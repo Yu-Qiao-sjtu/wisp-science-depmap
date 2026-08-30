@@ -3763,6 +3763,30 @@ async fn cleanup_refuses_while_an_external_reference_points_into_the_workdir() {
 
 // --- remote staging ledger ---------------------------------------------------
 
+struct StagingLedgerRunRunner {
+    commands: StdMutex<Vec<RunCommand>>,
+}
+
+#[async_trait::async_trait]
+impl RunCommandRunner for StagingLedgerRunRunner {
+    async fn run(
+        &self,
+        command: RunCommand,
+        _timeout: Duration,
+    ) -> Result<RunCommandOutput, String> {
+        self.commands.lock().unwrap().push(command.clone());
+        if command.script.starts_with("prepare ") {
+            return ok_output("__WISP_PREPARED__\n");
+        }
+        match command.script.as_str() {
+            "stage 1 input file(s)" => ok_output(""),
+            "poll SSH input progress" => ok_output("__WISP_TRANSFER_FILE__:input.fasta:10\n"),
+            "launch SSH Run" => Err("temporary SSH disconnect".into()),
+            other => Err(format!("unexpected command: {other}")),
+        }
+    }
+}
+
 #[tokio::test]
 async fn ssh_input_staging_ledgers_uploaded_files() {
     let tmp = std::env::temp_dir().join(format!("wisp_staging_ledger_{}", uuid::Uuid::new_v4()));
@@ -3784,14 +3808,9 @@ async fn ssh_input_staging_ledgers_uploaded_files() {
         .set_session_execution_context_enabled("f", "ssh:gpu", true)
         .await
         .unwrap();
-    let runner = Arc::new(ScriptedRunRunner::new(vec![
-        ok_output("__WISP_PREPARED__\n"),
-        ok_output(""),
-        Err("temporary SSH disconnect".into()),
-    ]));
-    runner
-        .synthesize_launch_ack
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let runner = Arc::new(StagingLedgerRunRunner {
+        commands: StdMutex::new(Vec::new()),
+    });
     let manager = RunManager::with_runner(runner.clone());
 
     let submitted = manager
@@ -3817,7 +3836,13 @@ async fn ssh_input_staging_ledgers_uploaded_files() {
         .list_remote_staging("p", "ssh:gpu", false)
         .await
         .unwrap();
-    assert_eq!(entries.len(), 1);
+    let finished = store.get_run(&submitted.run_id).await.unwrap().unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "finished={finished:?}; commands={:?}",
+        runner.commands.lock().unwrap()
+    );
     assert_eq!(entries[0].source, "run_input");
     assert_eq!(
         entries[0].run_id.as_deref(),
