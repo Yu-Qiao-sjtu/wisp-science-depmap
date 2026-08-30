@@ -363,59 +363,10 @@ pub(crate) async fn send_message_inner(
                 .as_ref()
                 .map(|specialist| specialist.id.as_str()),
         ) {
-            Some(intent_router::AutomaticRoute::SavedWorkflowWithSkillPortfolio(id)) => {
-                let base = quick_actions::workflow_proposal(&state.store, id).await;
-                let base_skill_ids = base
-                    .as_ref()
-                    .map(|proposal| {
-                        proposal
-                            .tasks
-                            .iter()
-                            .flat_map(|task| task.skill_ids.iter().cloned())
-                            .collect::<HashSet<_>>()
-                            .into_iter()
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let skills =
-                    specialist_skill_index(&state.store, &ap, routing_specialist.as_ref()).await;
-                let planner_model_id = models::session_profile_id(&state.store, &frame_id).await;
-                let supplemental_request = format!(
-                    "The validated DepMap topic Workflow already covers these Skills: {}. Select only additional enabled Skills whose descriptions materially improve this exact request; do not duplicate the base capabilities. If no catalog Skill adds material value, return an empty tasks array. User request: {}",
-                    base_skill_ids.join(", "),
-                    message
-                );
-                let supplement = skill_portfolio::plan_skill_portfolio_inner(
-                    state,
-                    &ap,
-                    Some(&frame_id),
-                    &supplemental_request,
-                    &planner_model_id,
-                    skills.as_ref(),
-                    &base_skill_ids,
-                )
-                .await;
-                match (base, supplement) {
-                    (Some(base), Ok(mut draft)) => {
-                        draft.proposal =
-                            quick_actions::merge_skill_portfolio_into_workflow(base, &draft)?;
-                        automatic_workflow_injection =
-                            Some(quick_actions::render_automatic_skill_workflow(&draft)?);
-                    }
-                    (_, Err(error)) => {
-                        tracing::info!(
-                            "no supplemental Skill portfolio was added for {frame_id}: {error}"
-                        );
-                        references
-                            .get_or_insert_with(Vec::new)
-                            .push(ComposerReferenceArg::Workflow { id: id.into() });
-                    }
-                    (None, Ok(_)) => {
-                        references
-                            .get_or_insert_with(Vec::new)
-                            .push(ComposerReferenceArg::Workflow { id: id.into() });
-                    }
-                }
+            Some(intent_router::AutomaticRoute::SavedWorkflow(id)) => {
+                references
+                    .get_or_insert_with(Vec::new)
+                    .push(ComposerReferenceArg::Workflow { id: id.into() });
             }
             Some(intent_router::AutomaticRoute::SkillPortfolio) => {
                 let skills =

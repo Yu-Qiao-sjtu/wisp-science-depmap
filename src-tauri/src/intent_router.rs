@@ -8,7 +8,7 @@ use crate::specialists;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutomaticRoute {
-    SavedWorkflowWithSkillPortfolio(&'static str),
+    SavedWorkflow(&'static str),
     SkillPortfolio,
 }
 
@@ -100,9 +100,7 @@ pub(crate) fn automatic_route(
     );
 
     if has_gene && (has_cancer || asks_for_topics || asks_for_analysis || is_bare_gene(request)) {
-        return Some(AutomaticRoute::SavedWorkflowWithSkillPortfolio(
-            DEPMAP_TOPIC_WORKFLOW_ID,
-        ));
+        return Some(AutomaticRoute::SavedWorkflow(DEPMAP_TOPIC_WORKFLOW_ID));
     }
 
     if has_cancer && (asks_for_topics || asks_for_analysis || request.chars().count() <= 30) {
@@ -221,9 +219,7 @@ mod tests {
         for request in ["KRAS", "帮我分析 KRAS 在肺癌里能做什么课题", "KRAS 肺癌"] {
             assert_eq!(
                 route(request),
-                Some(AutomaticRoute::SavedWorkflowWithSkillPortfolio(
-                    DEPMAP_TOPIC_WORKFLOW_ID
-                ))
+                Some(AutomaticRoute::SavedWorkflow(DEPMAP_TOPIC_WORKFLOW_ID))
             );
         }
     }
