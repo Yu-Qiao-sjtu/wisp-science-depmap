@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "audit_basis": {
+    "release": "26Q1",
+    "script_root": "tm00-script/scripts",
+    "method": "Static reverse audit of fread/readRDS/saveRDS calls in the project R scripts."
+  },
+  "datasets": [
+    {"id":"gene_effect_csv","kind":"raw","path":"data/CRISPRGeneEffect.csv"},
+    {"id":"gene_dependency_csv","kind":"raw","path":"data/CRISPRGeneDependency.csv"},
+    {"id":"expression_csv","kind":"raw","path":"data/OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv"},
+    {"id":"model_csv","kind":"raw","path":"data/Model.csv"},
+    {"id":"damaging_mutation_matrix_csv","kind":"raw","path":"data/OmicsSomaticMutationsMatrixDamaging.csv"},
+    {"id":"somatic_mutations_csv","kind":"raw","path":"data/OmicsSomaticMutations.csv"},
+    {"id":"prism_auc_csv","kind":"raw","path":"data/PRISM_Repurposing_AUC_Matrix.csv"},
+    {"id":"prism_compounds_csv","kind":"raw","path":"data/PRISM_Repurposing_Compound_Conditions.csv"},
+    {"id":"copy_number_csv","kind":"raw","path":"data/OmicsCNGeneMC_WES.csv"},
+    {"id":"model_condition_csv","kind":"raw","path":"data/ModelCondition.csv"},
+    {"id":"screen_gene_effect_csv","kind":"raw","path":"data/ScreenGeneEffect.csv"},
+    {"id":"screen_sequence_map_csv","kind":"raw","path":"data/ScreenSequenceMap.csv"},
+    {"id":"demeter2_gene_dependency_csv","kind":"raw","path":"data/DEMETER2_Data_v6/D2_Achilles_gene_dep_scores.csv"},
+    {"id":"amg193_auc_csv","kind":"user_input","path":"TM00/DepMap_TM00/resource/AMG193AUC.csv"},
+
+    {"id":"gene_effect_rds","kind":"derived","path":"TM00/DepMap_TM00/output/depmap_geneEffect.rds","source_inputs":["gene_effect_csv"],"producer_scripts":["01_read_depmap.r"]},
+    {"id":"expression_rds","kind":"derived","path":"TM00/DepMap_TM00/output/ccle_exprSet.rds","source_inputs":["expression_csv"],"producer_scripts":["01_read_depmap.r"]},
+    {"id":"cell_info_rds","kind":"derived","path":"TM00/DepMap_TM00/output/cellinfor.rds","source_inputs":["model_csv"],"producer_scripts":["01_read_depmap.r","07_mutant_dependency_22Q2.R","08_mutData_updata_23Q2.R"]},
+    {"id":"gene_dependency_rds","kind":"derived","path":"TM00/DepMap_TM00/output/geneDependency.rds","source_inputs":["gene_dependency_csv"],"producer_scripts":["07_mutant_dependency_22Q2.R","08_mutData_updata_23Q2.R"]},
+    {"id":"damaging_mutation_rds","kind":"derived","path":"TM00/DepMap_TM00/output/mutData_damaging.rds","source_inputs":["damaging_mutation_matrix_csv"],"producer_scripts":["07_mutant_dependency_22Q2.R"]},
+    {"id":"custom_mutation_rds","kind":"derived","path":"TM00/DepMap_TM00/output/mutData_custom_with_missense.rds","source_inputs":["somatic_mutations_csv","damaging_mutation_matrix_csv"],"producer_scripts":["08_mutData_updata_23Q2.R"]},
+    {"id":"co_dependency_rds","kind":"derived","path":"TM00/DepMap_TM00/output/co_dependency_matrix.rds","source_inputs":["gene_effect_rds"],"producer_scripts":["03_co_dependency.R"]},
+    {"id":"progeny_scores_rds","kind":"derived","path":"TM00/DepMap_TM00/output/progeny_pathway_scores.rds","source_inputs":["expression_rds","gene_effect_rds"],"producer_scripts":["05_from_gene_to_dependency.R"]}
+  ],
+  "capabilities": [
+    {"id":"core_ingestion","title":"Core 26Q1 ingestion and aligned R objects","scripts":["01_read_depmap.r"],"inputs":["gene_effect_csv","gene_dependency_csv","expression_csv","model_csv","damaging_mutation_matrix_csv"]},
+    {"id":"gene_correlation","title":"Expression gene-gene correlation","scripts":["02_gene_gene_correlation.R"],"inputs":["expression_rds"]},
+    {"id":"co_dependency","title":"Genome-wide co-dependency","scripts":["03_co_dependency.R"],"inputs":["gene_effect_rds"]},
+    {"id":"predictive_biomarkers","title":"Predictive biomarker association and models","scripts":["04_predivtive_biomarkers.R"],"inputs":["gene_effect_rds","expression_rds"]},
+    {"id":"gene_to_dependency","title":"Gene-centered dependency and pathway analysis","scripts":["05_from_gene_to_dependency.R"],"inputs":["gene_effect_rds","expression_rds"]},
+    {"id":"pathway_ml","title":"Pathway machine learning","scripts":["05.1_ml_pathway.R"],"inputs":["progeny_scores_rds","gene_effect_rds"]},
+    {"id":"synthetic_lethal_screen","title":"Observational synthetic-lethal screening","scripts":["05.2_synthetic_lethal.R"],"inputs":["co_dependency_rds"]},
+    {"id":"prism_drug_sensitivity","title":"PRISM drug sensitivity association","scripts":["05.3_drug_sensitivity.R"],"inputs":["progeny_scores_rds","prism_auc_csv","prism_compounds_csv"]},
+    {"id":"wgcna","title":"WGCNA module discovery","scripts":["05.4_wgcna.R"],"inputs":["expression_rds","gene_effect_rds"]},
+    {"id":"damaging_mutation_dependency","title":"Damaging mutation-stratified dependency","scripts":["07_mutant_dependency_22Q2.R"],"inputs":["damaging_mutation_matrix_csv","gene_dependency_csv","model_csv"]},
+    {"id":"annotated_mutation_dependency","title":"Annotated mutation matrix and dependency","scripts":["08_mutData_updata_23Q2.R"],"inputs":["somatic_mutations_csv","damaging_mutation_matrix_csv","gene_dependency_csv","model_csv"]},
+    {"id":"mutation_to_target","title":"Mutation-to-target batch association","scripts":["09_batch_from_mut_to_target_23Q2.R"],"inputs":["damaging_mutation_rds","gene_dependency_rds","cell_info_rds"]},
+    {"id":"mutation_to_target_lineage","title":"Lineage-restricted mutation-to-target association","scripts":["10_batch_from_mut_to_target_23Q2_add_celltype.R"],"inputs":["damaging_mutation_rds","gene_dependency_rds","cell_info_rds"]},
+    {"id":"target_to_mutation_lineage","title":"Lineage-restricted target-to-mutation screening","scripts":["11_batch_from_gene_to_mut_23Q2_add_celltype.R"],"inputs":["damaging_mutation_rds","gene_dependency_rds","cell_info_rds"]},
+    {"id":"ccne1_amplification","title":"CCNE1 amplification-context dependency","scripts":["12_CCNE1_AMP_PKMYT1.R"],"inputs":["gene_effect_csv","copy_number_csv","model_condition_csv"]},
+    {"id":"mycn_ddx1_coamplification","title":"MYCN/DDX1 co-amplification dependency","scripts":["13_MYCN_DDX1_coamplification_Cancer_discovery.R"],"inputs":["gene_effect_csv","copy_number_csv","model_condition_csv"]},
+    {"id":"disease_context_dependency","title":"Disease-context differential dependency","scripts":["14_DCAF5_SMARCB1_Nature.R"],"inputs":["model_csv","gene_effect_csv"]},
+    {"id":"sanger_cross_library","title":"Sanger and cross-library CRISPR comparison","scripts":["15_Sanger_CRISPR.R"],"inputs":["gene_effect_csv","screen_gene_effect_csv","screen_sequence_map_csv","cell_info_rds"]},
+    {"id":"negative_dependency_expression","title":"Negative dependency correlation with expression context","scripts":["16_Dependency_nagative_correlation.R"],"inputs":["gene_effect_csv","expression_csv","cell_info_rds"]},
+    {"id":"bipolar_dependency","title":"Recursive bipolar dependency search","scripts":["17_bipolar_dependency_ASB7_as_example.R"],"inputs":["gene_effect_csv"]},
+    {"id":"drug_auc_cross_validation","title":"CRISPR/RNAi/CNV/expression drug-AUC cross-validation","scripts":["18_DrugAUC_and_DepMap_MTAPasExample.R"],"inputs":["amg193_auc_csv","gene_effect_csv","cell_info_rds","demeter2_gene_dependency_csv","copy_number_csv","model_condition_csv","expression_csv"]}
+  ]
+}

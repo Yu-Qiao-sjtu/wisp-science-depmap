@@ -129,35 +129,59 @@ async function selectAssistantReplyText(
   page: Page,
   eventType: "mouseup" | "contextmenu" = "mouseup",
 ) {
-  return page.evaluate((type) => {
-    const body = document.querySelector(".msg.assistant .body");
-    if (!body) return "";
-    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-    let node: Text | null = null;
-    while (walker.nextNode()) {
-      const candidate = walker.currentNode as Text;
-      if (candidate.data.trim().length > 20) {
-        node = candidate;
-        break;
+  // STEPSDEMO publishes follow-up suggestions after the assistant text. Wait
+  // for that final async insert so its auto-scroll cannot dismiss a selection
+  // surface between this helper returning and the caller clicking an action.
+  await expect(page.getByText("Follow-up questions", { exact: true })).toBeVisible();
+  let selected = "";
+  const surface = page.locator(eventType === "mouseup" ? ".selection-popup" : ".ctx-menu");
+  await expect.poll(async () => {
+    selected = await page.evaluate((type) => {
+      const body = document.querySelector(".msg.assistant .body");
+      if (!body) return "";
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      while (walker.nextNode()) {
+        const candidate = walker.currentNode as Text;
+        if (candidate.data.trim().length > 20) {
+          node = candidate;
+          break;
+        }
       }
-    }
-    if (!node) return "";
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    const selection = window.getSelection()!;
-    selection.removeAllRanges();
-    selection.addRange(range);
-    const rect = range.getBoundingClientRect();
-    const target = document.querySelector(".chat") ?? body;
-    target.dispatchEvent(new MouseEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      button: type === "contextmenu" ? 2 : 0,
-      clientX: rect.left + rect.width / 2,
-      clientY: rect.top + Math.min(rect.height / 2, 12),
-    }));
-    return node.data.trim();
-  }, eventType);
+      if (!node) return "";
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      const rect = range.getBoundingClientRect();
+      const target = document.querySelector(".chat") ?? body;
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: type === "contextmenu" ? 2 : 0,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + Math.min(rect.height / 2, 12),
+      }));
+      return node.data.trim();
+    }, eventType);
+    return surface.isVisible();
+  }).toBe(true);
+  return selected;
+}
+
+async function selectAssistantReplyTextAndClick(
+  page: Page,
+  actionName: string,
+  eventType: "mouseup" | "contextmenu" = "mouseup",
+) {
+  let selected = "";
+  await expect(async () => {
+    selected = await selectAssistantReplyText(page, eventType);
+    const surface = page.locator(eventType === "mouseup" ? ".selection-popup" : ".ctx-menu");
+    await surface.getByRole("button", { name: actionName }).click({ timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
+  return selected;
 }
 
 function newSessionButton(page: Page) {
@@ -3979,7 +4003,7 @@ test("transcript selections add to the main composer without closing the right p
   await expect(popup.getByRole("button", { name: "Add to chat" })).toBeVisible();
   await expect(popup.getByRole("button", { name: "Ask AI in the conversation" })).toHaveCount(0);
   await expect(popup.getByRole("button", { name: "Quote in side chat" })).toBeVisible();
-  await popup.getByRole("button", { name: "Add to chat" }).click();
+  await selectAssistantReplyTextAndClick(page, "Add to chat");
   await expect(page.locator(".composer-reference-chips .quote").last())
     .toContainText(selected.slice(0, 30));
   await expect(panel).toBeVisible();
@@ -3991,7 +4015,7 @@ test("transcript selections add to the main composer without closing the right p
   await expect(menu.getByRole("button", { name: "Add to chat" })).toBeVisible();
   await expect(menu.getByRole("button", { name: "Ask AI in the conversation" })).toHaveCount(0);
   await expect(menu.getByRole("button", { name: "Quote in side chat" })).toBeVisible();
-  await menu.getByRole("button", { name: "Add to chat" }).click();
+  await selectAssistantReplyTextAndClick(page, "Add to chat", "contextmenu");
   await expect(page.locator(".composer-reference-chips .quote")).toHaveCount(2);
   await expect(panel).toBeVisible();
 });
@@ -4002,11 +4026,7 @@ test("literature research prepares a skill-backed turn in the current conversati
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText(/60,675 genes/)).toBeVisible({ timeout: 10_000 });
 
-  const selected = await selectAssistantReplyText(page);
-  const popup = page.locator(".selection-popup");
-  const action = popup.getByRole("button", { name: "Research literature" });
-  await expect(action).toBeVisible();
-  await action.click();
+  const selected = await selectAssistantReplyTextAndClick(page, "Research literature");
 
   await expect.poll(() => lastInvokeArgs(page, "run_quick_action")).toBeNull();
   await expect(page.locator(".selection-popup")).toHaveCount(0);
@@ -4033,9 +4053,11 @@ test("literature research from the right-click menu also stays in the composer",
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText(/60,675 genes/)).toBeVisible({ timeout: 10_000 });
 
-  const selected = await selectAssistantReplyText(page, "contextmenu");
-  const menu = page.locator(".ctx-menu");
-  await menu.getByRole("button", { name: "Research literature" }).click();
+  const selected = await selectAssistantReplyTextAndClick(
+    page,
+    "Research literature",
+    "contextmenu",
+  );
 
   await expect.poll(() => lastInvokeArgs(page, "run_quick_action")).toBeNull();
   await expect(page.locator(".ctx-menu")).toHaveCount(0);
@@ -5161,6 +5183,26 @@ test("saving a changed agent context asks for confirmation", async ({ page }) =>
   });
   await expect(settings).toHaveCount(0);
   await expect(page.locator(".copy-toast")).toHaveCount(0);
+});
+
+test("a project default Specialist is inherited by every new conversation", async ({ page }) => {
+  await enterApp(page);
+  await page.locator(".proj-switch").click();
+  await page.getByRole("button", { name: "Project settings" }).click();
+
+  const settings = page.locator(".proj-settings-modal");
+  const defaultAgent = settings.getByTestId("project-default-specialist");
+  await expect(defaultAgent).toBeVisible();
+  await defaultAgent.selectOption("depmap_r_agent");
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "update_project")).toMatchObject({
+    defaultSpecialistId: "depmap_r_agent",
+  });
+
+  await newSessionButton(page).click();
+  await expect(page.locator(".session-specialist")).toHaveText("DepMap Agent");
+  await newSessionButton(page).click();
+  await expect(page.locator(".session-specialist")).toHaveText("DepMap Agent");
 });
 
 test("center structure and FASTA previews fill the available height", async ({ page }) => {
@@ -9503,7 +9545,7 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator(".cred-help-trigger")).toHaveCount(4);
+  await expect(page.locator(".cred-help-trigger")).toHaveCount(5);
   const openAlexHelp = page.getByRole("button", { name: "OpenAlex: About this credential" });
   const openAlexTooltip = page.locator("#cred-help-openalex");
   await expect(openAlexTooltip).not.toBeVisible();
@@ -9566,6 +9608,20 @@ test("credentials settings include SCIMaster and save its key", async ({ page })
     value: "sk-sci-123",
   });
   await expect(page.locator(".settings-status")).toHaveText("Saved. Applies to new sessions.");
+  await expect(field).toContainText("Configured");
+});
+
+test("DepMap server token is stored through the credential boundary", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Credentials");
+  const field = page.locator("label", { hasText: "DepMap server token" });
+  await expect(field).toContainText("Not configured");
+  await field.locator("input").fill("depmap-token-123");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_credential")).toMatchObject({
+    id: "depmap_knowledge_api_token",
+    value: "depmap-token-123",
+  });
   await expect(field).toContainText("Configured");
 });
 
@@ -11046,7 +11102,8 @@ test("MCP App opens as a persistent center tab and delivers tool data", async ({
       } else if (message.method === "ui/notifications/tool-input") {
         input = message.params?.arguments?.sequence === "ACGT";
       } else if (message.method === "ui/notifications/tool-result") {
-        result = message.params?.structuredContent?.accepted === true;
+        result = message.params?.structuredContent?.accepted === true
+          || (message.params?.structuredContent?.payload?.records?.length ?? 0) > 0;
       }
       updateContext();
       render();
@@ -11135,6 +11192,14 @@ test("MCP App opens as a persistent center tab and delivers tool data", async ({
     name: "motif_open_workbench",
     arguments: { filename: "existing-local.fasta", content: ">local\nACGTACGT\n" },
   });
+  await expect.poll(() => lastInvokeArgs(page, "save_motif_workbench_snapshot")).toMatchObject({
+    instanceId: expect.stringContaining(`mcp-app:${frameId}:`),
+    result: {
+      structuredContent: {
+        payload: { records: [{ name: "local", sequence: "ACGTACGT" }] },
+      },
+    },
+  });
   await expect(page.locator(".center-mcp-import-status")).toContainText("existing-local.fasta");
 
   const cookie = Buffer.alloc(5 + 14);
@@ -11166,6 +11231,19 @@ test("MCP App opens as a persistent center tab and delivers tool data", async ({
           sequence: "ACGTRYSWKMBDHVN",
           annotations: [],
         }],
+      },
+    },
+  });
+  await expect.poll(() => lastInvokeArgs(page, "save_motif_workbench_snapshot")).toMatchObject({
+    result: {
+      structuredContent: {
+        payload: {
+          records: [{
+            name: "local",
+            type: "dna",
+            sequence: "ACGTACGT",
+          }],
+        },
       },
     },
   });
@@ -13354,6 +13432,10 @@ test("main-Agent dynamic batches show parallel roots and pending dependencies", 
   await expect(panel.locator(".agent-workflow-card.dynamic")).toHaveCount(1);
   await expect(panel).not.toContainText("Completed dynamic research");
   await expect(card).toContainText("Main Agent parallel research batch");
+  const progress = card.getByTestId("agent-workflow-progress");
+  await expect(progress).toContainText("0/3");
+  await expect(progress).toContainText("research_a、research_b");
+  await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
   const researchA = card.locator('[data-step-id$=":research_a"]');
   await expect(researchA.locator(".agent-attempt-status")).toHaveText("Running");
   await expect(researchA).toContainText("Temporary Agent · native · default");
@@ -13363,6 +13445,29 @@ test("main-Agent dynamic batches show parallel roots and pending dependencies", 
   await expect(synthesis.locator(".agent-attempt-status")).toHaveText("Pending");
   await expect(synthesis.locator(".agent-chip.dependency")).toHaveText(["research_a", "research_b"]);
   await expect(panel.locator(".agent-workflow-group-head")).toContainText("Conversation");
+});
+
+test("starting delegated tasks opens live per-Agent progress automatically", async ({ page }) => {
+  await enterApp(page, "/?mockAgentWorkflow=parallel");
+  await page.evaluate(() => {
+    (window as any).__tauriEmit("agent", {
+      kind: "ToolResult",
+      frame_id: "s-current",
+      name: "delegate_tasks",
+      ok: true,
+      content: JSON.stringify({ workflow_id: "workflow-dynamic", status: "running" }),
+      duration_ms: 12,
+    });
+  });
+
+  const panel = page.getByTestId("agent-workflows");
+  await expect(panel).toBeVisible();
+  const card = panel.locator(".agent-workflow-card.dynamic").first();
+  await expect(card.getByTestId("agent-workflow-progress")).toContainText(
+    "research_a、research_b",
+  );
+  await expect.poll(() => lastInvokeArgs(page, "list_agent_workflows"))
+    .toMatchObject({ sessionId: "s-current" });
 });
 
 test("nested Agent workflows render under their root without independent controls", async ({ page }) => {
@@ -13759,6 +13864,7 @@ test("specialists page configures the builtin Reader and saves a custom speciali
   await expect(page.getByText("Reviewer")).toBeVisible();
   await expect(page.getByText("Reader")).toBeVisible();
   await expect(page.getByText("Scientific Illustrator")).toBeVisible();
+  await expect(page.getByText("DepMap Agent")).toBeVisible();
   // Builtin rows have no remove button.
   await expect(page.locator(".settings-list-remove")).toHaveCount(0);
 
@@ -13787,6 +13893,27 @@ test("specialists page configures the builtin Reader and saves a custom speciali
   await page.getByLabel("Name").fill("Paper hunter");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Paper hunter")).toBeVisible();
+});
+
+test("DepMap specialist starts a bound session from settings and accepts the research question", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Specialists");
+  await page.getByText("DepMap Agent", { exact: true }).click();
+  await expect(page.getByLabel("Instructions")).toBeDisabled();
+
+  await page.getByTestId("start-specialist-session").click();
+  await expect(page.locator(".settings-page")).toHaveCount(0);
+  await expect(page.locator(".session-specialist")).toHaveText("DepMap Agent");
+  await expect.poll(() => lastInvokeArgs(page, "set_session_specialist")).toMatchObject({
+    id: "depmap_r_agent",
+  });
+
+  await composer(page).fill("分析 ESR1 的共依赖，并给出可复现图表");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+    message: "分析 ESR1 的共依赖，并给出可复现图表",
+  });
+  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
 });
 
 test("specialist skills whitelist uses a searchable picker instead of a full list", async ({ page }) => {

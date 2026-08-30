@@ -26,6 +26,8 @@ const LIVE_COMPACTION_SUITE: &str = include_str!("../eval-suites/live-compaction
 const LIVE_MEMORY_SUITE: &str = include_str!("../eval-suites/live-memory-v1.yaml");
 #[cfg(test)]
 const MEMORY_SUITE: &str = include_str!("../eval-suites/memory-v1.yaml");
+#[cfg(test)]
+const DEPMAP_AGENT_SUITE: &str = include_str!("../eval-suites/depmap-agent-v1.yaml");
 const DEFAULT_MAX_CONTEXT: usize = 128_000;
 const DEFAULT_MAX_ROUNDS: usize = 12;
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
@@ -194,6 +196,11 @@ struct EvalCase {
     fixture_runtimes: bool,
     #[serde(default)]
     fixture_mcp: BTreeMap<String, String>,
+    /// Eager tools with explicit schemas for live/offline domain-contract
+    /// evaluation. Unlike `fixture_mcp`, these are visible to the model without
+    /// deferred discovery and therefore mirror native host tools.
+    #[serde(default)]
+    fixture_tools: BTreeMap<String, FixtureTool>,
     /// Register the project-memory `search_memory` tool, mirroring the host's
     /// memory setting. Seed notes with `files` under `.wisp/memory/*.md`.
     #[serde(default)]
@@ -217,6 +224,20 @@ struct EvalCase {
     limits: EvalLimits,
     #[serde(default)]
     expect: EvalExpectation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FixtureTool {
+    #[serde(default = "default_fixture_description")]
+    description: String,
+    schema: Value,
+    result: String,
+    #[serde(default)]
+    error: bool,
+}
+
+fn default_fixture_description() -> String {
+    "Deterministic native retrieval fixture for agent evaluation.".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -787,6 +808,11 @@ struct FixtureMcpTool {
     result: String,
 }
 
+struct FixtureNativeTool {
+    name: String,
+    fixture: FixtureTool,
+}
+
 #[derive(Default)]
 struct EvalRuntimeLauncher;
 
@@ -899,6 +925,36 @@ impl Tool for FixtureMcpTool {
 
     async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
         ToolResult::ok(&self.result)
+    }
+}
+
+#[async_trait]
+impl Tool for FixtureNativeTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            &self.name,
+            &self.fixture.description,
+            self.fixture.schema.clone(),
+        )
+    }
+
+    fn read_only(&self) -> bool {
+        true
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        if let Err(error) = wisp_mcp::validate_tool_arguments(&self.fixture.schema, args) {
+            return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
+        }
+        if self.fixture.error {
+            ToolResult::fail(&self.fixture.result)
+        } else {
+            ToolResult::ok(&self.fixture.result)
+        }
     }
 }
 
@@ -1410,6 +1466,12 @@ fn build_agent(
         registry.add(Box::new(FixtureMcpTool {
             name: name.clone(),
             result: result.clone(),
+        }));
+    }
+    for (name, fixture) in &case.fixture_tools {
+        registry.add(Box::new(FixtureNativeTool {
+            name: name.clone(),
+            fixture: fixture.clone(),
         }));
     }
     if !case.explore_script.is_empty() {
@@ -1936,8 +1998,11 @@ fn summarize(results: &[ScenarioResult]) -> ReportSummary {
             .sum(),
         compaction_before_tokens,
         compaction_after_tokens,
-        compaction_ratio_percent: (compaction_before_tokens > 0)
-            .then_some(compaction_after_tokens.saturating_mul(100) / compaction_before_tokens),
+        compaction_ratio_percent: if compaction_before_tokens > 0 {
+            Some(compaction_after_tokens.saturating_mul(100) / compaction_before_tokens)
+        } else {
+            None
+        },
     }
 }
 
@@ -2238,6 +2303,42 @@ mod tests {
                 tags.contains(required),
                 "missing built-in coverage tag {required}"
             );
+        }
+    }
+
+    #[test]
+    fn depmap_suite_is_valid_for_offline_and_live_regression() {
+        let suite: EvalSuite = serde_yaml::from_str(DEPMAP_AGENT_SUITE).unwrap();
+        validate_suite(&suite, EvalMode::Offline).unwrap();
+        validate_suite(&suite, EvalMode::Live).unwrap();
+        assert_eq!(suite.cases.len(), 10);
+        assert!(suite
+            .cases
+            .iter()
+            .all(|case| case.fixture_tools.contains_key("depmap_query")
+                || case.fixture_tools.contains_key("depmap_evidence")
+                || case.fixture_tools.contains_key("start_workflow")));
+        assert!(suite
+            .cases
+            .iter()
+            .any(|case| case.fixture_tools.contains_key("depmap_evidence")));
+        assert!(suite
+            .cases
+            .iter()
+            .any(|case| case.fixture_tools.contains_key("start_workflow")));
+        let tags: BTreeSet<_> = suite
+            .cases
+            .iter()
+            .flat_map(|case| case.tags.iter().map(String::as_str))
+            .collect();
+        for required in [
+            "grounding",
+            "coverage-gap",
+            "negative-control",
+            "holdout",
+            "orchestration",
+        ] {
+            assert!(tags.contains(required), "missing DepMap tag {required}");
         }
     }
 
@@ -2646,6 +2747,15 @@ mod tests {
     }
 
     #[test]
+    fn summary_without_compactions_has_no_ratio() {
+        let summary = summarize(&[]);
+
+        assert_eq!(summary.compaction_before_tokens, 0);
+        assert_eq!(summary.compaction_after_tokens, 0);
+        assert_eq!(summary.compaction_ratio_percent, None);
+    }
+
+    #[test]
     fn verifier_checks_tool_argument_json_pointer() {
         let case = EvalCase {
             id: "args".into(),
@@ -2661,6 +2771,7 @@ mod tests {
             explore_script: vec![],
             fixture_runtimes: false,
             fixture_mcp: BTreeMap::new(),
+            fixture_tools: BTreeMap::new(),
             memory_enabled: false,
             runtime_injections: vec![],
             context_seed: vec![],

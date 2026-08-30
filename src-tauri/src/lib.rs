@@ -37,6 +37,7 @@ mod delegation_isolation;
 mod delegation_resources;
 mod delegation_runtime;
 mod delegation_tool;
+mod depmap_agent;
 mod desktop_lifecycle;
 mod device_bridge;
 mod device_hub;
@@ -2231,6 +2232,133 @@ async fn update_mcp_app_context(
     Ok(())
 }
 
+const MCP_APP_SNAPSHOT_SCHEMA: &str = "wisp.mcp-app-snapshot.v1";
+const MAX_MCP_APP_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
+
+fn apply_mcp_app_snapshot(
+    payload: &mut serde_json::Value,
+    app_kind: &str,
+    snapshot: &serde_json::Value,
+) -> Result<(), String> {
+    let payload_app_kind = payload
+        .pointer("/tool/name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "MCP App presentation has no tool name.".to_string())?;
+    if payload_app_kind != app_kind {
+        return Err("MCP App snapshot belongs to a different app.".into());
+    }
+    if snapshot.get("schema").and_then(serde_json::Value::as_str) != Some(MCP_APP_SNAPSHOT_SCHEMA) {
+        return Err("Unsupported MCP App snapshot schema.".into());
+    }
+    let result = snapshot
+        .get("result")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| "MCP App snapshot has no result payload.".to_string())?;
+    payload["result"] = result;
+    Ok(())
+}
+
+async fn restore_mcp_app_snapshot(
+    store: &Store,
+    frame_id: &str,
+    presentation_id: &str,
+    payload: &mut serde_json::Value,
+) {
+    let Ok(Some(saved)) = store.load_mcp_app_snapshot(frame_id, presentation_id).await else {
+        return;
+    };
+    let Ok(snapshot) = serde_json::from_str::<serde_json::Value>(&saved.snapshot_json) else {
+        tracing::warn!(
+            session = frame_id,
+            presentation = presentation_id,
+            "ignored malformed MCP App snapshot"
+        );
+        return;
+    };
+    if let Err(error) = apply_mcp_app_snapshot(payload, &saved.app_kind, &snapshot) {
+        tracing::warn!(
+            session = frame_id,
+            presentation = presentation_id,
+            %error,
+            "ignored incompatible MCP App snapshot"
+        );
+    }
+}
+
+/// Persist the deterministic data payload of a Motif workbench independently
+/// from its live MCP transport. A restored session can therefore rebuild the
+/// viewer after the original MCP process or connection has gone away.
+#[tauri::command]
+async fn save_motif_workbench_snapshot(
+    state: State<'_, AppState>,
+    instance_id: String,
+    result: serde_json::Value,
+) -> Result<(), String> {
+    let (frame_id, presentation_id) = mcp_app_identity(&instance_id)?;
+    let frame_id = frame_id.to_string();
+    let presentation_id = presentation_id.to_string();
+    if !result.is_object() {
+        return Err("Motif snapshot result must be an object.".into());
+    }
+    let records = result
+        .pointer("/structuredContent/payload/records")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Motif snapshot contains no DNA records.".to_string())?;
+    if records.is_empty() {
+        return Err("Motif snapshot contains no DNA records.".into());
+    }
+    let presentation = state
+        .store
+        .load_mcp_app_presentation_event(&frame_id, &presentation_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(presentation) = presentation {
+        let event = serde_json::from_str::<AgentEvent>(&presentation)
+            .map_err(|error| format!("Invalid Motif workbench presentation: {error}"))?;
+        let AgentEvent::ToolPresentation { payload, .. } = event else {
+            return Err("Motif workbench presentation no longer exists.".into());
+        };
+        if payload
+            .pointer("/tool/name")
+            .and_then(serde_json::Value::as_str)
+            != Some("motif_open_workbench")
+        {
+            return Err("Only Motif workbench data can be saved by this command.".into());
+        }
+    } else if !state
+        .mcp_app_bridge(&instance_id)
+        .is_some_and(|bridge| bridge.frame_id == frame_id)
+    {
+        // The presentation event and the WebView notification travel through
+        // separate async drains. A live, frame-bound bridge proves this is the
+        // just-presented App while its event is still reaching SQLite.
+        return Err("Motif workbench presentation no longer exists.".into());
+    }
+    let snapshot = serde_json::json!({
+        "schema": MCP_APP_SNAPSHOT_SCHEMA,
+        "result": result,
+    });
+    let snapshot_json = serde_json::to_string(&snapshot)
+        .map_err(|error| format!("Invalid Motif snapshot: {error}"))?;
+    if snapshot_json.len() > MAX_MCP_APP_SNAPSHOT_BYTES {
+        return Err(format!(
+            "Motif snapshot exceeds the {} KiB limit.",
+            MAX_MCP_APP_SNAPSHOT_BYTES / 1024
+        ));
+    }
+    state
+        .store
+        .save_mcp_app_snapshot(
+            &frame_id,
+            &presentation_id,
+            "motif_open_workbench",
+            &snapshot_json,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Hard ceiling on a single MCP App `tools/call` argument JSON blob.
 // Live scientific viewers can legitimately receive bounded sequence payloads
 // (Motif caps text input at 2,000,000 bytes). Keep this below the result cap
@@ -3887,6 +4015,30 @@ async fn active_skill_index(store: &Store, ap: &ActiveProject) -> Arc<SkillIndex
     Arc::new(catalog.filtered_by_names(enabled.as_ref()))
 }
 
+async fn specialist_skill_index(
+    store: &Store,
+    ap: &ActiveProject,
+    specialist: Option<&specialists::Specialist>,
+) -> Arc<SkillIndex> {
+    let (catalog, project_enabled) = project_skill_catalog(store, ap).await;
+    let Some(specialist) = specialist else {
+        return Arc::new(catalog.filtered_by_names(project_enabled.as_ref()));
+    };
+    let required = specialists::required_skill_names(specialist);
+    let enabled = match specialist.skills.as_ref() {
+        Some(allowed) => {
+            let mut names = allowed.iter().cloned().collect::<HashSet<_>>();
+            names.extend(required.iter().map(|name| (*name).to_string()));
+            Some(names)
+        }
+        None => project_enabled.map(|mut names| {
+            names.extend(required.iter().map(|name| (*name).to_string()));
+            names
+        }),
+    };
+    Arc::new(catalog.filtered_by_names(enabled.as_ref()))
+}
+
 /// Identity section appended after the base system prompt when a session has
 /// a specialist. Description is UI-only and deliberately excluded.
 fn specialist_prompt_section(spec: &specialists::Specialist) -> String {
@@ -4899,6 +5051,7 @@ async fn create_session_frame(store: &Store, project_id: &str) -> Result<String,
         .create_frame(&id, project_id, "OPERON", &model_id)
         .await
         .map_err(|e| format!("{e}"))?;
+    specialists::inherit_project_default_specialist(store, project_id, &id).await?;
     Ok(id)
 }
 
@@ -6775,6 +6928,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agent_turn::send_message,
             update_mcp_app_context,
+            save_motif_workbench_snapshot,
             call_mcp_app_tool,
             list_mcp_app_tools,
             mcp_app_has_server_tools,

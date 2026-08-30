@@ -22,6 +22,31 @@ impl Store {
         Ok(())
     }
 
+    pub async fn project_default_specialist(&self, project_id: &str) -> Result<Option<String>> {
+        let value: Option<String> = sqlx::query_scalar(
+            "SELECT NULLIF(TRIM(default_specialist_id),'') FROM projects WHERE id=?",
+        )
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+        Ok(value)
+    }
+
+    pub async fn set_project_default_specialist(
+        &self,
+        project_id: &str,
+        specialist_id: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE projects SET default_specialist_id=?, updated_at=? WHERE id=?")
+            .bind(specialist_id.trim())
+            .bind(chrono::Utc::now().timestamp())
+            .bind(project_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_project(&self, id: &str) -> Result<Option<(String, String)>> {
         let row: Option<(String, String)> = sqlx::query_as(
             "SELECT COALESCE(name,''), COALESCE(workspace_dir,'') FROM projects WHERE id=?",

@@ -57,6 +57,7 @@ pub(crate) fn ProjectsScreen(
     let settings_project_id = create_rw_signal(None::<String>);
     let settings_form = create_rw_signal(ProjectSettings::default());
     let settings_baseline = create_rw_signal(ProjectSettings::default());
+    let settings_specialists = create_rw_signal(Vec::<Specialist>::new());
     let settings_busy = create_rw_signal(false);
     let settings_confirm_context = create_rw_signal(false);
     let delete_data_countdown = create_rw_signal(0_u8);
@@ -370,6 +371,7 @@ pub(crate) fn ProjectsScreen(
                 "name": form.name,
                 "description": form.description,
                 "agentContext": form.agent_context,
+                "defaultSpecialistId": form.default_specialist_id,
             }))
             .unwrap();
             match invoke_checked("update_project", arg).await {
@@ -918,6 +920,23 @@ pub(crate) fn ProjectsScreen(
                                     }></textarea>
                             </label>
                             <label>
+                                <span class="ps-label">{move || t(locale.get(), "proj_settings.default_specialist")}</span>
+                                <span class="ps-hint">{move || t(locale.get(), "proj_settings.default_specialist_hint")}</span>
+                                <select data-testid="project-home-default-specialist"
+                                    prop:value=move || settings_form.get().default_specialist_id
+                                    on:change=move |ev| {
+                                        let value = event_target_value(&ev);
+                                        settings_form.update(|settings| settings.default_specialist_id = value);
+                                    }>
+                                    <option value="">{move || t(locale.get(), "proj_settings.default_specialist_none")}</option>
+                                    <For each=move || settings_specialists.get() key=|specialist| specialist.id.clone()
+                                        children=move |specialist| view! {
+                                            <option value=specialist.id>{specialist.name}</option>
+                                        }
+                                    />
+                                </select>
+                            </label>
+                            <label>
                                 <span class="ps-label">{move || t(locale.get(), "proj_settings.agent_context")}</span>
                                 <span class="ps-hint">{move || t(locale.get(), "proj_settings.agent_context_hint")}</span>
                                 <textarea class="ps-textarea ps-ctx" rows="8"
@@ -1062,6 +1081,11 @@ pub(crate) fn ProjectsScreen(
                                             settings_busy.set(false);
                                             open_error.set(None);
                                             spawn_local(async move {
+                                                if let Ok(value) = invoke_checked("list_specialists", wasm_bindgen::JsValue::UNDEFINED).await {
+                                                    if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<Specialist>>(value) {
+                                                        settings_specialists.set(list);
+                                                    }
+                                                }
                                                 let arg = to_value(&serde_json::json!({ "id": id.clone() })).unwrap();
                                                 match invoke_checked("get_project_settings", arg).await {
                                                     Ok(value) => {

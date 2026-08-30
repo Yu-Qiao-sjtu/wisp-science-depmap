@@ -797,6 +797,7 @@ pub(super) fn SettingsView(
     test_reviewer_form: Callback<web_sys::MouseEvent>,
     validate_model_form: Callback<web_sys::MouseEvent>,
     start_specialist_chat: Callback<web_sys::MouseEvent>,
+    start_specialist_session: Callback<String>,
     refresh_conns: Callback<()>,
     refresh_skills: Callback<()>,
     reload_skills: Callback<()>,
@@ -4263,6 +4264,16 @@ pub(super) fn SettingsView(
                                                 on:click=move |ev| test_reviewer_form.call(ev)>
                                                 {move || t(locale.get(), "specialists.reviewer.test")}
                                             </button>
+                                        })}
+                                        {move || specialist_form.get().filter(|f| !f.id.is_empty()).map(|f| {
+                                            let specialist_id = f.id.clone();
+                                            view! {
+                                                <button type="button" data-testid="start-specialist-session"
+                                                    disabled=move || settings_busy.get()
+                                                    on:click=move |_| start_specialist_session.call(specialist_id.clone())>
+                                                    {move || t(locale.get(), "specialists.start_session")}
+                                                </button>
+                                            }
                                         })}
                                         <button type="button" disabled=move || settings_busy.get() on:click=move |_| close_settings_subpage.call(())>{move || t(locale.get(), "settings.cancel")}</button>
                                             <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_specialist_form.call(ev)>{move || t(locale.get(), "settings.save")}</button>

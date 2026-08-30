@@ -2496,6 +2496,42 @@ async fn max_message_seq_uses_max_not_count_when_seqs_have_gaps() {
 }
 
 #[tokio::test]
+async fn frame_message_activity_reports_live_delegated_progress() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_store_frame_activity_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    store
+        .create_frame("child", "p", "Agent", "m")
+        .await
+        .unwrap();
+    store
+        .append_message("child", 1, &Message::user("search"))
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "child",
+            2,
+            &Message::tool("call-1", "literature_search", "ok"),
+        )
+        .await
+        .unwrap();
+    store
+        .append_message("child", 3, &Message::assistant("continue"))
+        .await
+        .unwrap();
+
+    let (messages, tools, last_activity_at) = store.frame_message_activity("child").await.unwrap();
+    assert_eq!(messages, 3);
+    assert_eq!(tools, 1);
+    assert!(last_activity_at.is_some());
+    let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
 async fn recent_turn_preview_messages_are_turn_and_content_bounded() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_store_recent_turns_{}.sqlite",
@@ -2862,6 +2898,61 @@ async fn session_ui_events_keep_insertion_order() {
     assert_eq!(
         store.load_session_ui_events("f").await.unwrap(),
         vec![first]
+    );
+}
+
+#[tokio::test]
+async fn mcp_app_snapshots_roundtrip_without_rewriting_the_ui_event_log() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_mcp_app_snapshot_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "P", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    let presentation = r#"{"kind":"ToolPresentation","frame_id":"f","presentation_id":"motif-1","presentation_kind":"mcp_app","payload":{"tool":{"name":"motif_open_workbench"}}}"#;
+    store
+        .append_session_ui_event("f", 1, presentation)
+        .await
+        .unwrap();
+
+    let snapshot_v1 = r#"{"schema":"wisp.mcp-app-snapshot.v1","result":{"records":["a"]}}"#;
+    store
+        .save_mcp_app_snapshot("f", "motif-1", "motif_open_workbench", snapshot_v1)
+        .await
+        .unwrap();
+    let saved = store
+        .load_mcp_app_snapshot("f", "motif-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.app_kind, "motif_open_workbench");
+    assert_eq!(saved.snapshot_json, snapshot_v1);
+    assert_eq!(
+        store.load_session_ui_events("f").await.unwrap(),
+        vec![presentation]
+    );
+    assert_eq!(
+        store
+            .load_mcp_app_presentation_event("f", "motif-1")
+            .await
+            .unwrap(),
+        Some(presentation.into())
+    );
+
+    let snapshot_v2 = r#"{"schema":"wisp.mcp-app-snapshot.v1","result":{"records":["b"]}}"#;
+    store
+        .save_mcp_app_snapshot("f", "motif-1", "motif_open_workbench", snapshot_v2)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_mcp_app_snapshot("f", "motif-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot_json,
+        snapshot_v2
     );
 }
 
@@ -4433,6 +4524,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             ORPHAN_FILE_RETENTION_MIGRATION.to_string(),
             RUN_REVIEW_DISMISSED_MIGRATION.to_string(),
             SESSION_SERVICE_TIER_MIGRATION.to_string(),
+            MCP_APP_SNAPSHOTS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();

@@ -552,6 +552,7 @@ pub(super) struct ProjectSettings {
     name: String,
     description: String,
     agent_context: String,
+    default_specialist_id: String,
 }
 
 fn project_agent_context_path(root: &Path) -> PathBuf {
@@ -609,11 +610,16 @@ pub(super) async fn get_project_settings(
     let (project_id, root, name, description) =
         settings_project(state.inner(), window.label(), id.as_deref()).await?;
     let _project_activity = state.begin_project_activity(&project_id)?;
+    let default_specialist_id =
+        specialists::project_default_specialist_id(&state.store, &project_id)
+            .await
+            .unwrap_or_default();
     Ok(ProjectSettings {
         id: project_id,
         name,
         description,
         agent_context: read_project_agent_context(&root),
+        default_specialist_id,
     })
 }
 
@@ -684,6 +690,7 @@ pub(super) async fn update_project(
     name: String,
     description: String,
     agent_context: String,
+    default_specialist_id: Option<String>,
 ) -> Result<ProjectSummary, String> {
     if name.trim().is_empty() {
         return Err("Project name is required".into());
@@ -716,6 +723,14 @@ pub(super) async fn update_project(
         .get_webview_window(&project_window_label(&project_id))
     {
         apply_app_window_title(&proj_win, Some(name));
+    }
+    if let Some(default_specialist_id) = default_specialist_id {
+        specialists::set_project_default_specialist(
+            &state.store,
+            &project_id,
+            default_specialist_id.trim(),
+        )
+        .await?;
     }
     Ok(build_project_summary(&state, &project_id).await)
 }

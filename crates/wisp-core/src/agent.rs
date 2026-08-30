@@ -57,10 +57,16 @@ fn context_archive(root: &Path) -> (PathBuf, String) {
 
 /// Head/tail-truncate a tool's text result to the ingestion budget. The full
 /// text is written under `.wisp/tool-output/` so the model can read/grep it back.
-fn budget_tool_result(root: &Path, tool_name: &str, content: Content) -> Content {
+fn budget_tool_result(
+    root: &Path,
+    tool_name: &str,
+    content: Content,
+    tool_budget: Option<usize>,
+) -> Content {
     let budget = std::env::var("WISP_TOOL_RESULT_BUDGET")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
+        .or(tool_budget)
         .unwrap_or(DEFAULT_STREAM_RESULT_BUDGET);
     budget_tool_result_with_limit(root, tool_name, content, budget)
 }
@@ -614,7 +620,14 @@ async fn agent_loop_inner(
             ctx.append_tool(
                 &tc.id,
                 &name,
-                budget_tool_result(env.project_root(), &name, content),
+                budget_tool_result(
+                    env.project_root(),
+                    &name,
+                    content,
+                    tools
+                        .get(&name)
+                        .and_then(|tool| tool.context_result_budget()),
+                ),
             );
             if let Some(m) = ctx.messages.last() {
                 output.on_message(m);

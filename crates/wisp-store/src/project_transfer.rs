@@ -187,6 +187,18 @@ async fn copy_project_children(tx: &mut Transaction<'_, Sqlite>, project_id: &st
             .execute(&mut **tx)
             .await?;
     }
+    if attached_table_exists(tx, "mcp_app_snapshots").await? {
+        sqlx::query(
+            "INSERT INTO mcp_app_snapshots(\
+               frame_id,presentation_id,app_kind,snapshot_json,updated_at) \
+             SELECT frame_id,presentation_id,app_kind,snapshot_json,updated_at \
+             FROM transfer.mcp_app_snapshots \
+             WHERE frame_id IN (SELECT id FROM transfer.frames WHERE project_id=?)",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
     if attached_table_exists(tx, "message_resource_links").await? {
         let columns = attached_table_columns(tx, "message_resource_links").await?;
         let created_artifact = if columns.contains("created_artifact") {
@@ -864,6 +876,7 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM session_execution_contexts WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM artifact_versions WHERE artifact_id IN (SELECT id FROM artifacts WHERE project_id=?)",
         "DELETE FROM session_reviews WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
+        "DELETE FROM mcp_app_snapshots WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM session_ui_events WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM turn_file_undo WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM proposed_plans WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
@@ -1301,6 +1314,7 @@ impl Store {
             ("frames", "*", "id"),
             ("messages", "*", "id"),
             ("session_reviews", "*", "id"),
+            ("mcp_app_snapshots", "*", "frame_id,presentation_id"),
             ("session_ui_events", "*", "frame_id,seq"),
             ("proposed_plans", "*", "id"),
             ("codex_turn_configs", "*", "id"),
@@ -1409,8 +1423,8 @@ impl Store {
         let result: Result<i64> = async {
             let mut tx = connection.begin().await?;
             sqlx::query(
-                "INSERT INTO projects(id,name,description,workspace_dir,created_at,updated_at) \
-                 SELECT id,name,description,'',created_at,updated_at FROM transfer.projects WHERE id=?",
+                "INSERT INTO projects(id,name,description,workspace_dir,default_specialist_id,created_at,updated_at) \
+                 SELECT id,name,description,'',default_specialist_id,created_at,updated_at FROM transfer.projects WHERE id=?",
             )
             .bind(project_id)
             .execute(&mut *tx)
@@ -1493,8 +1507,8 @@ impl Store {
             }
             let mut tx = connection.begin().await?;
             sqlx::query(
-                "INSERT INTO projects(id,name,description,workspace_dir,created_at,updated_at) \
-                 SELECT id,name,description,?,created_at,updated_at FROM transfer.projects WHERE id=?",
+                "INSERT INTO projects(id,name,description,workspace_dir,default_specialist_id,created_at,updated_at) \
+                 SELECT id,name,description,?,default_specialist_id,created_at,updated_at FROM transfer.projects WHERE id=?",
             )
             .bind(workspace.to_string_lossy().as_ref())
             .bind(project_id)
@@ -2646,6 +2660,50 @@ mod tests {
         );
         source.pool.close().await;
         for path in [source_path, first_path, second_path, edited_path] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn project_transfer_preserves_the_default_specialist() {
+        let token = uuid::Uuid::new_v4();
+        let source_path =
+            std::env::temp_dir().join(format!("wisp_specialist_source_{token}.sqlite"));
+        let archive_path =
+            std::env::temp_dir().join(format!("wisp_specialist_archive_{token}.sqlite"));
+        let target_path =
+            std::env::temp_dir().join(format!("wisp_specialist_target_{token}.sqlite"));
+        let source = Store::open(&source_path).await.unwrap();
+        source
+            .create_project("project", "Study", "/tmp/study")
+            .await
+            .unwrap();
+        source
+            .set_project_default_specialist("project", "depmap_r_agent")
+            .await
+            .unwrap();
+        source
+            .export_project_database("project", &archive_path)
+            .await
+            .unwrap();
+
+        let target = Store::open(&target_path).await.unwrap();
+        target
+            .import_project_database(&archive_path, "project", Path::new("/tmp/imported"))
+            .await
+            .unwrap();
+        assert_eq!(
+            target
+                .project_default_specialist("project")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("depmap_r_agent")
+        );
+
+        source.pool.close().await;
+        target.pool.close().await;
+        for path in [source_path, archive_path, target_path] {
             let _ = std::fs::remove_file(path);
         }
     }

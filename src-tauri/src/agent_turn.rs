@@ -66,7 +66,7 @@ pub(crate) async fn send_message_inner(
     session_id: Option<String>,
     message: String,
     attachments: Option<Vec<String>>,
-    references: Option<Vec<ComposerReferenceArg>>,
+    mut references: Option<Vec<ComposerReferenceArg>>,
     resume: Option<bool>,
     acp_agent_id: Option<String>,
     progress_observer_id: Option<u64>,
@@ -331,6 +331,21 @@ pub(crate) async fn send_message_inner(
     if user_routed_turn {
         state.set_notification_window(&frame_id, window_label);
     }
+    if !resume
+        && !references.as_ref().is_some_and(|references| {
+            references
+                .iter()
+                .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
+        })
+    {
+        if let Some(id) =
+            quick_actions::explicitly_requested_workflow_id(&state.store, &message).await
+        {
+            references
+                .get_or_insert_with(Vec::new)
+                .push(ComposerReferenceArg::Workflow { id });
+        }
+    }
     // Deliberately no set_active_frame here: see the `AppState::active_frame`
     // doc — a turn writing view state races the user's session/project switch.
     // A workflow reference is itself an accepted capability request. Persist it
@@ -504,14 +519,7 @@ pub(crate) async fn send_message_inner(
     }
     let reused_agent = guard.is_some();
     if guard.is_none() {
-        let skills = active_skill_index(&state.store, &ap).await;
-        let skills = match specialist.as_ref().and_then(|s| s.skills.as_ref()) {
-            Some(names) => {
-                let set: HashSet<String> = names.iter().cloned().collect();
-                Arc::new(skills.filtered_by_names(Some(&set)))
-            }
-            None => skills,
-        };
+        let skills = specialist_skill_index(&state.store, &ap, specialist.as_ref()).await;
         // Desktop history lives in SQLite. Do not hydrate the project-shared
         // `.wisp/session.json` (CLI leftover / other session) into model context.
         let mut agent = Agent::new_without_session_file(
@@ -631,6 +639,28 @@ pub(crate) async fn send_message_inner(
             ap.id.clone(),
             frame_id.clone(),
         )));
+        if specialist
+            .as_ref()
+            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
+        {
+            if let Some(tool) = depmap_agent::DepMapQueryTool::from_project(
+                ap.root.clone(),
+                skills.as_ref(),
+                state.store.clone(),
+            ) {
+                agent.add_tool(Box::new(tool.evidence_tool()));
+                agent.add_tool(Box::new(tool));
+            }
+            agent.add_tool(Box::new(depmap_agent::DepMapProjectRunsTool::new(
+                state.store.clone(),
+                frame_scope.clone(),
+            )));
+            agent.add_tool(Box::new(depmap_agent::DepMapValidateRunTool::new(
+                state.store.clone(),
+                frame_scope.clone(),
+                ap.root.clone(),
+            )));
+        }
         agent.add_tool(Box::new(research_graph::ResearchGraphTool::new_in_scope(
             state.store.clone(),
             frame_scope.clone(),
@@ -645,6 +675,15 @@ pub(crate) async fn send_message_inner(
             state.store.clone(),
             skills.clone(),
         )));
+        agent.add_tool(Box::new(
+            quick_actions::StartWorkflowTool::new(
+                state.store.clone(),
+                ap.clone(),
+                frame_id.clone(),
+                state.app_data.clone(),
+            )
+            .await,
+        ));
         agent.add_tool(Box::new(specialist_tool::SaveSpecialistTool {
             store: state.store.clone(),
         }));
@@ -698,10 +737,12 @@ pub(crate) async fn send_message_inner(
             );
         }
         agent.seed_system_prompt(&skills, None);
+        let workflow_templates = quick_actions::ensure_templates(&state.store).await;
         if let Some(message) = agent.ctx.messages.first_mut() {
             if let wisp_llm::Content::Text(prompt) = &mut message.content {
                 delegation_runtime::sync_delegation_prompt(prompt, delegation_enabled);
                 plan_mode::sync_plan_prompt(prompt, plan_mode_enabled);
+                quick_actions::sync_workflow_catalog_prompt(prompt, &workflow_templates);
             }
         }
         if let Some(spec) = &specialist {

@@ -2795,6 +2795,16 @@ fn App() -> impl IntoView {
                         }
                     });
                 }
+                // A delegated batch continues after the parent tool call returns.
+                // Surface its live per-task state immediately instead of leaving
+                // the user with only a static "tasks running" tool row.
+                if name == "delegate_tasks"
+                    && ok
+                    && active_cb.get_untracked().as_deref() == Some(frame_id.as_str())
+                {
+                    ensure_right_tab(RightTab::Agents, show_right, open_right_tabs, right_tab);
+                    refresh_agent_workflows(agent_panel);
+                }
                 refresh_transcript_projections(&frame_id);
                 if active_cb.get_untracked().as_deref() == Some(frame_id.as_str()) {
                     schedule_chat_follow();
@@ -6369,6 +6379,22 @@ fn App() -> impl IntoView {
         let approval_pending = approval_pending;
         Callback::new(
             move |(sid, approved, feedback, scope): (String, bool, Option<String>, String)| {
+                let approving_delegation = approved
+                    && if active_session.get_untracked().as_deref() == Some(sid.as_str()) {
+                        items.with_untracked(|rows| {
+                            rows.iter().any(|item| {
+                                matches!(item, ChatItem::ApprovalPending { tool, .. } if tool == "delegate_tasks")
+                            })
+                        })
+                    } else {
+                        transcripts.with_untracked(|cache| {
+                            cache.get(&sid).is_some_and(|rows| {
+                                rows.iter().any(|item| {
+                                    matches!(item, ChatItem::ApprovalPending { tool, .. } if tool == "delegate_tasks")
+                                })
+                            })
+                        })
+                    };
                 route_items(
                     active_session,
                     items,
@@ -6389,6 +6415,15 @@ fn App() -> impl IntoView {
                 spawn_local(async move {
                     let _ = invoke("confirm_response", arg).await;
                 });
+                if approving_delegation {
+                    ensure_right_tab(
+                        RightTab::Agents,
+                        show_right,
+                        open_right_tabs,
+                        right_tab,
+                    );
+                    refresh_agent_workflows(agent_panel);
+                }
             },
         )
     };
@@ -6585,6 +6620,41 @@ fn App() -> impl IntoView {
                 }
             }
             finish_pending_turn(pending_turns, running, &id);
+        });
+    });
+
+    let start_specialist_session = Callback::new(move |specialist_id: String| {
+        if demo_mode.get_untracked() {
+            return;
+        }
+        show_settings.set(false);
+        spawn_local(async move {
+            let id = match invoke_new_session().await {
+                Ok(id) => id,
+                Err(error) => {
+                    status.set(send_failed(locale.get_untracked(), &error));
+                    return;
+                }
+            };
+            let arg = to_value(&serde_json::json!({
+                "frameId": id.clone(),
+                "id": specialist_id.clone()
+            }))
+            .unwrap();
+            if let Err(error) = invoke_checked("set_session_specialist", arg).await {
+                status.set(send_failed(locale.get_untracked(), &js_error_text(error)));
+                return;
+            }
+            active_session.set(Some(id));
+            items.set(vec![]);
+            session_specialist.set(
+                specialists
+                    .get_untracked()
+                    .into_iter()
+                    .find(|specialist| specialist.id == specialist_id),
+            );
+            refresh_session_history();
+            focus_composer();
         });
     });
 
@@ -9002,7 +9072,10 @@ fn App() -> impl IntoView {
         proj_settings_busy.set(true);
         spawn_local(async move {
             let arg = to_value(&serde_json::json!({
-                "name": form.name, "description": form.description, "agentContext": form.agent_context,
+                "name": form.name,
+                "description": form.description,
+                "agentContext": form.agent_context,
+                "defaultSpecialistId": form.default_specialist_id,
             })).unwrap();
             let res = invoke_checked("update_project", arg).await;
             proj_settings_busy.set(false);
@@ -15559,7 +15632,7 @@ fn App() -> impl IntoView {
 
         <ProjSettingsOverlay
             state=ProjSettingsOverlayState {
-                locale, show_proj_settings, proj_settings, proj_settings_busy,
+                locale, show_proj_settings, proj_settings, proj_settings_busy, specialists,
             }
             on_save=Callback::new(save_proj_settings)
         />
@@ -15635,6 +15708,7 @@ fn App() -> impl IntoView {
             test_reviewer_form=Callback::new(test_reviewer_form)
             validate_model_form=Callback::new(validate_model_form)
             start_specialist_chat=start_specialist_chat
+            start_specialist_session=start_specialist_session
             refresh_conns=Callback::new(move |_: ()| refresh_conns())
             refresh_skills=Callback::new(move |_: ()| refresh_skills())
             reload_skills=reload_skills

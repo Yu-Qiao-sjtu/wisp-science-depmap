@@ -367,6 +367,11 @@ const CREDENTIALS: &[Credential] = &[
         secret: "ncbi_email",
         env: "NCBI_EMAIL",
     },
+    Credential {
+        id: "depmap_knowledge_api_token",
+        secret: "depmap_knowledge_api_token",
+        env: "DEPMAP_KNOWLEDGE_API_TOKEN",
+    },
 ];
 
 fn credential(id: &str) -> Option<&'static Credential> {
@@ -556,6 +561,15 @@ pub fn credential_status() -> Vec<(String, bool)> {
         )
     }));
     status
+}
+
+/// Read one registered service credential through the process-lifetime cache.
+/// Callers receive only the value they explicitly name; credential lists and
+/// tool results never include secret values.
+pub(crate) fn service_credential(id: &str) -> Option<String> {
+    let credential = credential(id)?;
+    let value = secret_get(credential.secret);
+    (!value.is_empty()).then_some(value)
 }
 
 /// Store (or clear, when `value` is blank) a credential by id. Returns an

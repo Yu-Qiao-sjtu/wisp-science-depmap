@@ -160,7 +160,7 @@ pub(crate) struct McpAppContext {
     pub(crate) body: String,
 }
 
-pub(crate) fn mcp_app_frame_id(instance_id: &str) -> Result<&str, String> {
+pub(crate) fn mcp_app_identity(instance_id: &str) -> Result<(&str, &str), String> {
     if instance_id.len() > MAX_MCP_APP_INSTANCE_ID_BYTES {
         return Err("MCP App instance id is too long.".into());
     }
@@ -173,13 +173,17 @@ pub(crate) fn mcp_app_frame_id(instance_id: &str) -> Result<&str, String> {
     if frame_id.is_empty() || identity.is_empty() {
         return Err("Invalid MCP App instance id.".into());
     }
-    Ok(frame_id)
+    Ok((frame_id, identity))
+}
+
+pub(crate) fn mcp_app_frame_id(instance_id: &str) -> Result<&str, String> {
+    mcp_app_identity(instance_id).map(|(frame_id, _)| frame_id)
 }
 
 /// Stable tab/bridge identity for one MCP App. Same UI resource (ignoring
 /// query/hash) or tool name reuses the existing center tab; a unique
 /// presentation UUID must not mint a new window.
-pub(crate) fn mcp_app_identity(payload: &serde_json::Value) -> &str {
+pub(crate) fn mcp_app_resource_identity(payload: &serde_json::Value) -> &str {
     let raw = payload
         .pointer("/resource/uri")
         .or_else(|| payload.pointer("/tool/name"))
@@ -194,7 +198,7 @@ pub(crate) fn mcp_app_identity(payload: &serde_json::Value) -> &str {
 }
 
 pub(crate) fn mcp_app_instance_id(frame_id: &str, payload: &serde_json::Value) -> String {
-    format!("mcp-app:{frame_id}:{}", mcp_app_identity(payload))
+    format!("mcp-app:{frame_id}:{}", mcp_app_resource_identity(payload))
 }
 
 pub(crate) fn normalize_mcp_app_context(

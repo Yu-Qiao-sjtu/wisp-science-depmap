@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::State;
+#[cfg(test)]
+use wisp_core::{CapabilityRegistry, DelegationHostPolicy};
 use wisp_llm::{Message, ToolSchema};
 use wisp_store::Store;
 use wisp_tools::{Tool, ToolEnv, ToolResult};
@@ -19,6 +21,8 @@ const LITERATURE_ACTION_ID: &str = "literature_research";
 const LITERATURE_TEMPLATE_ID: &str = "literature_evidence_review";
 const ROUNDTABLE_TEMPLATE_ID: &str = "roundtable";
 const RESEARCH_DESIGN_TEMPLATE_ID: &str = "data_driven_research_design";
+const DEPMAP_TOPIC_TEMPLATE_ID: &str = "depmap_gene_to_cancer_topics";
+const DEPMAP_REPORT_TEMPLATE_ID: &str = "depmap_selected_topic_report";
 const METHOD_SEARCH_TEMPLATE_ID: &str = "develop_computational_method";
 const MAX_ACTION_NAME_CHARS: usize = 80;
 const MAX_TEMPLATE_NAME_CHARS: usize = 100;
@@ -429,6 +433,239 @@ impl Tool for CreateWorkflowTool {
                 .unwrap_or_default(),
             ),
             Err(error) => ToolResult::fail(error),
+        }
+    }
+}
+
+/// Launch a registered Workflow from semantic intent. The tool creates a draft
+/// run that waits for the user's approval in the Agents panel; it never starts
+/// the Workflow itself. This is the semantic counterpart of the composer
+/// Workflow chip: the model picks the template, the user keeps the click.
+pub(crate) struct StartWorkflowTool {
+    store: Store,
+    project: ActiveProject,
+    frame_id: String,
+    app_data: std::path::PathBuf,
+    template_ids: Vec<String>,
+    #[cfg(test)]
+    policy_override: Option<(CapabilityRegistry, DelegationHostPolicy)>,
+}
+
+fn workflow_blocked(code: &str, message: impl Into<String>) -> ToolResult {
+    ToolResult::fail(
+        serde_json::to_string_pretty(&json!({
+            "state": "blocked",
+            "code": code,
+            "message": message.into(),
+            "manual_fallback_allowed": false,
+            "next": "This tool result is the complete user-visible blocker. The turn has ended. Do not query evidence, inspect files, or write a replacement deliverable until the user starts a new turn."
+        }))
+        .unwrap_or_default(),
+    )
+    // This is an authorization boundary, not prompt advice. A failed
+    // registered Workflow with manual_fallback_allowed=false must make any
+    // later calls in the same batch and subsequent model rounds impossible.
+    .stop_turn()
+}
+
+async fn workflow_context_selection(
+    store: &Store,
+    frame_id: &str,
+    template_id: &str,
+    args: &Value,
+) -> Option<String> {
+    if matches!(
+        template_id,
+        DEPMAP_TOPIC_TEMPLATE_ID | DEPMAP_REPORT_TEMPLATE_ID
+    ) {
+        // The model chooses a registered template; it must not rewrite the
+        // scientific scope. Bind the exact latest user request so a broad term
+        // such as 肝癌 cannot silently become HCC in model-supplied context.
+        if let Some(request) = store
+            .load_messages(frame_id)
+            .await
+            .ok()
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|message| message.role == wisp_llm::Role::User && message.tool_name.is_none())
+            .map(|message| message.content.as_text())
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+        {
+            return Some(format!(
+                "Exact current user request (verbatim; do not broaden or narrow it): {request}"
+            ));
+        }
+    }
+    args.get("context")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+        .map(str::to_string)
+}
+
+impl StartWorkflowTool {
+    pub(crate) async fn new(
+        store: Store,
+        project: ActiveProject,
+        frame_id: String,
+        app_data: std::path::PathBuf,
+    ) -> Self {
+        let template_ids = ensure_templates(&store)
+            .await
+            .into_iter()
+            .map(|template| template.id)
+            .collect();
+        Self {
+            store,
+            project,
+            frame_id,
+            app_data,
+            template_ids,
+            #[cfg(test)]
+            policy_override: None,
+        }
+    }
+}
+
+impl StartWorkflowTool {
+    #[cfg(test)]
+    fn overridden_policy(&self) -> Option<delegation_runtime::ProjectDelegationPolicy> {
+        self.policy_override.clone().map(|(registry, host)| {
+            delegation_runtime::ProjectDelegationPolicy {
+                registry,
+                host,
+                resources: crate::delegation_resources::ScientificResourceCatalog::default(),
+            }
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for StartWorkflowTool {
+    fn name(&self) -> &str {
+        "start_workflow"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "start_workflow",
+            "Launch a registered Workflow whose purpose matches the user's intent. Creates a draft run in this conversation and waits for the user's approval in the Agents panel; it does not execute the Workflow. Bind only the user's concrete request (e.g. resolved gene symbol and cancer scope) into context, not remembered evidence or an improvised analysis plan. Use this before direct evidence queries when the intent matches a registered Workflow. If launch is blocked, report the blocker and stop; never rebuild the Workflow by hand. After the draft is approved, the host executes its persisted task graph: do not duplicate any node with direct evidence tools, delegate_tasks, browser search, or an improvised replacement Workflow.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "template_id": {
+                        "type": "string",
+                        "enum": self.template_ids,
+                        "description": "Exact id of the registered Workflow to launch, from the workflow catalog"
+                    },
+                    "context": {
+                        "type": "string",
+                        "maxLength": MAX_SELECTION_CHARS,
+                        "description": "The user's concrete request bound to every task; do not paste the full transcript"
+                    }
+                },
+                "required": ["template_id"]
+            }),
+        )
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        args.get("template_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let Some(template_id) = args
+            .get("template_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return ToolResult::fail("missing required argument 'template_id'");
+        };
+        let Some(template) = ensure_templates(&self.store)
+            .await
+            .into_iter()
+            .find(|template| template.id == template_id)
+        else {
+            return ToolResult::fail(format!(
+                "Workflow '{template_id}' is not registered. Use explain_workflow with '*' to browse available Workflows."
+            ));
+        };
+        let mut proposal = template.proposal.clone();
+        if let Some(context) =
+            workflow_context_selection(&self.store, &self.frame_id, template_id, args).await
+        {
+            let selection = truncate_workflow_text(&context, MAX_SELECTION_CHARS);
+            proposal.context = if proposal.context.trim().is_empty() {
+                selection
+            } else {
+                format!("{}\n\n{selection}", proposal.context.trim())
+            };
+        }
+        // A semantic launch request is an accepted capability request, the
+        // same way attaching the Workflow chip enables delegation.
+        if let Err(error) = delegation_runtime::save_session_delegation_enabled(
+            &self.store,
+            &self.project.id,
+            &self.frame_id,
+            true,
+        )
+        .await
+        {
+            return workflow_blocked("workflow_enablement_unavailable", error);
+        }
+        let policy = {
+            #[cfg(test)]
+            let overridden = self.overridden_policy();
+            #[cfg(not(test))]
+            let overridden: Option<delegation_runtime::ProjectDelegationPolicy> = None;
+            match overridden {
+                Some(policy) => policy,
+                None => {
+                    match delegation_runtime::dynamic_delegation_policy_for_project(
+                        &self.store,
+                        &self.project,
+                        Some(&self.frame_id),
+                        &self.app_data,
+                    )
+                    .await
+                    {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            return workflow_blocked("workflow_policy_unavailable", error)
+                        }
+                    }
+                }
+            }
+        };
+        match delegation_runtime::create_dynamic_agent_workflow_draft(
+            &self.store,
+            &self.project.id,
+            &self.project.root,
+            self.frame_id.clone(),
+            proposal,
+            &(policy.registry.clone(), policy.host.clone()),
+            Some(&policy.resources),
+        )
+        .await
+        {
+            Ok(snapshot) => ToolResult::ok(
+                serde_json::to_string_pretty(&json!({
+                    "started": false,
+                    "workflow_id": snapshot.workflow.id,
+                    "workflow_name": snapshot.workflow.name,
+                    "status": "awaiting_user_approval",
+                    "next": "The Workflow draft is ready in this conversation's Agents panel. Tell the user what it will do and ask them to approve it there. Do not claim it is running or finished. Once the host records approval, do not manually execute, delegate, browse, or recreate any of its persisted tasks; wait for the Workflow's status and completion events."
+                }))
+                .unwrap_or_default(),
+            ),
+            Err(error) => workflow_blocked("workflow_draft_unavailable", error),
         }
     }
 }
@@ -922,6 +1159,370 @@ fn builtin_research_design_template() -> WorkflowTemplate {
     }
 }
 
+fn depmap_evidence_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["gene", "dataset_release", "observations", "coverage_gaps", "provenance"],
+        "properties": {
+            "gene": { "type": "string" },
+            "dataset_release": { "type": "string" },
+            "observations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["module", "finding", "numbers", "evidence_ref", "limitations"],
+                    "properties": {
+                        "module": { "type": "string" },
+                        "finding": { "type": "string" },
+                        "numbers": { "type": "array", "items": { "type": "string" } },
+                        "evidence_ref": { "type": "string" },
+                        "limitations": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            "coverage_gaps": { "type": "array", "items": { "type": "string" } },
+            "provenance": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn depmap_cancer_inventory_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "cancer_scope", "dataset_release", "available_analysis_families",
+            "eligible_lineages", "coverage_gaps", "gene_required_for_next_step"
+        ],
+        "properties": {
+            "cancer_scope": { "type": "string" },
+            "dataset_release": { "type": "string" },
+            "available_analysis_families": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["family", "status", "evidence_ref", "limitations"],
+                    "properties": {
+                        "family": { "type": "string" },
+                        "status": { "type": "string" },
+                        "evidence_ref": { "type": "string" },
+                        "limitations": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            "eligible_lineages": { "type": "array", "items": { "type": "string" } },
+            "coverage_gaps": { "type": "array", "items": { "type": "string" } },
+            "gene_required_for_next_step": { "type": "boolean" }
+        }
+    })
+}
+
+fn depmap_novelty_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["established_findings", "contested_findings", "open_questions", "papers", "search_limitations"],
+        "properties": {
+            "established_findings": { "type": "array", "items": { "type": "string" } },
+            "contested_findings": { "type": "array", "items": { "type": "string" } },
+            "open_questions": { "type": "array", "items": { "type": "string" } },
+            "papers": { "type": "array", "items": { "type": "object" } },
+            "search_limitations": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn depmap_topics_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["gene", "topics"],
+        "properties": {
+            "gene": { "type": "string" },
+            "topics": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "topic_id", "title", "cancer_context", "hypothesis", "depmap_basis",
+                        "literature_basis", "novelty_claim", "validation_plan", "expected_figures", "key_risks"
+                    ],
+                    "properties": {
+                        "topic_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "cancer_context": { "type": "string" },
+                        "hypothesis": { "type": "string" },
+                        "depmap_basis": { "type": "array", "items": { "type": "string" } },
+                        "literature_basis": { "type": "array", "items": { "type": "string" } },
+                        "novelty_claim": { "type": "string" },
+                        "validation_plan": { "type": "array", "items": { "type": "string" } },
+                        "expected_figures": { "type": "array", "items": { "type": "string" } },
+                        "key_risks": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn depmap_review_schema(kind: &str) -> Value {
+    json!({
+        "type": "object",
+        "required": ["review_kind", "topic_reviews"],
+        "properties": {
+            "review_kind": { "const": kind },
+            "topic_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["topic_id", "strengths", "blocking_risks", "score", "next_validation"],
+                    "properties": {
+                        "topic_id": { "type": "string" },
+                        "strengths": { "type": "array", "items": { "type": "string" } },
+                        "blocking_risks": { "type": "array", "items": { "type": "string" } },
+                        "score": { "type": "integer", "minimum": 1, "maximum": 5 },
+                        "next_validation": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn depmap_topic_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "gene", "executive_summary", "ranked_topics", "recommended_topic_id",
+            "evidence_caveats", "figure_plan", "manuscript_plan", "next_conversation_questions"
+        ],
+        "properties": {
+            "gene": { "type": "string" },
+            "executive_summary": { "type": "string" },
+            "ranked_topics": { "type": "array", "items": { "type": "object" } },
+            "recommended_topic_id": { "type": "string" },
+            "evidence_caveats": { "type": "array", "items": { "type": "string" } },
+            "figure_plan": { "type": "array", "items": { "type": "string" } },
+            "manuscript_plan": {
+                "type": "object",
+                "required": ["results_sections", "methods_sections", "figure_legends_needed"],
+                "properties": {
+                    "results_sections": { "type": "array", "items": { "type": "string" } },
+                    "methods_sections": { "type": "array", "items": { "type": "string" } },
+                    "figure_legends_needed": { "type": "array", "items": { "type": "string" } }
+                }
+            },
+            "next_conversation_questions": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn depmap_topic_task(
+    id: &str,
+    instruction: &str,
+    depends_on: &[&str],
+    capabilities: &[&str],
+    skill_ids: &[&str],
+    specialist_id: Option<&str>,
+    output_schema: Value,
+) -> dynamic_workflow::DynamicAgentTaskProposal {
+    dynamic_workflow::DynamicAgentTaskProposal {
+        id: id.into(),
+        instruction: instruction.into(),
+        depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
+        task_kind: wisp_core::WorkflowTaskKind::Agent,
+        run_activity: None,
+        capabilities: capabilities.iter().map(|value| (*value).into()).collect(),
+        skill_ids: skill_ids.iter().map(|value| (*value).into()).collect(),
+        specialist_id: specialist_id.map(str::to_string),
+        output_schema: Some(output_schema),
+        isolated: false,
+        model_id: None,
+        executor: None,
+        budget: None,
+    }
+}
+
+fn with_tool_call_budget(
+    mut task: dynamic_workflow::DynamicAgentTaskProposal,
+    max_tool_calls: u32,
+) -> dynamic_workflow::DynamicAgentTaskProposal {
+    task.budget = Some(dynamic_workflow::AgentBudgetProposal {
+        max_tokens: None,
+        max_tool_calls: Some(max_tool_calls),
+        max_cost_microunits: None,
+    });
+    task
+}
+
+fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal {
+    dynamic_workflow::DynamicAgentWorkflowProposal {
+        goal: "Turn one gene's bounded DepMap evidence into ranked, reviewable cancer research topics".into(),
+        context: "Supply exactly one resolved gene symbol and a cancer scope such as breast cancer. First inventory which precomputed data families are analyzable in that cancer, then use only bounded query results in Agent context; never load a full DepMap matrix. This Workflow proposes topics and a report blueprint. It does not claim experimental validation and does not write a manuscript or figure until the user selects a topic in a later turn.".into(),
+        approval_policy: dynamic_workflow::AgentApprovalPolicy::AutoSafe,
+        tasks: vec![
+            depmap_topic_task(
+                "cancer_data_inventory",
+                "Act as the project DepMap specialist. Call depmap_query exactly once with mode=lineage_catalog and the canonical cancer lineage, whether or not a gene was supplied. This task inventories cancer-level module availability only and must not duplicate the gene-level depmap_evidence task. Inventory dependency, co-dependency, expression, CNV, drug, pathway, and enrichment coverage; preserve release, sample or eligibility metadata, retention rules, evidence references, and coverage gaps. Do not claim that a module is analyzable merely because a raw file exists, do not rank genes, and do not call a new statistical test pure query work.",
+                &[],
+                &["depmap_read"],
+                &["depmap-knowledge-query"],
+                Some(crate::specialists::DEPMAP_SPECIALIST_ID),
+                depmap_cancer_inventory_schema(),
+            ),
+            depmap_topic_task(
+                "depmap_evidence",
+                "Act as the project DepMap specialist; call depmap_evidence once for the user-supplied gene and canonical cancer lineage, and do not load historical Runs for this query-only task. Use the returned focus.core.requested_lineage_summary for current lineage counts and descriptive values; never import a rank, p-value, or sample count from memory. Use depmap_query only for one surgical follow-up not present in the bundle. Cover core dependency, lineage networks, mutation, CNV, pathway/TF enrichment, and drug evidence when available. Preserve exact numbers, metric type, sample sizes, correction status, scope, release provenance, evidence references, and coverage gaps. Mutation/CNV mean differences are not correlations; damaging events are not automatically pathogenic. If no row survives multiple-testing correction, report the null result and do not turn nominal targets into a mechanism or drug hypothesis. A continuous association does not define a high/low subgroup, and one significant section is not the only significant signal when another section also has FDR below threshold. `not_testable` and `INELIGIBLE` are current-provider eligibility states, not proof that a biological route is infeasible. A zero count below a descriptive dependency cutoff must be reported as that observation, not as a categorical no-dependency conclusion. Do not run a new analysis, infer a subgroup from aggregate summaries, or name a drug without returned evidence.",
+                &[],
+                &["depmap_read"],
+                &["depmap-knowledge-query"],
+                Some(crate::specialists::DEPMAP_SPECIALIST_ID),
+                depmap_evidence_schema(),
+            ),
+            with_tool_call_budget(
+                depmap_topic_task(
+                    "novelty_landscape",
+                    "Search verified scholarly evidence for the supplied gene in the user-supplied cancer scope, using a deliberately bounded plan. Start with a broad gene+cancer search, add a targeted contradiction or treatment search only when the first result leaves that downstream claim unsupported, batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Treat the visible Workflow tool budget as a resource ceiling rather than a scientific completeness target: preserve enough budget to synthesize a schema-valid final result, and return verified partial coverage with explicit gaps instead of pursuing exhaustive retrieval until the wall-time deadline. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
+                    &[],
+                    &["literature_search"],
+                    &["literature-review"],
+                    None,
+                    depmap_novelty_schema(),
+                ),
+                8,
+            ),
+            depmap_topic_task(
+                "candidate_topics",
+                "Using only the DepMap evidence and novelty landscape dependency results, propose 3 to 6 distinct, testable cancer research topics. Every topic must identify its cancer context, falsifiable hypothesis, exact DepMap basis, traceable literature basis, defensible novelty claim, validation plan, expected figures, and key risks. Treat a DepMap lineage as a model-grouping proxy rather than a clinical histology: do not silently narrow Liver to HCC, add an unrequested control lineage, or name cell lines without current model metadata. A non-significant top list is a null result and its nominal targets must not seed a biological module, named drug, or mechanism. Do not disguise a generic correlation as a novel mechanism, relabel a mean difference as correlation, attach an unsupported drug, or call a proposed matrix/test/FDR calculation an already completed query.",
+                &["cancer_data_inventory", "depmap_evidence", "novelty_landscape"],
+                &["reasoning"],
+                &[],
+                None,
+                depmap_topics_schema(),
+            ),
+            depmap_topic_task(
+                "innovation_review",
+                "Independently review every candidate topic for novelty. Check prior-art collision, whether the proposed mechanism is already established, whether the DepMap angle is genuinely differentiating, and whether the topic closes a specific knowledge gap. Score every topic from 1 to 5 and state the next literature or data check that could falsify its innovation claim. Use only dependency results and never invent citations.",
+                &["novelty_landscape", "candidate_topics"],
+                &["reasoning", "review"],
+                &["literature-review"],
+                None,
+                depmap_review_schema("innovation"),
+            ),
+            depmap_topic_task(
+                "feasibility_review",
+                "Critically review every candidate topic for data coverage, cohort size, confounding, statistical testability, experimental tractability, reproducibility, cost, and likely failure modes. Score each topic from 1 to 5 and identify the next validation needed. Use only dependency results.",
+                &["cancer_data_inventory", "depmap_evidence", "candidate_topics"],
+                &["reasoning", "review"],
+                &["analysis-workflow"],
+                None,
+                depmap_review_schema("feasibility"),
+            ),
+            depmap_topic_task(
+                "clinical_translation_review",
+                "Critically review every candidate topic for biomarker definition, patient stratification, target or drug actionability, resistance hypotheses, preclinical models, clinical evidence, and translational barriers. Score each topic from 1 to 5. Treat DepMap associations as hypothesis-generating, not clinical validation.",
+                &["depmap_evidence", "novelty_landscape", "candidate_topics"],
+                &["reasoning", "review"],
+                &[],
+                None,
+                depmap_review_schema("clinical_translation"),
+            ),
+            depmap_topic_task(
+                "topic_report",
+                "Synthesize the candidate topics and all three independent reviews into a ranked decision report. Preserve exact evidence and caveats, explain the ranking, recommend one topic without hiding dissent, propose a figure and manuscript section plan, and ask only the few project-defining questions needed for the next conversation. Do not fabricate completed figures, Results, or Methods; those are generated only after topic selection and validated analyses.",
+                &[
+                    "candidate_topics", "innovation_review", "feasibility_review",
+                    "clinical_translation_review"
+                ],
+                &["reasoning"],
+                &[],
+                None,
+                depmap_topic_report_schema(),
+            ),
+        ],
+    }
+}
+
+fn builtin_depmap_topic_template() -> WorkflowTemplate {
+    WorkflowTemplate {
+        id: DEPMAP_TOPIC_TEMPLATE_ID.into(),
+        name: "DepMap gene-to-cancer topics".into(),
+        description: "Query bounded DepMap and literature evidence, generate cancer research topics, independently review feasibility and clinical translation, then rank them with a figure and manuscript blueprint.".into(),
+        proposal: depmap_topic_base_proposal(),
+        builtin: true,
+    }
+}
+
+fn depmap_report_file_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["gene", "cancer_context", "topic_id", "language", "files", "limitations"],
+        "properties": {
+            "gene": { "type": "string" },
+            "cancer_context": { "type": "string" },
+            "topic_id": { "type": "string" },
+            "language": { "type": "string", "enum": ["zh", "en"] },
+            "files": { "type": "array", "items": { "type": "string" } },
+            "limitations": { "type": "array", "items": { "type": "string" } }
+        }
+    })
+}
+
+fn depmap_selected_topic_report_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal {
+    dynamic_workflow::DynamicAgentWorkflowProposal {
+        goal: "Turn one user-selected, evidence-backed DepMap topic into a copy-ready illustrated report".into(),
+        context: "Run only after the user has selected one topic and supplied gene, cancer scope, and output language (zh or en). Every numerical statement must come from bounded DepMap query results or a validated persisted Run. Write only under analysis/depmap-agent/reports/. English output must include copy-ready Results, Methods, figure captions, and evidence-linked figures. Missing evidence must remain an explicit limitation, never a plausible-looking sentence.".into(),
+        approval_policy: dynamic_workflow::AgentApprovalPolicy::ReviewAll,
+        tasks: vec![
+            depmap_topic_task(
+                "report_evidence",
+                "Re-query and freeze the bounded evidence needed for the selected topic. Verify the exact gene, cancer context, dataset release, sample counts, statistics, correction status, coverage gaps, and evidence references. If required analysis is missing or not validated, list it as blocking and do not manufacture report claims.",
+                &[],
+                &["depmap_read", "project_read"],
+                &["depmap-knowledge-query"],
+                Some(crate::specialists::DEPMAP_SPECIALIST_ID),
+                depmap_evidence_schema(),
+            ),
+            depmap_topic_task(
+                "report_figures",
+                "Create the actual evidence-backed figures under analysis/depmap-agent/reports/<gene>-<cancer>-<topic>/figures/. Use only exact dependency evidence, include readable labels and sample sizes, and write a caption with evidence references for every figure. If evidence is insufficient, return the omission as a limitation instead of drawing a decorative or inferred plot.",
+                &["report_evidence"],
+                &["visualization"],
+                &["figure-style", "figure-composer"],
+                None,
+                depmap_report_file_schema(),
+            ),
+            depmap_topic_task(
+                "report_sections",
+                "Write copy-ready Results, Methods, and figure legends under analysis/depmap-agent/reports/<gene>-<cancer>-<topic>/. Match the requested language; for English use publication-style scientific English. Results may report only evidence supplied by report_evidence, Methods must preserve release, cohort, statistics, thresholds, correction and software provenance, and every unsupported mechanistic or clinical statement must be marked as interpretation or limitation.",
+                &["report_evidence"],
+                &["project_write"],
+                &[],
+                None,
+                depmap_report_file_schema(),
+            ),
+            depmap_topic_task(
+                "illustrated_report",
+                "Assemble report.md and report.html in the selected topic report directory. Combine the research rationale, exact evidence, innovation/feasibility/clinical arguments from the selected topic, generated figures, captions, Results, Methods, limitations, and provenance. Use relative image links, provide a copy-ready section index, and return every created path. Do not call a blueprint or missing file a completed report.",
+                &["report_evidence", "report_figures", "report_sections"],
+                &["project_write"],
+                &[],
+                None,
+                depmap_report_file_schema(),
+            ),
+        ],
+    }
+}
+
+fn builtin_depmap_report_template() -> WorkflowTemplate {
+    WorkflowTemplate {
+        id: DEPMAP_REPORT_TEMPLATE_ID.into(),
+        name: "DepMap selected-topic report".into(),
+        description: "After topic selection, verify bounded evidence, generate evidence-backed figures and captions, write Results and Methods, and assemble a copy-ready illustrated Markdown/HTML report.".into(),
+        proposal: depmap_selected_topic_report_proposal(),
+        builtin: true,
+    }
+}
+
 fn method_search_spec_schema() -> Value {
     json!({
         "type": "object",
@@ -1112,6 +1713,8 @@ pub(crate) async fn ensure_templates(store: &Store) -> Vec<WorkflowTemplate> {
         template.id != LITERATURE_TEMPLATE_ID
             && template.id != ROUNDTABLE_TEMPLATE_ID
             && template.id != RESEARCH_DESIGN_TEMPLATE_ID
+            && template.id != DEPMAP_TOPIC_TEMPLATE_ID
+            && template.id != DEPMAP_REPORT_TEMPLATE_ID
             && template.id != METHOD_SEARCH_TEMPLATE_ID
             && !template.builtin
             && validate_template(template).is_ok()
@@ -1119,6 +1722,8 @@ pub(crate) async fn ensure_templates(store: &Store) -> Vec<WorkflowTemplate> {
     templates.push(builtin_literature_template());
     templates.push(builtin_roundtable_template());
     templates.push(builtin_research_design_template());
+    templates.push(builtin_depmap_topic_template());
+    templates.push(builtin_depmap_report_template());
     templates.push(builtin_method_search_template());
     templates.sort_by(|left, right| {
         right
@@ -1257,6 +1862,53 @@ fn truncate_workflow_text(value: &str, max_chars: usize) -> String {
     truncated
 }
 
+const WORKFLOW_CATALOG_PROMPT_START: &str = "\n\n<workflow_catalog>";
+const WORKFLOW_CATALOG_PROMPT_END: &str = "</workflow_catalog>";
+const MAX_CATALOG_DESCRIPTION_CHARS: usize = 200;
+
+/// Compact Workflow directory for the system prompt so the model can match
+/// user intent to a registered Workflow without keyword trigger phrases.
+pub(crate) fn workflow_catalog_section(templates: &[WorkflowTemplate]) -> String {
+    if templates.is_empty() {
+        return String::new();
+    }
+    let mut section = String::from(WORKFLOW_CATALOG_PROMPT_START);
+    section.push_str(
+        "\nRegistered reusable Workflows for this project. When the user's intent \
+         semantically matches one of them, call start_workflow with that template_id \
+         (and a short context carrying the user's specifics) instead of decomposing \
+         ad-hoc delegate_tasks batches or asking the user for trigger phrases. \
+         start_workflow only creates a draft for the user to approve in the Agents \
+         panel; it never runs the Workflow itself, so afterwards describe what the \
+         Workflow will do and ask the user to approve it. Approval and execution are \
+         host-managed. If a later user message says that draft was approved, started, \
+         or asks for its status, do not manually duplicate its persisted nodes with \
+         direct evidence tools, delegate_tasks, browser search, or a replacement \
+         Workflow; wait for and report the host Workflow events.\n",
+    );
+    for template in templates {
+        let description =
+            truncate_workflow_text(template.description.trim(), MAX_CATALOG_DESCRIPTION_CHARS);
+        section.push_str(&format!(
+            "- {}: {} — {description}\n",
+            template.id, template.name
+        ));
+    }
+    section.push_str(WORKFLOW_CATALOG_PROMPT_END);
+    section
+}
+
+pub(crate) fn sync_workflow_catalog_prompt(prompt: &mut String, templates: &[WorkflowTemplate]) {
+    let section = workflow_catalog_section(templates);
+    crate::sync_prompt_section(
+        prompt,
+        WORKFLOW_CATALOG_PROMPT_START,
+        WORKFLOW_CATALOG_PROMPT_END,
+        &section,
+        !section.is_empty(),
+    );
+}
+
 pub(crate) async fn render_workflow_reference(
     store: &Store,
     template_id: &str,
@@ -1282,6 +1934,35 @@ pub(crate) async fn render_workflow_reference(
          </selected_workflow_template>",
         template.name, template.id, template.description, proposal
     ))
+}
+
+/// Resolve an explicitly requested configured Workflow from ordinary composer
+/// text. This keeps natural-language commands such as "run X workflow" on the
+/// same safe path as selecting the Workflow chip: the exact saved template is
+/// attached and delegation is enabled by the caller. Merely mentioning a
+/// workflow name without an execution verb is intentionally not enough.
+pub(crate) async fn explicitly_requested_workflow_id(
+    store: &Store,
+    message: &str,
+) -> Option<String> {
+    let normalized = message.trim().to_lowercase();
+    let requests_execution = ["run", "execute", "start", "运行", "执行", "启动"]
+        .iter()
+        .any(|verb| normalized.contains(verb));
+    let names_workflow = normalized.contains("workflow") || normalized.contains("工作流");
+    if !requests_execution || !names_workflow {
+        return None;
+    }
+    let matches = ensure_templates(store)
+        .await
+        .into_iter()
+        .filter(|template| {
+            normalized.contains(&template.id.to_lowercase())
+                || normalized.contains(&template.name.to_lowercase())
+        })
+        .map(|template| template.id)
+        .collect::<Vec<_>>();
+    (matches.len() == 1).then(|| matches[0].clone())
 }
 
 fn validate_template(template: &WorkflowTemplate) -> Result<(), String> {
@@ -1320,11 +2001,19 @@ async fn upsert_template(
         item.id != LITERATURE_TEMPLATE_ID
             && item.id != ROUNDTABLE_TEMPLATE_ID
             && item.id != RESEARCH_DESIGN_TEMPLATE_ID
+            && item.id != DEPMAP_TOPIC_TEMPLATE_ID
+            && item.id != DEPMAP_REPORT_TEMPLATE_ID
+            && item.id != METHOD_SEARCH_TEMPLATE_ID
             && !item.builtin
     });
     if matches!(
         template.id.as_str(),
-        LITERATURE_TEMPLATE_ID | ROUNDTABLE_TEMPLATE_ID | RESEARCH_DESIGN_TEMPLATE_ID
+        LITERATURE_TEMPLATE_ID
+            | ROUNDTABLE_TEMPLATE_ID
+            | RESEARCH_DESIGN_TEMPLATE_ID
+            | DEPMAP_TOPIC_TEMPLATE_ID
+            | DEPMAP_REPORT_TEMPLATE_ID
+            | METHOD_SEARCH_TEMPLATE_ID
     ) || template.builtin
     {
         return Err("Built-in Workflows are read-only. Duplicate one to customize it.".into());
@@ -1488,7 +2177,12 @@ pub(crate) async fn remove_workflow_template(
 ) -> Result<Vec<WorkflowTemplate>, String> {
     if matches!(
         template_id.as_str(),
-        LITERATURE_TEMPLATE_ID | ROUNDTABLE_TEMPLATE_ID | RESEARCH_DESIGN_TEMPLATE_ID
+        LITERATURE_TEMPLATE_ID
+            | ROUNDTABLE_TEMPLATE_ID
+            | RESEARCH_DESIGN_TEMPLATE_ID
+            | DEPMAP_TOPIC_TEMPLATE_ID
+            | DEPMAP_REPORT_TEMPLATE_ID
+            | METHOD_SEARCH_TEMPLATE_ID
     ) {
         return Err("Built-in Workflows cannot be removed.".into());
     }
@@ -1822,6 +2516,214 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    #[tokio::test]
+    async fn explicit_workflow_command_resolves_to_the_saved_template() {
+        let (store, path) = store().await;
+        assert_eq!(
+            explicitly_requested_workflow_id(&store, "请运行 Data-driven research design 工作流。")
+                .await
+                .as_deref(),
+            Some(RESEARCH_DESIGN_TEMPLATE_ID)
+        );
+        assert_eq!(
+            explicitly_requested_workflow_id(&store, "run develop_computational_method workflow")
+                .await
+                .as_deref(),
+            Some(METHOD_SEARCH_TEMPLATE_ID)
+        );
+        assert_eq!(
+            explicitly_requested_workflow_id(
+                &store,
+                "请运行 DepMap gene-to-cancer topics 工作流，论证 KRAS。",
+            )
+            .await
+            .as_deref(),
+            Some(DEPMAP_TOPIC_TEMPLATE_ID)
+        );
+        assert_eq!(
+            explicitly_requested_workflow_id(
+                &store,
+                "Run the DepMap selected-topic report workflow for ESR1 breast cancer.",
+            )
+            .await
+            .as_deref(),
+            Some(DEPMAP_REPORT_TEMPLATE_ID)
+        );
+        assert!(
+            explicitly_requested_workflow_id(&store, "What is Data-driven research design?")
+                .await
+                .is_none()
+        );
+        assert!(explicitly_requested_workflow_id(&store, "运行工作流")
+            .await
+            .is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn depmap_topic_template_is_evidence_then_independent_review_then_report() {
+        let proposal = depmap_topic_base_proposal();
+        dynamic_workflow::validate_proposal(&proposal).unwrap();
+        assert_eq!(
+            proposal.approval_policy,
+            dynamic_workflow::AgentApprovalPolicy::AutoSafe
+        );
+        assert_eq!(proposal.tasks.len(), 8);
+
+        let inventory = &proposal.tasks[0];
+        assert_eq!(inventory.id, "cancer_data_inventory");
+        assert_eq!(inventory.capabilities, ["depmap_read"]);
+        assert!(inventory
+            .instruction
+            .contains("sample or eligibility metadata"));
+        assert!(inventory.instruction.contains("mode=lineage_catalog"));
+        assert!(inventory
+            .instruction
+            .contains("must not duplicate the gene-level depmap_evidence task"));
+
+        let evidence = &proposal.tasks[1];
+        assert_eq!(evidence.id, "depmap_evidence");
+        assert_eq!(
+            evidence.specialist_id.as_deref(),
+            Some(crate::specialists::DEPMAP_SPECIALIST_ID)
+        );
+        assert_eq!(evidence.skill_ids, ["depmap-knowledge-query"]);
+        assert_eq!(evidence.capabilities, ["depmap_read"]);
+        assert!(evidence.instruction.contains("call depmap_evidence once"));
+        assert!(evidence
+            .instruction
+            .contains("never import a rank, p-value, or sample count from memory"));
+
+        let literature = &proposal.tasks[2];
+        assert_eq!(literature.id, "novelty_landscape");
+        assert!(literature.depends_on.is_empty());
+        assert_eq!(literature.capabilities, ["literature_search"]);
+        assert_eq!(
+            literature
+                .budget
+                .as_ref()
+                .and_then(|budget| budget.max_tool_calls),
+            Some(8)
+        );
+        assert!(literature
+            .instruction
+            .contains("visible Workflow tool budget"));
+        assert!(literature
+            .instruction
+            .contains("verified partial coverage with explicit gaps"));
+        assert!(!literature.instruction.contains("after six"));
+
+        let candidates = &proposal.tasks[3];
+        assert!(candidates
+            .instruction
+            .contains("non-significant top list is a null result"));
+        assert_eq!(
+            candidates.depends_on,
+            [
+                "cancer_data_inventory",
+                "depmap_evidence",
+                "novelty_landscape"
+            ]
+        );
+        assert_eq!(
+            candidates
+                .output_schema
+                .as_ref()
+                .unwrap()
+                .pointer("/properties/topics/minItems"),
+            Some(&json!(3))
+        );
+        assert!(candidates
+            .output_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/topics/items/required")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|field| field == "literature_basis"));
+
+        let innovation = &proposal.tasks[4];
+        let feasibility = &proposal.tasks[5];
+        let translation = &proposal.tasks[6];
+        assert_eq!(innovation.id, "innovation_review");
+        assert_eq!(feasibility.id, "feasibility_review");
+        assert_eq!(translation.id, "clinical_translation_review");
+        assert!(!feasibility.depends_on.contains(&translation.id));
+        assert!(!translation.depends_on.contains(&feasibility.id));
+
+        let report = &proposal.tasks[7];
+        assert_eq!(report.id, "topic_report");
+        assert_eq!(
+            report.depends_on,
+            [
+                "candidate_topics",
+                "innovation_review",
+                "feasibility_review",
+                "clinical_translation_review"
+            ]
+        );
+        let required = report.output_schema.as_ref().unwrap()["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&json!("figure_plan")));
+        assert!(required.contains(&json!("manuscript_plan")));
+        assert!(proposal
+            .tasks
+            .iter()
+            .filter(|task| task.id != "novelty_landscape")
+            .all(|task| task.budget.is_none()));
+    }
+
+    #[test]
+    fn breast_cancer_topic_to_report_acceptance_contract_is_complete() {
+        let topics = depmap_topic_base_proposal();
+        dynamic_workflow::validate_proposal(&topics).unwrap();
+        assert!(topics.context.contains("breast cancer"));
+        for (id, kind) in [
+            ("innovation_review", "innovation"),
+            ("feasibility_review", "feasibility"),
+            ("clinical_translation_review", "clinical_translation"),
+        ] {
+            let task = topics.tasks.iter().find(|task| task.id == id).unwrap();
+            assert_eq!(
+                task.output_schema
+                    .as_ref()
+                    .unwrap()
+                    .pointer("/properties/review_kind/const"),
+                Some(&json!(kind))
+            );
+        }
+
+        let report = depmap_selected_topic_report_proposal();
+        dynamic_workflow::validate_proposal(&report).unwrap();
+        assert_eq!(
+            report.approval_policy,
+            dynamic_workflow::AgentApprovalPolicy::ReviewAll
+        );
+        assert_eq!(report.tasks.len(), 4);
+        assert_eq!(
+            report.tasks[0].capabilities,
+            ["depmap_read", "project_read"]
+        );
+        assert_eq!(
+            report.tasks[1].skill_ids,
+            ["figure-style", "figure-composer"]
+        );
+        assert!(report.tasks[1]
+            .capabilities
+            .contains(&"visualization".into()));
+        assert!(report.tasks[2].instruction.contains("Results, Methods"));
+        assert_eq!(report.tasks[3].id, "illustrated_report");
+        assert_eq!(
+            report.tasks[3].depends_on,
+            ["report_evidence", "report_figures", "report_sections"]
+        );
+        assert!(report.tasks[3].instruction.contains("report.html"));
+        assert!(report.context.contains("zh or en"));
+        assert!(report.context.contains("validated persisted Run"));
+    }
+
     #[test]
     fn literature_template_is_parallel_then_serial() {
         let proposal = bind_selection(literature_base_proposal(), &input());
@@ -1968,7 +2870,19 @@ mod tests {
         let saved = upsert_template(&store, custom_template()).await.unwrap();
         assert_eq!(saved.id, "workflow_1");
         let templates = ensure_templates(&store).await;
-        assert_eq!(templates.len(), 5);
+        assert_eq!(
+            templates
+                .iter()
+                .filter(|template| !template.builtin)
+                .count(),
+            1
+        );
+        assert!(templates
+            .iter()
+            .any(|template| template.id == DEPMAP_TOPIC_TEMPLATE_ID && template.builtin));
+        assert!(templates
+            .iter()
+            .any(|template| template.id == DEPMAP_REPORT_TEMPLATE_ID && template.builtin));
         let action = QuickAction {
             id: String::new(),
             name: "Compare".into(),
@@ -2234,6 +3148,227 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workflow_catalog_section_lists_templates_with_semantic_guidance() {
+        let section = workflow_catalog_section(&[builtin_depmap_topic_template()]);
+        assert!(section.contains(DEPMAP_TOPIC_TEMPLATE_ID));
+        assert!(section.contains("DepMap gene-to-cancer topics"));
+        assert!(section.contains("start_workflow"));
+        assert!(section.contains("approve"));
+        assert!(section.contains("do not manually duplicate"));
+        assert!(workflow_catalog_section(&[]).is_empty());
+    }
+
+    #[test]
+    fn workflow_catalog_prompt_syncs_idempotently_and_clears_when_empty() {
+        let templates = [builtin_depmap_topic_template()];
+        let mut prompt = "Base prompt".to_string();
+        sync_workflow_catalog_prompt(&mut prompt, &templates);
+        sync_workflow_catalog_prompt(&mut prompt, &templates);
+        assert_eq!(prompt.matches("<workflow_catalog>").count(), 1);
+        assert!(prompt.contains(DEPMAP_TOPIC_TEMPLATE_ID));
+        sync_workflow_catalog_prompt(&mut prompt, &[]);
+        assert_eq!(prompt, "Base prompt");
+    }
+
+    async fn project_fixture() -> (Store, ActiveProject, std::path::PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("wisp_start_workflow_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("store.sqlite");
+        let store = Store::open(&database).await.unwrap();
+        store
+            .create_project("p", "Project", &root.to_string_lossy())
+            .await
+            .unwrap();
+        store
+            .create_frame("f", "p", "OPERON", "wisp")
+            .await
+            .unwrap();
+        let project = ActiveProject {
+            id: "p".into(),
+            root: root.clone(),
+            skills: std::sync::Arc::new(wisp_skills::SkillIndex::load(&[])),
+            memory: std::sync::Arc::new(wisp_core::MemoryManager::new(&root)),
+        };
+        (store, project, root)
+    }
+
+    /// Mirrors the delegation tool's test policy: a local executor with the
+    /// capability set the catalog templates need, without a configured model.
+    fn test_policy() -> (
+        wisp_core::CapabilityRegistry,
+        wisp_core::DelegationHostPolicy,
+    ) {
+        use wisp_core::{
+            AgentBudget, AgentExecutorRef, CapabilityRegistry, ContextPolicy, DelegationHostPolicy,
+            ExecutorFeature, ExecutorProfilePolicy, ModelProfilePolicy, PermissionSet,
+        };
+        (
+            CapabilityRegistry::builtins(),
+            DelegationHostPolicy {
+                revision: "start-workflow-test-v1".into(),
+                enabled_capabilities: vec![
+                    "reasoning".into(),
+                    "project_read".into(),
+                    "project_write".into(),
+                    "review".into(),
+                ],
+                models: vec![ModelProfilePolicy {
+                    id: "local".into(),
+                    features: vec![],
+                    external: false,
+                    enabled: true,
+                }],
+                executors: vec![ExecutorProfilePolicy {
+                    executor: AgentExecutorRef::Native,
+                    features: vec![
+                        ExecutorFeature::ProjectRead,
+                        ExecutorFeature::ProjectWrite,
+                        ExecutorFeature::CodeExecution,
+                    ],
+                    model_ids: vec!["local".into()],
+                    enabled: true,
+                }],
+                default_model_id: Some("local".into()),
+                permission_ceiling: PermissionSet {
+                    tools: vec![
+                        "read".into(),
+                        "search".into(),
+                        "grep".into(),
+                        "write".into(),
+                        "edit".into(),
+                    ],
+                    paths: vec!["project://**".into()],
+                    network: false,
+                    write: true,
+                    execute: true,
+                },
+                context_ceiling: ContextPolicy {
+                    include_history: false,
+                    include_artifacts: true,
+                    max_tokens: Some(32_000),
+                },
+                budget_ceiling: AgentBudget {
+                    max_tokens: Some(32_000),
+                    max_tool_calls: Some(64),
+                    max_cost_microunits: Some(1_000_000),
+                },
+                default_timeout_secs: Some(5),
+                timeout_ceiling_secs: Some(5),
+                auto_safe: true,
+                ..DelegationHostPolicy::default()
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn start_workflow_schema_advertises_every_registered_template() {
+        let (store, project, root) = project_fixture().await;
+        let tool = StartWorkflowTool::new(store, project, "f".into(), root.join("app-data")).await;
+        let schema = tool.schema();
+        let ids: Vec<&str> = schema.function.parameters["properties"]["template_id"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&DEPMAP_TOPIC_TEMPLATE_ID));
+        assert!(ids.contains(&DEPMAP_REPORT_TEMPLATE_ID));
+        assert!(schema.function.description.contains("approval"));
+        assert!(schema
+            .function
+            .description
+            .contains("do not duplicate any node"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn start_workflow_creates_an_awaiting_approval_draft_and_enables_delegation() {
+        let (store, project, root) = project_fixture().await;
+        let saved = upsert_template(&store, custom_template()).await.unwrap();
+        let tool = StartWorkflowTool {
+            store: store.clone(),
+            project,
+            frame_id: "f".into(),
+            app_data: root.join("app-data"),
+            template_ids: vec![saved.id.clone()],
+            policy_override: Some(test_policy()),
+        };
+        let result = tool
+            .run(
+                &json!({"template_id": saved.id, "context": "breast cancer, ESR1"}),
+                &NoEnv(root.clone()),
+            )
+            .await;
+        assert!(result.success, "{}", result.content);
+        let payload: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(payload["started"], false);
+        assert_eq!(payload["status"], "awaiting_user_approval");
+        assert!(payload["next"]
+            .as_str()
+            .unwrap()
+            .contains("do not manually execute"));
+        let workflow_id = payload["workflow_id"].as_str().unwrap().to_string();
+        let workflow = store
+            .get_agent_workflow(&workflow_id)
+            .await
+            .expect("draft workflow persisted")
+            .expect("draft workflow exists");
+        assert!(workflow.approved_at.is_none());
+        assert_eq!(workflow.frame_id.as_deref(), Some("f"));
+        // The user's specifics are bound into the shared task context.
+        assert!(workflow.plan_json.contains("breast cancer, ESR1"));
+        assert!(delegation_runtime::session_delegation_enabled(&store, "f").await);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn start_workflow_rejects_unregistered_templates() {
+        let (store, project, root) = project_fixture().await;
+        let tool = StartWorkflowTool::new(store, project, "f".into(), root.join("app-data")).await;
+        let failed = tool
+            .run(&json!({"template_id": "nope"}), &NoEnv(root.clone()))
+            .await;
+        assert!(!failed.success);
+        assert!(failed.content.contains("not registered"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_registered_workflow_blocker_is_a_host_enforced_turn_boundary() {
+        let blocked = workflow_blocked(
+            "workflow_draft_unavailable",
+            "capability is disabled or unavailable: depmap_read",
+        );
+        assert!(!blocked.success);
+        assert_eq!(blocked.control, wisp_tools::ToolControl::StopTurn);
+        let payload: Value = serde_json::from_str(&blocked.content).unwrap();
+        assert_eq!(payload["manual_fallback_allowed"], false);
+        assert!(payload["next"].as_str().unwrap().contains("turn has ended"));
+    }
+
+    #[tokio::test]
+    async fn depmap_workflow_binds_the_exact_user_scope_not_a_model_paraphrase() {
+        let (store, _project, root) = project_fixture().await;
+        store
+            .append_message("f", 1, &Message::user("我的课题是肝癌与ATF5 设计课题"))
+            .await
+            .unwrap();
+        let context = workflow_context_selection(
+            &store,
+            "f",
+            DEPMAP_TOPIC_TEMPLATE_ID,
+            &json!({"context":"ATF5；用户语境为肝细胞癌/HCC"}),
+        )
+        .await
+        .unwrap();
+        assert!(context.contains("我的课题是肝癌与ATF5 设计课题"));
+        assert!(!context.contains("肝细胞癌"));
+        assert!(!context.contains("HCC"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

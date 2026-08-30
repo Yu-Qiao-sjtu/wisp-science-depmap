@@ -2587,6 +2587,10 @@ pub struct ProjectSettings {
     pub description: String,
     #[serde(default)]
     pub agent_context: String,
+    /// Specialist automatically attached to future conversations in this
+    /// project. Existing conversations retain their frozen Specialist.
+    #[serde(default)]
+    pub default_specialist_id: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3851,6 +3855,10 @@ pub struct AgentResultSummary {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub tool_calls: i64,
+    #[serde(default)]
+    pub activity_messages: i64,
+    #[serde(default)]
+    pub last_activity_at: Option<i64>,
     pub cost_microunits: i64,
     pub duration_secs: Option<i64>,
     pub full_result_available: bool,

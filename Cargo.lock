@@ -7165,6 +7165,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wisp-core",
+ "wisp-dto",
  "wisp-llm",
  "wisp-mcp",
  "wisp-runtime",

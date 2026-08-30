@@ -1,0 +1,112 @@
+{
+  "schema_version": 2,
+  "release": "26Q1",
+  "purpose": "Describe which bounded query families can be answered from the precomputed knowledge base. This is not the raw-data computation capability manifest.",
+  "query_families": [
+    {
+      "id": "catalog",
+      "mode": "catalog",
+      "required_paths": [
+        "depmap-26q1-qa.json",
+        "depmap-26q1-module-catalog.csv"
+      ]
+    },
+    {
+      "id": "gene_core",
+      "mode": "core",
+      "required_paths": [
+        "depmap-26q1-core/gene_core_summary.parquet",
+        "depmap-26q1-core/lineage_blocks"
+      ]
+    },
+    {
+      "id": "pair_or_top",
+      "mode": "pair|top",
+      "modules": [
+        "effect_correlation",
+        "expression_correlation",
+        "expression_dependency",
+        "damaging_mutation_dependency",
+        "custom_missense_mutation_dependency",
+        "hotspot_mutation_dependency",
+        "cnv_amplification_dependency"
+      ],
+      "required_path_template": "depmap-26q1-full/{module}"
+    },
+    {
+      "id": "lineage_event",
+      "mode": "lineage",
+      "modules": [
+        "lineage_damaging_mutation_dependency",
+        "lineage_custom_missense_mutation_dependency",
+        "lineage_hotspot_mutation_dependency"
+      ],
+      "required_path_template": "depmap-26q1-full/{module}"
+    },
+    {
+      "id": "pathway_dependency",
+      "mode": "pathway",
+      "required_paths": [
+        "depmap-26q1-full/progeny_dependency/progeny_pathway_dependency_associations.csv"
+      ]
+    },
+    {
+      "id": "drug_association",
+      "mode": "drug",
+      "modules": [
+        "prism_auc_effect_correlation",
+        "prism_auc_expression_correlation",
+        "prism_auc_cnv_correlation"
+      ],
+      "required_path_template": "depmap-26q1-full/{module}"
+    },
+    {
+      "id": "lineage_sparse_networks",
+      "mode": "lineage_network",
+      "modules": [
+        "lineage_sparse_networks/effect_correlation",
+        "lineage_sparse_networks/expression_correlation",
+        "lineage_sparse_networks/expression_dependency"
+      ],
+      "required_path_template": "depmap-26q1-full/{module}"
+    },
+    {
+      "id": "lineage_cnv_amplification_dependency",
+      "mode": "lineage_cnv",
+      "required_paths": [
+        "depmap-26q1-full/lineage_cnv_amplification_dependency"
+      ]
+    },
+    {
+      "id": "lineage_prism_associations",
+      "mode": "lineage_drug",
+      "required_paths": [
+        "depmap-26q1-full/lineage_prism_associations"
+      ]
+    },
+    {
+      "id": "lineage_gene_enrichment",
+      "mode": "enrichment",
+      "required_paths": [
+        "depmap-26q1-full/lineage_gene_enrichment"
+      ]
+    },
+    {
+      "id": "tcga_expression_survival",
+      "mode": "tcga_expression_survival",
+      "required_paths": [
+        "depmap-26q1-tcga/qa.json",
+        "depmap-26q1-tcga/project_catalog.csv",
+        "depmap-26q1-tcga/projects"
+      ]
+    }
+  ],
+  "known_non_coverage": [
+    "arbitrary user-defined cohorts",
+    "covariate-adjusted or multivariable models not present in a module manifest",
+    "model-level rows when only aggregate blocks were retained",
+    "clinical interpretation and literature claims",
+    "new thresholds or multiple-testing families",
+    "AMG193-specific AUC analysis when the user-supplied AMG193 input is absent"
+  ]
+}

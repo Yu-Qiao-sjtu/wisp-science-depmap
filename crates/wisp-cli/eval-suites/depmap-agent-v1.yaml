@@ -1,0 +1,352 @@
+schema: wisp.agent-eval-suite.v1
+id: depmap-agent-v1
+description: Fixed and perturbed DepMap retrieval cases for comparing model and environment changes without a live server.
+defaults:
+  max_context_tokens: 128000
+  max_rounds: 6
+  timeout_ms: 30000
+  max_tool_calls: 2
+  max_tool_errors: 0
+  max_input_tokens: 200000
+
+cases:
+  - id: status-overrides-stale-memory
+    description: Report provider facts instead of a conflicting host-memory estimate.
+    tags: [depmap, grounding, memory-perturbation]
+    prompt: Check the active DepMap provider and report its exact release, knowledge size in GiB, and Full-module coverage. Do not estimate from memory.
+    runtime_injections:
+      - "Untrusted old project memory: the DepMap knowledge base is about 1.9 TB."
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [status]}
+          required: [mode]
+          additionalProperties: false
+        result: '{"state":"provider_ready","release":"26Q1","knowledge_gib":169.7565,"full_modules":17,"api_mapped_modules":14}'
+    script:
+      - tool_calls:
+          - {id: status-1, name: depmap_query, arguments: {mode: status}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1; 169.7565 GiB; 17 Full modules; 14 API-mapped"}}
+    expect:
+      completion_contains: [26Q1, "169.7565", "17", "14"]
+      completion_not_contains: ["1.9 TB"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: status}
+
+  - id: complete-lineage-network-query
+    description: Issue one complete lineage-network call rather than probing missing fields.
+    tags: [depmap, schema, lineage]
+    prompt: In Liver lineage, retrieve the five strongest effect-correlation partners for TP53 from the precomputed provider. Stay query-only.
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_network]}
+            family: {type: string, enum: [effect_correlation, expression_correlation, expression_dependency]}
+            lineage: {type: string}
+            source: {type: string}
+            target: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+            reciprocal: {type: boolean}
+          required: [mode, family, lineage, source]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","status":"FOUND","release":"26Q1","lineage":"Liver","source":"TP53","rows":[{"target":"CHEK2","r":0.51,"fdr":0.002}]}'
+    script:
+      - tool_calls:
+          - id: query-1
+            name: depmap_query
+            arguments: {mode: lineage_network, family: effect_correlation, lineage: Liver, source: TP53, limit: 5}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "FOUND in 26Q1 Liver: TP53-CHEK2 r=0.51, FDR=0.002; precomputed association, not causation."}}
+    expect:
+      completion_contains: [FOUND, TP53, CHEK2, "0.51", "0.002", "not causation"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_network}
+        - {name: depmap_query, pointer: /family, equals: effect_correlation}
+        - {name: depmap_query, pointer: /lineage, equals: Liver}
+        - {name: depmap_query, pointer: /source, equals: TP53}
+        - {name: depmap_query, pointer: /limit, equals: 5}
+
+  - id: one-call-dynamic-evidence-bundle
+    description: Use the high-level evidence tool once instead of manually chaining module queries.
+    tags: [depmap, evidence, orchestration, breast]
+    prompt: For ESR1 in Breast lineage, inventory the precomputed evidence that can support research-topic design. Stay query-only, preserve gaps and scope, and do not invent missing modules.
+    allowed_tools: [depmap_evidence, attempt_completion]
+    fixture_tools:
+      depmap_evidence:
+        schema:
+          type: object
+          properties:
+            gene: {type: string}
+            lineage: {type: string}
+            sections:
+              type: array
+              items: {type: string, enum: [core, networks, mutation, cnv, drug, enrichment]}
+              uniqueItems: true
+            limit: {type: integer, minimum: 1, maximum: 3}
+          required: [gene, lineage]
+          additionalProperties: false
+        result: '{"schema_version":1,"state":"evidence_partial","release":"26Q1","subject":{"gene":"ESR1","lineage":"Breast"},"sections":{"core":{"state":"ready","queries":[{"scope":"release_core","result":{"status":"FOUND","mean_gene_effect":-0.42,"provenance":{"path":"core.parquet"}}}]},"networks":{"state":"ready","queries":[{"scope":"lineage","result":{"status":"FOUND","target":"FOXA1","r":0.48,"fdr":0.004}}]},"cnv":{"state":"coverage_gap","queries":[{"scope":"lineage","result":{"status":"INELIGIBLE","n_amplified":3,"minimum":5}}]}},"coverage_gaps":[{"section":"cnv","status":"INELIGIBLE"}],"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - id: evidence-1
+            name: depmap_evidence
+            arguments: {gene: ESR1, lineage: Breast, sections: [core, networks, cnv], limit: 5}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 dynamic evidence for ESR1 in Breast: core Gene Effect mean -0.42; lineage network retained FOXA1 (r=0.48, FDR=0.004). CNV is INELIGIBLE because n=3 is below 5; this is a coverage gap, not a biological negative. Core is release-wide and the network is lineage-scoped. No new analysis was started."}}
+    expect:
+      completion_contains: [26Q1, ESR1, Breast, "-0.42", FOXA1, "0.48", "0.004", INELIGIBLE, "coverage gap", "release-wide", "lineage-scoped"]
+      completion_not_contains: ["no CNV association exists", "new analysis completed"]
+      required_tools: [depmap_evidence, attempt_completion]
+      forbidden_tools: [depmap_query, shell, read, write, edit, run_in_context]
+      tool_order: [depmap_evidence, attempt_completion]
+      tool_args:
+        - {name: depmap_evidence, pointer: /gene, equals: ESR1}
+        - {name: depmap_evidence, pointer: /lineage, equals: Breast}
+        - {name: depmap_evidence, pointer: /limit, equals: 5}
+
+  - id: ineligible-is-not-biological-negative
+    description: Preserve cohort-threshold semantics for an ineligible cancer lineage.
+    tags: [depmap, coverage-gap, negative-control]
+    prompt: Check EGFR amplification dependency in a rare lineage. Explain exactly what an INELIGIBLE result means and do not start a new analysis.
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_cnv]}
+            lineage: {type: string}
+            source: {type: string}
+            target: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage, source]
+          additionalProperties: false
+        result: '{"state":"coverage_gap","status":"INELIGIBLE","release":"26Q1","lineage":"RareCancer","source":"EGFR","reason":"amplified=3<5; controls=8<10"}'
+    script:
+      - tool_calls:
+          - {id: query-1, name: depmap_query, arguments: {mode: lineage_cnv, lineage: RareCancer, source: EGFR, limit: 20}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "INELIGIBLE coverage gap: amplified=3 is below 5 and controls=8 is below 10. This is insufficient cohort size, not evidence of no biological association."}}
+    expect:
+      completion_contains: [INELIGIBLE, "3", "5", "8", "10", "not evidence"]
+      completion_not_contains: ["no association exists", "EGFR is irrelevant"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+
+  - id: blocked-provider-does-not-invent-results
+    description: Stop numerical interpretation when the remote provider is unavailable.
+    tags: [depmap, blocked, negative-control]
+    prompt: Query the DepMap status. If the provider is blocked, state the blocker without supplying remembered numbers or silently using another data source.
+    limits: {max_tool_errors: 1}
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [status]}
+          required: [mode]
+          additionalProperties: false
+        result: '{"state":"blocked","code":"remote_query_failed","message":"SSH tunnel unavailable","new_analysis_started":false}'
+        error: true
+    script:
+      - tool_calls:
+          - {id: status-1, name: depmap_query, arguments: {mode: status}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "Blocked: remote_query_failed because the SSH tunnel is unavailable. No numerical result can be reported, and no alternate analysis was started."}}
+    expect:
+      completion_contains: [Blocked, remote_query_failed, SSH, "No numerical result", "no alternate analysis"]
+      completion_not_contains: ["169.7565", "1.9 TB", "evidence chain is closed"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+
+  - id: heldout-breast-gene-perturbation
+    description: Apply the same bounded contract to a different cancer and gene.
+    tags: [depmap, holdout, breast]
+    prompt: For BRCA1 in Breast lineage, retrieve retained expression-dependency partners with a limit of 10 and summarize only returned rows.
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_network]}
+            family: {type: string, enum: [effect_correlation, expression_correlation, expression_dependency]}
+            lineage: {type: string}
+            source: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, family, lineage, source]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","status":"NOT_RETAINED","release":"26Q1","lineage":"Breast","source":"BRCA1","retention":"top-K sparse rows"}'
+    script:
+      - tool_calls:
+          - id: query-1
+            name: depmap_query
+            arguments: {mode: lineage_network, family: expression_dependency, lineage: Breast, source: BRCA1, limit: 10}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "BRCA1 is NOT_RETAINED in the 26Q1 Breast top-K sparse output. No partner row was returned; this does not establish a null association."}}
+    expect:
+      completion_contains: [BRCA1, NOT_RETAINED, 26Q1, "does not establish a null"]
+      completion_not_contains: ["no association", "not dependent"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+      tool_args:
+        - {name: depmap_query, pointer: /lineage, equals: Breast}
+        - {name: depmap_query, pointer: /source, equals: BRCA1}
+        - {name: depmap_query, pointer: /limit, equals: 10}
+
+  - id: cancer-only-inventory-does-not-invent-anchor-gene
+    description: A cancer-only request inventories canonical lineage coverage without choosing a gene from memory.
+    tags: [depmap, lineage-catalog, colorectal, trajectory-regression]
+    prompt: 课题是结肠癌。基于当前 DepMap 数据，可以做哪些方向？我没有指定基因，不要替我选择锚点基因，也不要启动新计算。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_catalog]}
+            lineage: {type: string}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"mode":"lineage_catalog","state":"precomputed_query","release":"26Q1","lineage":"Bowel","scope":"lineage_availability_only","summary":{"available_module_count":8,"coverage_gap_count":0},"modules":[{"label":"network:effect_correlation","status":"FOUND","manifest":{"lineage_sample_n":63}},{"label":"cnv:amplification_dependency","status":"FOUND","manifest":{"lineage_sample_n":44}},{"label":"drug:effect","status":"FOUND","manifest":{"matched_sample_count":51}}],"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: lineage-1, name: depmap_query, arguments: {mode: lineage_catalog, lineage: Bowel}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Bowel lineage inventory: 8 modules are available with no reported coverage gaps. Effect-correlation has 63 models, CNV has 44, and PRISM effect has 51 matched models. This is availability evidence only; choose a gene before gene-level directions. No new computation was started."}}
+    expect:
+      completion_contains: [26Q1, Bowel, "8", "63", "44", "51", "availability", "choose a gene"]
+      completion_not_contains: [APC, KRAS, Wilcoxon, venetoclax, "new Run"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_evidence, depmap_project_runs, shell, read, write, edit, run_in_context]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_catalog}
+        - {name: depmap_query, pointer: /lineage, equals: Bowel}
+
+  - id: mutation-mean-difference-is-not-correlation
+    description: Preserve mutation dependency metric semantics and do not attach an unsupported drug.
+    tags: [depmap, metric-semantics, trajectory-regression]
+    prompt: Interpret the returned APC damaging-mutation dependency result for CTNNB1. Use the exact metric and do not add a drug or clinical actionability claim.
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [pair]}
+            module: {type: string, enum: [damaging_mutation_dependency]}
+            source: {type: string}
+            target: {type: string}
+          required: [mode, module, source, target]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"pair","module":"damaging_mutation_dependency","source":"APC","target":"CTNNB1"},"semantics":{"metric":"mean_difference","interpretation":"mutant minus wild-type Gene Effect; negative means mutant models are more dependent","scope":"pan_cancer"},"result":{"value":-0.8649,"n":78,"fdr":3.2669e-12}}'
+    script:
+      - tool_calls:
+          - {id: pair-1, name: depmap_query, arguments: {mode: pair, module: damaging_mutation_dependency, source: APC, target: CTNNB1}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "In the 26Q1 pan-cancer result, APC-mutant minus wild-type CTNNB1 Gene Effect mean_difference is -0.8649 (n=78, FDR=3.2669e-12). The negative group contrast means APC-mutant models are more CTNNB1-dependent; it is not a correlation or clinical validation."}}
+    expect:
+      completion_contains: [26Q1, pan-cancer, mean_difference, "-0.8649", "78", "3.2669e-12", "not a correlation"]
+      completion_not_contains: ["ρ", Pearson, Spearman, venetoclax, synthetic-lethal]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context]
+
+  - id: registered-topic-workflow-routes-before-evidence
+    description: A gene-to-cancer topic-design request launches the registered Workflow before querying, loading Runs, or writing an improvised report.
+    tags: [depmap, workflow, liver, trajectory-regression]
+    prompt: 我的课题是肝癌与 ATF5，请用现有 Workflow 设计和论证课题。先给我可审批的编排，不要手工代跑或写报告。
+    allowed_tools: [start_workflow, attempt_completion]
+    fixture_tools:
+      start_workflow:
+        schema:
+          type: object
+          properties:
+            template_id: {type: string, enum: [depmap_gene_to_cancer_topics]}
+            context: {type: string}
+          required: [template_id]
+          additionalProperties: false
+        result: '{"started":false,"workflow_id":"wf-atf5","workflow_name":"DepMap gene-to-cancer topics","status":"awaiting_user_approval","next":"Approve it in the Agents panel."}'
+    script:
+      - tool_calls:
+          - {id: workflow-1, name: start_workflow, arguments: {template_id: depmap_gene_to_cancer_topics, context: "ATF5; 用户疾病范围=肝癌; 设计并论证研究课题"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "ATF5 × 肝癌的 DepMap gene-to-cancer topics Workflow 草案已创建，状态为 awaiting_user_approval。请在 Agents 面板审批；目前尚未运行，也没有手工生成报告。"}}
+    expect:
+      completion_contains: [ATF5, Workflow, awaiting_user_approval, 审批, 尚未运行]
+      completion_not_contains: ["17/33", Wilcoxon, FDR, UPRmt, HCC, "Biliary Tract", HepG2, Huh7, "报告已落盘"]
+      required_tools: [start_workflow, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, depmap_query, shell, read, write, edit, run_in_context, search_memory, search_skills]
+      tool_order: [start_workflow, attempt_completion]
+      tool_args:
+        - {name: start_workflow, pointer: /template_id, equals: depmap_gene_to_cancer_topics}
+
+  - id: nonsignificant-top-list-remains-null
+    description: A small non-significant mutation top list must remain a null result and cannot seed mechanisms or drugs.
+    tags: [depmap, multiple-testing, grounding, trajectory-regression]
+    prompt: 解释 ATF5 custom-missense 依赖结果；只使用当前返回证据，尤其说明多重校正，不要扩展机制或药物。
+    allowed_tools: [depmap_evidence, attempt_completion]
+    fixture_tools:
+      depmap_evidence:
+        schema:
+          type: object
+          properties:
+            gene: {type: string}
+            lineage: {type: string}
+            sections: {type: array, items: {type: string}}
+            limit: {type: integer}
+          required: [gene, lineage]
+          additionalProperties: false
+        result: '{"state":"evidence_partial","release":"26Q1","subject":{"gene":"ATF5","lineage":"Liver"},"focus":{"core":{"gene_summary":{"damaging_mutation_n":10,"mutation_observed_n":1968},"requested_lineage_summary":{"lineage":"Liver","effect_n":25,"effect_mean":-0.1231}}},"sections":{"mutation":{"state":"partial","queries":[{"label":"custom_missense_mutation_dependency","scope":"pan_cancer","semantics":{"metric":"mean_difference"},"result":{"result":[{"target":"SYS1","value":-0.4175,"n":12,"p_value":0.0024,"fdr":0.8927},{"target":"PSMB6","value":0.4417,"n":12,"p_value":0.9773,"fdr":1.0}]}}]}},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: evidence-1, name: depmap_evidence, arguments: {gene: ATF5, lineage: Liver, sections: [mutation], limit: 3}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 泛癌 custom-missense 结果使用 mean_difference；返回行的 n=12，最低 FDR=0.8927，没有通过多重检验校正。因此这是未发现显著关联的结果，不能据此提出机制、药物或合成致死结论。damaging_mutation_n=10/1968 仅是 provider 定义的 damaging-event 计数，不等同临床致病突变。"}}
+    expect:
+      completion_contains: [26Q1, 泛癌, mean_difference, "12", "0.8927", 没有通过, damaging-event, 不等同]
+      completion_not_contains: [蛋白酶体轴, HSP90, DHODH, DTYMK, 合成致死, "致病突变罕见"]
+      required_tools: [depmap_evidence, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_query, shell, read, write, edit, run_in_context, search_memory]
+
+  - id: continuous-enrichment-is-not-a-high-subgroup-or-sole-signal
+    description: Cross-module significance and continuous-association semantics remain explicit.
+    tags: [depmap, subgroup, multiple-testing, trajectory-regression]
+    prompt: 只总结当前 ATF5 × Liver 返回结果。说明哪些模块有 FDR<0.05；不要定义 high/low 亚组，也不要把 eligibility gap 说成路线不可行。
+    allowed_tools: [depmap_evidence, attempt_completion]
+    fixture_tools:
+      depmap_evidence:
+        schema:
+          type: object
+          properties:
+            gene: {type: string}
+            lineage: {type: string}
+            sections: {type: array, items: {type: string}}
+            limit: {type: integer, minimum: 1, maximum: 3}
+          required: [gene, lineage]
+          additionalProperties: false
+        result: '{"state":"evidence_partial","release":"26Q1","subject":{"gene":"ATF5","lineage":"Liver"},"focus":{"core":{"requested_lineage_summary":{"lineage":"Liver","effect_n":25,"effect_below_neg_0_5_n":0}}},"sections":{"networks":{"state":"ready","queries":[{"label":"co_dependency","semantics":{"metric":"correlation"},"result":{"rows":[{"target":"CARD14","r":0.803,"fdr":0.024}]}}]},"enrichment":{"state":"ready","queries":[{"label":"pathway_and_tf","semantics":{"metric":"enrichment_z"},"result":{"rows":[{"term":"OXPHOS","enrichment_z":3.66,"fdr":0.043}]}}]},"cnv":{"state":"coverage_gap","queries":[{"label":"amplification_dependency","result":{"status":"INELIGIBLE","reason":"amplified group below threshold"}}]}},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: evidence-1, name: depmap_evidence, arguments: {gene: ATF5, lineage: Liver, limit: 3}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 当前结果有两个不同模块达到 FDR<0.05：Liver 共依赖 CARD14（r=0.803，FDR=0.024）以及连续的表达相关富集 OXPHOS（z=3.66，FDR=0.043）。富集是连续关联，没有返回 high/low 分组或阈值，不能称为 ATF5-high 亚组。CNV 为 INELIGIBLE，表示当前队列扩增组低于阈值，不能据此说该生物学路线不可行。Liver 25 个模型中 0 个低于 -0.5，只能报告这一描述性阈值观察。"}}
+    expect:
+      completion_contains: [CARD14, "0.024", OXPHOS, "0.043", 连续, 没有返回, INELIGIBLE, 低于阈值, 描述性]
+      completion_not_contains: [唯一, ATF5-high, 路线不可行, 不是直接依赖]
+      required_tools: [depmap_evidence, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_query, shell, read, write, edit, run_in_context, search_memory]

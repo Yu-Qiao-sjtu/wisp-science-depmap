@@ -603,6 +603,7 @@ pub(crate) struct ProjSettingsOverlayState {
     pub(crate) show_proj_settings: RwSignal<bool>,
     pub(crate) proj_settings: RwSignal<ProjectSettings>,
     pub(crate) proj_settings_busy: RwSignal<bool>,
+    pub(crate) specialists: RwSignal<Vec<Specialist>>,
 }
 
 #[component]
@@ -615,6 +616,7 @@ pub(crate) fn ProjSettingsOverlay(
         show_proj_settings,
         proj_settings,
         proj_settings_busy,
+        specialists,
     } = state;
     // Retention is stored per project and saved immediately on change; empty
     // means the automatic sweep stays off.
@@ -685,6 +687,23 @@ pub(crate) fn ProjSettingsOverlay(
                         <textarea class="ps-textarea" rows="2"
                             prop:value=move || proj_settings.get().description
                             on:input=move |ev| { let v = event_target_value(&ev); proj_settings.update(|s| s.description = v); }></textarea>
+                    </label>
+                    <label>
+                        <span class="ps-label">{move || t(locale.get(), "proj_settings.default_specialist")}</span>
+                        <span class="ps-hint">{move || t(locale.get(), "proj_settings.default_specialist_hint")}</span>
+                        <select data-testid="project-default-specialist"
+                            prop:value=move || proj_settings.get().default_specialist_id
+                            on:change=move |ev| {
+                                let value = event_target_value(&ev);
+                                proj_settings.update(|settings| settings.default_specialist_id = value);
+                            }>
+                            <option value="">{move || t(locale.get(), "proj_settings.default_specialist_none")}</option>
+                            <For each=move || specialists.get() key=|specialist| specialist.id.clone()
+                                children=move |specialist| view! {
+                                    <option value=specialist.id>{specialist.name}</option>
+                                }
+                            />
+                        </select>
                     </label>
                     <label>
                         <span class="ps-label">{move || t(locale.get(), "proj_settings.agent_context")}</span>

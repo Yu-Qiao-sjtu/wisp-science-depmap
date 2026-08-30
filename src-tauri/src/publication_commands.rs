@@ -851,6 +851,7 @@ mod tests {
             workspace.lineage[0].exact_version_id.as_deref(),
             Some("artifact-v2")
         );
+        store.close().await;
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -914,6 +915,7 @@ mod tests {
                 .await
                 .is_err()
         );
+        store.close().await;
         std::fs::remove_dir_all(root).unwrap();
     }
 }

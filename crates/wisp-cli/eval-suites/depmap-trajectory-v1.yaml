@@ -1,0 +1,49 @@
+schema: wisp.depmap-trajectory-rubric.v1
+id: depmap-gene-to-cancer-real-trajectory-v1
+description: Initial SLOs for the real three-turn liver-cancer trajectory; these are regression gates, not a claim of globally optimal model-call counts.
+
+limits:
+  max_tool_error_rate_percent: 5
+  max_invalid_depmap_queries: 0
+  max_remote_query_failures: 0
+  max_duplicate_tool_calls: 2
+  max_memory_marker_mentions: 1
+
+turns:
+  - turn: 1
+    max_model_rounds: 8
+    max_input_tokens: 200000
+    required_tools: [depmap_query]
+    forbidden_tools: [shell, run_in_context]
+  - turn: 2
+    max_model_rounds: 20
+    max_input_tokens: 1000000
+    required_tools: [depmap_validate_run]
+  - turn: 3
+    max_model_rounds: 20
+    max_input_tokens: 1000000
+    required_tools: [depmap_validate_run]
+
+forbidden_model_text:
+  - "1.9 TB"
+  - "证据链已闭环"
+  - "WGCNA"
+
+memory_markers:
+  - "global memory"
+  - "旧项目 depmap_0823"
+
+invalid_query_markers:
+  - '"code": "invalid_query"'
+  - '"code":"invalid_query"'
+
+remote_failure_markers:
+  - '"code": "remote_query_failed"'
+  - '"code":"remote_query_failed"'
+
+manual_review:
+  - Every reported number resolves to a successful bounded query or a validated persisted Run.
+  - Dataset release and snapshot fingerprint match when precomputed evidence and raw-data Runs use different roots.
+  - Innovation, feasibility, and clinical-translation scores are independently produced for every candidate topic.
+  - Negative findings remain negative; observational associations are not described as causal, synthetic lethal, clinically actionable, or a closed evidence chain.
+  - Figures, captions, Results, and Methods agree with the validated result and QC artifacts.

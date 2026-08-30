@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name          TEXT,
     description   TEXT,
     workspace_dir TEXT NOT NULL DEFAULT '',
+    default_specialist_id TEXT NOT NULL DEFAULT '',
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     run_retention_days        INTEGER,
@@ -95,6 +96,17 @@ CREATE TABLE IF NOT EXISTS session_ui_events (
     event_json TEXT NOT NULL,
     PRIMARY KEY(frame_id, seq)
 );
+
+CREATE TABLE IF NOT EXISTS mcp_app_snapshots (
+    frame_id        TEXT NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+    presentation_id TEXT NOT NULL,
+    app_kind        TEXT NOT NULL,
+    snapshot_json   TEXT NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY(frame_id, presentation_id)
+);
+CREATE INDEX IF NOT EXISTS ix_mcp_app_snapshots_frame_updated
+    ON mcp_app_snapshots(frame_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id              TEXT PRIMARY KEY,

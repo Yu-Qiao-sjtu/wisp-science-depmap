@@ -1006,6 +1006,20 @@ pub(crate) struct CredGroup {
 
 pub(crate) const CRED_GROUPS: &[CredGroup] = &[
     CredGroup {
+        id: "depmap",
+        name_key: "cred.depmap.name",
+        about_key: "cred.depmap.about",
+        configured_key: "cred.depmap.configured",
+        unconfigured_key: "cred.depmap.unconfigured",
+        hint_key: "cred.depmap.hint",
+        links: &[],
+        fields: &[CredField {
+            id: "depmap_knowledge_api_token",
+            label_key: "cred.depmap_knowledge_api_token.label",
+            secret: true,
+        }],
+    },
+    CredGroup {
         id: "openalex",
         name_key: "cred.openalex.name",
         about_key: "cred.openalex.about",

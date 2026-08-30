@@ -7,8 +7,8 @@
 //! bridge.
 
 use crate::{
-    active_skill_index, bio_domains, kernel_worker_path, load_disabled_connectors,
-    load_mcp_connections, r_kernel_worker_path, ActiveProject,
+    bio_domains, kernel_worker_path, load_disabled_connectors, load_mcp_connections,
+    r_kernel_worker_path, ActiveProject,
 };
 use serde::Serialize;
 use std::{collections::HashSet, path::Path};
@@ -74,7 +74,11 @@ impl ScientificResourceCatalog {
         frame_id: Option<&str>,
         app_data: &Path,
     ) -> Result<Self, String> {
-        let skills = active_skill_index(store, project).await;
+        let specialist = match frame_id {
+            Some(frame_id) => crate::specialists::session_specialist(store, frame_id).await,
+            None => None,
+        };
+        let skills = crate::specialist_skill_index(store, project, specialist.as_ref()).await;
         let enabled_skills = skills
             .all()
             .iter()
@@ -211,6 +215,27 @@ impl ScientificResourceCatalog {
 
     pub(crate) fn has_runtime(&self) -> bool {
         self.python || self.r
+    }
+
+    pub(crate) fn has_depmap(&self) -> bool {
+        self.enabled_skills
+            .iter()
+            .any(|skill| skill == "depmap-knowledge-query")
+    }
+
+    /// Exact resource ids advertised to the capability resolver. Enabling a
+    /// capability is not sufficient on its own: definitions such as
+    /// `depmap_read` also require the backing Skill to be present in the host
+    /// policy's `available_skills` set.
+    pub(crate) fn available_skill_ids(&self) -> Vec<String> {
+        self.enabled_skills.clone()
+    }
+
+    pub(crate) fn available_connector_ids(&self) -> Vec<String> {
+        self.connectors
+            .iter()
+            .map(|connector| connector.id.clone())
+            .collect()
     }
 
     pub(crate) fn revision(&self) -> String {
@@ -774,6 +799,22 @@ mod tests {
         let tools = &registry.get("visualization").unwrap().permissions.tools;
         assert!(tools.contains(&"python".into()));
         assert!(!tools.contains(&"r".into()));
+    }
+
+    #[test]
+    fn depmap_skill_enables_only_the_bounded_query_capability() {
+        let catalog =
+            ScientificResourceCatalog::fake(&["depmap-knowledge-query"], &[], &[], &[], &[]);
+        assert!(catalog.has_depmap());
+        let registry = catalog.capability_registry().unwrap();
+        let capability = registry.get("depmap_read").unwrap();
+        assert_eq!(
+            capability.permissions.tools,
+            ["depmap_query", "depmap_evidence"]
+        );
+        assert!(capability.permissions.network);
+        assert!(!capability.permissions.write);
+        assert!(!capability.permissions.execute);
     }
 
     #[test]

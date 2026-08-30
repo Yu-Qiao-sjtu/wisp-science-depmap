@@ -173,6 +173,15 @@ length is included in the composer reference card and structured chat context;
 it is calculated locally from the selected sequence and does not require a
 model call.
 
+After a successful local or project-file import, Wisp saves the resulting Motif
+record payload as a versioned, session-owned MCP App snapshot in SQLite. A
+conversation switch parks the live workbench, while a later session reload or
+Wisp restart rebuilds the workbench from that saved payload. Viewing the saved
+DNA records therefore does not require the original MCP process to remain
+connected. The live transport itself, pending tool calls, and server
+capabilities are deliberately not serialized; importing more files still
+requires a live Motif connection.
+
 Run this acceptance test natively on Windows as well. Wisp keeps canonical
 containment checks but passes ordinary drive-letter paths to Node MCP entrypoints;
 Windows verbatim (`\\?\`) paths are not valid Node entry-script arguments.

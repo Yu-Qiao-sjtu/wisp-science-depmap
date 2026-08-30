@@ -3157,6 +3157,42 @@ async function callMotifOpen(instance, motifArgs) {
   return result;
 }
 
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function motifRecords(result) {
+  const records = result?.structuredContent?.payload?.records;
+  return Array.isArray(records) ? records : [];
+}
+
+function motifSnapshotResult(instance, incoming, append) {
+  const added = motifRecords(incoming);
+  if (added.length === 0) throw new Error("Motif did not return any DNA records.");
+  let snapshot = cloneJson(incoming);
+  if (append) {
+    const existing = motifRecords(instance.payload?.result);
+    const combined = [...cloneJson(existing), ...cloneJson(added)];
+    snapshot = existing.length > 0 ? cloneJson(instance.payload.result) : snapshot;
+    snapshot.structuredContent ||= {};
+    snapshot.structuredContent.payload ||= {};
+    snapshot.structuredContent.payload.records = combined;
+    snapshot.structuredContent.recordCount = combined.length;
+    snapshot.structuredContent.residueCount = combined.reduce((total, record) => (
+      total + String(record?.sequence ?? record?.seq ?? "").length
+    ), 0);
+  }
+  instance.payload.result = snapshot;
+  return snapshot;
+}
+
+async function saveMotifSnapshot(instance, result) {
+  await invoke_strict("save_motif_workbench_snapshot", {
+    instanceId: instance.id,
+    result,
+  });
+}
+
 function motifBridgeRequest(instance, method, params = {}) {
   return new Promise((resolve, reject) => {
     const requestId = ++instance.motifRequestId;
@@ -3204,10 +3240,12 @@ export async function import_motif_dna_file(instanceId) {
   );
 
   const result = await callMotifOpen(instance, motifArgs);
+  const snapshot = motifSnapshotResult(instance, result, false);
+  await saveMotifSnapshot(instance, snapshot);
   instance.frame.contentWindow.postMessage({
     jsonrpc: "2.0",
     method: "ui/notifications/tool-result",
-    params: result || { content: [] },
+    params: snapshot,
   }, "*");
   return {
     imported: true,
@@ -3226,9 +3264,11 @@ export async function add_workspace_file_to_motif(instanceId, path) {
   const filename = String(path).split(/[\\/]/).pop() || "sequence";
   const bytes = await previewBytes({ path, maxBytes: 32 * 1024 * 1024 });
   const result = await callMotifOpen(instance, motifArgumentsForBytes(bytes, filename));
-  const records = result?.structuredContent?.payload?.records;
-  if (!Array.isArray(records) || records.length === 0) throw new Error("Motif did not return any DNA records.");
+  const records = motifRecords(result);
+  if (records.length === 0) throw new Error("Motif did not return any DNA records.");
   await motifBridgeRequest(instance, "wisp/motif-add-records", { records });
+  const snapshot = motifSnapshotResult(instance, result, true);
+  await saveMotifSnapshot(instance, snapshot);
   return { imported: true, filename, recordCount: records.length };
 }
 

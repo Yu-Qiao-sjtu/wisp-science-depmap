@@ -28,6 +28,13 @@ pub trait Tool: Send + Sync {
     fn read_only(&self) -> bool {
         false
     }
+    /// Optional ingestion budget for this tool's textual result. The global
+    /// `WISP_TOOL_RESULT_BUDGET` override still wins. Tools should use this
+    /// only for intentionally bounded, self-contained contracts where spilling
+    /// the result would cause a more expensive or less safe read-back loop.
+    fn context_result_budget(&self) -> Option<usize> {
+        None
+    }
     /// One-line preview shown in the tool-call card (e.g. the file path).
     fn preview(&self, _args: &Value) -> String {
         String::new()

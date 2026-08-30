@@ -310,10 +310,17 @@ fn root_limits_for_plan(
         },
         max_tasks: MAX_ROOT_AGENT_TASKS,
         max_parallel: u32::try_from(plan.max_parallel).unwrap_or(2).clamp(1, 2),
+        // Per-task max_tokens limits generated output, while root accounting
+        // intentionally includes both input and output tokens. Scientific
+        // workflows that read several bounded artifacts can therefore consume
+        // substantially more root input than the sum of their output ceilings.
+        // Keep the aggregate guard bounded, but provide four times the legacy
+        // allowance so a valid five-node fan-in can reach synthesis.
         max_tokens: multiply(
             host.budget_ceiling.max_tokens.map(u64::from),
             defaults.max_tokens / u64::from(MAX_ROOT_AGENT_TASKS),
-        ),
+        )
+        .max(defaults.max_tokens.saturating_mul(4)),
         max_tool_calls: multiply(
             host.budget_ceiling.max_tool_calls.map(u64::from),
             defaults.max_tool_calls / u64::from(MAX_ROOT_AGENT_TASKS),
@@ -602,7 +609,27 @@ async fn load_workflow_snapshot(
         .map_err(|error| error.to_string())?;
     let plan = stored_dynamic_plan(&workflow)?;
     let approval_policy = dynamic_workflow::AgentApprovalPolicy::from_mode(plan.mode);
-    let dynamic = dynamic_workflow::summarize(&plan, &attempts)?;
+    let mut dynamic = dynamic_workflow::summarize(&plan, &attempts)?;
+    for task in &mut dynamic.tasks {
+        let Some(result) = task.result.as_mut() else {
+            continue;
+        };
+        let Some(child_frame_id) = result.child_frame_id.as_deref() else {
+            continue;
+        };
+        let (message_count, live_tool_calls, last_activity_at) = store
+            .frame_message_activity(child_frame_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        result.activity_messages = message_count;
+        result.last_activity_at = last_activity_at;
+        // Terminal usage remains authoritative when it exists. A timed-out or
+        // still-running attempt can have zero finalized usage despite dozens
+        // of already-persisted tool results, so fill that blind spot only.
+        if result.tool_calls == 0 {
+            result.tool_calls = live_tool_calls;
+        }
+    }
     Ok(AgentWorkflowSnapshot {
         workflow,
         steps,
@@ -1168,7 +1195,9 @@ async fn build_dynamic_delegation_policy(
         ExecutorFeature::CodeExecution,
         ExecutorFeature::Delegation,
     ];
-    if resources.is_some_and(|resources| resources.has_external() || resources.has_literature()) {
+    if resources.is_some_and(|resources| {
+        resources.has_external() || resources.has_literature() || resources.has_depmap()
+    }) {
         native_features.push(ExecutorFeature::NetworkAccess);
     }
     if resources.is_some_and(|resources| resources.has_literature()) {
@@ -1239,6 +1268,9 @@ async fn build_dynamic_delegation_policy(
         "review".into(),
         "delegation".into(),
     ];
+    if resources.is_some_and(crate::delegation_resources::ScientificResourceCatalog::has_depmap) {
+        enabled_capabilities.push("depmap_read".into());
+    }
     if resources.is_some_and(|resources| resources.has_literature()) {
         enabled_capabilities.push("literature_search".into());
     }
@@ -1273,6 +1305,10 @@ async fn build_dynamic_delegation_policy(
     if resources.is_some_and(|resources| resources.has_external()) {
         permission_tools.push(crate::delegation_resources::EXTERNAL_TOOL_GRANT.into());
     }
+    if resources.is_some_and(crate::delegation_resources::ScientificResourceCatalog::has_depmap) {
+        permission_tools.push("depmap_query".into());
+        permission_tools.push("depmap_evidence".into());
+    }
     if resources.is_some_and(|resources| resources.python) {
         permission_tools.push("python".into());
     }
@@ -1288,14 +1324,21 @@ async fn build_dynamic_delegation_policy(
     let host = DelegationHostPolicy {
         revision,
         enabled_capabilities,
+        available_skills: resources
+            .map(crate::delegation_resources::ScientificResourceCatalog::available_skill_ids)
+            .unwrap_or_default(),
+        available_connectors: resources
+            .map(crate::delegation_resources::ScientificResourceCatalog::available_connector_ids)
+            .unwrap_or_default(),
         models: model_policies,
         executors,
         default_model_id,
         permission_ceiling: PermissionSet {
             tools: permission_tools,
             paths: vec!["project://**".into()],
-            network: resources
-                .is_some_and(|resources| resources.has_external() || resources.has_literature()),
+            network: resources.is_some_and(|resources| {
+                resources.has_external() || resources.has_literature() || resources.has_depmap()
+            }),
             write: true,
             execute: true,
         },
@@ -2530,6 +2573,32 @@ impl AgentDelegator for NativeDelegator {
             .collect::<HashSet<_>>();
         let skills = Arc::new(project_skills.filtered_by_names(Some(&skill_allow)));
         let mut tools = wisp_core::build_registry(skills, self.project.memory.clone(), false);
+        let depmap_query_granted = request
+            .spec
+            .permissions
+            .tools
+            .iter()
+            .any(|tool| tool == "depmap_query");
+        let depmap_evidence_granted = request
+            .spec
+            .permissions
+            .tools
+            .iter()
+            .any(|tool| tool == "depmap_evidence");
+        let depmap_tools_available = (depmap_query_granted || depmap_evidence_granted)
+            && specialist_from_request(&request).is_some_and(|specialist| {
+                specialist.id == crate::specialists::DEPMAP_SPECIALIST_ID
+            })
+            && crate::depmap_agent::DepMapQueryTool::from_project(
+                self.project.root.clone(),
+                project_skills.as_ref(),
+                self.store.clone(),
+            )
+            .is_some_and(|tool| {
+                tools.add(Box::new(tool.evidence_tool()));
+                tools.add(Box::new(tool));
+                true
+            });
         tools.add(Box::new(
             crate::session_context_tool::SessionExecutionContextTool::new(
                 Box::new(crate::run_context::RunInContextTool::new(
@@ -2612,6 +2681,14 @@ impl AgentDelegator for NativeDelegator {
             ));
         }
         let mut allowed_tools = native_tool_allowlist(&request);
+        if depmap_tools_available {
+            if depmap_query_granted {
+                allowed_tools.push("depmap_query".into());
+            }
+            if depmap_evidence_granted {
+                allowed_tools.push("depmap_evidence".into());
+            }
+        }
         if nested_delegation {
             allowed_tools.push("delegate_tasks".into());
             allowed_tools.push("get_delegated_result".into());
@@ -2825,6 +2902,7 @@ fn native_tool_allowlist(request: &AgentDelegationRequest) -> Vec<String> {
             "run_in_context" | "get_run" | "cancel_run" | "prepare_method_search" => {
                 request.spec.permissions.execute && !reviewer
             }
+            "depmap_query" | "depmap_evidence" => request.spec.permissions.network,
             _ => false,
         };
         if permitted && !allowed.iter().any(|existing| existing == name) {
@@ -4973,7 +5051,7 @@ mod tests {
     async fn project_policy_advertises_only_discovered_scientific_resources() {
         let (store, root) = dynamic_fixture().await;
         let resources = crate::delegation_resources::ScientificResourceCatalog::fake(
-            &["literature-review"],
+            &["literature-review", "depmap-knowledge-query"],
             &["literature-review"],
             &["pubmed"],
             &["web"],
@@ -4984,9 +5062,22 @@ mod tests {
                 .await
                 .unwrap();
 
-        for capability in ["literature_search", "external_research", "visualization"] {
+        for capability in [
+            "depmap_read",
+            "literature_search",
+            "external_research",
+            "visualization",
+        ] {
             assert!(host.enabled_capabilities.contains(&capability.into()));
         }
+        assert!(host
+            .available_skills
+            .contains(&"depmap-knowledge-query".into()));
+        assert!(host.available_connectors.contains(&"pubmed".into()));
+        assert!(host.available_connectors.contains(&"web".into()));
+        assert!(registry
+            .available_ids(&host)
+            .contains(&"depmap_read".into()));
         assert!(host.permission_ceiling.network);
         assert!(host
             .permission_ceiling
@@ -4994,6 +5085,14 @@ mod tests {
             .contains(&"literature_search".into()));
         assert!(host.permission_ceiling.tools.contains(&"web_search".into()));
         assert!(host.permission_ceiling.tools.contains(&"python".into()));
+        assert!(host
+            .permission_ceiling
+            .tools
+            .contains(&"depmap_query".into()));
+        assert!(host
+            .permission_ceiling
+            .tools
+            .contains(&"depmap_evidence".into()));
         assert!(!host.permission_ceiling.tools.contains(&"r".into()));
         assert_eq!(
             registry.get("visualization").unwrap().permissions.tools,
@@ -5033,6 +5132,31 @@ mod tests {
             approval_policy: AgentApprovalPolicy::ReviewAll,
             tasks,
         }
+    }
+
+    #[tokio::test]
+    async fn dynamic_root_budget_allows_bounded_scientific_fan_in_input() {
+        let (store, root) = dynamic_fixture().await;
+        let policy = test_dynamic_policy();
+        let created = create_dynamic_agent_workflow_draft(
+            &store,
+            "p",
+            &root,
+            "f".into(),
+            dynamic_proposal(vec![
+                dynamic_task("analysis", &[]),
+                dynamic_task("review", &[]),
+                dynamic_task("synthesis", &["analysis", "review"]),
+            ]),
+            &policy,
+            None,
+        )
+        .await
+        .unwrap();
+        let limits: AgentDelegationRootLimits =
+            serde_json::from_str(&created.workflow.root_limits_json).unwrap();
+        assert_eq!(limits.max_tokens, 1_024_000);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5452,6 +5576,35 @@ mod tests {
             native_tool_allowlist(&request),
             vec!["read", "search", "grep"]
         );
+    }
+
+    #[test]
+    fn native_depmap_reader_receives_only_the_bounded_query_tool() {
+        let request = AgentDelegationRequest {
+            request_id: "request".into(),
+            workflow_id: "workflow".into(),
+            step_id: "depmap".into(),
+            spec: serde_json::from_value(json!({
+                "agent_id": "depmap-reader",
+                "name": "DepMap reader",
+                "goal": "Read bounded evidence",
+                "role": "temporary",
+                "backend": "local",
+                "prompt_template": "Query only.",
+                "permissions": {
+                    "tools": ["depmap_query"],
+                    "paths": ["project://**"],
+                    "network": true,
+                    "write": false,
+                    "execute": false
+                },
+                "capabilities": ["depmap_read"]
+            }))
+            .unwrap(),
+            input: json!({}),
+            lineage: None,
+        };
+        assert_eq!(native_tool_allowlist(&request), ["depmap_query"]);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Workflow Studio editor and persisted Agent workflow activity surface.
 
-use crate::app_support::compose_icon;
+use crate::app_support::{compose_icon, format_relative_time};
 use crate::bindings::invoke_checked;
 use crate::dto::*;
 use crate::i18n::{t, tf, Locale};
@@ -3761,6 +3761,33 @@ fn dynamic_workflow_card(
     let root_workflow_id = workflow.root_workflow_id.clone();
     let parent_attempt_id = workflow.parent_attempt_id.clone().unwrap_or_default();
     let depth = workflow.depth;
+    let task_count = dynamic.tasks.len();
+    let completed_count = dynamic
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.result.as_ref().is_some_and(|result| {
+                matches!(result.status.as_str(), "succeeded" | "failed" | "cancelled")
+            })
+        })
+        .count();
+    let running_tasks = dynamic
+        .tasks
+        .iter()
+        .filter_map(|task| {
+            task.result
+                .as_ref()
+                .is_some_and(|result| result.status == "running")
+                .then(|| task.id.clone())
+        })
+        .collect::<Vec<_>>();
+    let progress_percent = if task_count == 0 {
+        0
+    } else {
+        completed_count.saturating_mul(100) / task_count
+    };
+    let progress_text = format!("{completed_count}/{task_count}");
+    let running_text = (!running_tasks.is_empty()).then(|| running_tasks.join("、"));
     view! {
         <article class=card_class data-workflow-id=workflow_id.clone()
             data-root-workflow-id=root_workflow_id data-parent-attempt-id=parent_attempt_id
@@ -3780,6 +3807,20 @@ fn dynamic_workflow_card(
                 <span class=status_class>{status_label(locale.get(), &status)}</span>
             </div>
             <p class="agent-workflow-goal">{workflow.goal.clone()}</p>
+            <section class="agent-workflow-progress" aria-live="polite"
+                data-testid="agent-workflow-progress">
+                <div class="agent-workflow-progress-label">
+                    <strong>{progress_text}</strong>
+                    <span>{status_label(locale.get(), &status)}</span>
+                    {running_text.map(|tasks| view! {
+                        <small>{format!("{}：{tasks}", t(locale.get(), "agents.task.activity"))}</small>
+                    })}
+                </div>
+                <div class="agent-workflow-progress-track" role="progressbar"
+                    aria-valuemin="0" aria-valuemax="100" aria-valuenow=progress_percent>
+                    <span style=format!("width: {progress_percent}%")></span>
+                </div>
+            </section>
             {workflow.requires_confirmation.then(|| view! {
                 <div class="agent-confirm-hint">{t(locale.get(), "agents.confirm_hint")}</div>
             })}
@@ -3825,12 +3866,28 @@ fn dynamic_workflow_card(
                         .unwrap_or_else(|| "—".into());
                     let summary = result.as_ref().and_then(|result| result.summary.clone());
                     let result_error = result.as_ref().and_then(|result| result.error.clone());
-                    let usage = result.as_ref().map(|result| format!(
-                        "{} tokens · {} tools · {:.4}",
-                        result.input_tokens.saturating_add(result.output_tokens),
-                        result.tool_calls,
-                        result.cost_microunits as f64 / 1_000_000.0,
-                    ));
+                    let usage = result.as_ref().map(|result| {
+                        let tokens = result.input_tokens.saturating_add(result.output_tokens);
+                        let token_label = if tokens == 0 && result.activity_messages > 0 {
+                            "—".into()
+                        } else {
+                            tokens.to_string()
+                        };
+                        let activity = result.last_activity_at
+                            .filter(|timestamp| *timestamp > 0)
+                            .map(|timestamp| format!(
+                                " · {} events · {} {}",
+                                result.activity_messages,
+                                t(locale.get(), "runtime.last_activity"),
+                                format_relative_time(timestamp, locale.get()),
+                            ))
+                            .unwrap_or_default();
+                        format!(
+                            "{token_label} tokens · {} tools · {:.4}{activity}",
+                            result.tool_calls,
+                            result.cost_microunits as f64 / 1_000_000.0,
+                        )
+                    });
                     let duration = result.as_ref().and_then(|result| result.duration_secs)
                         .map(|seconds| format!("{seconds}s"));
                     let full_result = result.as_ref().is_some_and(|result| result.full_result_available);

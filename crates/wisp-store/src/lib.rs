@@ -17,6 +17,7 @@ mod external_session_cache;
 mod global_memories;
 mod library;
 mod lineage;
+mod mcp_app_snapshots;
 pub mod mcp_secrets;
 mod method_search;
 mod models;
@@ -63,6 +64,7 @@ pub use library::{
     LibraryItem, LibraryItemDetail, LibraryItemSummary, LibraryItemVersion, LibraryStore,
     NewLibraryItem,
 };
+pub use mcp_app_snapshots::McpAppSnapshot;
 pub use method_search::{
     MethodCandidate, MethodCandidateBlob, MethodCandidateStatus, MethodSearchRunState,
     MethodStrategyStat,
@@ -171,6 +173,9 @@ const RUN_LOG_PULL_MIGRATION: &str = "0050_run_log_pull";
 const ORPHAN_FILE_RETENTION_MIGRATION: &str = "0051_orphan_file_retention";
 const RUN_REVIEW_DISMISSED_MIGRATION: &str = "0052_run_review_dismissed";
 const SESSION_SERVICE_TIER_MIGRATION: &str = "0053_session_service_tier";
+const MCP_APP_SNAPSHOTS_MIGRATION: &str = "0054_mcp_app_snapshots";
+const MCP_APP_SNAPSHOTS_MIGRATION_SQL: &str =
+    include_str!("../migrations/0054_mcp_app_snapshots.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -181,6 +186,13 @@ impl Store {
     /// Open (or create) the SQLite database at `path` and run migrations.
     pub async fn open(path: &Path) -> Result<Self> {
         Self::open_with_journal(path, true).await
+    }
+
+    /// Close the underlying connection pool and wait for SQLite file handles
+    /// to be released. This is primarily useful before removing a store on
+    /// platforms such as Windows, where open database files cannot be deleted.
+    pub async fn close(self) {
+        self.pool.close().await;
     }
 
     /// Open a throwaway snapshot/transfer database in the default rollback
@@ -709,6 +721,10 @@ impl Store {
             Self::add_columns_if_missing(pool, "frames", &[("service_tier", "TEXT")]).await?;
             Self::record_migration(pool, SESSION_SERVICE_TIER_MIGRATION).await?;
         }
+        if !Self::migration_applied(pool, MCP_APP_SNAPSHOTS_MIGRATION).await? {
+            Self::execute_sql_script(pool, MCP_APP_SNAPSHOTS_MIGRATION_SQL).await?;
+            Self::record_migration(pool, MCP_APP_SNAPSHOTS_MIGRATION).await?;
+        }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was
         // later folded into 0000_init.sql (or into an already-shipped apply_*
@@ -739,6 +755,7 @@ impl Store {
             "projects",
             &[
                 ("workspace_dir", "TEXT NOT NULL DEFAULT ''"),
+                ("default_specialist_id", "TEXT NOT NULL DEFAULT ''"),
                 ("run_retention_days", "INTEGER"),
                 ("failed_run_retention_days", "INTEGER"),
                 ("orphan_file_retention_days", "INTEGER"),

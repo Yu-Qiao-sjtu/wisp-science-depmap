@@ -139,6 +139,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
   const projectNames: Record<string, string> = { default: project.name, other: "Other project" };
   const projectDescriptions: Record<string, string> = { default: "", other: "" };
   const projectAgentContexts: Record<string, string> = { default: "", other: "" };
+  const projectDefaultSpecialists: Record<string, string> = { default: "", other: "" };
   const query = new URLSearchParams(window.location.search);
   const mockPlanFlow = query.get("mockPlanFlow");
   const mockPublication = query.get("mockPublication");
@@ -520,6 +521,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
     { id: "reviewer", name: "Reviewer", icon: "review", color: "clay", description: "", instructions: "rubric", model_id: "", skills: [], connectors: [], builtin: true },
     { id: "reader", name: "Reader", icon: "search", color: "clay", description: "Searches project sessions", instructions: "reader rubric", model_id: "", skills: [], connectors: [], builtin: true },
     { id: "scientific_illustrator", name: "Scientific Illustrator", icon: "image", color: "clay", description: "Creates scientific figures", instructions: "illustrator rubric", model_id: "", skills: ["figure-composer", "figure-style"], connectors: [], builtin: true },
+    { id: "depmap_r_agent", name: "DepMap Agent", icon: "dna", color: "clay", description: "Queries validated DepMap evidence and orchestrates R-first analyses", instructions: "depmap rubric", model_id: "", skills: null, connectors: null, builtin: true },
   ];
   let sessionSpecialists: Record<string, string> = {};
   let mockBrowserUrlFilters = { block: [] as { host: string; reason?: string }[], prefer: [] as { host: string; reason?: string }[] };
@@ -1091,6 +1093,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
     }
   };
   let mockCredentials: Record<string, boolean> = {
+    depmap_knowledge_api_token: false,
     openalex_api_key: false,
     infinisynapse_api_key: false,
     scimaster_api_key: false,
@@ -3706,6 +3709,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
               name: projectNames[settingsId] ?? (settingsId === "other" ? "Other project" : project.name),
               description: projectDescriptions[settingsId] ?? "",
               agent_context: projectAgentContexts[settingsId] ?? (settingsId === "default" ? projectAgentContext : ""),
+              default_specialist_id: projectDefaultSpecialists[settingsId] ?? "",
             };
           }
           case "update_project": {
@@ -3721,6 +3725,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             projectDescriptions[settingsId] = nextDescription;
             const nextContext = String(arg("agentContext") ?? arg("agent_context") ?? "");
             projectAgentContexts[settingsId] = nextContext;
+            projectDefaultSpecialists[settingsId] = String(
+              arg("defaultSpecialistId") ?? arg("default_specialist_id") ?? projectDefaultSpecialists[settingsId] ?? "",
+            );
             if (settingsId === "default" || settingsId === activeProjectId) {
               projectAgentContext = nextContext;
             }
@@ -4581,6 +4588,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             }
             const id = `s-${Math.random().toString(36).slice(2)}`;
             sessionModels[id] = activeHttpModelId();
+            const defaultSpecialist = projectDefaultSpecialists[activeProjectId ?? "default"] ?? "";
+            if (defaultSpecialist) sessionSpecialists[id] = defaultSpecialist;
             return id;
           }
           case "start_scratch_chat": {
@@ -4607,6 +4616,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             }
             const id = `branch-${Math.random().toString(36).slice(2)}`;
             sessionModels[id] = sessionModels[source] ?? activeHttpModelId();
+            if (sessionSpecialists[source]) sessionSpecialists[id] = sessionSpecialists[source];
             if (Object.prototype.hasOwnProperty.call(sessionReasoningEfforts, source)) {
               sessionReasoningEfforts[id] = sessionReasoningEfforts[source];
             }

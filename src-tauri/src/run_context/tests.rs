@@ -401,9 +401,14 @@ async fn run_in_context_preflight_is_structured_and_persisted_with_the_run() {
     let prepare = commands[1].stdin.as_deref().unwrap();
     #[cfg(windows)]
     {
-        // Windows prepare embeds the command as base64 into command.ps1.
+        // Windows prepare embeds a command wrapper into command.ps1. The
+        // wrapper must propagate failures from native tools such as Rscript;
+        // reaching EOF in a plain PowerShell script would otherwise return 0.
         use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD.encode("python analysis.py");
+        let command = local_detached::windows_command_script("python analysis.py");
+        assert!(command.contains("$wispNativeExitCode"));
+        assert!(command.contains("exit $wispNativeExitCode"));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(command);
         assert!(prepare.contains(&encoded), "{prepare}");
     }
     #[cfg(not(windows))]
@@ -2402,6 +2407,27 @@ fn windows_transport_executes_stdin_as_one_script() {
         .args
         .contains(&"[Console]::In.ReadToEnd() | Invoke-Expression".to_string()));
     assert_eq!(command.stdin.as_deref(), Some("exit 0"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_command_script_propagates_native_exit_code() {
+    let path = std::env::temp_dir().join(format!("wisp-native-exit-{}.ps1", uuid::Uuid::new_v4()));
+    let script = local_detached::windows_command_script("& $env:ComSpec /c exit 17");
+    std::fs::write(&path, script).unwrap();
+    let status = std::process::Command::new(local_detached::windows_powershell_program())
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(17));
+    let _ = std::fs::remove_file(path);
 }
 
 #[cfg(windows)]

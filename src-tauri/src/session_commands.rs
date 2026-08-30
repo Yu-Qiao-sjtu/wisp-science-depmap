@@ -74,6 +74,11 @@ pub(super) async fn branch_session(
     // as any other non-source mainline conversation during an active round.
     let id = create_session_frame(&state.store, &ap.id).await?;
     if let Some(source) = session_id.as_deref().filter(|s| !s.is_empty()) {
+        // A branch is a continuation of the source conversation's identity.
+        // Prefer that frozen Specialist over a newer project default.
+        if let Some(specialist_id) = specialists::frame_specialist_id(&state.store, source).await {
+            specialists::set_frame_specialist(&state.store, &id, &specialist_id).await?;
+        }
         let msgs = state
             .store
             .load_messages(source)
@@ -1222,7 +1227,7 @@ pub(super) async fn load_session(
         .await
         .map_err(|e| format!("{e}"))?;
     let presentations = if before_seq.is_none() {
-        state
+        let mut presentations = state
             .store
             .load_latest_session_ui_event(&id, "ToolPresentation")
             .await
@@ -1242,7 +1247,19 @@ pub(super) async fn load_session(
                 _ => None,
             })
             .into_iter()
-            .collect()
+            .collect::<Vec<_>>();
+        for presentation in &mut presentations {
+            if presentation.presentation_kind == "mcp_app" {
+                restore_mcp_app_snapshot(
+                    &state.store,
+                    &id,
+                    &presentation.presentation_id,
+                    &mut presentation.payload,
+                )
+                .await;
+            }
+        }
+        presentations
     } else {
         Vec::new()
     };

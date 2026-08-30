@@ -87,6 +87,27 @@ fn b64(value: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(value.as_bytes())
 }
 
+/// PowerShell does not propagate a native program's exit code when a `.ps1`
+/// file reaches EOF. Detached Runs execute the user's command through a
+/// generated script, so explicitly preserve the final command status for the
+/// supervisor. Without this wrapper, `Rscript` can print `Execution halted`
+/// and exit non-zero while the enclosing PowerShell process reports success.
+pub(super) fn windows_command_script(command: &str) -> String {
+    format!(
+        r#"$global:LASTEXITCODE = 0
+{command}
+$wispCommandSucceeded = $?
+$wispNativeExitCode = [int]$global:LASTEXITCODE
+if (-not $wispCommandSucceeded) {{
+  if ($wispNativeExitCode -ne 0) {{ exit $wispNativeExitCode }}
+  exit 1
+}}
+if ($wispNativeExitCode -ne 0) {{ exit $wispNativeExitCode }}
+exit 0
+"#
+    )
+}
+
 pub(super) fn posix_prepare_payload(remote: &RemoteRun) -> String {
     let RemoteRunHandle::LocalDetached {
         transport,
@@ -613,7 +634,7 @@ pub(super) fn windows_prepare_payload(remote: &RemoteRun) -> String {
         unreachable!("windows prepare requires LocalDetached");
     };
     let workdir_win = workdir.replace('/', "\\");
-    let command_b64 = b64(&remote.command);
+    let command_b64 = b64(&windows_command_script(&remote.command));
     let supervisor_b64 = b64(&windows_supervisor_script(
         &workdir_win,
         token,

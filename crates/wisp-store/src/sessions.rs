@@ -946,6 +946,27 @@ impl Store {
         )
     }
 
+    /// Lightweight live activity for a delegated child frame. Attempt usage is
+    /// finalized only when the Agent returns, while message/tool rows are
+    /// durable as work happens; the Workflow UI uses this to avoid displaying
+    /// a false `0 tools` during a long-running task.
+    pub async fn frame_message_activity(&self, frame_id: &str) -> Result<(i64, i64, Option<i64>)> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS message_count,\
+                    COALESCE(SUM(CASE WHEN role='tool' THEN 1 ELSE 0 END),0) AS tool_count,\
+                    MAX(ts) AS last_activity_at \
+             FROM messages WHERE frame_id=?",
+        )
+        .bind(frame_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            row.try_get("message_count")?,
+            row.try_get("tool_count")?,
+            row.try_get("last_activity_at")?,
+        ))
+    }
+
     /// Durable seq cursor for a frame: `COALESCE(MAX(seq), 0)`.
     ///
     /// This is the source of truth for `last_seq` recovery. Do not use
@@ -1656,6 +1677,24 @@ impl Store {
         )
         .bind(frame_id)
         .bind(kind)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    pub async fn load_mcp_app_presentation_event(
+        &self,
+        frame_id: &str,
+        presentation_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT event_json FROM session_ui_events WHERE frame_id=? \
+             AND json_extract(event_json,'$.kind')='ToolPresentation' \
+             AND json_extract(event_json,'$.presentation_kind')='mcp_app' \
+             AND json_extract(event_json,'$.presentation_id')=? \
+             ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(frame_id)
+        .bind(presentation_id)
         .fetch_optional(&self.pool)
         .await?)
     }

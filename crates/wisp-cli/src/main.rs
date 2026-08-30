@@ -1,5 +1,6 @@
 mod eval;
 mod rpc;
+mod trajectory_eval;
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
@@ -18,6 +19,7 @@ const USAGE: &str = "Usage:
   wisp-science run [--output console|jsonl] <prompt>
   wisp-science rpc
   wisp-science eval [--mode offline|live] [--suite suite.yaml] [options]
+  wisp-science trajectory-eval --input trajectory.html [--rubric rubric.yaml] [--save report.json] [--allow-failures]
   wisp-science dev
 
 Eval defaults to the built-in deterministic offline suite and requires no API key.
@@ -44,6 +46,7 @@ enum CliCommand {
         output: OutputFormat,
     },
     Eval(eval::EvalOptions),
+    TrajectoryEval(trajectory_eval::Options),
     Rpc,
     Dev,
     Help,
@@ -177,6 +180,26 @@ fn parse_command(args: impl IntoIterator<Item = String>) -> Result<CliCommand> {
                 }
             }
             Ok(CliCommand::Eval(options))
+        }
+        "trajectory-eval" => {
+            let mut options = trajectory_eval::Options::default();
+            while let Some(arg) = args.next() {
+                let value = |args: &mut std::vec::IntoIter<String>| -> Result<String> {
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("{arg} requires a value"))
+                };
+                match arg.as_str() {
+                    "--input" => replace_path(&mut options.input, &arg, value(&mut args)?)?,
+                    "--rubric" => replace_path(&mut options.rubric, &arg, value(&mut args)?)?,
+                    "--save" => replace_path(&mut options.save, &arg, value(&mut args)?)?,
+                    "--allow-failures" => options.allow_failures = true,
+                    _ => bail!("unknown trajectory-eval option '{arg}'"),
+                }
+            }
+            if options.input.is_none() {
+                bail!("trajectory-eval requires --input");
+            }
+            Ok(CliCommand::TrajectoryEval(options))
         }
         _ => bail!("unknown command '{command}'\n\n{USAGE}"),
     }
@@ -771,6 +794,9 @@ async fn main() -> Result<()> {
         };
         return eval::run(live_config, options).await;
     }
+    if let CliCommand::TrajectoryEval(options) = &command {
+        return trajectory_eval::run(options);
+    }
     let cfg = match provider_config() {
         Ok(cfg) => cfg,
         Err(error) => {
@@ -1103,6 +1129,39 @@ mod tests {
             command(&["eval", "--mode", "live", "--model", "model-a", "--model", "model-b"])
                 .unwrap(),
             CliCommand::Eval(expected)
+        );
+    }
+
+    #[test]
+    fn parses_trajectory_eval_paths_and_failure_policy() {
+        let mut expected = trajectory_eval::Options::default();
+        expected.input = Some(PathBuf::from("trace.html"));
+        expected.rubric = Some(PathBuf::from("rubric.yaml"));
+        expected.save = Some(PathBuf::from("report.json"));
+        expected.allow_failures = true;
+        assert_eq!(
+            command(&[
+                "trajectory-eval",
+                "--input",
+                "trace.html",
+                "--rubric",
+                "rubric.yaml",
+                "--save",
+                "report.json",
+                "--allow-failures"
+            ])
+            .unwrap(),
+            CliCommand::TrajectoryEval(expected)
+        );
+        assert!(command(&["trajectory-eval"])
+            .unwrap_err()
+            .to_string()
+            .contains("requires --input"));
+        assert!(
+            command(&["trajectory-eval", "--input", "one", "--input", "two"])
+                .unwrap_err()
+                .to_string()
+                .contains("only be specified once")
         );
     }
 

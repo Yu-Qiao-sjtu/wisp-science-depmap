@@ -10,11 +10,11 @@ use super::{
     persist_ui_events, provenance_ui_file_changes, receive_confirm_decision,
     reclaim_unconsumed_cutin, resolve_acp_artifact_references, resolve_composer_references,
     resolve_reader_references, resolve_review_backend, resolve_workspace, session_runtime_status,
-    should_hide_app_on_macos_close, should_persist_ui_event, ui_watchdog_note_unfocused,
-    ui_watchdog_requires_reload, user_message_start, AgentEvent, ComposerReferenceArg,
-    McpConnection, McpHttpAuth, McpTransport, ProjectActivityLocks, QueuedItem, SessionRuntime,
-    SkillInfo, StartupReport, StartupTimeline, MAX_PENDING_UI_EVENT_BYTES,
-    UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
+    should_hide_app_on_macos_close, should_persist_ui_event, specialist_skill_index,
+    ui_watchdog_note_unfocused, ui_watchdog_requires_reload, user_message_start, AgentEvent,
+    ComposerReferenceArg, McpConnection, McpHttpAuth, McpTransport, ProjectActivityLocks,
+    QueuedItem, SessionRuntime, SkillInfo, StartupReport, StartupTimeline,
+    MAX_PENDING_UI_EVENT_BYTES, UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -54,6 +54,63 @@ async fn exploration_creation_shares_project_activity_but_serializes_round_initi
     );
     drop(running_candidate);
     assert!(locks.project("project").try_write_owned().is_ok());
+}
+
+#[tokio::test]
+async fn depmap_specialist_keeps_required_skills_when_project_subset_is_empty() {
+    let root = std::env::temp_dir().join(format!("wisp_depmap_skills_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let db = root.join("store.sqlite");
+    let store = wisp_store::Store::open(&db).await.unwrap();
+    store
+        .create_project("p1", "DepMap", &root.to_string_lossy())
+        .await
+        .unwrap();
+    store
+        .create_frame("f1", "p1", "OPERON", "wisp")
+        .await
+        .unwrap();
+    store
+        .set_setting("project_enabled_skills:p1", "[]")
+        .await
+        .unwrap();
+    let project = super::ActiveProject {
+        id: "p1".into(),
+        root: root.clone(),
+        skills: Arc::new(super::load_skill_index(&root)),
+        memory: Arc::new(wisp_core::MemoryManager::new(&root)),
+    };
+    let specialist = super::specialists::builtin_depmap_r_agent();
+    let skills = specialist_skill_index(&store, &project, Some(&specialist)).await;
+    assert!(skills.get("depmap-knowledge-query").is_some());
+    assert!(skills.get("depmap-coding-agent").is_some());
+    super::specialists::set_frame_specialist(
+        &store,
+        "f1",
+        super::specialists::DEPMAP_SPECIALIST_ID,
+    )
+    .await
+    .unwrap();
+    let resources = super::delegation_resources::ScientificResourceCatalog::discover(
+        &store,
+        &project,
+        Some("f1"),
+        &root.join("app-data"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resources.has_depmap(),
+        "the DepMap specialist's required Skill must enable depmap_read for registered Workflows"
+    );
+    assert!(resources
+        .capability_registry()
+        .unwrap()
+        .get("depmap_read")
+        .is_some());
+
+    drop(store);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]
@@ -379,7 +436,7 @@ fn mcp_app_instance_id_reuses_resource_uri_across_presentations() {
         super::mcp_app_instance_id("session-a", &open)
     );
     assert_eq!(
-        super::mcp_app_identity(&serde_json::json!({ "tool": { "name": "open_app" } })),
+        super::mcp_app_resource_identity(&serde_json::json!({ "tool": { "name": "open_app" } })),
         "open_app"
     );
 }
@@ -1049,6 +1106,84 @@ fn mcp_app_presentations_are_persisted_for_session_restore() {
         frame_id: "f".into(),
         path: "temporary.txt".into(),
     }));
+}
+
+#[test]
+fn mcp_app_snapshot_restores_the_saved_result_without_changing_host_resource() {
+    let mut payload = serde_json::json!({
+        "tool": { "name": "motif_open_workbench" },
+        "result": { "structuredContent": { "payload": { "records": [{ "name": "old" }] } } },
+        "resource": { "uri": "ui://motif/workbench.html", "text": "<html>Motif</html>" }
+    });
+    let snapshot = serde_json::json!({
+        "schema": super::MCP_APP_SNAPSHOT_SCHEMA,
+        "result": { "structuredContent": { "payload": { "records": [{ "name": "saved" }] } } }
+    });
+    super::apply_mcp_app_snapshot(&mut payload, "motif_open_workbench", &snapshot).unwrap();
+    assert_eq!(
+        payload.pointer("/result/structuredContent/payload/records/0/name"),
+        Some(&serde_json::json!("saved"))
+    );
+    assert_eq!(
+        payload.pointer("/resource/text"),
+        Some(&serde_json::json!("<html>Motif</html>"))
+    );
+}
+
+#[test]
+fn mcp_app_snapshot_rejects_a_different_app_kind() {
+    let mut payload = serde_json::json!({ "tool": { "name": "figure_search" } });
+    let snapshot = serde_json::json!({
+        "schema": super::MCP_APP_SNAPSHOT_SCHEMA,
+        "result": {}
+    });
+    assert!(
+        super::apply_mcp_app_snapshot(&mut payload, "motif_open_workbench", &snapshot,).is_err()
+    );
+}
+
+#[tokio::test]
+async fn persisted_mcp_app_snapshot_restores_without_a_live_bridge() {
+    let path = std::env::temp_dir().join(format!(
+        "wisp-motif-restore-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = wisp_store::Store::open(&path).await.unwrap();
+    store.create_project("p", "P", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    store
+        .save_mcp_app_snapshot(
+            "f",
+            "motif-1",
+            "motif_open_workbench",
+            &serde_json::json!({
+                "schema": super::MCP_APP_SNAPSHOT_SCHEMA,
+                "result": {
+                    "structuredContent": {
+                        "payload": {
+                            "records": [{ "name": "pET-28a", "sequence": "ACGT" }]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+    let mut payload = serde_json::json!({
+        "tool": { "name": "motif_open_workbench" },
+        "result": { "structuredContent": { "payload": { "records": [] } } },
+        "resource": { "text": "<html>Motif</html>" }
+    });
+
+    super::restore_mcp_app_snapshot(&store, "f", "motif-1", &mut payload).await;
+
+    assert_eq!(
+        payload.pointer("/result/structuredContent/payload/records/0/name"),
+        Some(&serde_json::json!("pET-28a"))
+    );
+    store.close().await;
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

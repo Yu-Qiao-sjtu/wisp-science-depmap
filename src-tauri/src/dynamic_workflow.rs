@@ -301,6 +301,8 @@ pub(crate) struct AgentResultSummary {
     pub(crate) input_tokens: i64,
     pub(crate) output_tokens: i64,
     pub(crate) tool_calls: i64,
+    pub(crate) activity_messages: i64,
+    pub(crate) last_activity_at: Option<i64>,
     pub(crate) cost_microunits: i64,
     pub(crate) duration_secs: Option<i64>,
     pub(crate) full_result_available: bool,
@@ -711,6 +713,8 @@ fn result_summary(attempt: &AgentWorkflowAttempt) -> AgentResultSummary {
         input_tokens: attempt.input_tokens,
         output_tokens: attempt.output_tokens,
         tool_calls: attempt.tool_calls,
+        activity_messages: 0,
+        last_activity_at: None,
         cost_microunits: attempt.cost_microunits,
         duration_secs: attempt
             .started_at

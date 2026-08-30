@@ -39,14 +39,14 @@ const loadI18n = () => {
   return sandbox.WISP_PAGES_I18N as { zh: Record<string, string>; en: Record<string, string> };
 };
 
-test("GitHub Pages homepage aligns with v1.5.0 and ships a language switch", () => {
+test("GitHub Pages homepage aligns with v1.6.1 and ships a language switch", () => {
   const index = readRepositoryFile("docs/index.html");
   const i18nJs = readRepositoryFile("docs/assets/i18n.js");
 
   expect(index).toContain('class="lang-switch"');
   expect(index).toContain("assets/i18n.js");
-  expect(index).toContain("34 个内置 SKILL");
-  expect(index).toContain("v1.5.0");
+  expect(index).toContain(`${skillCount} 个内置 SKILL`);
+  expect(index).toContain("v1.6.1");
   expect(index).toContain("Linux");
   expect(index).toContain("Python / R");
   expect(index).not.toContain("30 个内置");
