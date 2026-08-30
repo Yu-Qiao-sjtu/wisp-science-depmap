@@ -328,6 +328,7 @@ pub(crate) async fn send_message_inner(
         }
         None => create_session_frame(&state.store, &ap.id).await?,
     };
+    let mut automatic_workflow_injection = None;
     if user_routed_turn {
         state.set_notification_window(&frame_id, window_label);
     }
@@ -346,16 +347,117 @@ pub(crate) async fn send_message_inner(
                 .push(ComposerReferenceArg::Workflow { id });
         }
     }
+    let has_manually_routed_capability = references.as_ref().is_some_and(|references| {
+        references.iter().any(|reference| {
+            matches!(
+                reference,
+                ComposerReferenceArg::Skill { .. } | ComposerReferenceArg::Workflow { .. }
+            )
+        })
+    });
+    if !resume && !has_manually_routed_capability {
+        let routing_specialist = specialists::session_specialist(&state.store, &frame_id).await;
+        match intent_router::automatic_route(
+            &message,
+            routing_specialist
+                .as_ref()
+                .map(|specialist| specialist.id.as_str()),
+        ) {
+            Some(intent_router::AutomaticRoute::SavedWorkflowWithSkillPortfolio(id)) => {
+                let base = quick_actions::workflow_proposal(&state.store, id).await;
+                let base_skill_ids = base
+                    .as_ref()
+                    .map(|proposal| {
+                        proposal
+                            .tasks
+                            .iter()
+                            .flat_map(|task| task.skill_ids.iter().cloned())
+                            .collect::<HashSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let skills =
+                    specialist_skill_index(&state.store, &ap, routing_specialist.as_ref()).await;
+                let planner_model_id = models::session_profile_id(&state.store, &frame_id).await;
+                let supplemental_request = format!(
+                    "The validated DepMap topic Workflow already covers these Skills: {}. Select only additional enabled Skills whose descriptions materially improve this exact request; do not duplicate the base capabilities. If no catalog Skill adds material value, return an empty tasks array. User request: {}",
+                    base_skill_ids.join(", "),
+                    message
+                );
+                let supplement = skill_portfolio::plan_skill_portfolio_inner(
+                    state,
+                    &ap,
+                    Some(&frame_id),
+                    &supplemental_request,
+                    &planner_model_id,
+                    skills.as_ref(),
+                    &base_skill_ids,
+                )
+                .await;
+                match (base, supplement) {
+                    (Some(base), Ok(mut draft)) => {
+                        draft.proposal =
+                            quick_actions::merge_skill_portfolio_into_workflow(base, &draft)?;
+                        automatic_workflow_injection =
+                            Some(quick_actions::render_automatic_skill_workflow(&draft)?);
+                    }
+                    (_, Err(error)) => {
+                        tracing::info!(
+                            "no supplemental Skill portfolio was added for {frame_id}: {error}"
+                        );
+                        references
+                            .get_or_insert_with(Vec::new)
+                            .push(ComposerReferenceArg::Workflow { id: id.into() });
+                    }
+                    (None, Ok(_)) => {
+                        references
+                            .get_or_insert_with(Vec::new)
+                            .push(ComposerReferenceArg::Workflow { id: id.into() });
+                    }
+                }
+            }
+            Some(intent_router::AutomaticRoute::SkillPortfolio) => {
+                let skills =
+                    specialist_skill_index(&state.store, &ap, routing_specialist.as_ref()).await;
+                let planner_model_id = models::session_profile_id(&state.store, &frame_id).await;
+                match skill_portfolio::plan_skill_portfolio_inner(
+                    state,
+                    &ap,
+                    Some(&frame_id),
+                    &message,
+                    &planner_model_id,
+                    skills.as_ref(),
+                    &[],
+                )
+                .await
+                {
+                    Ok(draft) => {
+                        automatic_workflow_injection =
+                            Some(quick_actions::render_automatic_skill_workflow(&draft)?);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "automatic Skill portfolio planning skipped for {frame_id}: {error}"
+                        );
+                    }
+                }
+            }
+            None => {}
+        }
+    }
     // Deliberately no set_active_frame here: see the `AppState::active_frame`
     // doc — a turn writing view state races the user's session/project switch.
     // A workflow reference is itself an accepted capability request. Persist it
     // before a Guide message can be consumed by the current loop; provider
     // profile reads below still wait for the next workflow boundary.
-    if references.as_ref().is_some_and(|references| {
-        references
-            .iter()
-            .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
-    }) {
+    if automatic_workflow_injection.is_some()
+        || references.as_ref().is_some_and(|references| {
+            references
+                .iter()
+                .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
+        })
+    {
         delegation_runtime::save_session_delegation_enabled(&state.store, &ap.id, &frame_id, true)
             .await?;
     }
@@ -921,6 +1023,9 @@ pub(crate) async fn send_message_inner(
         for injection in
             resolve_composer_references(&state.store, &refs, &frame_id, &ap.root, &skills).await?
         {
+            agent.ctx.inject_user(injection);
+        }
+        if let Some(injection) = automatic_workflow_injection.take() {
             agent.ctx.inject_user(injection);
         }
         if let Some(injection) =

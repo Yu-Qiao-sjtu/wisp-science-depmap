@@ -122,20 +122,58 @@ pub(crate) async fn plan_skill_portfolio(
 
     let project = state.active(window.label());
     let frame_id = state.active_frame(window.label());
-    let policy = delegation_runtime::dynamic_delegation_policy_for_project(
-        &state.store,
+    let index = active_skill_index(&state.store, &project).await;
+    plan_skill_portfolio_inner(
+        state.inner(),
         &project,
         frame_id.as_deref(),
+        research_request,
+        model_id,
+        &index,
+        &[],
+    )
+    .await
+}
+
+pub(crate) async fn plan_skill_portfolio_inner(
+    state: &AppState,
+    project: &crate::ActiveProject,
+    frame_id: Option<&str>,
+    research_request: &str,
+    model_id: &str,
+    index: &SkillIndex,
+    excluded_skill_ids: &[String],
+) -> Result<SkillPortfolioDraft, String> {
+    let research_request = research_request.trim();
+    if research_request.is_empty() || research_request.chars().count() > MAX_RESEARCH_REQUEST_CHARS
+    {
+        return Err(format!(
+            "Research request must contain 1 to {MAX_RESEARCH_REQUEST_CHARS} characters."
+        ));
+    }
+    if model_id.trim().is_empty() {
+        return Err("Choose a planning model.".into());
+    }
+    let policy = delegation_runtime::dynamic_delegation_policy_for_project(
+        &state.store,
+        project,
+        frame_id,
         &state.app_data,
     )
     .await?;
-    let index = active_skill_index(&state.store, &project).await;
-    let catalog = planning_catalog(&index, &policy.resources);
+    let excluded = excluded_skill_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let catalog = planning_catalog(index, &policy.resources)
+        .into_iter()
+        .filter(|skill| !excluded.contains(skill.id.as_str()))
+        .collect::<Vec<_>>();
     if catalog.is_empty() {
         return Err("No effective, enabled Skills are available for planning.".into());
     }
 
-    let (llm, model_label) = planner_provider(&state.store, model_id, &policy.host).await?;
+    let (llm, model_label) = planner_provider(&state.store, model_id.trim(), &policy.host).await?;
     let messages = planning_messages(research_request, &catalog)?;
     let completion = tokio::time::timeout(PLANNER_TIMEOUT, llm.complete(&messages, &[]))
         .await
@@ -144,7 +182,7 @@ pub(crate) async fn plan_skill_portfolio(
     let agent_plan = parse_agent_plan(&completion.content)?;
     let draft = build_draft(
         research_request,
-        model_id,
+        model_id.trim(),
         &model_label,
         agent_plan,
         &catalog,
@@ -482,5 +520,31 @@ mod tests {
         assert!(build_draft("request", "planner", "Planner", plan, &[])
             .unwrap_err()
             .contains("unavailable Skill 'invented'"));
+    }
+
+    #[test]
+    fn semantic_planner_receives_skill_descriptions_and_metadata() {
+        let catalog = vec![PlanningSkill {
+            id: "user-oncology-review".into(),
+            name: "User oncology review".into(),
+            description: "Evaluate translational novelty for a cancer target".into(),
+            tags: vec!["oncology".into(), "translation".into()],
+            scope: "project".into(),
+            metadata: Some(WispSkillMetadata {
+                schema_version: 1,
+                domains: vec!["oncology".into()],
+                research_stages: vec!["hypothesis".into()],
+                roles: vec!["critic".into()],
+                evidence_types: vec!["literature".into()],
+                outputs: vec!["hypothesis-card".into()],
+                side_effects: SkillSideEffects::ReadOnly,
+            }),
+        }];
+        let messages = planning_messages("论证 KRAS 的临床转化价值", &catalog).unwrap();
+        let payload = messages[1].content.as_text();
+        assert!(payload.contains("user-oncology-review"));
+        assert!(payload.contains("Evaluate translational novelty"));
+        assert!(payload.contains("project"));
+        assert!(payload.contains("hypothesis-card"));
     }
 }
