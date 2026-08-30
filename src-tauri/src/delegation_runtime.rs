@@ -5050,6 +5050,22 @@ mod tests {
     #[tokio::test]
     async fn project_policy_advertises_only_discovered_scientific_resources() {
         let (store, root) = dynamic_fixture().await;
+        let profiles = vec![acp::AcpAgentProfile {
+            id: "test-acp".into(),
+            label: "Test ACP".into(),
+            command: std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            args: vec!["--fake".into()],
+        }];
+        store
+            .set_setting(
+                "acp_agent_profiles",
+                &serde_json::to_string(&profiles).unwrap(),
+            )
+            .await
+            .unwrap();
         let resources = crate::delegation_resources::ScientificResourceCatalog::fake(
             &["literature-review", "depmap-knowledge-query"],
             &["literature-review"],
