@@ -1,12 +1,14 @@
-# Local DepMap MCP
+# Local DepMap + TCGA MCP
 
 This service turns the existing local DepMap 26Q1 precomputed knowledge base
-into a bounded, read-only MCP server. It does not copy the knowledge base and
-does not start any analysis job.
+and the optional precomputed TCGA expression/survival bridge into one bounded,
+read-only MCP server. It does not copy data, open SSH connections, or start any
+analysis job.
 
 ## Local paths
 
 - Knowledge: `D:\New-PHD\depmap_0823\knowledge`
+- Optional TCGA bridge: `D:\New-PHD\depmap_0823\knowledge\depmap-26q1-tcga`
 - Runtime: `D:\New-PHD\depmap_0823\runtime\depmap-mcp-venv`
 - HTTP endpoint: `http://127.0.0.1:8877/mcp`
 
@@ -32,11 +34,27 @@ The exposed tools are intentionally small:
 - `depmap_lineage_catalog`
 - `depmap_lineage_direction_discovery`
 - `depmap_gene_evidence`
+- `tcga_gene_expression_survival`
 - `depmap_pair_evidence`
 - `depmap_drug_evidence`
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
+The combined gene tool returns TCGA and DepMap as separate evidence items. It
+never performs a sample-level join or creates a synthetic combined score.
+
+If the optional TCGA bridge is absent, TCGA queries return
+`MODULE_UNAVAILABLE`; this is a coverage state, not a biological result. Install
+only the validated, precomputed bridge with this layout:
+
+- `depmap-26q1-tcga/qa.json`
+- `depmap-26q1-tcga/project_catalog.csv`
+- `depmap-26q1-tcga/projects/TCGA-*/manifest.json`
+- `depmap-26q1-tcga/projects/TCGA-*/gene_associations.parquet`
+
+Server access remains a Wisp Science execution-context concern. This MCP does
+not manage SSH or tunnels; after results are transferred to the local knowledge
+root, restart the MCP and its status tool will report TCGA as installed.
 
 Cancer-name normalization covers every one of the 34 canonical DepMap lineage
 labels. The MCP accepts the maintained Chinese main names and common synonyms

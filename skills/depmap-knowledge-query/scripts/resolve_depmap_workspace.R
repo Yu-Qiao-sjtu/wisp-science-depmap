@@ -159,23 +159,21 @@ if (identical(provider, "local")) {
 } else if (is.null(endpoint_pick$value) || !nzchar(endpoint_pick$value)) {
   blocking <- c(blocking, "knowledge_endpoint_missing")
 }
+if (is.list(config$knowledge) && !is.null(config$knowledge$tunnel)) {
+  blocking <- c(blocking, "managed_tunnel_not_supported")
+  warnings <- c(warnings, paste(
+    "The DepMap Skill does not create SSH tunnels.",
+    "Connect the server through Wisp Science or configure an already reachable endpoint."
+  ))
+}
 if (!write_boundary_pass) blocking <- c(blocking, "analysis_root_overlaps_read_only_source")
 
 remote_needs_probe <- identical(provider, "remote") && !length(blocking)
-tunnel <- if (is.list(config$knowledge) && is.list(config$knowledge$tunnel)) {
-  config$knowledge$tunnel
-} else {
-  NULL
-}
-tunnel_enabled <- !is.null(tunnel) && !identical(tunnel$enabled, FALSE)
-tunnel_access_authorized <- tunnel_enabled && identical(tunnel$access_authorized, TRUE)
 
 result <- list(
   schema_version = 2,
   status = if (length(blocking)) {
     "blocked"
-  } else if (tunnel_enabled && !tunnel_access_authorized) {
-    "awaiting_access"
   } else if (remote_needs_probe) {
     "needs_probe"
   } else {
@@ -190,15 +188,7 @@ result <- list(
     source = if (is.null(knowledge_pick$source)) NA_character_ else knowledge_pick$source,
     endpoint = if (is.null(endpoint_pick$value)) NA_character_ else endpoint_pick$value,
     endpoint_source = if (is.null(endpoint_pick$source)) NA_character_ else endpoint_pick$source,
-    transport = if (tunnel_enabled) "managed_ssh_tunnel" else "https",
-    tunnel = if (!tunnel_enabled) NULL else list(
-      configured = TRUE,
-      context_id = tunnel$context_id,
-      local_port = tunnel$local_port,
-      remote_port = tunnel$remote_port,
-      access_authorized = tunnel_access_authorized,
-      connection_attempted = FALSE
-    ),
+    transport = if (identical(provider, "local")) "local_files" else "configured_endpoint",
     qa_path = if (is.null(qa_path)) NULL else portable(qa_path),
     qa_status = if (is.null(qa)) NULL else qa$qa_status,
     release = if (!is.null(qa)) qa$release else release_pick$value,

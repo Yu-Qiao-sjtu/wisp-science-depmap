@@ -61,13 +61,65 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
         self.assertEqual(result["request"]["gene"], "ESR1")
-        self.assertEqual(result["evidence"]["query_count"], 10)
+        self.assertEqual(result["evidence"]["query_count"], 11)
         self.assertTrue(result["evidence_id"].startswith("depmap-26q1-"))
         self.assertEqual(self.queries[1]["lineage"], "Breast")
         provenance = result["evidence"]["items"][0]["result"]["provenance"][0]
         self.assertEqual(
             provenance, "depmap://26Q1/depmap-26q1-full/fixture.parquet"
         )
+        tcga = result["evidence"]["items"][-1]
+        self.assertEqual(
+            tcga["query"],
+            {
+                "mode": "tcga_expression_survival",
+                "gene": "ESR1",
+                "lineage": "Breast",
+                "endpoint": "OS",
+                "limit": 3,
+            },
+        )
+        self.assertEqual(
+            tcga["metric_semantics"]["metric"],
+            "tcga_expression_and_survival_association",
+        )
+
+    async def test_gene_without_lineage_queries_tcga_across_projects(self):
+        result = await self.service.gene_evidence("tp53", limit=4)
+        tcga = result["evidence"]["items"][-1]
+        self.assertEqual(
+            tcga["query"],
+            {
+                "mode": "tcga_expression_survival",
+                "gene": "TP53",
+                "endpoint": "OS",
+                "limit": 4,
+            },
+        )
+
+    async def test_dedicated_tcga_tool_keeps_patient_evidence_separate(self):
+        result = await self.service.tcga_expression_survival(
+            "kras", lineage="Bowel", endpoint="PFI", limit=6
+        )
+        self.assertEqual(result["request"]["gene"], "KRAS")
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "tcga_expression_survival",
+                "gene": "KRAS",
+                "lineage": "Bowel",
+                "endpoint": "PFI",
+                "limit": 6,
+            },
+        )
+        self.assertIn("patient_evidence", result["evidence"])
+        self.assertIn("never", result["evidence"]["integration_rule"])
+
+    async def test_tcga_project_and_lineage_are_mutually_exclusive(self):
+        with self.assertRaisesRegex(ValueError, "alternative cohort selectors"):
+            await self.service.tcga_expression_survival(
+                "ESR1", project="TCGA-BRCA", lineage="Breast"
+            )
 
     async def test_same_evidence_has_same_id(self):
         first = await self.service.drug_evidence("olaparib", "BRCA1", "Breast")
@@ -149,6 +201,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_lineage_catalog",
                         "depmap_lineage_direction_discovery",
                         "depmap_gene_evidence",
+                        "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
                         "depmap_drug_evidence",
                     },
@@ -159,6 +212,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 called = await session.call_tool("depmap_status", {})
                 self.assertFalse(called.isError)
                 self.assertEqual(called.structuredContent["release"], "26Q1")
+                self.assertFalse(
+                    called.structuredContent["evidence"]["data_sources"]["tcga"][
+                        "installed"
+                    ]
+                )
 
 
 if __name__ == "__main__":

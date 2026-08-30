@@ -1,4 +1,4 @@
-"""Bounded, read-only MCP access to precomputed DepMap 26Q1 evidence.
+"""Bounded, read-only MCP access to precomputed DepMap and TCGA evidence.
 
 This module deliberately does not expose filesystem reads, arbitrary SQL/R,
 or analysis jobs.  Every tool maps to the validated query contract in
@@ -32,7 +32,7 @@ from services.depmap_api.app import (
 
 
 Runner = Callable[[Settings, dict[str, Any]], Awaitable[dict[str, Any]]]
-Section = Literal["core", "networks", "cnv", "pathways", "drugs"]
+Section = Literal["core", "networks", "cnv", "pathways", "drugs", "tcga"]
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
@@ -45,6 +45,7 @@ DEFAULT_SECTIONS: tuple[Section, ...] = (
     "cnv",
     "pathways",
     "drugs",
+    "tcga",
 )
 GLOBAL_GENE_MODULES = (
     "effect_correlation",
@@ -125,6 +126,15 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
         return {
             "metric": "enrichment_z",
             "interpretation": "signed precomputed pathway/TF enrichment score",
+        }
+    if mode == "tcga_expression_survival":
+        return {
+            "metric": "tcga_expression_and_survival_association",
+            "interpretation": (
+                "patient-cohort primary-tumor expression and univariate survival "
+                "association; this is independent from DepMap cell-line evidence "
+                "and is not causal"
+            ),
         }
     if mode == "core":
         return {
@@ -229,6 +239,14 @@ class DepMapEvidenceService:
         return list(await asyncio.gather(*(self._execute(query) for query in queries)))
 
     async def status(self) -> dict[str, Any]:
+        tcga_root = self.settings.knowledge_root / "depmap-26q1-tcga"
+        tcga_qa_path = tcga_root / "qa.json"
+        tcga_qa: dict[str, Any] | None = None
+        if tcga_qa_path.is_file():
+            try:
+                tcga_qa = json.loads(tcga_qa_path.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError):
+                tcga_qa = {"status": "INVALID_QA"}
         evidence = {
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
@@ -244,7 +262,24 @@ class DepMapEvidenceService:
                 "gene_evidence",
                 "exact_gene_pair_evidence",
                 "drug_gene_evidence",
+                "tcga_gene_expression_survival",
             ],
+            "data_sources": {
+                "depmap": {
+                    "installed": True,
+                    "qa_status": self.qa.get("qa_status"),
+                    "scope": "cell-line perturbation and molecular association evidence",
+                },
+                "tcga": {
+                    "installed": tcga_qa_path.is_file(),
+                    "qa_status": (tcga_qa or {}).get("status", "MODULE_UNAVAILABLE"),
+                    "scope": "patient primary-tumor expression and survival association evidence",
+                },
+            },
+            "integration_rule": (
+                "TCGA patient evidence and DepMap cell-line evidence remain separate "
+                "metrics; no sample-level join or combined score is performed"
+            ),
         }
         return self._envelope(tool="depmap_status", request={}, evidence=evidence)
 
@@ -350,6 +385,16 @@ class DepMapEvidenceService:
                 queries.append(
                     {"mode": "top", "module": module, "source": symbol, "limit": limit}
                 )
+        if "tcga" in selected:
+            tcga_query: dict[str, Any] = {
+                "mode": "tcga_expression_survival",
+                "gene": symbol,
+                "endpoint": "OS",
+                "limit": limit,
+            }
+            if lineage:
+                tcga_query["lineage"] = lineage
+            queries.append(tcga_query)
         items = await self._execute_many(queries)
         failures = sum(item.get("status") == "QUERY_ERROR" for item in items)
         request = {
@@ -366,6 +411,55 @@ class DepMapEvidenceService:
             "coverage_note": "INELIGIBLE/NOT_COMPUTED/NOT_RETAINED are coverage states, not negative biological evidence",
         }
         return self._envelope(tool="depmap_gene_evidence", request=request, evidence=evidence)
+
+    async def tcga_expression_survival(
+        self,
+        gene: str,
+        project: str | None = None,
+        lineage: str | None = None,
+        endpoint: str = "OS",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        symbol = gene.strip().upper()
+        if not symbol:
+            raise ValueError("gene must be non-empty")
+        normalized_endpoint = endpoint.strip().upper()
+        if normalized_endpoint not in {"OS", "DSS", "DFI", "PFI"}:
+            raise ValueError("endpoint must be one of OS, DSS, DFI, or PFI")
+        if project and lineage:
+            raise ValueError("project and lineage are alternative cohort selectors")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        query: dict[str, Any] = {
+            "mode": "tcga_expression_survival",
+            "gene": symbol,
+            "endpoint": normalized_endpoint,
+            "limit": limit,
+        }
+        if project:
+            query["project"] = project.strip().upper()
+        if lineage:
+            query["lineage"] = lineage
+        item = await self._execute(query)
+        request = {
+            "gene": symbol,
+            "project": query.get("project"),
+            "lineage": lineage,
+            "endpoint": normalized_endpoint,
+            "limit": limit,
+        }
+        evidence = {
+            "patient_evidence": item,
+            "integration_rule": (
+                "Interpret this TCGA patient-cohort association alongside, but never "
+                "as the same metric as, DepMap cell-line evidence"
+            ),
+        }
+        return self._envelope(
+            tool="tcga_gene_expression_survival",
+            request=request,
+            evidence=evidence,
+        )
 
     async def pair_evidence(
         self,
@@ -487,11 +581,13 @@ def build_mcp_server(
 ) -> FastMCP:
     service = DepMapEvidenceService(settings or settings_from_env(), runner)
     mcp = FastMCP(
-        name="wisp-depmap-26q1",
+        name="wisp-depmap-tcga-26q1",
         instructions=(
-            "Read-only access to precomputed DepMap 26Q1 evidence. Use coverage "
-            "statuses literally, preserve metric semantics, cite evidence_id, and "
-            "never describe NOT_RETAINED or INELIGIBLE as negative biology."
+            "Read-only access to local precomputed DepMap 26Q1 and TCGA expression/"
+            "survival evidence. Keep TCGA patient-cohort metrics separate from DepMap "
+            "cell-line metrics, use coverage statuses literally, preserve metric "
+            "semantics, cite evidence_id, and never describe NOT_RETAINED, "
+            "MODULE_UNAVAILABLE, or INELIGIBLE as negative biology."
         ),
         host=host,
         port=port,
@@ -555,8 +651,9 @@ def build_mcp_server(
     @mcp.tool(
         title="DepMap gene evidence",
         description=(
-            "Primary bounded gene query. Returns core, network, CNV, pathway/TF, and "
-            "PRISM evidence for a gene, optionally inside one cancer lineage."
+            "Primary bounded gene query. Returns separate DepMap core, network, CNV, "
+            "pathway/TF and PRISM evidence plus TCGA expression/OS evidence for a "
+            "gene, optionally inside one cancer lineage."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -568,6 +665,28 @@ def build_mcp_server(
         limit: int = 5,
     ) -> dict[str, Any]:
         return await service.gene_evidence(gene, lineage, sections, limit)
+
+    @mcp.tool(
+        title="TCGA gene expression and survival evidence",
+        description=(
+            "Retrieve bounded precomputed primary-tumor expression and univariate "
+            "OS/DSS/DFI/PFI association rows for one gene across all completed TCGA "
+            "projects, one TCGA project, or projects mapped to one DepMap lineage. "
+            "This patient evidence is never merged numerically with DepMap evidence."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def tcga_gene_expression_survival(
+        gene: str,
+        project: str | None = None,
+        lineage: str | None = None,
+        endpoint: str = "OS",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.tcga_expression_survival(
+            gene, project, lineage, endpoint, limit
+        )
 
     @mcp.tool(
         title="DepMap exact gene-pair evidence",

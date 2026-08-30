@@ -28,16 +28,12 @@ Credentials and remote tokens belong in the system keyring, never this file. A l
 project-local `data/`, `tm00-script/`, and `knowledge/` layout remains
 recognizable but is not the product contract.
 
-For an API available only on a research server, the remote configuration may
-also name a registered SSH ExecutionContext and loopback ports. Wisp opens this
-managed tunnel only when `depmap_evidence` or `depmap_query` is first used. It requires a successful
-Wisp Probe and key-based SSH, inherits the registered host/user/key settings,
-and never stores credentials in `depmap-agent.json`. The project's
-`knowledge.tunnel.access_authorized` flag is a local kill switch and remains
-false while server-side permission is pending. Until an administrator grants
-access, that flag is enabled, and the Probe passes, the Agent reports the provider as blocked;
-it does not try alternate SSH settings or scan raw data locally. See the
-Skill's `workspace-contract.md` for the exact configuration.
+The DepMap Agent and local DepMap/TCGA MCP do not create SSH sessions or
+tunnels. Users connect research servers through Wisp Science's ordinary
+ExecutionContext UI. The knowledge query layer accepts local files or an
+already reachable HTTPS/loopback endpoint only; a project containing
+`knowledge.tunnel` is rejected with an explicit configuration error. This keeps
+server access separate from scientific evidence retrieval.
 
 The Agent never changes raw data, the knowledge base, or canonical reference scripts. It writes
 task-specific R source, manifests, JSON summaries, tables, figures, and logs

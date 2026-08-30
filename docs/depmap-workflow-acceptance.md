@@ -53,10 +53,12 @@ trajectory-eval`; see [DepMap Agent benchmark](depmap-agent-benchmark.md). This
 separates deterministic orchestration checks from model-cost, tool-error, and
 scientific-review gates.
 
-## Live acceptance after administrator approval
+## Live acceptance after data access is available
 
-1. Enable `knowledge.tunnel.access_authorized` in the project config.
-2. Probe `ssh:guotosky` through Wisp Science.
+1. Connect the research server through Wisp Science when server access is needed.
+2. Transfer validated outputs to the local knowledge root, or configure an
+   already reachable HTTPS/loopback evidence endpoint. The DepMap Agent itself
+   must not create an SSH tunnel.
 3. Run `depmap_query(mode=status)` and verify release and health.
 4. Use a known gene and breast-cancer lineage for one bounded evidence query.
 5. Run the topic Workflow and audit every numerical claim against tool output.

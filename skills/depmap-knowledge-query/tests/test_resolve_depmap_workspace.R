@@ -29,14 +29,7 @@ write_json(
     knowledge = list(
       provider = "remote",
       endpoint = "http://127.0.0.1:18876/api/v1",
-      release = "26Q1",
-      tunnel = list(
-        enabled = TRUE,
-        context_id = "ssh:lab-server",
-        local_port = 18876L,
-        remote_port = 8876L,
-        access_authorized = TRUE
-      )
+      release = "26Q1"
     ),
     analysis_root = "analysis/depmap-agent"
   ),
@@ -51,19 +44,21 @@ stopifnot(identical(remote$status, "needs_probe"))
 stopifnot(identical(remote$knowledge$provider, "remote"))
 stopifnot(identical(remote$knowledge$health, "unverified"))
 stopifnot(identical(remote$knowledge$query_ready, FALSE))
-stopifnot(identical(remote$knowledge$transport, "managed_ssh_tunnel"))
-stopifnot(identical(remote$knowledge$tunnel$context_id, "ssh:lab-server"))
-stopifnot(identical(remote$knowledge$tunnel$access_authorized, TRUE))
-stopifnot(identical(remote$knowledge$tunnel$connection_attempted, FALSE))
+stopifnot(identical(remote$knowledge$transport, "configured_endpoint"))
 stopifnot(identical(remote$blocking_failures, list()))
 
 config_path <- file.path(root, ".wisp", "depmap-agent.json")
-pending_config <- fromJSON(config_path, simplifyVector = FALSE)
-pending_config$knowledge$tunnel$access_authorized <- FALSE
-write_json(pending_config, config_path, auto_unbox = TRUE, pretty = TRUE)
-pending <- run_resolver(root)
-stopifnot(identical(pending$status, "awaiting_access"))
-stopifnot(identical(pending$knowledge$tunnel$connection_attempted, FALSE))
+tunnel_config <- fromJSON(config_path, simplifyVector = FALSE)
+tunnel_config$knowledge$tunnel <- list(
+  enabled = TRUE,
+  context_id = "ssh:lab-server",
+  local_port = 18876L,
+  remote_port = 8876L
+)
+write_json(tunnel_config, config_path, auto_unbox = TRUE, pretty = TRUE)
+blocked_tunnel <- run_resolver(root)
+stopifnot(identical(blocked_tunnel$status, "blocked"))
+stopifnot("managed_tunnel_not_supported" %in% unlist(blocked_tunnel$blocking_failures))
 
 write_json(
   list(schema_version = 2, knowledge = list(provider = "remote")),

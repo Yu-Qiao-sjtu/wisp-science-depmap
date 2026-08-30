@@ -9,11 +9,8 @@ use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use url::{Host, Url};
 use wisp_llm::ToolSchema;
 use wisp_tools::{Tool, ToolEnv, ToolResult};
@@ -226,21 +223,8 @@ const CHINESE_LINEAGE_ALIASES: &[(&str, &str)] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KnowledgeProvider {
-    Local {
-        root: PathBuf,
-    },
-    Remote {
-        endpoint: Url,
-        tunnel: Option<DepMapTunnelConfig>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DepMapTunnelConfig {
-    context_id: String,
-    local_port: u16,
-    remote_port: u16,
-    access_authorized: bool,
+    Local { root: PathBuf },
+    Remote { endpoint: Url },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,8 +237,6 @@ struct KnowledgeWorkspace {
 pub(crate) struct DepMapQueryTool {
     project_root: PathBuf,
     query_script: PathBuf,
-    store: wisp_store::Store,
-    tunnel_child: Arc<Mutex<Option<tokio::process::Child>>>,
 }
 
 pub(crate) struct DepMapEvidenceTool {
@@ -640,14 +622,12 @@ impl DepMapQueryTool {
     pub(crate) fn from_project(
         project_root: PathBuf,
         skills: &wisp_skills::SkillIndex,
-        store: wisp_store::Store,
+        _store: wisp_store::Store,
     ) -> Option<Self> {
         let skill = skills.get(SKILL_NAME)?;
         Some(Self {
             project_root,
             query_script: skill.dir.join("scripts").join("query_depmap_kb.R"),
-            store,
-            tunnel_child: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -688,10 +668,7 @@ impl DepMapQueryTool {
                     "next": "Use depmap_query with a bounded query mode."
                 })))
             }
-            KnowledgeProvider::Remote { endpoint, tunnel } => {
-                if let Err(error) = self.ensure_remote_tunnel(endpoint, tunnel.as_ref()).await {
-                    return ToolResult::fail(blocked("remote_tunnel_not_ready", error));
-                }
+            KnowledgeProvider::Remote { endpoint } => {
                 let health_url = match endpoint_url(endpoint, "health") {
                     Ok(url) => url,
                     Err(error) => {
@@ -703,8 +680,7 @@ impl DepMapQueryTool {
                     Ok(health) => ToolResult::ok(pretty(json!({
                         "state": "provider_ready",
                         "provider": "remote",
-                        "transport": tunnel.as_ref().map(|_| "managed_ssh_tunnel").unwrap_or("https"),
-                        "execution_context": tunnel.as_ref().map(|value| value.context_id.as_str()),
+                        "transport": "configured_endpoint",
                         "release": workspace.release,
                         "endpoint": endpoint,
                         "health": health,
@@ -723,111 +699,10 @@ impl DepMapQueryTool {
         };
         match &workspace.provider {
             KnowledgeProvider::Local { root } => self.run_local(root, workspace, &query).await,
-            KnowledgeProvider::Remote { endpoint, tunnel } => {
-                if let Err(error) = self.ensure_remote_tunnel(endpoint, tunnel.as_ref()).await {
-                    return ToolResult::fail(blocked("remote_tunnel_not_ready", error));
-                }
+            KnowledgeProvider::Remote { endpoint } => {
                 self.run_remote(endpoint, workspace, &query).await
             }
         }
-    }
-
-    async fn ensure_remote_tunnel(
-        &self,
-        endpoint: &Url,
-        tunnel: Option<&DepMapTunnelConfig>,
-    ) -> Result<(), String> {
-        let Some(tunnel) = tunnel else {
-            return Ok(());
-        };
-        if !tunnel.access_authorized {
-            return Err(
-                "managed DepMap SSH access is configured but not yet authorized; set knowledge.tunnel.access_authorized=true only after the server administrator grants access"
-                    .into(),
-            );
-        }
-        validate_tunnel_endpoint(endpoint, tunnel)?;
-        if loopback_port_ready(tunnel.local_port).await {
-            return Ok(());
-        }
-
-        let mut child_slot = self.tunnel_child.lock().await;
-        if let Some(child) = child_slot.as_mut() {
-            match child.try_wait() {
-                Ok(None) => {}
-                Ok(Some(status)) => {
-                    *child_slot = None;
-                    return Err(format!(
-                        "managed DepMap SSH tunnel exited before becoming ready ({status})"
-                    ));
-                }
-                Err(error) => {
-                    *child_slot = None;
-                    return Err(format!("cannot inspect managed DepMap SSH tunnel: {error}"));
-                }
-            }
-        }
-
-        if child_slot.is_none() {
-            let context = self
-                .store
-                .get_execution_context(&tunnel.context_id)
-                .await
-                .map_err(|error| format!("cannot load {}: {error}", tunnel.context_id))?
-                .ok_or_else(|| {
-                    format!(
-                        "SSH environment '{}' is not registered in Wisp Science",
-                        tunnel.context_id
-                    )
-                })?;
-            crate::ssh_hosts::require_managed_ssh_ready(&context)?;
-            let connection = crate::ssh_hosts::SshConnection::from_execution_context(&context)?;
-            if connection.uses_password() {
-                return Err(
-                    "automatic DepMap tunnels require key-based SSH; password-based environments must use an administrator-managed HTTPS endpoint".into(),
-                );
-            }
-            let (program, args) = build_tunnel_command(&connection, tunnel)?;
-            let mut command = Command::new(program);
-            command
-                .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true);
-            #[cfg(target_os = "windows")]
-            {
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                command.creation_flags(CREATE_NO_WINDOW);
-            }
-            *child_slot = Some(
-                command
-                    .spawn()
-                    .map_err(|error| format!("cannot start managed DepMap SSH tunnel: {error}"))?,
-            );
-        }
-
-        for _ in 0..50 {
-            if loopback_port_ready(tunnel.local_port).await {
-                return Ok(());
-            }
-            if let Some(child) = child_slot.as_mut() {
-                if let Some(status) = child
-                    .try_wait()
-                    .map_err(|error| format!("cannot inspect managed DepMap SSH tunnel: {error}"))?
-                {
-                    *child_slot = None;
-                    return Err(format!(
-                        "managed DepMap SSH tunnel exited before becoming ready ({status}); run Probe after the server administrator grants access"
-                    ));
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        Err(
-            "managed DepMap SSH tunnel did not become ready within 5 seconds; run Probe after the server administrator grants access"
-                .into(),
-        )
     }
 
     async fn run_local(
@@ -1916,9 +1791,14 @@ async fn resolve_workspace(project_root: &Path) -> Result<KnowledgeWorkspace, St
             )
             .ok_or_else(|| "remote knowledge provider requires an endpoint".to_string())?;
             let endpoint = validate_endpoint(&endpoint)?;
-            let tunnel = parse_tunnel_config(&config, &endpoint)?;
+            if config.pointer("/knowledge/tunnel").is_some() {
+                return Err(
+                    "knowledge.tunnel is not supported by the DepMap agent; connect the server through Wisp Science or provide an already reachable HTTPS/loopback endpoint"
+                        .into(),
+                );
+            }
             Ok(KnowledgeWorkspace {
-                provider: KnowledgeProvider::Remote { endpoint, tunnel },
+                provider: KnowledgeProvider::Remote { endpoint },
                 release,
             })
         }
@@ -1986,126 +1866,6 @@ fn validate_endpoint(endpoint: &str) -> Result<Url, String> {
         url.set_path(&format!("{}/", url.path()));
     }
     Ok(url)
-}
-
-fn parse_tunnel_config(
-    config: &Value,
-    endpoint: &Url,
-) -> Result<Option<DepMapTunnelConfig>, String> {
-    let Some(value) = config.pointer("/knowledge/tunnel") else {
-        return Ok(None);
-    };
-    let object = value
-        .as_object()
-        .ok_or_else(|| "knowledge.tunnel must be a JSON object".to_string())?;
-    if object
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .is_some_and(|enabled| !enabled)
-    {
-        return Ok(None);
-    }
-    if object
-        .get("enabled")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        return Err("knowledge.tunnel.enabled must be a boolean".into());
-    }
-    let context_id = object
-        .get("context_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "knowledge.tunnel.context_id is required".to_string())?;
-    if !context_id.starts_with("ssh:") || context_id.chars().any(char::is_control) {
-        return Err("knowledge.tunnel.context_id must name a registered ssh: environment".into());
-    }
-    let local_port = tunnel_port(object.get("local_port"), "local_port")?;
-    let remote_port = tunnel_port(object.get("remote_port"), "remote_port")?;
-    let access_authorized = object
-        .get("access_authorized")
-        .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| "knowledge.tunnel.access_authorized must be a boolean".to_string())
-        })
-        .transpose()?
-        .unwrap_or(false);
-    let tunnel = DepMapTunnelConfig {
-        context_id: context_id.to_string(),
-        local_port,
-        remote_port,
-        access_authorized,
-    };
-    validate_tunnel_endpoint(endpoint, &tunnel)?;
-    Ok(Some(tunnel))
-}
-
-fn tunnel_port(value: Option<&Value>, key: &str) -> Result<u16, String> {
-    let value = value
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("knowledge.tunnel.{key} must be an integer between 1 and 65535"))?;
-    u16::try_from(value)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| format!("knowledge.tunnel.{key} must be an integer between 1 and 65535"))
-}
-
-fn validate_tunnel_endpoint(endpoint: &Url, tunnel: &DepMapTunnelConfig) -> Result<(), String> {
-    let loopback = match endpoint.host() {
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(host)) => host.is_loopback(),
-        Some(Host::Ipv6(host)) => host.is_loopback(),
-        None => false,
-    };
-    if !loopback {
-        return Err("a managed SSH tunnel requires a loopback endpoint".into());
-    }
-    let endpoint_port = endpoint
-        .port_or_known_default()
-        .ok_or_else(|| "managed tunnel endpoint must declare a usable port".to_string())?;
-    if endpoint_port != tunnel.local_port {
-        return Err(format!(
-            "knowledge endpoint port {endpoint_port} does not match tunnel local_port {}",
-            tunnel.local_port
-        ));
-    }
-    Ok(())
-}
-
-fn build_tunnel_command(
-    connection: &crate::ssh_hosts::SshConnection,
-    tunnel: &DepMapTunnelConfig,
-) -> Result<(String, Vec<String>), String> {
-    let mut args = connection.ssh_args()?;
-    let target = args
-        .pop()
-        .ok_or_else(|| "SSH connection did not produce a target".to_string())?;
-    args.extend([
-        "-N".into(),
-        "-o".into(),
-        "ExitOnForwardFailure=yes".into(),
-        "-o".into(),
-        "ServerAliveInterval=30".into(),
-        "-o".into(),
-        "ServerAliveCountMax=3".into(),
-        "-L".into(),
-        format!(
-            "127.0.0.1:{}:127.0.0.1:{}",
-            tunnel.local_port, tunnel.remote_port
-        ),
-        target,
-    ]);
-    Ok(("ssh".into(), args))
-}
-
-async fn loopback_port_ready(port: u16) -> bool {
-    tokio::time::timeout(
-        Duration::from_millis(250),
-        tokio::net::TcpStream::connect(("127.0.0.1", port)),
-    )
-    .await
-    .is_ok_and(|result| result.is_ok())
 }
 
 fn endpoint_url(endpoint: &Url, route: &str) -> Result<Url, String> {
@@ -2496,7 +2256,6 @@ mod tests {
         let workspace = KnowledgeWorkspace {
             provider: KnowledgeProvider::Remote {
                 endpoint: Url::parse("https://depmap.example.test/api/v1").unwrap(),
-                tunnel: None,
             },
             release: Some("26Q1".into()),
         };
@@ -2541,73 +2300,6 @@ mod tests {
         assert_eq!(
             endpoint_url(&endpoint, "query").unwrap().as_str(),
             "https://depmap.example.org/api/v1/query"
-        );
-    }
-
-    #[test]
-    fn managed_tunnel_requires_loopback_endpoint_and_matching_port() {
-        let tunnel = DepMapTunnelConfig {
-            context_id: "ssh:lab-server".into(),
-            local_port: 18876,
-            remote_port: 8876,
-            access_authorized: true,
-        };
-        let endpoint = validate_endpoint("http://127.0.0.1:18876/api/v1").unwrap();
-        assert!(validate_tunnel_endpoint(&endpoint, &tunnel).is_ok());
-        let wrong_port = validate_endpoint("http://127.0.0.1:18877/api/v1").unwrap();
-        assert!(validate_tunnel_endpoint(&wrong_port, &tunnel).is_err());
-        let public = validate_endpoint("https://depmap.example.org/api/v1").unwrap();
-        assert!(validate_tunnel_endpoint(&public, &tunnel).is_err());
-    }
-
-    #[test]
-    fn managed_tunnel_access_defaults_to_closed() {
-        let endpoint = validate_endpoint("http://127.0.0.1:18876/api/v1").unwrap();
-        let config = json!({
-            "knowledge": {
-                "tunnel": {
-                    "context_id":"ssh:lab-server",
-                    "local_port":18876,
-                    "remote_port":8876
-                }
-            }
-        });
-        let tunnel = parse_tunnel_config(&config, &endpoint)
-            .unwrap()
-            .expect("tunnel config");
-        assert!(!tunnel.access_authorized);
-    }
-
-    #[test]
-    fn managed_tunnel_command_uses_registered_ssh_connection() {
-        let mut context =
-            wisp_store::ExecutionContext::new("ssh:lab-server", "Lab server").expect("SSH context");
-        context.config_json = json!({
-            "alias":"lab-server",
-            "host_name":"server.example.test",
-            "user":"researcher",
-            "port":2222,
-            "auth_method":"key"
-        })
-        .to_string();
-        let connection = crate::ssh_hosts::SshConnection::from_execution_context(&context)
-            .expect("SSH connection");
-        let tunnel = DepMapTunnelConfig {
-            context_id: context.id,
-            local_port: 18876,
-            remote_port: 8876,
-            access_authorized: true,
-        };
-        let (program, args) = build_tunnel_command(&connection, &tunnel).unwrap();
-        assert_eq!(program, "ssh");
-        assert!(args.windows(2).any(|pair| pair == ["-p", "2222"]));
-        assert!(args
-            .windows(2)
-            .any(|pair| { pair == ["-L", "127.0.0.1:18876:127.0.0.1:8876"] }));
-        assert!(args.contains(&"ExitOnForwardFailure=yes".to_string()));
-        assert_eq!(
-            args.last().map(String::as_str),
-            Some("researcher@server.example.test")
         );
     }
 
@@ -2748,7 +2440,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_resolves_managed_tunnel_without_connecting() {
+    async fn workspace_rejects_managed_tunnel_configuration() {
         let root = std::env::temp_dir().join(format!("wisp-depmap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join(".wisp")).unwrap();
         std::fs::write(
@@ -2771,46 +2463,9 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let workspace = resolve_workspace(&root).await.unwrap();
-        match workspace.provider {
-            KnowledgeProvider::Remote {
-                endpoint,
-                tunnel: Some(tunnel),
-            } => {
-                assert_eq!(endpoint.as_str(), "http://127.0.0.1:18876/api/v1/");
-                assert_eq!(tunnel.context_id, "ssh:lab-server");
-                assert_eq!(tunnel.local_port, 18876);
-                assert_eq!(tunnel.remote_port, 8876);
-                assert!(tunnel.access_authorized);
-            }
-            other => panic!("unexpected provider: {other:?}"),
-        }
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[tokio::test]
-    async fn workspace_rejects_unsafe_managed_tunnel_configuration() {
-        let root = std::env::temp_dir().join(format!("wisp-depmap-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(root.join(".wisp")).unwrap();
-        std::fs::write(
-            root.join(".wisp").join("depmap-agent.json"),
-            serde_json::to_vec(&json!({
-                "schema_version":2,
-                "knowledge": {
-                    "provider":"remote",
-                    "endpoint":"https://depmap.example.test/api/v1",
-                    "tunnel": {
-                        "context_id":"ssh:lab-server",
-                        "local_port":18876,
-                        "remote_port":8876
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
         let error = resolve_workspace(&root).await.unwrap_err();
-        assert!(error.contains("loopback endpoint"));
+        assert!(error.contains("not supported by the DepMap agent"));
+        assert!(error.contains("connect the server through Wisp Science"));
         std::fs::remove_dir_all(root).ok();
     }
 

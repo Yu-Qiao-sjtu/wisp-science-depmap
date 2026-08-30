@@ -31,42 +31,13 @@ For a server-hosted knowledge base, use the version 2 nested form:
 }
 ```
 
-When the API is bound only to the server's loopback interface, Wisp Science can
-create the SSH tunnel lazily through an already registered SSH ExecutionContext:
+The DepMap Agent and local MCP do not create SSH connections or tunnels. Users
+connect research servers with Wisp Science's ordinary ExecutionContext support,
+then either transfer validated precomputed outputs to the local knowledge root
+or expose an already reachable authenticated HTTPS endpoint. A project config
+containing `knowledge.tunnel` is rejected as `managed_tunnel_not_supported`.
 
-```json
-{
-  "schema_version": 2,
-  "knowledge": {
-    "provider": "remote",
-    "endpoint": "http://127.0.0.1:18876/api/v1",
-    "release": "26Q1",
-    "tunnel": {
-      "enabled": true,
-      "context_id": "ssh:lab-server",
-      "local_port": 18876,
-      "remote_port": 8876,
-      "access_authorized": true
-    }
-  },
-  "analysis_root": "analysis/depmap-agent"
-}
-```
-
-The project file identifies only the registered environment and ports. Host,
-user, key path, and probe status come from Wisp Science's ExecutionContext
-registry; private keys and passwords are never copied into the project. The
-tunnel is not opened when the project or Skill is loaded. The first
-`depmap_evidence` or `depmap_query` opens it on demand, after the SSH
-environment has a successful Probe. Automatic tunnels require key-based SSH.
-Set `access_authorized` to `false` while server-side access is pending; this is
-an explicit local kill switch that prevents even a previously successful Probe
-from opening the tunnel. Change it to `true` only after the administrator grants
-access.
-If the administrator has not granted access, the query returns
-`remote_tunnel_not_ready` and does not fall back to local raw-data scanning.
-
-The remote endpoint and optional tunnel are configuration, not proof that the service is healthy.
+The remote endpoint is configuration, not proof that the service is healthy.
 The resolver returns `needs_probe` until the fixed query tool validates the
 endpoint. Authentication belongs in the OS keyring, never in this file.
 See [remote-api-contract.md](remote-api-contract.md) for the health and bounded
