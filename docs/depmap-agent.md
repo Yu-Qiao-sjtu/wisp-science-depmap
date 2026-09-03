@@ -323,12 +323,18 @@ An explicit request to use the user's real Chrome/Chromium session can be handle
 either by the main Agent or by a Native Workflow node with the separately
 approved **Real browser research** (`browser_research`) capability. That grant
 exposes only browser setup, tab opening, page scanning, bounded page JavaScript,
-through the same persistent browser bridge and URL block/preference
-rules, provenance log, and task budget. It is never inherited from
+plus host-persisted structured research-progress checkpoints. Browser actions
+continue to use the same persistent bridge, URL block/preference rules,
+provenance log, and task budget. The capability is never inherited from
 `literature_search` or `external_research`, is not granted by default, and is not
 available to ACP/external executors that cannot share the in-process browser
 bridge. Neither browser text nor model memory becomes literature evidence until
 publication identifiers are verified and returned with the claim.
+
+Native `literature_search`, `external_research`, and `browser_research` tasks
+all expose host-persisted phase and evidence-coverage checkpoints in the Agents
+panel. This progress contract does not grant Chrome access to ordinary
+literature or external-research tasks.
 
 This first-stage Workflow proposes and audits topics. After the user selects a
 topic, run the built-in **DepMap selected-topic report** Workflow with the exact

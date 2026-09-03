@@ -321,9 +321,12 @@ The initial resource mapping is deliberately capability-shaped:
 - `literature_search` grants only enabled literature Skills and literature
   connectors.
 - `external_research` grants only enabled non-literature MCP connections.
+- Native Agents using any research capability also receive the host-owned
+  `report_research_progress` checkpoint tool.
 - `browser_research` grants a Native child the same persistent Chrome/Chromium
   bridge used by the main Agent, limited to setup/status, tab opening, page
-  scanning, and bounded page JavaScript. It is a separate,
+  scanning, and bounded page JavaScript. It also grants the host-owned
+  `report_research_progress` checkpoint tool. It is a separate,
   approval-visible capability and is not implied by either network capability.
 - `visualization` grants configured Python/R tools and figure-oriented Skills.
 - `code_run` grants `run_in_context`, `get_run`, and `cancel_run`. A generic
@@ -349,6 +352,19 @@ executors do not receive it. Browser URL block/preference rules still apply,
 opened tabs remain attributable to the child conversation, and disconnected
 or human-verification states fail visibly instead of falling back to model
 memory.
+
+Native research progress follows the same durable-transcript rule as Agent
+messages. Before retrieval and after each bounded retrieval or evidence-review
+batch, the Native child reports an observable phase plus cumulative facet,
+query, source-screening, claim-coverage, and unresolved-gap counts. The host
+validates monotonic cumulative counts and persists each checkpoint as a tool
+result in the child frame. Workflow snapshots recover the newest checkpoint
+from SQLite, so closing and reopening the panel does not reset the display.
+Totals are optional and may be established as the research plan develops; this
+is an observability contract, not a hard-coded search-count stopping rule. The
+child reassesses marginal evidence gain after each bounded batch and moves to
+synthesis when planned facets are covered or no materially different query or
+source is likely to close the remaining documented gaps.
 
 ACP profiles remain available to workflows that explicitly resolve to an ACP
 executor. Every configured profile whose command is currently available is

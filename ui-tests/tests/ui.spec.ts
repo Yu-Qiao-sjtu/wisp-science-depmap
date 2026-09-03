@@ -13580,6 +13580,12 @@ test("main-Agent dynamic batches show parallel roots and pending dependencies", 
   await expect(researchB.locator(".agent-attempt-status")).toHaveText("Running");
   await expect(researchB.locator(".agent-current-activity")).toContainText("Using tools and consolidating evidence");
   await expect(researchB.locator(".agent-usage")).toContainText("5 events");
+  const researchProgress = researchB.getByTestId("agent-research-progress");
+  await expect(researchProgress).toContainText("Research progress");
+  await expect(researchProgress).toContainText("Screening sources");
+  await expect(researchProgress).toContainText("5");
+  await expect(researchProgress).toContainText("6 / 11 / 18");
+  await expect(researchProgress).toContainText("PTK7 liver cancer clinical evidence");
   const synthesis = card.locator('[data-step-id$=":synthesize"]');
   await expect(synthesis.locator(".agent-attempt-status")).toHaveText("Pending");
   await expect(synthesis.locator(".agent-chip.dependency")).toHaveText(["research_a", "research_b"]);

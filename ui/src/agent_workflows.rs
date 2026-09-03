@@ -1103,6 +1103,21 @@ fn attempt_activity_label(
     t(locale, key).into()
 }
 
+fn research_phase_label(locale: Locale, phase: &str) -> String {
+    let key = match phase {
+        "planning" => "agents.research.phase.planning",
+        "searching" => "agents.research.phase.searching",
+        "screening" => "agents.research.phase.screening",
+        "gathering_evidence" => "agents.research.phase.gathering_evidence",
+        "checking_gaps" => "agents.research.phase.checking_gaps",
+        "synthesizing" => "agents.research.phase.synthesizing",
+        "auditing_citations" => "agents.research.phase.auditing_citations",
+        "complete" => "agents.research.phase.complete",
+        _ => return phase.to_string(),
+    };
+    t(locale, key).into()
+}
+
 fn risk_label(locale: Locale, risk: &str) -> String {
     let key = match risk {
         "read_only" => "agents.risk.read_only",
@@ -3920,6 +3935,8 @@ fn dynamic_workflow_card(
                             result.tool_calls,
                         ),
                     );
+                    let research_progress = result.as_ref()
+                        .and_then(|result| result.research_progress.clone());
                     let usage = result.as_ref().map(|result| {
                         let tokens = result.input_tokens.saturating_add(result.output_tokens);
                         let token_label = if tokens == 0
@@ -4046,6 +4063,49 @@ fn dynamic_workflow_card(
                                 <strong>{activity_label}</strong>
                                 {duration.map(|duration| view! { <small>{duration}</small> })}
                             </div>
+                            {research_progress.map(|progress| {
+                                let phase = research_phase_label(locale.get(), &progress.phase);
+                                let facets = progress.facets_total.map(|total| {
+                                    format!("{} / {total}", progress.facets_completed)
+                                }).or_else(|| (progress.facets_completed > 0)
+                                    .then(|| progress.facets_completed.to_string()));
+                                let queries = progress.queries_total.map(|total| {
+                                    format!("{} / {total}", progress.queries_completed)
+                                }).or_else(|| (progress.queries_completed > 0)
+                                    .then(|| progress.queries_completed.to_string()));
+                                let claims = progress.claims_total.map(|total| {
+                                    format!("{} / {total}", progress.claims_covered)
+                                }).or_else(|| (progress.claims_covered > 0)
+                                    .then(|| progress.claims_covered.to_string()));
+                                let sources = format!(
+                                    "{} / {} / {}",
+                                    progress.accepted_sources,
+                                    progress.screened_sources,
+                                    progress.candidate_sources,
+                                );
+                                let show_sources = progress.candidate_sources > 0;
+                                let gap_count = progress.unresolved_gaps.len();
+                                view! {
+                                    <section class="agent-research-progress" data-testid="agent-research-progress"
+                                        aria-live="polite">
+                                        <div class="agent-research-progress-head">
+                                            <strong>{t(locale.get(), "agents.research.progress")}</strong>
+                                            <span>{phase}</span>
+                                        </div>
+                                        <div class="agent-research-progress-grid">
+                                            {facets.map(|value| view! { <div><span>{t(locale.get(), "agents.research.facets")}</span><strong>{value}</strong></div> })}
+                                            {queries.map(|value| view! { <div><span>{t(locale.get(), "agents.research.queries")}</span><strong>{value}</strong></div> })}
+                                            {show_sources.then(|| view! { <div><span>{t(locale.get(), "agents.research.sources")}</span><strong>{sources}</strong></div> })}
+                                            {claims.map(|value| view! { <div><span>{t(locale.get(), "agents.research.claims")}</span><strong>{value}</strong></div> })}
+                                            {(gap_count > 0).then(|| view! { <div><span>{t(locale.get(), "agents.research.gaps")}</span><strong>{gap_count}</strong></div> })}
+                                        </div>
+                                        {progress.current_query.map(|query| view! {
+                                            <div class="agent-research-current"><span>{t(locale.get(), "agents.research.current_query")}</span><strong>{query}</strong></div>
+                                        })}
+                                        {progress.note.map(|note| view! { <p>{note}</p> })}
+                                    </section>
+                                }
+                            })}
                             {summary.map(|summary| view! { <p class="agent-attempt-summary">{summary}</p> })}
                             {result_error.map(|error| view! { <div class="agents-error">{error}</div> })}
                             {usage.map(|usage| view! { <div class="agent-usage">{usage}</div> })}
@@ -4491,6 +4551,13 @@ pub(super) fn agent_workflows_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_phases_have_user_facing_labels() {
+        assert_eq!(research_phase_label(Locale::En, "searching"), "Searching");
+        assert_eq!(research_phase_label(Locale::Zh, "checking_gaps"), "检查覆盖缺口");
+        assert_eq!(research_phase_label(Locale::En, "custom"), "custom");
+    }
 
     #[test]
     fn inspector_width_keeps_both_panes_usable() {

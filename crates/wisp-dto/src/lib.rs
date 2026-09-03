@@ -3917,6 +3917,32 @@ pub struct AgentApprovalReasonSummary {
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ResearchProgressSnapshot {
+    pub schema_version: u32,
+    pub phase: String,
+    #[serde(default)]
+    pub facets_completed: u32,
+    pub facets_total: Option<u32>,
+    #[serde(default)]
+    pub queries_completed: u32,
+    pub queries_total: Option<u32>,
+    #[serde(default)]
+    pub candidate_sources: u32,
+    #[serde(default)]
+    pub screened_sources: u32,
+    #[serde(default)]
+    pub accepted_sources: u32,
+    #[serde(default)]
+    pub claims_covered: u32,
+    pub claims_total: Option<u32>,
+    #[serde(default)]
+    pub unresolved_gaps: Vec<String>,
+    pub current_query: Option<String>,
+    pub note: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentResultSummary {
     pub status: String,
     pub summary: Option<String>,
@@ -3930,6 +3956,8 @@ pub struct AgentResultSummary {
     pub activity_messages: i64,
     #[serde(default)]
     pub last_activity_at: Option<i64>,
+    #[serde(default)]
+    pub research_progress: Option<ResearchProgressSnapshot>,
     pub cost_microunits: i64,
     pub duration_secs: Option<i64>,
     pub full_result_available: bool,

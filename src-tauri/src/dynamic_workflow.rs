@@ -306,6 +306,7 @@ pub(crate) struct AgentResultSummary {
     pub(crate) tool_calls: i64,
     pub(crate) activity_messages: i64,
     pub(crate) last_activity_at: Option<i64>,
+    pub(crate) research_progress: Option<crate::research_progress::ResearchProgressSnapshot>,
     pub(crate) cost_microunits: i64,
     pub(crate) duration_secs: Option<i64>,
     pub(crate) full_result_available: bool,
@@ -736,6 +737,7 @@ fn result_summary(attempt: &AgentWorkflowAttempt) -> AgentResultSummary {
         // message, the attempt timestamp still lets the UI distinguish a
         // freshly-started Agent from a card with no observable heartbeat.
         last_activity_at: Some(attempt.updated_at),
+        research_progress: None,
         cost_microunits: attempt.cost_microunits,
         duration_secs: attempt_duration_secs(attempt, chrono::Utc::now().timestamp()),
         full_result_available: attempt.response_json.is_some(),

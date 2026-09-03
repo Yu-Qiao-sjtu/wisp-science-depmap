@@ -967,6 +967,39 @@ impl Store {
         ))
     }
 
+    /// Return a bounded newest-first window of persisted results for one tool.
+    ///
+    /// Delegated research uses this append-only message boundary for progress
+    /// recovery. Keeping progress in the transcript means reconnecting the UI
+    /// does not depend on an in-memory WebSocket or a second job-state store.
+    /// Consumers can skip a malformed/failed newest result and recover the
+    /// preceding valid checkpoint without loading the entire child transcript.
+    pub async fn recent_tool_result_texts(
+        &self,
+        frame_id: &str,
+        tool_name: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(
+            "SELECT content,ts FROM messages \
+             WHERE frame_id=? AND role='tool' AND tool_name=? \
+             ORDER BY seq DESC LIMIT ?",
+        )
+        .bind(frame_id)
+        .bind(tool_name)
+        .bind(limit.clamp(1, 50))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let content_json: String = row.try_get("content")?;
+                let content = serde_json::from_str::<wisp_llm::Content>(&content_json)
+                    .unwrap_or_else(|_| wisp_llm::Content::text(""));
+                Ok((content.as_text(), row.try_get("ts")?))
+            })
+            .collect()
+    }
+
     /// Durable seq cursor for a frame: `COALESCE(MAX(seq), 0)`.
     ///
     /// This is the source of truth for `last_seq` recovery. Do not use

@@ -1059,6 +1059,23 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
       snapshot.dynamic.tasks[1].result = dynamicResult(snapshot.dynamic.tasks[1], "running", {
         activity_messages: 5,
         tool_calls: 2,
+        research_progress: {
+          schema_version: 1,
+          phase: "screening",
+          facets_completed: 2,
+          facets_total: 4,
+          queries_completed: 5,
+          queries_total: null,
+          candidate_sources: 18,
+          screened_sources: 11,
+          accepted_sources: 6,
+          claims_covered: 3,
+          claims_total: 7,
+          unresolved_gaps: ["No prospective clinical validation found"],
+          current_query: "PTK7 liver cancer clinical evidence",
+          note: "Reviewing primary studies",
+          updated_at: Math.floor(Date.now() / 1000),
+        },
       });
     } else if (kind === "partial") {
       snapshot.partialFailureRecorded = true;

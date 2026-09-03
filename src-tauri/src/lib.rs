@@ -78,6 +78,7 @@ mod publication_freeze;
 mod publication_reproduction;
 mod quick_actions;
 mod research_graph;
+mod research_progress;
 mod resource_leases;
 mod resource_refs;
 mod review;

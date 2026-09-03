@@ -297,7 +297,7 @@ impl CapabilityRegistry {
             .find(|definition| definition.id == "code_run")
             .expect("code_run capability")
             .revision = 3;
-        Self::new("wisp-capabilities-v5", definitions)
+        Self::new("wisp-capabilities-v6", definitions)
             .expect("built-in capability definitions must be valid")
     }
 
@@ -1410,7 +1410,7 @@ fn builtin_capabilities() -> Vec<CapabilityDefinition> {
             "Literature search",
             "Search configured scholarly sources.",
             CapabilityRisk::Network,
-            &["literature_search"],
+            &["literature_search", "report_research_progress"],
             false,
             true,
             false,
@@ -1428,7 +1428,7 @@ fn builtin_capabilities() -> Vec<CapabilityDefinition> {
             "External research",
             "Use configured external research sources.",
             CapabilityRisk::External,
-            &["web_search"],
+            &["web_search", "report_research_progress"],
             false,
             true,
             false,
@@ -1519,6 +1519,7 @@ fn browser_research_capability() -> CapabilityDefinition {
             "web_scan",
             "web_execute_js",
             "web_open_tab",
+            "report_research_progress",
         ],
         false,
         true,
@@ -1800,12 +1801,18 @@ mod tests {
             ),
             (
                 "literature_search",
-                vec!["literature_search"],
+                vec!["literature_search", "report_research_progress"],
                 false,
                 true,
                 false,
             ),
-            ("external_research", vec!["web_search"], false, true, false),
+            (
+                "external_research",
+                vec!["web_search", "report_research_progress"],
+                false,
+                true,
+                false,
+            ),
             (
                 "browser_research",
                 vec![
@@ -1813,6 +1820,7 @@ mod tests {
                     "web_scan",
                     "web_execute_js",
                     "web_open_tab",
+                    "report_research_progress",
                 ],
                 false,
                 true,
@@ -2068,7 +2076,10 @@ mod tests {
         restricted.specialist.as_mut().unwrap().connectors =
             Some(vec!["literature".into(), "untrusted-extra".into()]);
         let resolved = registry.resolve_task(restricted, &host).unwrap();
-        assert_eq!(resolved.spec().permissions.tools, vec!["literature_search"]);
+        assert_eq!(
+            resolved.spec().permissions.tools,
+            vec!["literature_search", "report_research_progress"]
+        );
         assert!(!resolved
             .spec()
             .permissions

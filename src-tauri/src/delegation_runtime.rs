@@ -637,6 +637,10 @@ async fn load_workflow_snapshot(
         if result.tool_calls == 0 {
             result.tool_calls = live_tool_calls;
         }
+        result.research_progress =
+            crate::research_progress::latest_research_progress(store, child_frame_id)
+                .await
+                .map_err(|error| error.to_string())?;
     }
     Ok(AgentWorkflowSnapshot {
         workflow,
@@ -1326,6 +1330,11 @@ async fn build_dynamic_delegation_policy(
     }
     if resources.is_some_and(|resources| resources.has_external()) {
         permission_tools.push(crate::delegation_resources::EXTERNAL_TOOL_GRANT.into());
+    }
+    if browser_available
+        || resources.is_some_and(|resources| resources.has_literature() || resources.has_external())
+    {
+        permission_tools.push(crate::research_progress::REPORT_RESEARCH_PROGRESS.into());
     }
     if browser_available {
         permission_tools.extend(
@@ -2647,6 +2656,12 @@ impl AgentDelegator for NativeDelegator {
             .capabilities
             .iter()
             .any(|capability| capability == "browser_research");
+        let research_progress_granted = request.spec.capabilities.iter().any(|capability| {
+            matches!(
+                capability.as_str(),
+                "browser_research" | "literature_search" | "external_research"
+            )
+        });
         if browser_granted {
             let bridge = self.browser_bridge.clone().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2654,6 +2669,17 @@ impl AgentDelegator for NativeDelegator {
                 )
             })?;
             add_browser_research_tools(&mut tools, bridge, self.store.clone());
+        }
+        if research_progress_granted {
+            tools.add(Box::new(
+                crate::research_progress::ReportResearchProgressTool::new(
+                    self.store.clone(),
+                    child_frame_id.clone(),
+                ),
+            ));
+            system.push_str(
+                "\n\n<research_progress_contract>\nBefore the first retrieval and after each bounded retrieval or evidence-review batch, call report_research_progress. Start by defining distinct research facets, then use each batch to close a specific facet or unresolved evidence gap. After every batch, assess observable marginal evidence gain. Transition to synthesis when the planned facets are adequately covered, or when another batch has no materially different query or source likely to resolve the remaining gaps; document those gaps instead of searching indefinitely. Reserve time for citation auditing. Report only observable activity and cumulative counts, never hidden reasoning. The host persists these checkpoints for the user and reconnect recovery. Do not invent totals: omit a total until the plan establishes it.\n</research_progress_contract>",
+            );
         }
         let depmap_query_granted = request
             .spec
@@ -2793,6 +2819,9 @@ impl AgentDelegator for NativeDelegator {
                 .into_iter()
                 .map(str::to_string),
             );
+        }
+        if research_progress_granted {
+            allowed_tools.push(crate::research_progress::REPORT_RESEARCH_PROGRESS.into());
         }
         allowed_tools.sort();
         allowed_tools.dedup();
@@ -5249,6 +5278,10 @@ mod tests {
             .contains(&"literature_search".into()));
         assert!(host.permission_ceiling.tools.contains(&"web_search".into()));
         assert!(host.permission_ceiling.tools.contains(&"web_scan".into()));
+        assert!(host
+            .permission_ceiling
+            .tools
+            .contains(&crate::research_progress::REPORT_RESEARCH_PROGRESS.into()));
         assert!(host.permission_ceiling.tools.contains(&"python".into()));
         assert!(host
             .permission_ceiling
