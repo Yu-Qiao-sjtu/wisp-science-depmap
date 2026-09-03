@@ -2362,7 +2362,7 @@ mod tests {
         let suite: EvalSuite = serde_yaml::from_str(DEPMAP_AGENT_SUITE).unwrap();
         validate_suite(&suite, EvalMode::Offline).unwrap();
         validate_suite(&suite, EvalMode::Live).unwrap();
-        assert_eq!(suite.cases.len(), 11);
+        assert_eq!(suite.cases.len(), 13);
         assert!(suite
             .cases
             .iter()
