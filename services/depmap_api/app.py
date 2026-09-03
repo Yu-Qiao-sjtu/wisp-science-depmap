@@ -40,6 +40,14 @@ MATRIX_MODULES = {
 }
 LINEAGE_EVENTS = {"damaging", "custom_missense", "hotspot"}
 DRUG_OMICS = {"effect", "expression", "cnv"}
+SYNTHETIC_LETHAL_EVENTS = {
+    "damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"
+}
+THREE_D_FAMILIES = {
+    "dependency_profiles", "differential_dependency", "codependency",
+    "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
+}
+THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 MODE_REQUIRED_FIELDS = {
     "catalog": set(),
     "lineage_catalog": {"lineage"},
@@ -57,6 +65,9 @@ MODE_REQUIRED_FIELDS = {
     "enrichment": {"lineage", "source"},
     "subtype": set(),
     "coamplification": {"source"},
+    "true_love": set(),
+    "synthetic_lethal": set(),
+    "three_d": {"family"},
     "tcga_expression_survival": {"gene"},
 }
 MODE_OPTIONAL_FIELDS = {
@@ -68,6 +79,9 @@ MODE_OPTIONAL_FIELDS = {
     "enrichment": {"collection", "term", "limit"},
     "subtype": {"gene", "lineage", "contrast", "limit"},
     "coamplification": {"partner", "target", "layer", "limit"},
+    "true_love": {"gene", "partner", "limit"},
+    "synthetic_lethal": {"source", "target", "event", "limit"},
+    "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
 }
 LINEAGE_NETWORK_FAMILIES = {
@@ -101,6 +115,7 @@ QUERY_FIELD_ORDER = (
     "contrast",
     "partner",
     "layer",
+    "cohort",
     "reciprocal",
     "project",
     "endpoint",
@@ -367,6 +382,7 @@ class QueryRequest(BaseModel):
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
+        "true_love", "synthetic_lethal", "three_d",
         "tcga_expression_survival",
     ]
     gene: str | None = None
@@ -386,6 +402,7 @@ class QueryRequest(BaseModel):
     contrast: str | None = None
     partner: str | None = None
     layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] | None = None
+    cohort: str | None = None
     reciprocal: bool | None = None
     project: str | None = None
     endpoint: str | None = None
@@ -397,7 +414,7 @@ class QueryRequest(BaseModel):
         all_fields = {
             "gene", "module", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
-            "project", "endpoint", "contrast", "partner", "layer",
+            "project", "endpoint", "contrast", "partner", "layer", "cohort",
         }
         supplied = {
             name
@@ -414,12 +431,18 @@ class QueryRequest(BaseModel):
             )
         if self.module is not None and self.module not in MATRIX_MODULES:
             raise ValueError("unsupported module")
-        if self.event is not None and self.event not in LINEAGE_EVENTS:
+        if self.event is not None and self.mode != "synthetic_lethal" and self.event not in LINEAGE_EVENTS:
             raise ValueError("unsupported lineage event")
-        if self.omic is not None and self.omic not in DRUG_OMICS:
+        if self.mode == "synthetic_lethal" and self.event is not None and self.event not in SYNTHETIC_LETHAL_EVENTS:
+            raise ValueError("unsupported synthetic-lethal event")
+        if self.omic is not None and self.mode != "three_d" and self.omic not in DRUG_OMICS:
             raise ValueError("unsupported drug omic")
-        if self.family is not None and self.family not in LINEAGE_NETWORK_FAMILIES:
+        if self.mode == "three_d" and self.omic is not None and self.omic not in THREE_D_OMICS:
+            raise ValueError("unsupported 3D omic")
+        if self.family is not None and self.mode != "three_d" and self.family not in LINEAGE_NETWORK_FAMILIES:
             raise ValueError("unsupported lineage network family")
+        if self.mode == "three_d" and self.family not in THREE_D_FAMILIES:
+            raise ValueError("unsupported 3D family")
         if self.endpoint is not None and self.endpoint.upper() not in TCGA_SURVIVAL_ENDPOINTS:
             raise ValueError("unsupported TCGA survival endpoint")
         if self.mode == "lineage_drug" and self.drug is None and self.target is None:
@@ -428,6 +451,10 @@ class QueryRequest(BaseModel):
             self.limit = 20
         if self.mode == "coamplification" and self.layer is None:
             self.layer = "lineage_adjusted"
+        if self.mode == "true_love" and self.gene is None and self.partner is not None:
+            raise ValueError("true_love partner requires gene")
+        if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
+            raise ValueError("synthetic_lethal requires source, target, or both")
         for name in (supplied - {"limit", "reciprocal"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -794,6 +821,174 @@ def _run_coamplification_query(settings: Settings, query: dict[str, Any]) -> dic
         source=source, partner=partner, target=target, layer=layer,
         pairs=pairs[:limit], hits=hits[:limit], audit=audit_rows[:limit],
         summary={"matched_pair_count": len(pairs), "retained_hit_count": len(hits)},
+        manifest=manifest, provenance=provenance,
+    )
+
+
+def _filter_pair_rows(
+    rows: list[dict[str, Any]], gene: str | None, partner: str | None
+) -> list[dict[str, Any]]:
+    symbol = gene.strip().upper() if gene else None
+    mate = partner.strip().upper() if partner else None
+    filtered = []
+    for row in rows:
+        a = str(row.get("gene_a") or row.get("source_gene") or "").upper()
+        b = str(row.get("gene_b") or row.get("target_gene") or "").upper()
+        if symbol and symbol not in {a, b}:
+            continue
+        if mate and mate not in {a, b}:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    root = settings.knowledge_root / "depmap-26q1-full" / "true_love_gene"
+    manifest, unavailable = _complete_module(root, mode="true_love")
+    if unavailable is not None:
+        return unavailable
+    stable_root = root / "high_confidence_stability"
+    stable_manifest = _load_manifest(stable_root)
+    stable_path = stable_root / "final_high_confidence_true_love_genes.csv.gz"
+    strict_path = root / "strict_mutual_rank1_pairs.csv.gz"
+    path = stable_path if stable_manifest and stable_manifest.get("status") == "complete" and stable_path.is_file() else strict_path
+    if not path.is_file():
+        return _evidence_response(
+            "NOT_COMPUTED", mode="true_love",
+            reason="the completed module has no queryable strict-pair table",
+            manifest=manifest, provenance=[str(root / "manifest.json")],
+        )
+    gene = query.get("gene")
+    partner = query.get("partner")
+    rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
+    rows.sort(key=lambda row: (-float(row.get("bootstrap_reciprocal_stability") or 0), float(row.get("worst_direction_fdr") or 1), -abs(float(row.get("strongest_absolute_correlation") or 0))))
+    limit = int(query.get("limit", 20))
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="true_love",
+        reason=("stable reciprocal rank-1 dependency pairs found" if rows else "the completed strict/stability screen retained no matching pair"),
+        gene=gene.strip().upper() if gene else None,
+        partner=partner.strip().upper() if partner else None,
+        rows=rows[:limit],
+        summary={"matched_pair_count": len(rows), "returned_count": min(limit, len(rows)), "stability_layer": path == stable_path},
+        manifest=stable_manifest if path == stable_path else manifest,
+        provenance=[str(root / "manifest.json"), str(path)],
+    )
+
+
+def _run_synthetic_lethal_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    root = settings.knowledge_root / "depmap-26q1-full" / "observational_synthetic_lethal_candidates"
+    manifest, unavailable = _complete_module(root, mode="synthetic_lethal")
+    if unavailable is not None:
+        return unavailable
+    event = query.get("event")
+    path = root / (f"{event}.csv.gz" if event else "pair_evidence_summary.csv.gz")
+    if not path.is_file():
+        return _evidence_response(
+            "NOT_COMPUTED", mode="synthetic_lethal",
+            reason="the requested completed evidence-family table is unavailable",
+            event=event, manifest=manifest, provenance=[str(root / "manifest.json")],
+        )
+    source = query.get("source")
+    target = query.get("target")
+    source = source.strip().upper() if source else None
+    target = target.strip().upper() if target else None
+    rows = [
+        row for row in _read_csv_records(path)
+        if (source is None or row.get("source_gene") == source)
+        and (target is None or row.get("target_gene") == target)
+    ]
+    rows.sort(key=lambda row: (float(row.get("best_fdr") or row.get("fdr") or 1), -int(row.get("evidence_family_count") or 0), float(row.get("strongest_mean_difference") or row.get("mean_difference") or 0)))
+    limit = int(query.get("limit", 20))
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="synthetic_lethal",
+        reason=("observational synthetic-lethal candidate evidence found" if rows else "the completed candidate screen retained no matching row"),
+        source=source, target=target, event=event, rows=rows[:limit],
+        summary={"matched_row_count": len(rows), "returned_count": min(limit, len(rows))},
+        manifest=manifest, provenance=[str(root / "manifest.json"), str(path)],
+    )
+
+
+def _catalog_choice(root: Path, filename: str, field: str, requested: str | None) -> tuple[list[dict[str, Any]], str | None]:
+    rows = _read_csv_records(root / filename)
+    if requested is None:
+        return rows, None
+    match = next((str(row[field]) for row in rows if str(row.get(field, "")).casefold() == requested.casefold()), None)
+    return rows, match
+
+
+def _run_three_d_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    root = settings.knowledge_root / "depmap-26q1-3d"
+    family = query["family"]
+    family_root = root / family
+    manifest, unavailable = _complete_module(family_root, mode="three_d")
+    if unavailable is not None:
+        return unavailable
+    limit = int(query.get("limit", 20))
+    gene = query.get("gene")
+    source = query.get("source")
+    target = query.get("target")
+    symbol = gene.strip().upper() if gene else None
+    source = source.strip().upper() if source else None
+    target = target.strip().upper() if target else None
+    cohort = query.get("cohort")
+    contrast = query.get("contrast")
+    omic = query.get("omic")
+    provenance = [str(family_root / "manifest.json")]
+
+    catalog_specs = {
+        "dependency_profiles": ("group_catalog.csv", "group", cohort),
+        "differential_dependency": ("contrast_catalog.csv", "contrast", contrast),
+        "codependency": ("cohort_catalog.csv", "cohort", cohort),
+        "true_love_gene": ("cohort_catalog.csv", "cohort", cohort),
+        "omics_dependency": ("modality_catalog.csv", "modality", f"{omic}_dependency" if omic else None),
+        "lineage_dependency_enrichment": ("group_catalog.csv", "group", cohort),
+    }
+    catalog_file, catalog_field, requested = catalog_specs[family]
+    catalog_path = family_root / catalog_file
+    if not catalog_path.is_file():
+        return _evidence_response("NOT_COMPUTED", mode="three_d", reason="the completed 3D family has no catalog", family=family, manifest=manifest, provenance=provenance)
+    catalog_rows, selected = _catalog_choice(family_root, catalog_file, catalog_field, requested)
+    provenance.append(str(catalog_path))
+    selector_present = requested is not None
+    if selector_present and selected is None:
+        return _evidence_response("NOT_COMPUTED", mode="three_d", reason="the requested 3D cohort, contrast, or modality is not in the completed catalog", family=family, cohort=cohort, contrast=contrast, omic=omic, manifest=manifest, provenance=provenance)
+    if not selector_present and not any((symbol, source, target)):
+        return _evidence_response("FOUND", mode="three_d", reason="completed 3D analysis-family catalog found", family=family, rows=catalog_rows[:limit], summary={"catalog_count": len(catalog_rows)}, manifest=manifest, provenance=provenance)
+
+    units = [selected] if selected else [str(row[catalog_field]) for row in catalog_rows if row.get("status") == "complete"]
+    rows: list[dict[str, Any]] = []
+    for unit in units:
+        unit_root = family_root / str(unit)
+        candidates: list[Path]
+        if family == "dependency_profiles":
+            candidates = [unit_root / "all_genes.csv.gz"]
+        elif family == "differential_dependency":
+            candidates = [unit_root / "all_genes.csv.gz"]
+        elif family in {"codependency", "true_love_gene"}:
+            candidates = [unit_root / "high_confidence_pairs.csv.gz"]
+        elif family == "omics_dependency":
+            candidates = [unit_root / "significant_associations.csv.gz"]
+        else:
+            candidates = [unit_root / "significant_enrichment.csv.gz"]
+        for path in candidates:
+            if not path.is_file() or (_load_manifest(unit_root) or {}).get("status") != "complete":
+                continue
+            candidates_rows = _read_csv_records(path)
+            if family in {"codependency", "true_love_gene"}:
+                candidates_rows = _filter_pair_rows(candidates_rows, symbol or source, target)
+            elif symbol:
+                candidates_rows = [row for row in candidates_rows if str(row.get("gene", "")).upper() == symbol]
+            elif source or target:
+                candidates_rows = [row for row in candidates_rows if (source is None or str(row.get("feature_gene", "")).upper() == source) and (target is None or str(row.get("target_gene", "")).upper() == target)]
+            rows.extend({"unit": unit, **row} for row in candidates_rows)
+            provenance.extend([str(unit_root / "manifest.json"), str(path)])
+    rows = rows[:limit]
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="three_d",
+        reason=("bounded rows from the completed 3D analysis family found" if rows else "the completed 3D analysis family retained no matching row"),
+        family=family, cohort=cohort, contrast=contrast, omic=omic,
+        gene=symbol, source=source, target=target, rows=rows,
+        summary={"searched_unit_count": len(units), "returned_count": len(rows)},
         manifest=manifest, provenance=provenance,
     )
 
@@ -1835,6 +2030,12 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_subtype_query, settings, query)
     if query["mode"] == "coamplification":
         return await asyncio.to_thread(_run_coamplification_query, settings, query)
+    if query["mode"] == "true_love":
+        return await asyncio.to_thread(_run_true_love_query, settings, query)
+    if query["mode"] == "synthetic_lethal":
+        return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
+    if query["mode"] == "three_d":
+        return await asyncio.to_thread(_run_three_d_query, settings, query)
     return await run_r_query(settings, query)
 
 
@@ -1885,8 +2086,8 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 5,
-            "coverage_manifest_version": 3,
+            "query_contract_version": 6,
+            "coverage_manifest_version": 4,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),
             "query_modes": sorted(MODE_REQUIRED_FIELDS),

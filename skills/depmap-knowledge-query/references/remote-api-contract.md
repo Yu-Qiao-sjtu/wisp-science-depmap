@@ -20,8 +20,8 @@ are ready. Recommended fields:
   "schema_version": 1,
   "status": "ready",
   "release": "26Q1",
-  "query_contract_version": 5,
-  "coverage_manifest_version": 3
+  "query_contract_version": 6,
+  "coverage_manifest_version": 4
 }
 ```
 
@@ -41,7 +41,8 @@ query helper, for example:
 
 Supported modes are `catalog`, `lineage_catalog`, `lineage_dependency`, `core`, `pair`, `top`,
 `lineage`, `pathway`, `drug`, `lineage_network`, `lineage_cnv`,
-`lineage_drug`, `enrichment`, `subtype`, `coamplification`, and
+`lineage_drug`, `enrichment`, `subtype`, `coamplification`, `true_love`,
+`synthetic_lethal`, `three_d`, and
 `tcga_expression_survival`.
 `lineage_catalog` inventories cancer-level
 module manifests without requiring or inventing a gene.
@@ -62,6 +63,11 @@ larger than 4 MiB and does not follow redirects.
 contrast without a gene returns retained selective hits. `coamplification`
 requires `source` and optionally accepts `partner`, dependency `target`,
 `layer` (`exhaustive_high_confidence` or `lineage_adjusted`), and `limit`.
+`true_love` optionally accepts `gene`, `partner`, and `limit` and prefers the
+completed bootstrap-stability layer. `synthetic_lethal` requires `source`,
+`target`, or both, and optionally accepts one frozen event family. `three_d`
+requires a supported analysis `family` and uses only catalog-validated cohort,
+contrast, omic, gene, source, and target selectors.
 
 Use a non-2xx status for configuration, authentication, or service failures.
 Use a successful JSON response with `status: "not_testable"` for a legitimate

@@ -40,6 +40,9 @@ The exposed tools are intentionally small:
 - `depmap_drug_evidence`
 - `depmap_subtype_evidence`
 - `depmap_coamplification_evidence`
+- `depmap_true_love_evidence`
+- `depmap_synthetic_lethal_evidence`
+- `depmap_3d_evidence`
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
@@ -96,6 +99,16 @@ free-text subtype definitions. `depmap_coamplification_evidence` reads only the
 lineage-adjusted retained target hits. `NOT_RETAINED` means the pair was tested
 but the requested target did not pass the stored result contract; it is not a
 biological null.
+
+`depmap_true_love_evidence` reads the completed mutual-rank-1 negative
+codependency screen and prefers the bootstrap-stable high-confidence table.
+`depmap_synthetic_lethal_evidence` reads the completed observational
+mutation/CNV event-to-dependency candidate tables; its name is a screen label,
+not proof of causal synthetic lethality. `depmap_3d_evidence` exposes six
+catalog-validated families: dependency profiles, 3D-vs-2D contrasts,
+codependency, 3D True Love pairs, omics-dependency associations, and
+lineage/pathway enrichment. All return bounded rows and their terminal
+manifests rather than opening full matrices.
 
 ## Connect from Wisp Science
 

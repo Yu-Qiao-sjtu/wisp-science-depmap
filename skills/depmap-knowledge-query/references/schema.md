@@ -22,6 +22,9 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
 - `enrichment --lineage NAME --source GENE [--collection NAME] [--term NAME] [--limit N]`.
 - `subtype [--gene GENE] [--lineage NAME] [--contrast EXACT_ID] [--limit N]`.
 - `coamplification --source GENE [--partner GENE] [--target GENE] [--layer exhaustive_high_confidence|lineage_adjusted] [--limit N]`.
+- `true_love [--gene GENE] [--partner GENE] [--limit N]`.
+- `synthetic_lethal (--source GENE | --target GENE) [--event damaging_mutation|custom_missense_mutation|hotspot_mutation|cnv_amplification] [--limit N]`.
+- `three_d --family dependency_profiles|differential_dependency|codependency|true_love_gene|omics_dependency|lineage_dependency_enrichment [--gene GENE] [--source GENE] [--target GENE] [--cohort ID] [--contrast ID] [--omic expression|cnv|damaging|hotspot] [--limit N]`.
 - `tcga_expression_survival --gene GENE [--project TCGA-BRCA] [--lineage NAME] [--endpoint OS|DSS|DFI|PFI] [--limit N]`.
 
 The native tool exposes these fields through one flat model-compatible schema;
@@ -77,3 +80,8 @@ lineage; negative `effect_size` means stronger subtype dependency.
 `coamplification` never exhausts arbitrary pairs at query time. It reads the
 fixed high-confidence screen; negative adjusted/difference effects mean
 stronger dependency in coamplified models.
+`true_love` prefers the completed bootstrap-stable mutual-rank-1 negative
+dependency table. `synthetic_lethal` reads only retained observational event
+contrasts and cannot establish causal synthetic lethality. `three_d` validates
+all cohort, contrast, modality, and family selectors against the completed 3D
+catalogs and returns bounded rows with terminal manifests.

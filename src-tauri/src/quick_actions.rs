@@ -1358,11 +1358,12 @@ fn depmap_topic_task(
         model_id: None,
         executor: None,
         budget: None,
+        timeout_secs: None,
     }
 }
 
 fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal {
-    dynamic_workflow::DynamicAgentWorkflowProposal {
+    let mut proposal = dynamic_workflow::DynamicAgentWorkflowProposal {
         goal: "Turn a bounded DepMap cancer direction, with an optional explicit gene, into ranked and reviewable research topics".into(),
         context: "Supply a cancer scope such as breast cancer and preserve the exact recent user wording. A gene is optional, but it must never be invented: if the user did not name one, the Workflow must remain cancer/direction-level until returned evidence nominates candidates. First inventory which precomputed data families are analyzable in that cancer, then use only bounded query results in Agent context; never load a full DepMap matrix. This Workflow proposes topics and a report blueprint. It does not claim experimental validation and does not write a manuscript or figure until the user selects a topic in a later turn.".into(),
         approval_policy: dynamic_workflow::AgentApprovalPolicy::AutoSafe,
@@ -1443,7 +1444,14 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 depmap_topic_report_schema(),
             ),
         ],
-    }
+    };
+    // Literature evidence-saturation searches routinely exceeded the legacy
+    // 600-second delegated-Agent default in Debug 6/7. Keep the search itself
+    // adaptive (no fixed tool-call count), but give this reviewable task a
+    // longer wall-clock envelope. The task timeout remains visible/editable in
+    // the Agents panel and on retry.
+    proposal.tasks[2].timeout_secs = Some(1_800);
+    proposal
 }
 
 fn builtin_depmap_topic_template() -> WorkflowTemplate {
@@ -2613,6 +2621,7 @@ mod tests {
         assert!(literature.depends_on.is_empty());
         assert_eq!(literature.capabilities, ["literature_search"]);
         assert!(literature.budget.is_none());
+        assert_eq!(literature.timeout_secs, Some(1_800));
         assert!(literature
             .instruction
             .contains("exact cancer and research direction"));

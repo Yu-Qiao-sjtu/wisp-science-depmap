@@ -165,6 +165,21 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "metric": "coamplification_dependency_difference",
             "interpretation": "negative effect means stronger dependency in coamplified source-positive models; lineage_adjusted controls for OncoTree lineage",
         }
+    if mode == "true_love":
+        return {
+            "metric": "stable_mutual_rank1_negative_codependency",
+            "interpretation": "reciprocal rank-1 negative correlation with the frozen FDR/stability contract; association is not proof of mechanism",
+        }
+    if mode == "synthetic_lethal":
+        return {
+            "metric": "observational_event_dependency_difference",
+            "interpretation": "event-group minus control-group dependency across retained mutation/CNV evidence; hypothesis-generating, not causal synthetic lethality",
+        }
+    if mode == "three_d":
+        return {
+            "metric": "family_specific_3d_screen_evidence",
+            "interpretation": "precomputed 3D/2D dependency evidence; preserve the returned cohort, contrast, covariate, and family-specific metric semantics",
+        }
     if mode == "lineage_directions":
         return {
             "metric": "family_specific_shortlists",
@@ -284,9 +299,9 @@ class DepMapEvidenceService:
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 5,
+            "query_contract_version": 6,
             "lineage_resolution_contract_version": 1,
-            "coverage_manifest_version": 3,
+            "coverage_manifest_version": 4,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
             "tool_boundary": [
                 "status_and_coverage",
@@ -298,6 +313,9 @@ class DepMapEvidenceService:
                 "drug_gene_evidence",
                 "molecular_subtype_evidence",
                 "coamplification_dependency_evidence",
+                "true_love_gene_evidence",
+                "observational_synthetic_lethal_evidence",
+                "three_d_dependency_evidence",
                 "tcga_gene_expression_survival",
             ],
             "data_sources": {
@@ -322,6 +340,18 @@ class DepMapEvidenceService:
                     "installed": coamp_qa_path.is_file(),
                     "qa_status": coamp_qa.get("status", "MODULE_UNAVAILABLE"),
                     "scope": "constrained observed high-confidence directional pairs",
+                },
+                "true_love_gene": {
+                    "installed": (full_root / "true_love_gene" / "manifest.json").is_file(),
+                    "scope": "stable mutual rank-1 negative dependency pairs",
+                },
+                "observational_synthetic_lethal": {
+                    "installed": (full_root / "observational_synthetic_lethal_candidates" / "manifest.json").is_file(),
+                    "scope": "retained event-to-dependency candidate evidence",
+                },
+                "three_d": {
+                    "installed": (self.settings.knowledge_root / "depmap-26q1-3d" / "catalog.csv").is_file(),
+                    "scope": "3D dependency profiles, contrasts, networks, pathway and omics evidence",
                 },
             },
             "integration_rule": (
@@ -661,6 +691,78 @@ class DepMapEvidenceService:
             tool="depmap_coamplification_evidence", request=request, evidence=item
         )
 
+    async def true_love_evidence(
+        self,
+        gene: str | None = None,
+        partner: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        query: dict[str, Any] = {"mode": "true_love", "limit": limit}
+        if gene:
+            query["gene"] = gene.strip().upper()
+        if partner:
+            query["partner"] = partner.strip().upper()
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {
+            "gene": validated.get("gene"),
+            "partner": validated.get("partner"),
+            "limit": limit,
+        }
+        return self._envelope(tool="depmap_true_love_evidence", request=request, evidence=item)
+
+    async def synthetic_lethal_evidence(
+        self,
+        source: str | None = None,
+        target: str | None = None,
+        event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not source and not target:
+            raise ValueError("source, target, or both are required")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        query: dict[str, Any] = {"mode": "synthetic_lethal", "limit": limit}
+        if source:
+            query["source"] = source.strip().upper()
+        if target:
+            query["target"] = target.strip().upper()
+        if event:
+            query["event"] = event
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {key: validated.get(key) for key in ("source", "target", "event")}
+        request["limit"] = limit
+        return self._envelope(tool="depmap_synthetic_lethal_evidence", request=request, evidence=item)
+
+    async def three_d_evidence(
+        self,
+        family: Literal["dependency_profiles", "differential_dependency", "codependency", "true_love_gene", "omics_dependency", "lineage_dependency_enrichment"],
+        gene: str | None = None,
+        source: str | None = None,
+        target: str | None = None,
+        cohort: str | None = None,
+        contrast: str | None = None,
+        omic: Literal["expression", "cnv", "damaging", "hotspot"] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        query: dict[str, Any] = {"mode": "three_d", "family": family, "limit": limit}
+        for key, value in (("gene", gene), ("source", source), ("target", target)):
+            if value:
+                query[key] = value.strip().upper()
+        for key, value in (("cohort", cohort), ("contrast", contrast), ("omic", omic)):
+            if value:
+                query[key] = value.strip()
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {key: validated.get(key) for key in ("family", "gene", "source", "target", "cohort", "contrast", "omic")}
+        request["limit"] = limit
+        return self._envelope(tool="depmap_3d_evidence", request=request, evidence=item)
+
     async def drug_evidence(
         self,
         drug: str,
@@ -919,6 +1021,65 @@ def build_mcp_server(
     ) -> dict[str, Any]:
         return await service.coamplification_evidence(
             source, partner, target, layer, limit
+        )
+
+    @mcp.tool(
+        title="DepMap True Love reciprocal dependency evidence",
+        description=(
+            "Query the completed strict mutual-rank-1 negative dependency screen, "
+            "preferring its bootstrap-stable high-confidence layer. This is a "
+            "codependency hypothesis and does not establish a causal mechanism."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_true_love_evidence(
+        gene: str | None = None,
+        partner: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.true_love_evidence(gene, partner, limit)
+
+    @mcp.tool(
+        title="DepMap observational synthetic-lethal evidence",
+        description=(
+            "Query retained mutation/CNV event-to-target dependency candidates. "
+            "The result is observational and hypothesis-generating; it must not be "
+            "reported as experimentally proven synthetic lethality."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_synthetic_lethal_evidence(
+        source: str | None = None,
+        target: str | None = None,
+        event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.synthetic_lethal_evidence(source, target, event, limit)
+
+    @mcp.tool(
+        title="DepMap 3D screening evidence",
+        description=(
+            "Query one completed 3D analysis family: dependency profiles, 3D-vs-2D "
+            "contrasts, codependency, 3D True Love pairs, omics associations, or "
+            "lineage/pathway enrichment. Selectors are validated against frozen catalogs."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_3d_evidence(
+        family: Literal["dependency_profiles", "differential_dependency", "codependency", "true_love_gene", "omics_dependency", "lineage_dependency_enrichment"],
+        gene: str | None = None,
+        source: str | None = None,
+        target: str | None = None,
+        cohort: str | None = None,
+        contrast: str | None = None,
+        omic: Literal["expression", "cnv", "damaging", "hotspot"] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.three_d_evidence(
+            family, gene, source, target, cohort, contrast, omic, limit
         )
 
     return mcp

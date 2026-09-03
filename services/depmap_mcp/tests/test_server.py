@@ -232,6 +232,45 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "coamplification_dependency_difference",
         )
 
+    async def test_true_love_and_synthetic_lethal_tools_use_explicit_noncausal_contracts(self):
+        true_love = await self.service.true_love_evidence("kras", "nras", 8)
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8},
+        )
+        self.assertIn("not proof", true_love["evidence"]["metric_semantics"]["interpretation"])
+        synthetic = await self.service.synthetic_lethal_evidence(
+            "arid1a", "arid1b", "damaging_mutation", 6
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "synthetic_lethal",
+                "source": "ARID1A",
+                "target": "ARID1B",
+                "event": "damaging_mutation",
+                "limit": 6,
+            },
+        )
+        self.assertIn("not causal", synthetic["evidence"]["metric_semantics"]["interpretation"])
+
+    async def test_three_d_tool_preserves_family_and_cohort_selectors(self):
+        result = await self.service.three_d_evidence(
+            "dependency_profiles", gene="kras", cohort="three_d_all", limit=4
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "three_d",
+                "family": "dependency_profiles",
+                "gene": "KRAS",
+                "cohort": "three_d_all",
+                "limit": 4,
+            },
+        )
+        self.assertEqual(result["request"]["family"], "dependency_profiles")
+        self.assertFalse(result["new_analysis_started"])
+
     def test_expression_dependency_uses_its_real_target_gene_order(self):
         query_script = (
             Path(__file__).resolve().parents[3]
@@ -277,6 +316,9 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",
                         "depmap_coamplification_evidence",
+                        "depmap_true_love_evidence",
+                        "depmap_synthetic_lethal_evidence",
+                        "depmap_3d_evidence",
                     },
                 )
                 self.assertTrue(

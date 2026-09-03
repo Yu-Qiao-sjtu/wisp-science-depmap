@@ -119,7 +119,7 @@ pub fn bound_tool_results_in_history(root: &Path, messages: &mut [Message]) {
         }
         let name = message.tool_name.clone().unwrap_or_else(|| "tool".into());
         let content = std::mem::replace(&mut message.content, Content::text(""));
-        message.content = budget_tool_result(root, &name, content);
+        message.content = budget_tool_result(root, &name, content, None);
     }
 }
 

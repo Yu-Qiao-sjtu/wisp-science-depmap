@@ -78,6 +78,35 @@ class DepMapApiTests(unittest.TestCase):
         with gzip.open(adjusted_root / "pair_lineage_audit.csv.gz", "wt", encoding="utf-8") as handle:
             handle.write("screen_pair_id,source_gene,partner_gene,model_n,coamplified_n,source_only_n,informative_lineage_count,estimable\n")
             handle.write("COAMP-HC-000001,CTTN,RNF121,53,19,34,9,TRUE\n")
+
+        true_love_root = root / "depmap-26q1-full" / "true_love_gene"
+        stable_root = true_love_root / "high_confidence_stability"
+        stable_root.mkdir(parents=True)
+        (true_love_root / "manifest.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+        (stable_root / "manifest.json").write_text(json.dumps({"status": "complete", "pair_count": 1}), encoding="utf-8")
+        with gzip.open(stable_root / "final_high_confidence_true_love_genes.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("true_love_pair_id,gene_a,gene_b,worst_direction_fdr,strongest_absolute_correlation,bootstrap_reciprocal_stability\n")
+            handle.write("TL-1,KRAS,NRAS,0.001,0.72,0.94\n")
+
+        synthetic_root = root / "depmap-26q1-full" / "observational_synthetic_lethal_candidates"
+        synthetic_root.mkdir(parents=True)
+        (synthetic_root / "manifest.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+        with gzip.open(synthetic_root / "pair_evidence_summary.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("source_gene,target_gene,evidence_family_count,evidence_families,best_fdr,strongest_mean_difference,max_event_n,max_control_n\n")
+            handle.write("ARID1A,ARID1B,2,damaging_mutation;cnv_amplification,0.002,-0.45,22,80\n")
+
+        three_d_root = root / "depmap-26q1-3d" / "dependency_profiles"
+        three_d_unit = three_d_root / "three_d_all"
+        three_d_unit.mkdir(parents=True)
+        (three_d_root / "manifest.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+        (three_d_root / "group_catalog.csv").write_text(
+            "group,screen_types,screen_count,robust_dependency_count,status\nthree_d_all,3DO+3DN,108,1,complete\n",
+            encoding="utf-8",
+        )
+        (three_d_unit / "manifest.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+        with gzip.open(three_d_unit / "all_genes.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("gene,valid_gene_effect_n,mean_gene_effect,robust_group_dependency\n")
+            handle.write("KRAS,108,-0.62,TRUE\n")
         tcga_root = root / "depmap-26q1-tcga"
         tcga_project = tcga_root / "projects" / "TCGA-BRCA"
         tcga_project.mkdir(parents=True)
@@ -180,11 +209,14 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 5)
+        self.assertEqual(response.json()["query_contract_version"], 6)
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
         self.assertIn("subtype", response.json()["query_modes"])
         self.assertIn("coamplification", response.json()["query_modes"])
+        self.assertIn("true_love", response.json()["query_modes"])
+        self.assertIn("synthetic_lethal", response.json()["query_modes"])
+        self.assertIn("three_d", response.json()["query_modes"])
         self.assertIn("NOT_RETAINED", response.json()["evidence_statuses"])
 
     def test_pair_query_is_bounded_and_forwarded(self):
@@ -263,6 +295,28 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(found["status"], "FOUND")
         self.assertEqual(found["hits"][0]["lineage_adjusted_effect"], -0.27)
         self.assertEqual(not_retained["status"], "NOT_RETAINED")
+
+    def test_true_love_synthetic_lethal_and_three_d_are_bounded_precomputed_queries(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            true_love = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "gene": "kras", "partner": "nras", "limit": 5},
+            ).json()
+            synthetic = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "synthetic_lethal", "source": "arid1a", "target": "arid1b", "limit": 5},
+            ).json()
+            three_d = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "three_d", "family": "dependency_profiles", "cohort": "three_d_all", "gene": "kras", "limit": 5},
+            ).json()
+        self.assertEqual(true_love["status"], "FOUND")
+        self.assertEqual(true_love["rows"][0]["bootstrap_reciprocal_stability"], 0.94)
+        self.assertEqual(synthetic["status"], "FOUND")
+        self.assertEqual(synthetic["rows"][0]["target_gene"], "ARID1B")
+        self.assertEqual(three_d["status"], "FOUND")
+        self.assertEqual(three_d["rows"][0]["mean_gene_effect"], -0.62)
 
     def test_precomputed_tcga_query_returns_bounded_expression_survival_row(self):
         client = TestClient(create_app(self.settings))

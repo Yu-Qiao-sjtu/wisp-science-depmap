@@ -158,11 +158,16 @@ request time; it is not a
 precomputed evidence-card requirement. Use `depmap_query` afterward only when a
 specific pair, drug, pathway, or term needs a narrower lookup.
 
-Use the dedicated `depmap_subtype_evidence` and
-`depmap_coamplification_evidence` MCP tools for the QA-complete subtype and
-double-amplification modules. Do not reinterpret an arbitrary free-text subtype
+Use the dedicated `depmap_subtype_evidence`,
+`depmap_coamplification_evidence`, `depmap_true_love_evidence`,
+`depmap_synthetic_lethal_evidence`, and `depmap_3d_evidence` MCP tools for the
+completed subtype, double-amplification, reciprocal-pair, observational
+synthetic-lethal, and 3D modules. Do not reinterpret an arbitrary free-text subtype
 as a frozen contrast, and do not treat a pair outside the constrained screen as
 if it had been exhaustively tested.
+Treat True Love and synthetic-lethal labels as hypothesis-generating screen
+classes, not causal mechanisms. For 3D, preserve the returned cohort/contrast
+and distinguish exploratory CNS-only results from lineage-adjusted results.
 
 When a bounded tool result is spilled to a named `.wisp/tool-output` file, read
 or grep only that exact path and only the necessary ranges. Never grep the

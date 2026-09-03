@@ -16,8 +16,10 @@ Optional controls include `DEPMAP_RELEASE`, `DEPMAP_QUERY_TIMEOUT_SECONDS`,
 The production endpoint is `/api/v1`. Both `health` and `query` require the
 same Bearer token. Run the dependency-free tests from the repository root:
 
-Contract v2 adds bounded `lineage_catalog`, `lineage_network`, `lineage_cnv`,
-`lineage_drug`, and `enrichment` modes over the sparse lineage outputs.
+Contract v6 includes bounded `lineage_catalog`, `lineage_network`,
+`lineage_cnv`, `lineage_drug`, `enrichment`, `subtype`, `coamplification`,
+`true_love`, `synthetic_lethal`, and `three_d` modes over completed sparse
+outputs.
 `lineage_catalog` supports disease-first inventory without an anchor gene. The
 association modes return explicit
 `FOUND`, `NOT_RETAINED`, `INELIGIBLE`, `NOT_COMPUTED`, or

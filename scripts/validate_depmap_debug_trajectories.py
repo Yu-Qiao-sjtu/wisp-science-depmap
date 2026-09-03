@@ -95,6 +95,24 @@ TRAJECTORY_SIGNATURES = {
         Signature("duplicate ad-hoc therapy search", "lit-therapy"),
         Signature("parent manually delegated after Workflow approval", "delegate_tasks"),
     ],
+    "wisp_debug-7": [
+        Signature("cancer-only request tried anchor-dependent top mode", '"lineage":"Breast","mode":"top"'),
+        Signature("schema learned by repeated missing-source failures", "mode requires non-empty 'source'", minimum=3),
+        Signature("ordinary exploration escalated to Workflow", "start_workflow"),
+        Signature("incorrect left-side Agents guidance", "本对话左侧的 **Agents 面板**"),
+        Signature("delegated literature task hit fixed 600-second wall", "delegated Agent timed out after 600 seconds"),
+        Signature("manual delegation appeared after Workflow execution", "delegate_tasks"),
+    ],
+    "wisp_debug-8-不同描述压力测试": [
+        Signature("cancer-only ranking tried top without module", '"lineage":"Breast","limit":15,"mode":"top"'),
+        Signature("top mode then failed without source", "mode requires non-empty 'source'"),
+        Signature("lineage event mode used for dependency ranking", '"lineage":"Breast","limit":10,"mode":"lineage"'),
+        Signature("core mode attempted without gene", "mode requires non-empty 'gene'"),
+        Signature("precomputed ranking was misclassified as new computation", "No raw matrix is opened. Ranking = user-approved new computation on one precomputed table."),
+        Signature("repair Run v2", "Breast selective dependency top-10 (26Q1) v2 contract"),
+        Signature("repair Run v3", "Breast selective dependency top-10 (26Q1) v3"),
+        Signature("repair Run v4", "Breast selective dependency top-10 (26Q1) v4 final"),
+    ],
 }
 
 
@@ -109,7 +127,7 @@ SOURCE_GUARDS = [
     ("src-tauri/src/specialists.rs", "model-grouping proxy"),
     ("src-tauri/src/quick_actions.rs", '"manual_fallback_allowed": false'),
     ("src-tauri/src/quick_actions.rs", ".stop_turn()"),
-    ("src-tauri/src/quick_actions.rs", "Exact current user request (verbatim; do not broaden or narrow it)"),
+    ("src-tauri/src/quick_actions.rs", "Exact recent user requests (newest first; verbatim; do not broaden or narrow them)"),
     ("src-tauri/src/quick_actions.rs", "mode=lineage_catalog"),
     ("src-tauri/src/quick_actions.rs", "non-significant top list is a null result"),
     ("skills/depmap-knowledge-query/SKILL.md", "Skill text and model memory are not literature evidence"),
@@ -119,10 +137,16 @@ SOURCE_GUARDS = [
     ("src-tauri/src/depmap_agent.rs", "compact_evidence_result"),
     ("src-tauri/src/depmap_agent.rs", "const MAX_EVIDENCE_LIMIT: i64 = 3"),
     ("skills/depmap-knowledge-query/SKILL.md", "Continuous expression-to-dependency"),
-    ("src-tauri/src/quick_actions.rs", "visible Workflow tool budget"),
+    ("src-tauri/src/quick_actions.rs", "Built-in templates ship unlimited budgets"),
     ("src-tauri/src/quick_actions.rs", "do not manually duplicate"),
     ("crates/wisp-store/src/sessions.rs", "frame_message_activity"),
     ("ui/src/agent_workflows.rs", "activity_messages"),
+    ("src-tauri/src/specialists.rs", "`mode=lineage_dependency`"),
+    ("src-tauri/src/specialists.rs", "must not be escalated to a new Run"),
+    ("src-tauri/src/depmap_agent.rs", '"intent":"cancer_dependency_ranking"'),
+    ("src-tauri/src/depmap_agent.rs", '"lineage_dependency" => &["lineage"]'),
+    ("ui/src/main.rs", 'matches!(name.as_str(), "delegate_tasks" | "start_workflow")'),
+    ("crates/wisp-core/src/delegation.rs", "pub timeout_secs: Option<u64>"),
 ]
 
 
@@ -137,7 +161,7 @@ def main() -> int:
         "--trajectory-dir",
         type=Path,
         default=Path(r"D:\wisp_agent"),
-        help="Directory containing wisp_debug-2 through wisp_debug-6",
+        help="Directory containing wisp_debug-2 through wisp_debug-8",
     )
     parser.add_argument(
         "--repo-root",
@@ -199,7 +223,7 @@ def main() -> int:
     result["source_guards"] = guard_results
     result["status"] = "passed" if not failed else "failed"
     result["remaining_gate"] = (
-        "After explicit authorization, build the Windows EXE and replay the five user prompts to test actual model behavior."
+        "Build the Windows EXE only when requested, then replay the audited prompts to test actual model behavior."
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 1 if failed else 0
