@@ -1898,7 +1898,10 @@ pub(crate) fn workflow_catalog_section(templates: &[WorkflowTemplate]) -> String
          start_workflow only creates a draft for the user to approve in the Agents \
          panel; it never runs the Workflow itself, so afterwards describe what the \
          Workflow will do and ask the user to approve it. Approval and execution are \
-         host-managed. If a later user message says that draft was approved, started, \
+         host-managed. A user's exact saved Workflow name is also its command phrase: \
+         an execution verb plus that exact name may launch it without requiring the \
+         extra word Workflow. Do not use fuzzy or partial-name matching. If a later \
+         user message says that draft was approved, started, \
          or asks for its status, do not manually duplicate its persisted nodes with \
          direct evidence tools, delegate_tasks, browser search, or a replacement \
          Workflow; wait for and report the host Workflow events.\n",
@@ -1954,20 +1957,23 @@ pub(crate) async fn render_workflow_reference(
 }
 
 /// Resolve an explicitly requested configured Workflow from ordinary composer
-/// text. This keeps natural-language commands such as "run X workflow" on the
-/// same safe path as selecting the Workflow chip: the exact saved template is
-/// attached and delegation is enabled by the caller. Merely mentioning a
-/// workflow name without an execution verb is intentionally not enough.
+/// text. This keeps natural-language commands such as "run X workflow" and
+/// "运行我的文献调研" on the same safe path as selecting the Workflow chip: the
+/// exact saved template is attached and delegation is enabled by the caller.
+/// An exact template name or id plus an execution verb is sufficient, so a
+/// user-defined Workflow name also acts as its command phrase. Merely
+/// mentioning the name without an execution verb is intentionally not enough.
 pub(crate) async fn explicitly_requested_workflow_id(
     store: &Store,
     message: &str,
 ) -> Option<String> {
     let normalized = message.trim().to_lowercase();
-    let requests_execution = ["run", "execute", "start", "运行", "执行", "启动"]
-        .iter()
-        .any(|verb| normalized.contains(verb));
-    let names_workflow = normalized.contains("workflow") || normalized.contains("工作流");
-    if !requests_execution || !names_workflow {
+    let requests_execution = [
+        "run", "execute", "start", "use", "运行", "执行", "启动", "使用", "调用",
+    ]
+    .iter()
+    .any(|verb| normalized.contains(verb));
+    if !requests_execution {
         return None;
     }
     let matches = ensure_templates(store)
@@ -2537,6 +2543,10 @@ mod tests {
     #[tokio::test]
     async fn explicit_workflow_command_resolves_to_the_saved_template() {
         let (store, path) = store().await;
+        let mut custom = custom_template();
+        custom.name = "谷歌浏览器调研".into();
+        custom.proposal.goal = "Use the user-selected research source".into();
+        let custom = upsert_template(&store, custom).await.unwrap();
         assert_eq!(
             explicitly_requested_workflow_id(&store, "请运行 Data-driven research design 工作流。")
                 .await
@@ -2566,6 +2576,17 @@ mod tests {
             .await
             .as_deref(),
             Some(DEPMAP_REPORT_TEMPLATE_ID)
+        );
+        assert_eq!(
+            explicitly_requested_workflow_id(&store, "请使用谷歌浏览器调研调查 PTK7 与肝癌。")
+                .await
+                .as_deref(),
+            Some(custom.id.as_str())
+        );
+        assert!(
+            explicitly_requested_workflow_id(&store, "谷歌浏览器调研可以做什么？")
+                .await
+                .is_none()
         );
         assert!(
             explicitly_requested_workflow_id(&store, "What is Data-driven research design?")
@@ -3182,6 +3203,7 @@ mod tests {
         assert!(section.contains("start_workflow"));
         assert!(section.contains("approve"));
         assert!(section.contains("do not manually duplicate"));
+        assert!(section.contains("exact saved Workflow name"));
         assert!(section.contains("Do not call"));
         assert!(section.contains("domain tools"));
         assert!(!section.contains("semantically matches one of them"));

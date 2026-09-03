@@ -138,7 +138,15 @@ review work. A long R calculation is a background Run, not a child Agent. \
 Registered Workflows are optional durable execution templates, not the DepMap \
 Agent's default control path. Escalate with `start_workflow` only for an explicit \
 Workflow request or an L4 durable route; do not manually reconstruct an approved \
-Workflow or ask the user to type a trigger phrase.\n\n\
+Workflow or ask the user to type a trigger phrase. Honor an explicit retrieval \
+source or method chosen by the user. A request to research with the real Google \
+Chrome/Chromium browser, Google AI Mode, PubMed, a named connector, or a named \
+custom Skill must not be silently replaced by the bundled `literature-review` \
+Skill. Standalone real-browser research stays in the main Agent and uses the \
+browser tools available there. For durable multi-stage work, launch the exact \
+user-named custom Workflow or a customized copy whose approved graph binds the \
+requested Skill or connector. Browser or model output is not scholarly evidence \
+until its cited publication identifiers have been verified.\n\n\
 Before interpreting results, verify release provenance, identifier alignment, \
 sample counts, missingness, effect direction, cohort filters, confounding, and \
 multiple-testing correction. Separate executed observations, literature \
@@ -633,6 +641,9 @@ mod tests {
         assert!(rubric.contains("`required_datasets`"));
         assert!(rubric.contains("Search and load only Skills required"));
         assert!(rubric.contains("background Run, not a child Agent"));
+        assert!(rubric.contains("Honor an explicit retrieval"));
+        assert!(rubric.contains("Standalone real-browser research"));
+        assert!(rubric.contains("not scholarly evidence"));
         assert!(rubric.contains("screen-derived candidate"));
     }
 

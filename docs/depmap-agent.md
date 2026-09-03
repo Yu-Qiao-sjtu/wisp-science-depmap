@@ -304,6 +304,27 @@ Workflow resource discovery even if the project's ordinary enabled-Skill subset
 is empty, so the main Agent and delegated evidence nodes see the same bounded
 provider capability.
 
+### Custom research modules and command phrases
+
+Built-in Workflows provide a tested default, but they are not the only allowed
+research implementation. Duplicate a built-in Workflow in Workflow Studio, then
+replace its literature node with any enabled project Skill or configured
+literature/external-research connector. The approved run snapshots the resolved
+Skill, connector, model, capabilities, and task graph for reproducibility.
+
+A custom Workflow's exact saved name is also a natural-language command phrase.
+For example, after saving a module named `谷歌浏览器调研`, the user can say
+`使用谷歌浏览器调研调查 PTK7 与肝癌` without adding the word `Workflow`. Wisp
+requires an execution verb and one exact template name; mentioning a name while
+asking what it does does not start it, and ambiguous or partial matches fail
+closed.
+
+An explicit request to use the user's real Chrome/Chromium session is handled by
+the main Agent's browser tools. A custom delegated research module instead uses
+the exact Skills and connectors selected in its approved graph. Neither browser
+text nor model memory becomes literature evidence until publication identifiers
+are verified and returned with the claim.
+
 This first-stage Workflow proposes and audits topics. After the user selects a
 topic, run the built-in **DepMap selected-topic report** Workflow with the exact
 gene, cancer scope, topic id, and output language (`zh` or `en`). It re-queries
