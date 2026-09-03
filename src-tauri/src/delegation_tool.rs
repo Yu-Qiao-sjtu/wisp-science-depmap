@@ -160,6 +160,7 @@ async fn delegation_policy_for_frame(
     project: &ActiveProject,
     frame_id: &str,
     app_data: &std::path::Path,
+    browser_available: bool,
 ) -> Result<
     (
         delegation_runtime::ProjectDelegationPolicy,
@@ -172,6 +173,7 @@ async fn delegation_policy_for_frame(
         project,
         Some(frame_id),
         app_data,
+        browser_available,
     )
     .await?;
     let nested = nested_delegation_context(store, frame_id).await?;
@@ -194,7 +196,8 @@ pub(crate) async fn delegate_tasks_schema(
     frame_id: &str,
     app_data: &std::path::Path,
 ) -> Result<ToolSchema, String> {
-    let (policy, nested) = delegation_policy_for_frame(store, project, frame_id, app_data).await?;
+    let (policy, nested) =
+        delegation_policy_for_frame(store, project, frame_id, app_data, false).await?;
     let completion = if nested.is_some() {
         crate::delegation_completion::AgentCompletionSettings::default()
     } else {
@@ -349,6 +352,7 @@ pub(crate) struct DelegateTasksTool {
     run_manager: RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: PathBuf,
+    browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     schema: ToolSchema,
     nested: Option<NestedDelegationContext>,
     policy_override: Option<(CapabilityRegistry, DelegationHostPolicy)>,
@@ -364,9 +368,36 @@ impl DelegateTasksTool {
         runtime_manager: wisp_runtime::RuntimeManager,
         app_data: PathBuf,
     ) -> Result<Self, String> {
+        Self::new_with_browser(
+            store,
+            project,
+            frame_id,
+            run_manager,
+            runtime_manager,
+            app_data,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_browser(
+        store: Store,
+        project: ActiveProject,
+        frame_id: impl Into<String>,
+        run_manager: RunManager,
+        runtime_manager: wisp_runtime::RuntimeManager,
+        app_data: PathBuf,
+        browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
+    ) -> Result<Self, String> {
         let frame_id = frame_id.into();
-        let (policy, nested) =
-            delegation_policy_for_frame(&store, &project, &frame_id, &app_data).await?;
+        let (policy, nested) = delegation_policy_for_frame(
+            &store,
+            &project,
+            &frame_id,
+            &app_data,
+            browser_bridge.is_some(),
+        )
+        .await?;
         let completion = if nested.is_some() {
             crate::delegation_completion::AgentCompletionSettings::default()
         } else {
@@ -382,6 +413,7 @@ impl DelegateTasksTool {
             run_manager,
             runtime_manager,
             app_data,
+            browser_bridge,
             schema,
             nested,
             policy_override: None,
@@ -417,6 +449,7 @@ impl DelegateTasksTool {
             run_manager: RunManager::new(),
             runtime_manager,
             app_data,
+            browser_bridge: None,
             schema,
             nested: None,
             policy_override: Some(policy),
@@ -442,6 +475,7 @@ impl DelegateTasksTool {
                     &self.project,
                     &self.frame_id,
                     &self.app_data,
+                    self.browser_bridge.is_some(),
                 )
                 .await?;
                 if self.nested.is_some() != nested.is_some() {
@@ -644,6 +678,7 @@ impl DelegateTasksTool {
             let workflow_id_for_task = workflow_id.clone();
             let display_ids_for_task = display_ids.clone();
             let delegator = self.delegator_override.clone();
+            let browser_bridge = self.browser_bridge.clone();
             let dynamic_policy = (registry.clone(), host.clone());
             tokio::spawn(async move {
                 let result = match delegator {
@@ -665,6 +700,7 @@ impl DelegateTasksTool {
                             run_manager,
                             runtime_manager,
                             app_data,
+                            browser_bridge,
                             &workflow_id_for_task,
                             Some(delivery.generation),
                         )
@@ -740,6 +776,7 @@ impl DelegateTasksTool {
                     self.run_manager.clone(),
                     self.runtime_manager.clone(),
                     self.app_data.clone(),
+                    self.browser_bridge.clone(),
                     &workflow_id,
                     None,
                 )

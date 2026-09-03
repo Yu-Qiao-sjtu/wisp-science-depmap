@@ -934,6 +934,7 @@ async fn continue_recovered_workflow(
     run_manager: crate::run_context::RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: PathBuf,
+    browser_bridge: std::sync::Arc<crate::browser_bridge::BrowserBridge>,
     run_id: String,
 ) {
     let workflow_id = match crate::method_search_coordinator::settle_linked_workflow_attempt(
@@ -954,6 +955,7 @@ async fn continue_recovered_workflow(
             run_manager,
             runtime_manager,
             app_data,
+            Some(browser_bridge),
             &workflow_id,
         )
         .await
@@ -1018,6 +1020,7 @@ pub(crate) async fn start_method_search(
     let run_manager = state.run_manager.clone();
     let runtime_manager = state.runtime_manager.clone();
     let app_data = state.app_data.clone();
+    let browser_bridge = state.browser_bridge.clone();
     let run_id_for_task = run_id.clone();
     let project_for_task = project.clone();
     tauri::async_runtime::spawn(async move {
@@ -1040,6 +1043,7 @@ pub(crate) async fn start_method_search(
                     run_manager,
                     runtime_manager,
                     app_data,
+                    browser_bridge,
                     run_id_for_task,
                 )
                 .await;
@@ -1052,6 +1056,7 @@ pub(crate) async fn start_method_search(
                     run_manager,
                     runtime_manager,
                     app_data,
+                    browser_bridge,
                     run_id_for_task,
                 )
                 .await;
@@ -1114,6 +1119,7 @@ pub(crate) async fn resume_method_search(
     let run_manager = state.run_manager.clone();
     let runtime_manager = state.runtime_manager.clone();
     let app_data = state.app_data.clone();
+    let browser_bridge = state.browser_bridge.clone();
     let run_id_for_task = run_id.clone();
     let project_for_task = project.clone();
     tauri::async_runtime::spawn(async move {
@@ -1136,6 +1142,7 @@ pub(crate) async fn resume_method_search(
                     run_manager,
                     runtime_manager,
                     app_data,
+                    browser_bridge,
                     run_id_for_task,
                 )
                 .await;
@@ -1148,6 +1155,7 @@ pub(crate) async fn resume_method_search(
                     run_manager,
                     runtime_manager,
                     app_data,
+                    browser_bridge,
                     run_id_for_task,
                 )
                 .await;
@@ -1187,6 +1195,7 @@ pub(crate) async fn cancel_method_search(
         let run_manager = state.run_manager.clone();
         let runtime_manager = state.runtime_manager.clone();
         let app_data = state.app_data.clone();
+        let browser_bridge = state.browser_bridge.clone();
         let project_for_task = project.clone();
         let run_id_for_task = run_id.clone();
         tauri::async_runtime::spawn(async move {
@@ -1205,6 +1214,7 @@ pub(crate) async fn cancel_method_search(
                 run_manager,
                 runtime_manager,
                 app_data,
+                browser_bridge,
                 run_id_for_task,
             )
             .await;

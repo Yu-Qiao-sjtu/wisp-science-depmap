@@ -142,10 +142,11 @@ Workflow or ask the user to type a trigger phrase. Honor an explicit retrieval \
 source or method chosen by the user. A request to research with the real Google \
 Chrome/Chromium browser, Google AI Mode, PubMed, a named connector, or a named \
 custom Skill must not be silently replaced by the bundled `literature-review` \
-Skill. Standalone real-browser research stays in the main Agent and uses the \
-browser tools available there. For durable multi-stage work, launch the exact \
-user-named custom Workflow or a customized copy whose approved graph binds the \
-requested Skill or connector. Browser or model output is not scholarly evidence \
+Skill. Standalone real-browser research may stay in the main Agent. For durable \
+multi-stage work, launch the exact user-named custom Workflow or a customized \
+copy whose Native research node explicitly requests the separately approved \
+`browser_research` capability; never infer that grant from `literature_search` \
+or `external_research`. Browser or model output is not scholarly evidence \
 until its cited publication identifiers have been verified.\n\n\
 Before interpreting results, verify release provenance, identifier alignment, \
 sample counts, missingness, effect direction, cohort filters, confounding, and \
@@ -643,6 +644,7 @@ mod tests {
         assert!(rubric.contains("background Run, not a child Agent"));
         assert!(rubric.contains("Honor an explicit retrieval"));
         assert!(rubric.contains("Standalone real-browser research"));
+        assert!(rubric.contains("`browser_research` capability"));
         assert!(rubric.contains("not scholarly evidence"));
         assert!(rubric.contains("screen-derived candidate"));
     }

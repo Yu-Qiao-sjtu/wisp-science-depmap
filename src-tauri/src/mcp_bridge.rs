@@ -1894,6 +1894,7 @@ mod tests {
             &server.active_project(),
             Some("child-frame"),
             &app_data,
+            false,
         )
         .await
         .unwrap();

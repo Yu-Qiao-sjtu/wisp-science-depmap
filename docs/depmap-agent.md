@@ -319,11 +319,16 @@ requires an execution verb and one exact template name; mentioning a name while
 asking what it does does not start it, and ambiguous or partial matches fail
 closed.
 
-An explicit request to use the user's real Chrome/Chromium session is handled by
-the main Agent's browser tools. A custom delegated research module instead uses
-the exact Skills and connectors selected in its approved graph. Neither browser
-text nor model memory becomes literature evidence until publication identifiers
-are verified and returned with the claim.
+An explicit request to use the user's real Chrome/Chromium session can be handled
+either by the main Agent or by a Native Workflow node with the separately
+approved **Real browser research** (`browser_research`) capability. That grant
+exposes only browser setup, tab opening, page scanning, bounded page JavaScript,
+through the same persistent browser bridge and URL block/preference
+rules, provenance log, and task budget. It is never inherited from
+`literature_search` or `external_research`, is not granted by default, and is not
+available to ACP/external executors that cannot share the in-process browser
+bridge. Neither browser text nor model memory becomes literature evidence until
+publication identifiers are verified and returned with the claim.
 
 This first-stage Workflow proposes and audits topics. After the user selects a
 topic, run the built-in **DepMap selected-topic report** Workflow with the exact

@@ -715,13 +715,14 @@ pub(crate) async fn send_message_inner(
         }
         if delegation_enabled {
             agent.add_tool(Box::new(
-                delegation_tool::DelegateTasksTool::new(
+                delegation_tool::DelegateTasksTool::new_with_browser(
                     state.store.clone(),
                     ap.clone(),
                     frame_id.clone(),
                     state.run_manager.clone(),
                     state.runtime_manager.clone(),
                     state.app_data.clone(),
+                    Some(state.browser_bridge.clone()),
                 )
                 .await?,
             ));

@@ -332,7 +332,8 @@ impl BrowserBridge {
         }
     }
 
-    fn new(extension_dir: PathBuf) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(extension_dir: PathBuf) -> Self {
         Self::construct(extension_dir, None, false)
     }
 

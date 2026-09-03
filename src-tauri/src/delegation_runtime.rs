@@ -432,6 +432,7 @@ pub(crate) async fn get_dynamic_agent_options(
         &project,
         frame_id.as_deref(),
         &state.app_data,
+        true,
     )
     .await?;
     let mut options =
@@ -753,6 +754,7 @@ pub(crate) async fn retry_agent_workflow(
                 &project,
                 frame_id.as_deref(),
                 &state.app_data,
+                true,
             )
             .await?;
             prepare_agent_workflow_budget_retry(
@@ -980,6 +982,7 @@ pub(crate) async fn run_agent_workflow(
         state.run_manager.clone(),
         state.runtime_manager.clone(),
         state.app_data.clone(),
+        Some(state.browser_bridge.clone()),
         &workflow_id,
         None,
     )
@@ -1029,6 +1032,7 @@ async fn spawn_agent_workflow_with_completion_override(
     let run_manager = state.run_manager.clone();
     let runtime_manager = state.runtime_manager.clone();
     let app_data = state.app_data.clone();
+    let browser_bridge = state.browser_bridge.clone();
     tauri::async_runtime::spawn(async move {
         let _project_activity = project_activity;
         let result = execute_agent_workflow(
@@ -1037,6 +1041,7 @@ async fn spawn_agent_workflow_with_completion_override(
             run_manager,
             runtime_manager,
             app_data,
+            Some(browser_bridge),
             &workflow_id,
             Some(delivery.generation),
         )
@@ -1081,6 +1086,7 @@ pub(crate) async fn dynamic_delegation_policy_for_project(
     project: &ActiveProject,
     frame_id: Option<&str>,
     app_data: &std::path::Path,
+    browser_available: bool,
 ) -> Result<ProjectDelegationPolicy, String> {
     let resources = crate::delegation_resources::ScientificResourceCatalog::discover(
         store, project, frame_id, app_data,
@@ -1097,6 +1103,7 @@ pub(crate) async fn dynamic_delegation_policy_for_project(
         Some(&resources),
         isolation_available,
         preferred_model_id.as_deref(),
+        browser_available,
     )
     .await?;
     Ok(ProjectDelegationPolicy {
@@ -1109,7 +1116,7 @@ pub(crate) async fn dynamic_delegation_policy_for_project(
 pub(crate) async fn dynamic_delegation_policy(
     store: &Store,
 ) -> Result<(CapabilityRegistry, DelegationHostPolicy), String> {
-    build_dynamic_delegation_policy(store, None, false, None).await
+    build_dynamic_delegation_policy(store, None, false, None, false).await
 }
 
 fn select_default_model_id(
@@ -1146,6 +1153,7 @@ async fn build_dynamic_delegation_policy(
     resources: Option<&crate::delegation_resources::ScientificResourceCatalog>,
     isolation_available: bool,
     preferred_model_id: Option<&str>,
+    browser_available: bool,
 ) -> Result<(CapabilityRegistry, DelegationHostPolicy), String> {
     let model_profiles = models::delegation_profiles(store).await;
     let (active_provider, active_url, active_model, active_key) = load_settings(store).await;
@@ -1204,11 +1212,15 @@ async fn build_dynamic_delegation_policy(
     ];
     if resources.is_some_and(|resources| {
         resources.has_external() || resources.has_literature() || resources.has_depmap()
-    }) {
+    }) || browser_available
+    {
         native_features.push(ExecutorFeature::NetworkAccess);
     }
     if resources.is_some_and(|resources| resources.has_literature()) {
         native_features.push(ExecutorFeature::LiteratureAccess);
+    }
+    if browser_available {
+        native_features.push(ExecutorFeature::BrowserAccess);
     }
     if model_policies
         .iter()
@@ -1284,6 +1296,9 @@ async fn build_dynamic_delegation_policy(
     if resources.is_some_and(|resources| resources.has_external()) {
         enabled_capabilities.push("external_research".into());
     }
+    if browser_available {
+        enabled_capabilities.push("browser_research".into());
+    }
     if resources.is_some_and(|resources| resources.has_runtime()) {
         enabled_capabilities.push("visualization".into());
     }
@@ -1311,6 +1326,18 @@ async fn build_dynamic_delegation_policy(
     }
     if resources.is_some_and(|resources| resources.has_external()) {
         permission_tools.push(crate::delegation_resources::EXTERNAL_TOOL_GRANT.into());
+    }
+    if browser_available {
+        permission_tools.extend(
+            [
+                "browser_setup",
+                "web_scan",
+                "web_execute_js",
+                "web_open_tab",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        );
     }
     if resources.is_some_and(crate::delegation_resources::ScientificResourceCatalog::has_depmap) {
         permission_tools.push("depmap_query".into());
@@ -1343,9 +1370,10 @@ async fn build_dynamic_delegation_policy(
         permission_ceiling: PermissionSet {
             tools: permission_tools,
             paths: vec!["project://**".into()],
-            network: resources.is_some_and(|resources| {
-                resources.has_external() || resources.has_literature() || resources.has_depmap()
-            }),
+            network: browser_available
+                || resources.is_some_and(|resources| {
+                    resources.has_external() || resources.has_literature() || resources.has_depmap()
+                }),
             write: true,
             execute: true,
         },
@@ -1493,6 +1521,7 @@ async fn execute_agent_workflow(
     run_manager: crate::run_context::RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: std::path::PathBuf,
+    browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     workflow_id: &str,
     attempt_generation: Option<i64>,
 ) -> Result<DelegationExecutionResult, String> {
@@ -1502,6 +1531,7 @@ async fn execute_agent_workflow(
         &project,
         workflow.frame_id.as_deref(),
         &app_data,
+        browser_bridge.is_some(),
     )
     .await?;
     let delegator = Arc::new(TauriDelegator::new(
@@ -1511,6 +1541,7 @@ async fn execute_agent_workflow(
         runtime_manager,
         app_data,
         policy.resources.clone(),
+        browser_bridge,
     ));
     let result = execute_agent_workflow_with_delegator(
         store,
@@ -1533,6 +1564,7 @@ pub(crate) async fn execute_inline_agent_workflow(
     run_manager: crate::run_context::RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: std::path::PathBuf,
+    browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     workflow_id: &str,
     attempt_generation: Option<i64>,
 ) -> Result<DelegationExecutionResult, String> {
@@ -1542,6 +1574,7 @@ pub(crate) async fn execute_inline_agent_workflow(
         run_manager,
         runtime_manager,
         app_data,
+        browser_bridge,
         workflow_id,
         attempt_generation,
     )
@@ -1626,6 +1659,7 @@ pub(crate) async fn resume_inline_agent_workflow(
     run_manager: crate::run_context::RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: std::path::PathBuf,
+    browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     workflow_id: &str,
 ) -> Result<DelegationExecutionResult, String> {
     let workflow = project_workflow(store, &project.id, workflow_id).await?;
@@ -1637,6 +1671,7 @@ pub(crate) async fn resume_inline_agent_workflow(
         &project,
         workflow.frame_id.as_deref(),
         &app_data,
+        browser_bridge.is_some(),
     )
     .await?;
     let delegator = Arc::new(TauriDelegator::new(
@@ -1646,6 +1681,7 @@ pub(crate) async fn resume_inline_agent_workflow(
         runtime_manager,
         app_data,
         policy.resources.clone(),
+        browser_bridge,
     ));
     let prior = persisted_workflow_steps(store, workflow_id).await?;
     let result = execute_agent_workflow_with_delegator_inner(
@@ -1997,6 +2033,7 @@ impl TauriDelegator {
         runtime_manager: wisp_runtime::RuntimeManager,
         app_data: std::path::PathBuf,
         resources: crate::delegation_resources::ScientificResourceCatalog,
+        browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     ) -> Self {
         let isolation = crate::delegation_isolation::GitWorktreeIsolation::new(
             app_data.join("agent-worktrees"),
@@ -2009,6 +2046,7 @@ impl TauriDelegator {
                 runtime_manager,
                 app_data: app_data.clone(),
                 resources: resources.clone(),
+                browser_bridge,
                 active: Arc::new(StdMutex::new(HashMap::new())),
                 provenance: Arc::new(Mutex::new(HashMap::new())),
             },
@@ -2047,6 +2085,7 @@ impl TauriDelegator {
                     runtime_manager: self.native.runtime_manager.clone(),
                     app_data: self.native.app_data.clone(),
                     resources: self.native.resources.clone(),
+                    browser_bridge: self.native.browser_bridge.clone(),
                     active: self.native.active.clone(),
                     provenance: self.native.provenance.clone(),
                 }
@@ -2481,8 +2520,31 @@ struct NativeDelegator {
     runtime_manager: wisp_runtime::RuntimeManager,
     app_data: std::path::PathBuf,
     resources: crate::delegation_resources::ScientificResourceCatalog,
+    browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     active: Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>,
     provenance: Arc<Mutex<HashMap<String, String>>>,
+}
+
+fn add_browser_research_tools(
+    tools: &mut wisp_tools::Registry,
+    bridge: Arc<crate::browser_bridge::BrowserBridge>,
+    store: Store,
+) {
+    tools.add(Box::new(crate::browser_bridge::BrowserSetupTool::new(
+        bridge.clone(),
+        store.clone(),
+    )));
+    tools.add(Box::new(crate::browser_bridge::WebScanTool::new(
+        bridge.clone(),
+    )));
+    tools.add(Box::new(crate::browser_bridge::WebExecuteJsTool::new(
+        bridge.clone(),
+        store.clone(),
+    )));
+    tools.add(Box::new(crate::browser_bridge::WebOpenTabTool::new(
+        bridge.clone(),
+        store,
+    )));
 }
 
 #[async_trait]
@@ -2580,6 +2642,19 @@ impl AgentDelegator for NativeDelegator {
             .collect::<HashSet<_>>();
         let skills = Arc::new(project_skills.filtered_by_names(Some(&skill_allow)));
         let mut tools = wisp_core::build_registry(skills, self.project.memory.clone(), false);
+        let browser_granted = request
+            .spec
+            .capabilities
+            .iter()
+            .any(|capability| capability == "browser_research");
+        if browser_granted {
+            let bridge = self.browser_bridge.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "browser_research was approved, but this executor has no real-browser bridge"
+                )
+            })?;
+            add_browser_research_tools(&mut tools, bridge, self.store.clone());
+        }
         let depmap_query_granted = request
             .spec
             .permissions
@@ -2659,13 +2734,14 @@ impl AgentDelegator for NativeDelegator {
                 .await;
         if nested_delegation {
             tools.add(Box::new(
-                crate::delegation_tool::DelegateTasksTool::new(
+                crate::delegation_tool::DelegateTasksTool::new_with_browser(
                     self.store.clone(),
                     self.project.clone(),
                     child_frame_id.clone(),
                     self.run_manager.clone(),
                     self.runtime_manager.clone(),
                     self.app_data.clone(),
+                    self.browser_bridge.clone(),
                 )
                 .await
                 .map_err(anyhow::Error::msg)?,
@@ -2705,6 +2781,18 @@ impl AgentDelegator for NativeDelegator {
         allowed_tools.extend(wiring.added_tools);
         if !resource_grant.skills.is_empty() {
             allowed_tools.push("use_skill".into());
+        }
+        if browser_granted {
+            allowed_tools.extend(
+                [
+                    "browser_setup",
+                    "web_scan",
+                    "web_execute_js",
+                    "web_open_tab",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
         }
         allowed_tools.sort();
         allowed_tools.dedup();
@@ -5133,7 +5221,7 @@ mod tests {
             &["python"],
         );
         let (registry, host) =
-            build_dynamic_delegation_policy(&store, Some(&resources), true, None)
+            build_dynamic_delegation_policy(&store, Some(&resources), true, None, true)
                 .await
                 .unwrap();
 
@@ -5141,6 +5229,7 @@ mod tests {
             "depmap_read",
             "literature_search",
             "external_research",
+            "browser_research",
             "visualization",
         ] {
             assert!(host.enabled_capabilities.contains(&capability.into()));
@@ -5159,6 +5248,7 @@ mod tests {
             .tools
             .contains(&"literature_search".into()));
         assert!(host.permission_ceiling.tools.contains(&"web_search".into()));
+        assert!(host.permission_ceiling.tools.contains(&"web_scan".into()));
         assert!(host.permission_ceiling.tools.contains(&"python".into()));
         assert!(host
             .permission_ceiling
@@ -5183,19 +5273,55 @@ mod tests {
             .unwrap();
         assert!(native.features.contains(&ExecutorFeature::NetworkAccess));
         assert!(native.features.contains(&ExecutorFeature::LiteratureAccess));
+        assert!(native.features.contains(&ExecutorFeature::BrowserAccess));
         assert!(native.features.contains(&ExecutorFeature::Isolation));
+        let acp = host
+            .executors
+            .iter()
+            .find(|executor| matches!(executor.executor, AgentExecutorRef::Acp { .. }))
+            .unwrap();
+        assert!(!acp.features.contains(&ExecutorFeature::BrowserAccess));
 
         let offline =
             crate::delegation_resources::ScientificResourceCatalog::fake(&[], &[], &[], &[], &[]);
         let (_, offline_host) =
-            build_dynamic_delegation_policy(&store, Some(&offline), false, None)
+            build_dynamic_delegation_policy(&store, Some(&offline), false, None, false)
                 .await
                 .unwrap();
         assert!(!offline_host
             .enabled_capabilities
             .contains(&"literature_search".into()));
         assert!(!offline_host.permission_ceiling.network);
+        assert!(!offline_host
+            .enabled_capabilities
+            .contains(&"browser_research".into()));
         assert_ne!(offline_host.revision, host.revision);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn approved_native_browser_capability_registers_only_the_bounded_bridge_tools() {
+        let (store, root) = dynamic_fixture().await;
+        let bridge = Arc::new(crate::browser_bridge::BrowserBridge::new(
+            root.join("browser-extension"),
+        ));
+        let mut registry = wisp_tools::Registry::builtins().filtered(&[]);
+        add_browser_research_tools(&mut registry, bridge, store);
+        let names = registry.names();
+
+        assert_eq!(
+            names,
+            [
+                "browser_setup",
+                "web_scan",
+                "web_execute_js",
+                "web_open_tab",
+            ]
+        );
+        assert!(!names.contains(&"web_screenshot"));
+        assert!(!names.contains(&"web_save_assets"));
+        assert!(!names.contains(&"web_agent_send"));
 
         let _ = std::fs::remove_dir_all(root);
     }

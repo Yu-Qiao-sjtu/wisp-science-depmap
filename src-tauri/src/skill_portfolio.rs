@@ -159,6 +159,7 @@ pub(crate) async fn plan_skill_portfolio_inner(
         project,
         frame_id,
         &state.app_data,
+        true,
     )
     .await?;
     let excluded = excluded_skill_ids

@@ -642,6 +642,7 @@ impl Tool for StartWorkflowTool {
                         &self.project,
                         Some(&self.frame_id),
                         &self.app_data,
+                        true,
                     )
                     .await
                     {
@@ -2356,6 +2357,7 @@ pub(crate) async fn run_quick_action(
         &project,
         None,
         &state.app_data,
+        true,
     )
     .await?;
     // Resolve before creating the dedicated conversation so an unavailable

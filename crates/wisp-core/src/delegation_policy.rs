@@ -44,6 +44,7 @@ pub enum ExecutorFeature {
     CodeExecution,
     NetworkAccess,
     LiteratureAccess,
+    BrowserAccess,
     Vision,
     Isolation,
     Delegation,
@@ -296,7 +297,7 @@ impl CapabilityRegistry {
             .find(|definition| definition.id == "code_run")
             .expect("code_run capability")
             .revision = 3;
-        Self::new("wisp-capabilities-v4", definitions)
+        Self::new("wisp-capabilities-v5", definitions)
             .expect("built-in capability definitions must be valid")
     }
 
@@ -1437,6 +1438,7 @@ fn builtin_capabilities() -> Vec<CapabilityDefinition> {
             AgentWorkspacePolicy::SharedReadOnly,
             CONTEXT_TOKEN_CEILING,
         ),
+        browser_research_capability(),
         capability(
             "visualization",
             "Visualization",
@@ -1503,6 +1505,36 @@ fn delegation_capability() -> CapabilityDefinition {
     );
     definition.approval_reason =
         Some("Task may create a bounded nested Agent batch within root-wide limits".into());
+    definition
+}
+
+fn browser_research_capability() -> CapabilityDefinition {
+    let mut definition = capability(
+        "browser_research",
+        "Real browser research",
+        "Research with the user's connected, persistent Chrome/Chromium session.",
+        CapabilityRisk::External,
+        &[
+            "browser_setup",
+            "web_scan",
+            "web_execute_js",
+            "web_open_tab",
+        ],
+        false,
+        true,
+        false,
+        &[
+            ExecutorFeature::NetworkAccess,
+            ExecutorFeature::BrowserAccess,
+        ],
+        &[],
+        &[],
+        AgentWorkspacePolicy::SharedReadOnly,
+        CONTEXT_TOKEN_CEILING,
+    );
+    definition.approval_reason = Some(
+        "Task may read and interact with the user's connected real Chrome/Chromium session".into(),
+    );
     definition
 }
 
@@ -1630,6 +1662,7 @@ mod tests {
                         ExecutorFeature::CodeExecution,
                         ExecutorFeature::NetworkAccess,
                         ExecutorFeature::LiteratureAccess,
+                        ExecutorFeature::BrowserAccess,
                         ExecutorFeature::Vision,
                         ExecutorFeature::Isolation,
                     ],
@@ -1774,6 +1807,18 @@ mod tests {
             ),
             ("external_research", vec!["web_search"], false, true, false),
             (
+                "browser_research",
+                vec![
+                    "browser_setup",
+                    "web_scan",
+                    "web_execute_js",
+                    "web_open_tab",
+                ],
+                false,
+                true,
+                false,
+            ),
+            (
                 "visualization",
                 vec!["read", "search", "grep", "write", "edit", "python", "r"],
                 true,
@@ -1807,6 +1852,30 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn real_browser_research_requires_native_browser_authority() {
+        let registry = CapabilityRegistry::builtins();
+        let host = host_policy();
+        let mut task = proposal("browser", &["browser_research"]);
+        task.executor = Some(AgentExecutorRef::Acp {
+            profile_id: "acp-general".into(),
+        });
+        assert!(matches!(
+            registry.resolve_task(task, &host),
+            Err(ResolutionError::UnknownExecutor(_))
+        ));
+
+        let resolved = registry
+            .resolve_task(proposal("browser", &["browser_research"]), &host)
+            .unwrap();
+        assert_eq!(resolved.spec().executor, Some(AgentExecutorRef::Native));
+        assert!(resolved
+            .spec()
+            .approval_reasons
+            .iter()
+            .any(|reason| reason.contains("connected real Chrome/Chromium session")));
     }
 
     #[test]

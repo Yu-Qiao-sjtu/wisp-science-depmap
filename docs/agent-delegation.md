@@ -321,6 +321,10 @@ The initial resource mapping is deliberately capability-shaped:
 - `literature_search` grants only enabled literature Skills and literature
   connectors.
 - `external_research` grants only enabled non-literature MCP connections.
+- `browser_research` grants a Native child the same persistent Chrome/Chromium
+  bridge used by the main Agent, limited to setup/status, tab opening, page
+  scanning, and bounded page JavaScript. It is a separate,
+  approval-visible capability and is not implied by either network capability.
 - `visualization` grants configured Python/R tools and figure-oriented Skills.
 - `code_run` grants `run_in_context`, `get_run`, and `cancel_run`. A generic
   temporary code task does not inherit every project Skill; a selected
@@ -338,6 +342,13 @@ Native children discover granted MCP tools through `search_mcp_tools` and call
 them through `use_mcp_tool`; the child approval boundary authorizes both those
 gateway names and the exact hidden tool targets from the resolved connector
 grant.
+
+The real-browser bridge is in-process desktop authority, so
+`browser_research` is eligible only on the Native executor. ACP and external
+executors do not receive it. Browser URL block/preference rules still apply,
+opened tabs remain attributable to the child conversation, and disconnected
+or human-verification states fail visibly instead of falling back to model
+memory.
 
 ACP profiles remain available to workflows that explicitly resolve to an ACP
 executor. Every configured profile whose command is currently available is
@@ -553,6 +564,11 @@ create two independent leaf tasks. Confirm that both leaves appear under the
 same root card at depth 2, their IDs are prefixed by the parent task, their
 structured results appear in the root result, and cancelling the root marks
 the parent and both leaves for cancellation.
+Create a Native research task with **Real browser research**, approve the
+browser authority, and confirm the child can open and scan an allowed test URL.
+Confirm the same task cannot select an ACP executor, blocked hosts remain
+blocked, and a workflow without `browser_research` sees none of the browser
+tools.
 For the isolation path, start from a clean Git project and create two independent
 write tasks with **Use an isolated workspace** enabled. Confirm that approval
 shows **Conflict-check, then cherry-pick**, both children overlap, both changes
