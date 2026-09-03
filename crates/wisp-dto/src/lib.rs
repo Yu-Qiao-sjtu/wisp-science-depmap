@@ -1701,7 +1701,7 @@ pub struct BrowserTabCleanupPrompt {
     pub tabs: Vec<BrowserTabCleanupItem>,
 }
 
-/// Reply of `open_browser_extension_page`: bundled extension path and whether
+/// Reply of `open_browser_extension_page`: managed extension path and whether
 /// a browser was launched on its extension-manager page.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BrowserExtensionSetup {
@@ -1709,6 +1709,47 @@ pub struct BrowserExtensionSetup {
     pub extension_path: Option<String>,
     #[serde(default)]
     pub opened: bool,
+}
+
+/// Compatibility and integrity state of the shared-browser extension.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserExtensionStatus {
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub current_version: Option<String>,
+    #[serde(default)]
+    pub bundled_version: Option<String>,
+    #[serde(default)]
+    pub current_protocol: i64,
+    #[serde(default)]
+    pub required_protocol: i64,
+    #[serde(default)]
+    pub update_required: bool,
+    #[serde(default)]
+    pub automatic_reload_available: bool,
+    #[serde(default)]
+    pub extension_path: Option<String>,
+    #[serde(default)]
+    pub extension_path_verified: bool,
+    #[serde(default)]
+    pub integrity_verified: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Result of preparing the bundled browser extension and attempting to reload
+/// it. `outcome` is `updated`, `manual_reload_required`, or `error`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserExtensionUpdateResult {
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub status: BrowserExtensionStatus,
+    #[serde(default)]
+    pub opened: bool,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 fn default_sync_backend() -> String {
@@ -2575,6 +2616,33 @@ pub struct ProjectSummary {
     pub sync_configured: bool,
     #[serde(default)]
     pub last_synced_at: Option<i64>,
+}
+
+/// Read-only scan result shown before an orphaned workspace is registered and
+/// its `.wisp/history` context archives are imported.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceSessionRecoveryPreview {
+    pub workspace_dir: String,
+    pub suggested_name: String,
+    pub archive_count: usize,
+    pub valid_archive_count: usize,
+    pub recoverable_session_count: usize,
+    pub message_count: usize,
+    pub invalid_archive_count: usize,
+    pub duplicate_archive_count: usize,
+    pub earliest_message_at: Option<i64>,
+    pub latest_message_at: Option<i64>,
+}
+
+/// Result of the transactional workspace-session recovery import.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceSessionRecoveryResult {
+    pub project_id: String,
+    pub project_name: String,
+    pub recovered_session_count: usize,
+    pub message_count: usize,
+    pub invalid_archive_count: usize,
+    pub duplicate_archive_count: usize,
 }
 
 /// Editable project settings (Project Settings modal). `agent_context` is the
@@ -3800,6 +3868,9 @@ pub struct DynamicAgentTaskProposal {
     pub model_id: Option<String>,
     pub executor: Option<AgentExecutorSelection>,
     pub budget: Option<AgentBudgetProposal>,
+    /// Omit to inherit policy, use zero for unlimited, or set seconds.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

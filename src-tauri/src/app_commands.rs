@@ -324,6 +324,26 @@ pub(super) fn share_image_file_name(default_name: &str) -> String {
         .unwrap_or_else(|| "wisp-share.png".to_string())
 }
 
+/// A user can replace the whole suggested name in a native save dialog. On
+/// Windows that may also remove the hidden `.html` suffix, after which a
+/// browser treats the UTF-8 document as plain text and shows its source. Keep
+/// the chosen name, including Unicode and spaces, but restore the file type.
+fn share_html_destination(mut path: std::path::PathBuf) -> std::path::PathBuf {
+    let is_html = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("html"));
+    if !is_html {
+        let mut name = path
+            .file_name()
+            .map(std::ffi::OsStr::to_os_string)
+            .unwrap_or_else(|| std::ffi::OsString::from("wisp-share"));
+        name.push(".html");
+        path.set_file_name(name);
+    }
+    path
+}
+
 // Generous ceiling for one long conversation image (base64 of ~48 MB PNG).
 const MAX_SHARE_PNG_BASE64_BYTES: usize = 64 * 1024 * 1024;
 
@@ -384,6 +404,7 @@ pub(super) async fn save_share_html(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
+        .add_filter("HTML", &["html"])
         .set_file_name(&share_image_file_name(&default_name))
         .save_file(move |p| {
             let _ = tx.send(p);
@@ -391,7 +412,7 @@ pub(super) async fn save_share_html(
     let Some(dest) = rx.await.map_err(|e| format!("{e}"))? else {
         return Ok(None); // user cancelled
     };
-    let dest_path = std::path::PathBuf::from(dest.to_string());
+    let dest_path = share_html_destination(std::path::PathBuf::from(dest.to_string()));
     tokio::fs::write(&dest_path, html)
         .await
         .map_err(|e| format!("write failed: {e}"))?;
@@ -584,8 +605,26 @@ pub(super) fn open_external_url(app: tauri::AppHandle, url: String) -> Result<()
 #[tauri::command]
 pub(super) fn open_browser_extension_page(
     state: State<'_, AppState>,
-) -> browser_bridge::BrowserExtensionSetup {
+) -> wisp_dto::BrowserExtensionSetup {
     state.browser_bridge.open_extension_setup()
+}
+
+/// Report whether the connected shared-browser extension matches this build.
+#[tauri::command]
+pub(super) async fn browser_extension_status(
+    state: State<'_, AppState>,
+) -> Result<wisp_dto::BrowserExtensionStatus, String> {
+    Ok(state.browser_bridge.extension_status().await)
+}
+
+/// Refresh the verified managed copy and reload it automatically when the
+/// connected extension supports that operation. Older extensions fall back to
+/// the extension-manager page with the exact stable path in the result.
+#[tauri::command]
+pub(super) async fn update_browser_extension(
+    state: State<'_, AppState>,
+) -> Result<wisp_dto::BrowserExtensionUpdateResult, String> {
+    Ok(state.browser_bridge.update_extension().await)
 }
 
 /// Live extension connection check for the offline banner's display gate.
@@ -613,6 +652,24 @@ pub(super) fn reveal_in_file_manager(
 }
 
 #[tauri::command]
+pub(super) fn open_workspace_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let ap = state.active(window.label());
+    let real = wisp_tools::safety::validate_file_path(&ap.root, &path)?;
+    if !real.exists() {
+        return Err(format!("file not found: {path}"));
+    }
+    app.opener()
+        .open_path(real.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(super) async fn dismiss_onboarding(state: State<'_, AppState>) -> Result<(), String> {
     state
         .store
@@ -623,7 +680,7 @@ pub(super) async fn dismiss_onboarding(state: State<'_, AppState>) -> Result<(),
 
 #[cfg(test)]
 mod share_image_tests {
-    use super::share_image_file_name;
+    use super::{share_html_destination, share_image_file_name};
 
     #[test]
     fn keeps_only_a_safe_file_name_component() {
@@ -635,5 +692,21 @@ mod share_image_tests {
         assert_eq!(share_image_file_name("/tmp/evil/name.png"), "name.png");
         assert_eq!(share_image_file_name(""), "wisp-share.png");
         assert_eq!(share_image_file_name(".."), "wisp-share.png");
+    }
+
+    #[test]
+    fn html_destination_restores_the_extension_after_rename() {
+        assert_eq!(
+            share_html_destination(std::path::PathBuf::from("分析 result 01")),
+            std::path::PathBuf::from("分析 result 01.html")
+        );
+        assert_eq!(
+            share_html_destination(std::path::PathBuf::from("report.HTML")),
+            std::path::PathBuf::from("report.HTML")
+        );
+        assert_eq!(
+            share_html_destination(std::path::PathBuf::from("report.txt")),
+            std::path::PathBuf::from("report.txt.html")
+        );
     }
 }

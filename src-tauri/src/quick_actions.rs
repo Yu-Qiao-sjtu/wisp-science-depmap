@@ -392,6 +392,7 @@ impl Tool for CreateWorkflowTool {
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             }],
         };
         if let Some(params) = args.get("params") {
@@ -899,6 +900,7 @@ fn literature_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "challenging_evidence".into(),
@@ -918,6 +920,7 @@ fn literature_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "synthesize".into(),
@@ -938,6 +941,7 @@ fn literature_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
         ],
     }
@@ -983,6 +987,7 @@ fn roundtable_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "seat_2_opening".into(),
@@ -998,6 +1003,7 @@ fn roundtable_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "seat_1_review".into(),
@@ -1013,6 +1019,7 @@ fn roundtable_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "seat_2_review".into(),
@@ -1028,6 +1035,7 @@ fn roundtable_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             dynamic_workflow::DynamicAgentTaskProposal {
                 id: "chair_synthesis".into(),
@@ -1047,6 +1055,7 @@ fn roundtable_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal 
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
         ],
     }
@@ -1119,6 +1128,7 @@ fn research_design_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProp
             model_id: None,
             executor: None,
             budget: None,
+            timeout_secs: None,
         }
     };
     dynamic_workflow::DynamicAgentWorkflowProposal {
@@ -1152,6 +1162,7 @@ fn research_design_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProp
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
         ],
     }
@@ -1587,6 +1598,7 @@ fn method_search_agent_task(
         model_id: None,
         executor: None,
         budget: None,
+        timeout_secs: None,
     }
 }
 
@@ -1651,6 +1663,7 @@ fn method_search_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowPropos
                 model_id: None,
                 executor: None,
                 budget: None,
+                timeout_secs: None,
             },
             method_search_agent_task(
                 "verify_finalists",
@@ -2433,6 +2446,7 @@ mod tests {
                     model_id: None,
                     executor: None,
                     budget: None,
+                    timeout_secs: None,
                 }],
             },
             builtin: false,
@@ -2971,6 +2985,7 @@ mod tests {
                     model_id: None,
                     executor: None,
                     budget: None,
+                    timeout_secs: None,
                 }],
             }
         )

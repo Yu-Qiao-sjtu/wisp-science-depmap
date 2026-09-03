@@ -2476,6 +2476,29 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             ];
           case "pick_directory":
             return "/mock/root/new-project";
+          case "preview_workspace_session_recovery":
+            return {
+              workspace_dir: String(arg("workspaceDir") ?? "/mock/root/new-project"),
+              suggested_name: "Recovered study",
+              archive_count: 4,
+              valid_archive_count: 3,
+              recoverable_session_count: 2,
+              message_count: 648,
+              invalid_archive_count: 1,
+              duplicate_archive_count: 1,
+              earliest_message_at: 1_725_000_000,
+              latest_message_at: 1_725_003_600,
+            };
+          case "recover_workspace_sessions":
+            projectNames.recovered = String(arg("name") ?? "Recovered study");
+            return {
+              project_id: "recovered",
+              project_name: projectNames.recovered,
+              recovered_session_count: 2,
+              message_count: 648,
+              invalid_archive_count: 1,
+              duplicate_archive_count: 1,
+            };
           case "pick_executable_file":
             return "/mock/picked/Rscript";
           case "open_project": {
@@ -5471,7 +5494,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
                 emit("agent", {
                   kind: "Text",
                   frame_id: fid,
-                  delta: "I inspected `old.csv` and created the requested output. See `notes/FIGURE_LEGEND.md`.",
+                  delta: "I inspected `old.csv` and created the requested output `new.png`. See `notes/FIGURE_LEGEND.md` and [the results folder](results/).",
                 });
                 emit("agent", { kind: "Done", frame_id: fid });
               }, 30);
@@ -5628,6 +5651,27 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             return null;
           case "open_browser_extension_page":
             return { extension_path: "/mock/wisp/browser-extension", opened: false };
+          case "browser_extension_status":
+            return (window as any).__browserExtensionStatus ?? {
+              connected: false,
+              current_version: null,
+              bundled_version: "0.3.1",
+              current_protocol: 0,
+              required_protocol: 2,
+              update_required: false,
+              automatic_reload_available: false,
+              extension_path: "/mock/wisp/browser-extension",
+              extension_path_verified: true,
+              integrity_verified: true,
+              error: null,
+            };
+          case "update_browser_extension":
+            return (window as any).__browserExtensionUpdateResult ?? {
+              outcome: "manual_reload_required",
+              status: (window as any).__browserExtensionStatus,
+              opened: true,
+              error: null,
+            };
           case "extension_connected":
             return Boolean((window as any).__extensionConnected);
           case "ui_heartbeat":
@@ -6045,6 +6089,27 @@ export function parallelMock(): void {
             return null;
           case "open_browser_extension_page":
             return { extension_path: "/mock/wisp/browser-extension", opened: false };
+          case "browser_extension_status":
+            return (window as any).__browserExtensionStatus ?? {
+              connected: false,
+              current_version: null,
+              bundled_version: "0.3.1",
+              current_protocol: 0,
+              required_protocol: 2,
+              update_required: false,
+              automatic_reload_available: false,
+              extension_path: "/mock/wisp/browser-extension",
+              extension_path_verified: true,
+              integrity_verified: true,
+              error: null,
+            };
+          case "update_browser_extension":
+            return (window as any).__browserExtensionUpdateResult ?? {
+              outcome: "manual_reload_required",
+              status: (window as any).__browserExtensionStatus,
+              opened: true,
+              error: null,
+            };
           case "extension_connected":
             return Boolean((window as any).__extensionConnected);
           case "ui_heartbeat":

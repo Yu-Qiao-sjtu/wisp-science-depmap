@@ -43,11 +43,11 @@ mod device_bridge;
 mod device_hub;
 mod dynamic_workflow;
 mod exploration_commands;
-mod exploration_isolation;
+pub(crate) use wisp_runs::exploration_isolation;
 mod exploration_promotion;
 mod exploration_workspace;
 mod file_browser;
-mod harvest;
+pub(crate) use wisp_runs::harvest;
 mod image_generation_tool;
 mod library_commands;
 mod mcp_bridge;
@@ -81,7 +81,7 @@ mod research_graph;
 mod resource_leases;
 mod resource_refs;
 mod review;
-mod run_context;
+pub(crate) use wisp_runs as run_context;
 mod runtime_commands;
 mod runtime_config_tool;
 mod runtime_launcher;
@@ -97,12 +97,12 @@ mod share_social;
 mod side_chat;
 mod skill_commands;
 mod skill_portfolio;
-mod snapshot_store;
+pub(crate) use wisp_runs::snapshot_store;
 mod specialist_tool;
 mod specialists;
-mod ssh_guard;
+pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
-mod ssh_master;
+pub(crate) use wisp_runs::ssh_master;
 mod storage_prefs;
 mod terminal_sessions;
 mod trajectory;
@@ -113,6 +113,7 @@ mod video_generation_tool;
 mod windows_snap;
 mod workspace_manifest;
 mod workspace_scan;
+mod workspace_session_recovery;
 mod wsl_contexts;
 
 pub(crate) use agent_turn::*;
@@ -6819,6 +6820,7 @@ pub fn run() {
             let browser_bridge = startup.record("browser_bridge", || {
                 tauri::async_runtime::block_on(browser_bridge::BrowserBridge::start(
                     browser_extension_dir,
+                    app_data.join("browser-extension"),
                     store.clone(),
                 ))
             });
@@ -7088,6 +7090,8 @@ pub fn run() {
             debug_request::get_context_usage_details,
             project_transfer::export_project,
             project_transfer::import_project,
+            workspace_session_recovery::preview_workspace_session_recovery,
+            workspace_session_recovery::recover_workspace_sessions,
             codex_import::list_codex_sessions,
             codex_import::list_claude_sessions,
             codex_import::preview_codex_session,
@@ -7246,9 +7250,12 @@ pub fn run() {
             app_updates::install_update,
             app_commands::open_external_url,
             app_commands::open_browser_extension_page,
+            app_commands::browser_extension_status,
+            app_commands::update_browser_extension,
             app_commands::extension_connected,
             ui_heartbeat,
             app_commands::reveal_in_file_manager,
+            app_commands::open_workspace_path,
             connector_commands::list_mcp_connections,
             connector_commands::add_mcp_connection,
             connector_commands::authorize_http_connection,

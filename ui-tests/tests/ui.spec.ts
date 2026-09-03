@@ -2506,6 +2506,79 @@ test("/share PNG keeps markdown tables and KaTeX from the live thread", async ({
   expect(pngHeight).toBeGreaterThan(400);
 });
 
+test("/share keeps a long picker at its scroll position and bounds exported prose", async ({ page }) => {
+  await enterApp(page);
+  const composerInput = composer(page);
+  await composerInput.fill("SHARETHINK seed a long share list");
+  await composerInput.press("Enter");
+  await expect(page.getByText("Alice confirmed the spectrum is clean.")).toBeVisible({ timeout: 10_000 });
+  const send = await lastInvokeArgs(page, "send_message");
+  const frameId = String(send.sessionId ?? send.session_id ?? "");
+  await page.evaluate((fid) => {
+    const emit = (window as any).__tauriEmit;
+    for (let index = 0; index < 12; index += 1) {
+      emit("agent", {
+        kind: "User",
+        frame_id: fid,
+        text: `follow-up ${index} ${"sample".repeat(45)}`,
+      });
+      emit("agent", {
+        kind: "Text",
+        frame_id: fid,
+        delta: `Long result ${index}: https://example.test/${"unbroken".repeat(55)}`,
+      });
+    }
+  }, frameId);
+  await expect(page.locator(".msg.user")).toHaveCount(13);
+
+  await page.getByTestId("share-topbar").click();
+  const overlay = page.getByTestId("share-overlay");
+  const list = overlay.locator(".share-list");
+  const rows = overlay.locator(".share-row");
+  await expect(rows).toHaveCount(27);
+  const before = await list.evaluate((element: HTMLElement) => {
+    element.scrollTop = element.scrollHeight;
+    return element.scrollTop;
+  });
+  expect(before).toBeGreaterThan(0);
+
+  // Updating one checkbox used to replace every row view, resetting the
+  // scroll container to zero. Keyed rows must survive consecutive updates.
+  await rows.nth(25).locator("input").click();
+  await expect.poll(() => list.evaluate((element: HTMLElement) => element.scrollTop))
+    .toBeGreaterThan(before * 0.8);
+  const afterFirst = await list.evaluate((element: HTMLElement) => element.scrollTop);
+  await rows.nth(24).locator("input").click();
+  await expect.poll(() => list.evaluate((element: HTMLElement) => element.scrollTop))
+    .toBeGreaterThan(afterFirst * 0.8);
+
+  await overlay.getByTestId("share-format-html").click();
+  await overlay.getByTestId("share-export").click();
+  await expect.poll(() => lastInvokeArgs(page, "save_share_html")).not.toBeNull();
+  const html = String((await lastInvokeArgs(page, "save_share_html")).html);
+  const layout = await page.evaluate(async (documentHtml) => {
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = "position:fixed;left:-9999px;width:420px;height:640px;border:0";
+    document.body.appendChild(iframe);
+    const loaded = new Promise((resolve) => {
+      iframe.addEventListener("load", () => resolve(undefined), { once: true });
+    });
+    iframe.srcdoc = documentHtml;
+    await loaded;
+    const doc = iframe.contentDocument!;
+    const prose = [...doc.querySelectorAll<HTMLElement>(".msg .body")];
+    const result = {
+      pageWidth: doc.documentElement.clientWidth,
+      pageScrollWidth: doc.documentElement.scrollWidth,
+      overflowingProse: prose.filter((element) => element.scrollWidth > element.clientWidth + 1).length,
+    };
+    iframe.remove();
+    return result;
+  }, html);
+  expect(layout.pageScrollWidth).toBeLessThanOrEqual(layout.pageWidth + 1);
+  expect(layout.overflowingProse).toBe(0);
+});
+
 test("/share hides the social copy flow and keeps PNG plus HTML export", async ({ page }) => {
   await enterApp(page);
   const composerInput = composer(page);
@@ -4121,6 +4194,11 @@ test("Quick Actions opens its bound graph in the standalone Workflow Studio", as
     .click();
   const inspector = studio.getByTestId("workflow-graph-inspector");
   await expect(inspector.getByTestId("dynamic-task-id")).toHaveValue("synthesize");
+  await inspector.locator("details.dynamic-agent-advanced > summary").click();
+  const timeout = inspector.getByTestId("dynamic-task-timeout-secs");
+  await expect(timeout).toHaveAttribute("placeholder", "Empty = policy default; 0 = unlimited");
+  await timeout.fill("0");
+  await expect(timeout).toHaveValue("0");
   await expect(inspector.getByTestId("workflow-graph-remove-edge")).toHaveCount(2);
   const skillPicker = inspector.getByTestId("dynamic-task-skills");
   await expect(skillPicker.getByTestId("dynamic-task-skill-option")).toHaveCount(0);
@@ -4708,7 +4786,7 @@ test("Generated artifacts survive follow-up tool commentary and ignore mentioned
   await page.getByRole("button", { name: "Send" }).click();
 
   const reply = page.locator(".msg.assistant", {
-    hasText: "I inspected old.csv and created the requested output.",
+    hasText: "I inspected old.csv and created the requested output",
   });
   await expect(reply).toBeVisible({ timeout: 10_000 });
   await expect(reply.locator(".message-artifacts-label")).toHaveText("Generated · 1");
@@ -4745,6 +4823,28 @@ test("Generated artifacts survive follow-up tool commentary and ignore mentioned
   });
   await expect(page.locator(".artifact-modal")).toHaveCount(0);
 
+  // A generated file mentioned in the answer is rendered as an artifact chip,
+  // not a workspace-path anchor. It must own the same file menu and must not
+  // fall through to "Copy message" (the real-world #1048 regression).
+  const artifactPath = reply.locator('.art-ref[data-workspace-path="/mock/root/results/new.png"]');
+  await expect(artifactPath).toHaveText("new.png");
+  await artifactPath.click({ button: "right" });
+  await expect(pathMenu.getByRole("button", { name: "Open with default app" })).toBeVisible();
+  await expect(pathMenu.getByRole("button", { name: "Copy message" })).toHaveCount(0);
+  await pathMenu.getByRole("button", { name: "Open with default app" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "open_workspace_path")).toMatchObject({
+    path: "results/new.png",
+  });
+
+  // Ordinary project-directory Markdown links share the same route.
+  const directoryPath = reply.locator('a[href="results/"]');
+  await directoryPath.click({ button: "right" });
+  await expect(pathMenu.getByRole("button", { name: "Open with default app" })).toBeVisible();
+  await pathMenu.getByRole("button", { name: "Show in file manager" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "reveal_in_file_manager")).toMatchObject({
+    path: "results/",
+  });
+
   await pathLink.click();
   const linkedModal = page.locator('.artifact-modal:has(.am-figure[data-file-path="notes/FIGURE_LEGEND.md"])');
   await expect(linkedModal).toBeVisible();
@@ -4771,7 +4871,7 @@ test("links inside the artifact modal preview never navigate the app", async ({ 
   await page.getByRole("button", { name: "Send" }).click();
 
   const reply = page.locator(".msg.assistant", {
-    hasText: "I inspected old.csv and created the requested output.",
+    hasText: "I inspected old.csv and created the requested output",
   });
   await reply.locator('a.workspace-path-link[href="notes/FIGURE_LEGEND.md"]').click();
   const modal = page.locator('.artifact-modal:has(.am-figure[data-file-path="notes/FIGURE_LEGEND.md"])');
@@ -12314,6 +12414,39 @@ test("import can open an existing folder in place without copying it", async ({ 
     standardLayout: false,
   });
   await expect.poll(() => lastInvokeArgs(page, "import_project")).toBeNull();
+});
+
+test("workspace recovery previews archived conversations before transactional import", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Import project" }).click();
+  const options = page.getByTestId("project-import-options");
+  await expect(options.getByRole("button", { name: "Recover conversations from a workspace" })).toBeVisible();
+  await options.getByRole("button", { name: "Recover conversations from a workspace" }).click();
+
+  const recovery = page.getByTestId("workspace-session-recovery");
+  await expect(recovery).toBeVisible();
+  await expect(recovery.getByRole("heading", { name: "Recover workspace conversations" })).toBeVisible();
+  await expect(recovery.locator("#workspace-recovery-name")).toHaveValue("Recovered study");
+  await expect(recovery.locator(".workspace-recovery-stats")).toContainText("2conversations");
+  await expect(recovery.locator(".workspace-recovery-stats")).toContainText("648messages");
+  await expect(recovery).toContainText("1 damaged archive(s) and 1 duplicate archive(s) will be skipped");
+
+  // The preview owns the top Escape layer and closes immediately without a
+  // prior focus move or any import side effect.
+  await page.keyboard.press("Escape");
+  await expect(recovery).toBeHidden();
+  await expect.poll(() => lastInvokeArgs(page, "recover_workspace_sessions")).toBeNull();
+
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page.getByTestId("project-import-options")
+    .getByRole("button", { name: "Recover conversations from a workspace" }).click();
+  await expect(recovery).toBeVisible();
+  await recovery.getByRole("button", { name: "Recover and open" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "recover_workspace_sessions")).toMatchObject({
+    workspaceDir: "/mock/root/new-project",
+    name: "Recovered study",
+  });
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "recovered" });
 });
 
 test("project transfers stay in a lower-right progress card without blocking other projects", async ({ page }) => {

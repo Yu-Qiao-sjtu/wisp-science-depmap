@@ -632,13 +632,15 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "agents.task.executor") => Some("Executor"),
         (Locale::En, "agents.task.auto") => Some("Policy default"),
         (Locale::En, "agents.task.isolated") => Some("Use an isolated workspace"),
-        (Locale::En, "agents.task.advanced_hint") => Some("Leave budget fields empty for unlimited. Use 0 to explicitly remove a limit."),
+        (Locale::En, "agents.task.advanced_hint") => Some("Leave budget fields empty for unlimited. Runtime uses the policy default when empty; use 0 to remove its limit."),
         (Locale::En, "agents.task.max_tokens") => Some("Max tokens"),
         (Locale::En, "agents.task.max_tokens_hint") => Some("Empty = unlimited"),
         (Locale::En, "agents.task.max_tools") => Some("Max tool calls"),
         (Locale::En, "agents.task.max_tools_hint") => Some("Empty = unlimited"),
         (Locale::En, "agents.task.max_cost") => Some("Max cost (microunits)"),
         (Locale::En, "agents.task.max_cost_hint") => Some("Empty = unlimited"),
+        (Locale::En, "agents.task.timeout") => Some("Max runtime (seconds)"),
+        (Locale::En, "agents.task.timeout_hint") => Some("Empty = policy default; 0 = unlimited"),
         (Locale::En, "agents.task.output_schema") => Some("Output JSON Schema"),
         (Locale::En, "agents.task.output_schema_hint") => Some("Leave empty for the standard result contract (summary, files_changed, artifacts, evidence, tests, risks)."),
         (Locale::En, "agents.task.workspace") => Some("Workspace"),
@@ -1330,6 +1332,25 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "browser.offline.setup_done") => Some("Extension path copied. In the browser tab that just opened: enable Developer mode, then choose \"Load unpacked\" and paste the path."),
         (Locale::En, "browser.offline.setup_failed") => Some("Couldn't open the browser automatically. Open chrome://extensions yourself, enable Developer mode, and load the bundled extension from the Wisp install folder."),
         (Locale::En, "browser.offline.dismiss") => Some("Dismiss"),
+        (Locale::En, "browser.extension.eyebrow") => Some("Browser extension update"),
+        (Locale::En, "browser.extension.title") => Some("Wisp Real Browser Bridge is out of date"),
+        (Locale::En, "browser.extension.body") => Some("Connected version {current}; this build includes {required}. Update before using newer browser tools."),
+        (Locale::En, "browser.extension.manual_title") => Some("Updated files are ready — reload the extension"),
+        (Locale::En, "browser.extension.manual_body") => Some("Chrome cannot reload version {current} automatically. On the extension page, reload Wisp Real Browser Bridge {required}; if it still shows the old version, load the unpacked folder below."),
+        (Locale::En, "browser.extension.waiting_title") => Some("Waiting for the browser extension to reconnect"),
+        (Locale::En, "browser.extension.waiting_body") => Some("Last detected version {current}; this build requires {required}. Keep Wisp running while the extension reconnects, or open the extension page below."),
+        (Locale::En, "browser.extension.unknown") => Some("unknown"),
+        (Locale::En, "browser.extension.update") => Some("Update extension"),
+        (Locale::En, "browser.extension.updating") => Some("Updating…"),
+        (Locale::En, "browser.extension.updated") => Some("Browser extension updated and reconnected."),
+        (Locale::En, "browser.extension.manual_ready") => Some("Updated extension path copied. Reload the extension in the browser, then Wisp will recheck automatically."),
+        (Locale::En, "browser.extension.failed") => Some("Could not prepare the browser extension update. Check the error and retry."),
+        (Locale::En, "browser.extension.copy_path") => Some("Copy extension path"),
+        (Locale::En, "browser.extension.path_copied") => Some("Extension path copied."),
+        (Locale::En, "browser.extension.open_page") => Some("Open extension page"),
+        (Locale::En, "browser.extension.open_failed") => Some("Could not open the extension page automatically. Open chrome://extensions in your browser."),
+        (Locale::En, "browser.extension.recheck") => Some("Recheck"),
+        (Locale::En, "browser.extension.dismiss") => Some("Dismiss"),
         (Locale::En, "settings.nav.connections") => Some("Connections"),
         (Locale::En, "settings.nav.channels") => Some("Remote Access"),
         (Locale::En, "channels.desc") => Some("Connect Feishu, WeChat, or a StickS3 device to Wisp Science. Each access method stays opt-in and has its own security boundary."),
@@ -2197,6 +2218,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "ctx.attach_directory") => Some("Add folder to chat"),
         (Locale::En, "ctx.register_artifact") => Some("Register as artifact"),
         (Locale::En, "ctx.reveal_in_manager") => Some("Show in file manager"),
+        (Locale::En, "ctx.open_with_system") => Some("Open with default app"),
         (Locale::En, "ctx.export_session") => Some("Export session"),
         (Locale::En, "ctx.export_debug_request") => Some("Export debug request (what was sent)"),
         (Locale::En, "ctx.open_session") => Some("Open session"),
@@ -2429,11 +2451,24 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "projects.search_close") => Some(" close"),
         (Locale::En, "projects.new") => Some("New project"),
         (Locale::En, "projects.import") => Some("Import project"),
-        (Locale::En, "projects.import_options_hint") => Some("Choose whether to use an existing folder in place or restore a complete Wisp archive."),
+        (Locale::En, "projects.import_options_hint") => Some("Open an existing folder, restore a complete Wisp archive, or recover conversations from workspace history."),
         (Locale::En, "projects.import_in_place") => Some("Open a folder in place"),
         (Locale::En, "projects.import_in_place_hint") => Some("Keep every file where it is. Wisp registers the folder without copying it."),
         (Locale::En, "projects.import_zip") => Some("Import a ZIP archive"),
         (Locale::En, "projects.import_zip_hint") => Some("Restore workspace files, conversations, and Wisp project records into a new folder."),
+        (Locale::En, "projects.recover_workspace") => Some("Recover conversations from a workspace"),
+        (Locale::En, "projects.recover_workspace_hint") => Some("Scan .wisp/history in an orphaned workspace and rebuild the recoverable conversation timelines in place."),
+        (Locale::En, "projects.recover_title") => Some("Recover workspace conversations"),
+        (Locale::En, "projects.recover_notice") => Some("This is a best-effort recovery of message timelines from .wisp/history. It does not restore UI-only events, runs, reviews, or other database-only records, and the source archives are not changed."),
+        (Locale::En, "projects.recover_sessions") => Some("conversations"),
+        (Locale::En, "projects.recover_messages") => Some("messages"),
+        (Locale::En, "projects.recover_archives") => Some("valid archives"),
+        (Locale::En, "projects.recover_range") => Some("Message range: {start} – {end}"),
+        (Locale::En, "projects.recover_range_unknown") => Some("The archives do not contain usable message timestamps."),
+        (Locale::En, "projects.recover_skipped") => Some("{invalid} damaged archive(s) and {duplicate} duplicate archive(s) will be skipped."),
+        (Locale::En, "projects.recover_empty") => Some("No recoverable conversations were found in this workspace."),
+        (Locale::En, "projects.recover_action") => Some("Recover and open"),
+        (Locale::En, "projects.recovering") => Some("Recovering…"),
         (Locale::En, "projects.open_folder_title") => Some("Open project folder"),
         (Locale::En, "projects.open_folder_hint") => Some("Wisp will use this folder in place. No project files are copied."),
         (Locale::En, "projects.open_folder_action") => Some("Open project"),
@@ -3160,13 +3195,15 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "agents.task.executor") => Some("执行器"),
         (Locale::Zh, "agents.task.auto") => Some("使用策略默认值"),
         (Locale::Zh, "agents.task.isolated") => Some("使用隔离工作区"),
-        (Locale::Zh, "agents.task.advanced_hint") => Some("预算字段留空表示不限制。填 0 可显式取消限制。"),
+        (Locale::Zh, "agents.task.advanced_hint") => Some("预算字段留空表示不限制。最长运行时间留空使用策略默认值，填 0 表示不限时。"),
         (Locale::Zh, "agents.task.max_tokens") => Some("最大 Token 数"),
         (Locale::Zh, "agents.task.max_tokens_hint") => Some("留空 = 不限"),
         (Locale::Zh, "agents.task.max_tools") => Some("最大工具调用数"),
         (Locale::Zh, "agents.task.max_tools_hint") => Some("留空 = 不限"),
         (Locale::Zh, "agents.task.max_cost") => Some("最大费用（微单位）"),
         (Locale::Zh, "agents.task.max_cost_hint") => Some("留空 = 不限"),
+        (Locale::Zh, "agents.task.timeout") => Some("最长运行时间（秒）"),
+        (Locale::Zh, "agents.task.timeout_hint") => Some("留空 = 策略默认值；0 = 不限时"),
         (Locale::Zh, "agents.task.output_schema") => Some("输出 JSON Schema"),
         (Locale::Zh, "agents.task.output_schema_hint") => Some("留空使用标准输出格式（summary, files_changed, artifacts, evidence, tests, risks）。"),
         (Locale::Zh, "agents.task.workspace") => Some("工作区"),
@@ -3858,6 +3895,25 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "browser.offline.setup_done") => Some("扩展路径已复制。在刚打开的浏览器页面中开启「开发者模式」，再点「加载已解压的扩展程序」并粘贴路径。"),
         (Locale::Zh, "browser.offline.setup_failed") => Some("未能自动打开浏览器。请自行打开 chrome://extensions 开启开发者模式，并从 Wisp 安装目录加载扩展。"),
         (Locale::Zh, "browser.offline.dismiss") => Some("关闭"),
+        (Locale::Zh, "browser.extension.eyebrow") => Some("浏览器扩展更新"),
+        (Locale::Zh, "browser.extension.title") => Some("Wisp Real Browser Bridge 版本过低"),
+        (Locale::Zh, "browser.extension.body") => Some("当前已连接版本为 {current}，本构建内置版本为 {required}。请先更新，再使用新版浏览器工具。"),
+        (Locale::Zh, "browser.extension.manual_title") => Some("新版文件已就绪，请重新加载扩展"),
+        (Locale::Zh, "browser.extension.manual_body") => Some("Chrome 无法自动重新加载版本 {current}。请在扩展管理页重新加载 Wisp Real Browser Bridge {required}；若仍显示旧版本，请从下方目录“加载已解压的扩展程序”。"),
+        (Locale::Zh, "browser.extension.waiting_title") => Some("正在等待浏览器扩展重新连接"),
+        (Locale::Zh, "browser.extension.waiting_body") => Some("上次检测到版本 {current}，本构建要求 {required}。请保持 Wisp 运行以等待扩展重连，或打开下方扩展管理页。"),
+        (Locale::Zh, "browser.extension.unknown") => Some("未知"),
+        (Locale::Zh, "browser.extension.update") => Some("更新扩展"),
+        (Locale::Zh, "browser.extension.updating") => Some("正在更新…"),
+        (Locale::Zh, "browser.extension.updated") => Some("浏览器扩展已更新并重新连接。"),
+        (Locale::Zh, "browser.extension.manual_ready") => Some("新版扩展路径已复制。请在浏览器中重新加载扩展，Wisp 会自动复检。"),
+        (Locale::Zh, "browser.extension.failed") => Some("无法准备浏览器扩展更新，请查看错误后重试。"),
+        (Locale::Zh, "browser.extension.copy_path") => Some("复制扩展路径"),
+        (Locale::Zh, "browser.extension.path_copied") => Some("扩展路径已复制。"),
+        (Locale::Zh, "browser.extension.open_page") => Some("打开扩展管理页"),
+        (Locale::Zh, "browser.extension.open_failed") => Some("无法自动打开扩展管理页，请在浏览器中打开 chrome://extensions。"),
+        (Locale::Zh, "browser.extension.recheck") => Some("重新检测"),
+        (Locale::Zh, "browser.extension.dismiss") => Some("关闭"),
         (Locale::Zh, "settings.nav.connections") => Some("连接"),
         (Locale::Zh, "settings.nav.channels") => Some("远程接入"),
         (Locale::Zh, "channels.desc") => Some("将飞书、微信或 StickS3 设备接入 Wisp Science。每种远程接入都默认关闭，并具有独立的安全边界。"),
@@ -4720,6 +4776,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "ctx.attach_directory") => Some("添加文件夹到对话"),
         (Locale::Zh, "ctx.register_artifact") => Some("登记为产物"),
         (Locale::Zh, "ctx.reveal_in_manager") => Some("在文件管理器中打开"),
+        (Locale::Zh, "ctx.open_with_system") => Some("使用系统默认应用打开"),
         (Locale::Zh, "ctx.export_session") => Some("导出会话"),
         (Locale::Zh, "ctx.export_debug_request") => Some("导出调试请求（实际发送内容）"),
         (Locale::Zh, "ctx.open_session") => Some("打开会话"),
@@ -4952,11 +5009,24 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "projects.search_close") => Some(" 关闭"),
         (Locale::Zh, "projects.new") => Some("新建项目"),
         (Locale::Zh, "projects.import") => Some("导入项目"),
-        (Locale::Zh, "projects.import_options_hint") => Some("请选择原地使用已有文件夹，或恢复一份完整的 Wisp 压缩包。"),
+        (Locale::Zh, "projects.import_options_hint") => Some("请选择原地使用已有文件夹、恢复完整的 Wisp 压缩包，或从工作区历史中恢复会话。"),
         (Locale::Zh, "projects.import_in_place") => Some("原地打开文件夹"),
         (Locale::Zh, "projects.import_in_place_hint") => Some("文件保持在当前位置；Wisp 只登记此文件夹，不复制任何项目文件。"),
         (Locale::Zh, "projects.import_zip") => Some("导入 ZIP 压缩包"),
         (Locale::Zh, "projects.import_zip_hint") => Some("把工作区文件、会话和 Wisp 项目记录完整恢复到一个新文件夹。"),
+        (Locale::Zh, "projects.recover_workspace") => Some("从工作区恢复会话"),
+        (Locale::Zh, "projects.recover_workspace_hint") => Some("扫描孤立工作区中的 .wisp/history，并在原位置重建可恢复的会话时间线。"),
+        (Locale::Zh, "projects.recover_title") => Some("恢复工作区会话"),
+        (Locale::Zh, "projects.recover_notice") => Some("这是基于 .wisp/history 的尽力恢复，只恢复消息时间线，不恢复仅存在于数据库中的 UI 事件、运行、审阅等记录；原始存档不会被修改。"),
+        (Locale::Zh, "projects.recover_sessions") => Some("个会话"),
+        (Locale::Zh, "projects.recover_messages") => Some("条消息"),
+        (Locale::Zh, "projects.recover_archives") => Some("个有效存档"),
+        (Locale::Zh, "projects.recover_range") => Some("消息时间范围：{start} – {end}"),
+        (Locale::Zh, "projects.recover_range_unknown") => Some("存档中没有可用的消息时间戳。"),
+        (Locale::Zh, "projects.recover_skipped") => Some("将跳过 {invalid} 个损坏存档和 {duplicate} 个重复存档。"),
+        (Locale::Zh, "projects.recover_empty") => Some("这个工作区中没有找到可恢复的会话。"),
+        (Locale::Zh, "projects.recover_action") => Some("恢复并打开"),
+        (Locale::Zh, "projects.recovering") => Some("正在恢复…"),
         (Locale::Zh, "projects.open_folder_title") => Some("打开项目文件夹"),
         (Locale::Zh, "projects.open_folder_hint") => Some("Wisp 会原地使用此文件夹，不会复制项目文件。"),
         (Locale::Zh, "projects.open_folder_action") => Some("打开项目"),
@@ -5168,6 +5238,64 @@ pub fn localize_backend(locale: Locale, msg: &str) -> String {
             t(locale, "err.cred_env_invalid")
         }
         "Credential value is required." => t(locale, "err.cred_value_required"),
+        m if m.starts_with("workspace_recovery_no_history:") => {
+            if locale == Locale::Zh {
+                "所选文件夹中没有可读取的 .wisp/history 会话存档目录。".into()
+            } else {
+                m.trim_start_matches("workspace_recovery_no_history:")
+                    .trim()
+                    .into()
+            }
+        }
+        m if m.starts_with("workspace_recovery_registered:") => {
+            t(locale, "projects.folder_registered")
+        }
+        m if m.starts_with("workspace_recovery_no_sessions:") => {
+            t(locale, "projects.recover_empty")
+        }
+        m if m.starts_with("workspace_recovery_name_required:") => {
+            if locale == Locale::Zh {
+                "项目名称不能为空。".into()
+            } else {
+                "Project name is required.".into()
+            }
+        }
+        m if m.starts_with("workspace_recovery_invalid_workspace:") => {
+            if locale == Locale::Zh {
+                "无法打开所选工作区，请确认该路径仍然存在且是文件夹。".into()
+            } else {
+                m.trim_start_matches("workspace_recovery_invalid_workspace:")
+                    .trim()
+                    .into()
+            }
+        }
+        m if m.starts_with("workspace_recovery_not_writable:") => {
+            if locale == Locale::Zh {
+                "所选工作区不可写，无法登记为可继续使用的恢复项目。".into()
+            } else {
+                m.trim_start_matches("workspace_recovery_not_writable:")
+                    .trim()
+                    .into()
+            }
+        }
+        m if m.starts_with("workspace_recovery_too_large:") => {
+            if locale == Locale::Zh {
+                "工作区历史超过安全恢复上限，请减少存档数量或大小后重试。".into()
+            } else {
+                m.trim_start_matches("workspace_recovery_too_large:")
+                    .trim()
+                    .into()
+            }
+        }
+        m if m.starts_with("workspace_recovery_import_failed:") => {
+            if locale == Locale::Zh {
+                "恢复会话写入失败，未创建半恢复项目；原始工作区未被修改。".into()
+            } else {
+                m.trim_start_matches("workspace_recovery_import_failed:")
+                    .trim()
+                    .into()
+            }
+        }
         m if m.starts_with("exploration_round_active:") => {
             if locale == Locale::Zh {
                 "另一个主线会话已有当前探索轮；请先结束该轮探索。".to_string()

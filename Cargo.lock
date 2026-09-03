@@ -7138,7 +7138,7 @@ checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wisp-acp"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -7151,7 +7151,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-cli"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7168,14 +7168,16 @@ dependencies = [
  "wisp-dto",
  "wisp-llm",
  "wisp-mcp",
+ "wisp-runs",
  "wisp-runtime",
  "wisp-skills",
+ "wisp-store",
  "wisp-tools",
 ]
 
 [[package]]
 name = "wisp-core"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7197,7 +7199,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-dto"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -7205,7 +7207,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-llm"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -7219,7 +7221,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-mcp"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7238,11 +7240,37 @@ dependencies = [
 
 [[package]]
 name = "wisp-paths"
-version = "1.8.0"
+version = "1.8.1"
+
+[[package]]
+name = "wisp-runs"
+version = "1.8.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "dunce",
+ "glob",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+ "wisp-core",
+ "wisp-llm",
+ "wisp-store",
+ "wisp-sync",
+ "wisp-tools",
+]
 
 [[package]]
 name = "wisp-runtime"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7263,7 +7291,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-skills"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "async-trait",
  "hex",
@@ -7279,7 +7307,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-store"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7291,13 +7319,14 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tracing",
  "uuid",
  "wisp-llm",
 ]
 
 [[package]]
 name = "wisp-sync"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7318,7 +7347,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tauri"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7370,6 +7399,7 @@ dependencies = [
  "wisp-llm",
  "wisp-mcp",
  "wisp-paths",
+ "wisp-runs",
  "wisp-runtime",
  "wisp-skills",
  "wisp-store",
@@ -7380,7 +7410,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tools"
-version = "1.8.0"
+version = "1.8.1"
 dependencies = [
  "anydoc",
  "async-trait",

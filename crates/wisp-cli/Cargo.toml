@@ -28,3 +28,5 @@ wisp-core = { workspace = true }
 wisp-skills = { workspace = true }
 wisp-tools = { workspace = true }
 wisp-dto = { workspace = true }
+wisp-runs = { workspace = true }
+wisp-store = { workspace = true }

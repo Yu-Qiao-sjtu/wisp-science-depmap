@@ -1,6 +1,7 @@
 mod eval;
 mod rpc;
 mod trajectory_eval;
+mod runs;
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
@@ -720,11 +721,53 @@ fn provider_config() -> Result<ProviderConfig> {
     if api_key.is_empty() {
         anyhow::bail!("WISP_API_KEY is not set (required). Set it to your provider API key.");
     }
-    Ok(match kind.as_str() {
+    let mut cfg = match kind.as_str() {
         "anthropic" => ProviderConfig::anthropic(base_url, api_key, model),
         "openai_responses" => ProviderConfig::openai_responses(base_url, api_key, model),
         _ => ProviderConfig::openai(base_url, api_key, model),
-    })
+    };
+    cfg.max_tokens = parse_wisp_max_tokens(std::env::var("WISP_MAX_TOKENS").ok().as_deref())
+        .unwrap_or(DEFAULT_HEADLESS_MAX_TOKENS);
+    if let Some(effort) =
+        parse_wisp_reasoning_effort(std::env::var("WISP_REASONING_EFFORT").ok().as_deref())
+    {
+        cfg.reasoning_effort = Some(effort);
+    }
+    Ok(cfg)
+}
+
+const DEFAULT_HEADLESS_MAX_TOKENS: u64 = 32_768;
+const DEFAULT_HEADLESS_MAX_ITER: usize = 0;
+const DEFAULT_HEADLESS_VISION: bool = false;
+
+fn parse_wisp_max_tokens(raw: Option<&str>) -> Option<u64> {
+    raw.and_then(|value| value.parse().ok())
+}
+
+fn parse_wisp_max_iter(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|value| value.parse().ok())
+}
+
+fn parse_wisp_vision(raw: Option<&str>) -> Option<bool> {
+    let value = raw?.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "1" | "true" | "on" | "yes" | "y" => Some(true),
+        "0" | "false" | "off" | "no" | "n" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_wisp_reasoning_effort(raw: Option<&str>) -> Option<String> {
+    let value = raw?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let value = value.to_ascii_lowercase();
+    matches!(
+        value.as_str(),
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+    )
+    .then_some(value)
 }
 
 fn skill_paths(root: &std::path::Path) -> Vec<PathBuf> {
@@ -823,7 +866,8 @@ async fn main() -> Result<()> {
     let max_context = env("WISP_MAX_CONTEXT", "1000000")
         .parse::<usize>()
         .unwrap_or(1_000_000);
-    let max_iter = env("WISP_MAX_ITER", "100").parse::<usize>().unwrap_or(100);
+    let max_iter = parse_wisp_max_iter(std::env::var("WISP_MAX_ITER").ok().as_deref())
+        .unwrap_or(DEFAULT_HEADLESS_MAX_ITER);
 
     let skills = Arc::new(SkillIndex::load(&skill_paths(&root)));
     let memory = Arc::new(MemoryManager::new(&root));
@@ -838,7 +882,18 @@ async fn main() -> Result<()> {
         true,
         None,
     );
-    agent.seed_system_prompt(&skills, None);
+    agent.ctx.supports_vision = parse_wisp_vision(std::env::var("WISP_VISION").ok().as_deref())
+        .unwrap_or(DEFAULT_HEADLESS_VISION);
+    let run_store = wisp_runs::open_project_store(&root, runs::CLI_PROJECT_ID, "CLI").await?;
+    let run_manager = wisp_runs::RunManager::new();
+    runs::register_run_tools(
+        &mut agent.tools,
+        run_store.clone(),
+        run_manager.clone(),
+        runs::CLI_PROJECT_ID,
+    );
+    let compute = wisp_runs::cli_compute_section(&run_store).await;
+    agent.seed_system_prompt(&skills, Some(compute));
 
     // Provision a uv venv once; shared by the Python REPL and the bundled
     // bio-tools MCP server. Skipped silently if uv isn't installed.
@@ -1016,7 +1071,8 @@ async fn main() -> Result<()> {
             "/n" | "/new" => {
                 agent.ctx.backup(&agent.session_path);
                 agent.ctx.clear();
-                agent.seed_system_prompt(&skills, None);
+                let compute = wisp_runs::cli_compute_section(&run_store).await;
+                agent.seed_system_prompt(&skills, Some(compute));
                 println!("{}New session created.{}", out.green(), out.reset());
                 agent.save();
                 continue;
@@ -1223,5 +1279,68 @@ mod tests {
         assert_eq!(events[1]["call_id"], "call-42");
         assert_eq!(events[1]["arguments"]["path"], "notes.txt");
         assert_eq!(events[2]["call_id"], "call-42");
+    }
+
+    #[test]
+    fn wisp_max_tokens_override_parses_set_unset_and_invalid() {
+        assert_eq!(parse_wisp_max_tokens(None), None);
+        assert_eq!(
+            parse_wisp_max_tokens(None).unwrap_or(DEFAULT_HEADLESS_MAX_TOKENS),
+            32_768
+        );
+        assert_eq!(parse_wisp_max_tokens(Some("65536")), Some(65536));
+        assert_eq!(parse_wisp_max_tokens(Some("nope")), None);
+        assert_eq!(
+            parse_wisp_max_tokens(Some("nope")).unwrap_or(DEFAULT_HEADLESS_MAX_TOKENS),
+            32_768
+        );
+        assert_eq!(parse_wisp_max_tokens(Some("")), None);
+    }
+
+    #[test]
+    fn wisp_max_iter_override_parses_set_unset_and_invalid() {
+        assert_eq!(parse_wisp_max_iter(None), None);
+        assert_eq!(
+            parse_wisp_max_iter(None).unwrap_or(DEFAULT_HEADLESS_MAX_ITER),
+            0
+        );
+        assert_eq!(parse_wisp_max_iter(Some("50")), Some(50));
+        assert_eq!(parse_wisp_max_iter(Some("0")), Some(0));
+        assert_eq!(parse_wisp_max_iter(Some("nope")), None);
+        assert_eq!(
+            parse_wisp_max_iter(Some("nope")).unwrap_or(DEFAULT_HEADLESS_MAX_ITER),
+            0
+        );
+    }
+
+    #[test]
+    fn wisp_vision_override_parses_set_unset_and_invalid() {
+        assert_eq!(parse_wisp_vision(None), None);
+        assert_eq!(
+            parse_wisp_vision(None).unwrap_or(DEFAULT_HEADLESS_VISION),
+            false
+        );
+        assert_eq!(parse_wisp_vision(Some("0")), Some(false));
+        assert_eq!(parse_wisp_vision(Some("1")), Some(true));
+        assert_eq!(parse_wisp_vision(Some("TRUE")), Some(true));
+        assert_eq!(parse_wisp_vision(Some("off")), Some(false));
+        assert_eq!(parse_wisp_vision(Some("nope")), None);
+        assert_eq!(
+            parse_wisp_vision(Some("nope")).unwrap_or(DEFAULT_HEADLESS_VISION),
+            false
+        );
+    }
+
+    #[test]
+    fn wisp_reasoning_effort_override_parses_set_unset_and_invalid() {
+        assert_eq!(parse_wisp_reasoning_effort(None), None);
+        assert_eq!(
+            parse_wisp_reasoning_effort(Some("high")),
+            Some("high".into())
+        );
+        assert_eq!(parse_wisp_reasoning_effort(Some("MAX")), Some("max".into()));
+        assert_eq!(parse_wisp_reasoning_effort(Some("nope")), None);
+        assert_eq!(parse_wisp_reasoning_effort(Some("")), None);
+        assert_eq!(parse_wisp_reasoning_effort(Some("  ")), None);
     }
 }
