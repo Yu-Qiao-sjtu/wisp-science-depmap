@@ -4525,6 +4525,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             RUN_REVIEW_DISMISSED_MIGRATION.to_string(),
             SESSION_SERVICE_TIER_MIGRATION.to_string(),
             MCP_APP_SNAPSHOTS_MIGRATION.to_string(),
+            SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();

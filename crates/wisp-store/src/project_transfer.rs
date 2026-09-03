@@ -199,6 +199,21 @@ async fn copy_project_children(tx: &mut Transaction<'_, Sqlite>, project_id: &st
         .execute(&mut **tx)
         .await?;
     }
+    if attached_table_exists(tx, "scientific_evidence_ledger").await? {
+        sqlx::query(
+            "INSERT INTO scientific_evidence_ledger(\
+               id,project_id,frame_id,evidence_id,provider,provider_version,tool_name,\
+               canonical_arguments_json,evidence_state,semantics_json,provenance_json,\
+               compact_payload_json,created_at,updated_at) \
+             SELECT id,project_id,frame_id,evidence_id,provider,provider_version,tool_name,\
+                    canonical_arguments_json,evidence_state,semantics_json,provenance_json,\
+                    compact_payload_json,created_at,updated_at \
+             FROM transfer.scientific_evidence_ledger WHERE project_id=?",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
     if attached_table_exists(tx, "message_resource_links").await? {
         let columns = attached_table_columns(tx, "message_resource_links").await?;
         let created_artifact = if columns.contains("created_artifact") {
@@ -877,6 +892,7 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM artifact_versions WHERE artifact_id IN (SELECT id FROM artifacts WHERE project_id=?)",
         "DELETE FROM session_reviews WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM mcp_app_snapshots WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
+        "DELETE FROM scientific_evidence_ledger WHERE project_id=?",
         "DELETE FROM session_ui_events WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM turn_file_undo WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM proposed_plans WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
@@ -1315,6 +1331,7 @@ impl Store {
             ("messages", "*", "id"),
             ("session_reviews", "*", "id"),
             ("mcp_app_snapshots", "*", "frame_id,presentation_id"),
+            ("scientific_evidence_ledger", "*", "id"),
             ("session_ui_events", "*", "frame_id,seq"),
             ("proposed_plans", "*", "id"),
             ("codex_turn_configs", "*", "id"),

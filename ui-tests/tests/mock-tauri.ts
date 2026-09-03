@@ -931,8 +931,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
     input_tokens: status === "succeeded" ? 900 : 0,
     output_tokens: status === "succeeded" ? 240 : 0,
     tool_calls: status === "succeeded" ? 3 : 0,
+    activity_messages: status === "running" ? 1 : (status === "pending" ? 0 : 4),
+    last_activity_at: status === "pending" ? null : Math.floor(Date.now() / 1000),
     cost_microunits: status === "succeeded" ? 19000 : 0,
-    duration_secs: status === "running" ? null : 2,
+    duration_secs: status === "running" ? 37 : 2,
     full_result_available: !["running", "pending"].includes(status),
     ...overrides,
   });
@@ -1054,7 +1056,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
     if (kind === "parallel") {
       snapshot.workflow.status = "running";
       snapshot.dynamic.tasks[0].result = dynamicResult(snapshot.dynamic.tasks[0], "running");
-      snapshot.dynamic.tasks[1].result = dynamicResult(snapshot.dynamic.tasks[1], "running");
+      snapshot.dynamic.tasks[1].result = dynamicResult(snapshot.dynamic.tasks[1], "running", {
+        activity_messages: 5,
+        tool_calls: 2,
+      });
     } else if (kind === "partial") {
       snapshot.partialFailureRecorded = true;
       snapshot.workflow.status = "failed";

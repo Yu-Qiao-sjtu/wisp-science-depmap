@@ -49,7 +49,6 @@ mod exploration_workspace;
 mod file_browser;
 mod harvest;
 mod image_generation_tool;
-mod intent_router;
 mod library_commands;
 mod mcp_bridge;
 pub use mcp_bridge::run_mcp_bridge_cli;

@@ -1,4 +1,5 @@
 import json
+import gzip
 import os
 import tempfile
 import unittest
@@ -26,6 +27,57 @@ class DepMapApiTests(unittest.TestCase):
         (root / "depmap-26q1-core").mkdir()
         (root / "depmap-26q1-core" / "lineage_blocks").mkdir()
         (root / "depmap-26q1-full").mkdir()
+        subtype_root = root / "depmap-26q1-full" / "subtype_dependency"
+        subtype_unit = subtype_root / "FEATURE__BOWEL__MSI"
+        subtype_unit.mkdir(parents=True)
+        (subtype_root / "manifest.json").write_text(
+            json.dumps({"status": "complete", "eligible_contrast_count": 1, "target_gene_count": 2}),
+            encoding="utf-8",
+        )
+        (subtype_root / "contrast_catalog.csv").write_text(
+            "contrast_id,contrast_kind,lineage,subtype_label,group_n,control_n,eligible,definition,ineligibility_reason\n"
+            "FEATURE__BOWEL__MSI,curated_model_feature,Bowel,MSI,10,53,TRUE,MSI within Bowel,\n",
+            encoding="utf-8",
+        )
+        (subtype_unit / "manifest.json").write_text(
+            json.dumps({"status": "complete", "selective_fdr_hit_count": 1}),
+            encoding="utf-8",
+        )
+        subtype_header = (
+            "gene,contrast_id,contrast_kind,lineage,subtype_label,group_n,control_n,"
+            "subtype_mean_gene_effect,control_mean_gene_effect,effect_size,moderated_t,"
+            "p_value,fdr,stronger_subtype_dependency,passes_fdr,rank_stronger_dependency\n"
+        )
+        with gzip.open(subtype_unit / "all_genes.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write(subtype_header)
+            handle.write("WRN,FEATURE__BOWEL__MSI,curated_model_feature,Bowel,MSI,10,53,-1.8,-0.2,-1.6,-8,1e-11,4e-7,TRUE,TRUE,1\n")
+            handle.write("TP53,FEATURE__BOWEL__MSI,curated_model_feature,Bowel,MSI,10,53,-0.1,-0.1,0,0,1,1,FALSE,FALSE,100\n")
+        with gzip.open(subtype_unit / "selective_hits.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write(subtype_header)
+            handle.write("WRN,FEATURE__BOWEL__MSI,curated_model_feature,Bowel,MSI,10,53,-1.8,-0.2,-1.6,-8,1e-11,4e-7,TRUE,TRUE,1\n")
+
+        coamp_root = root / "depmap-26q1-full" / "coamplification_dependency"
+        exhaustive_root = coamp_root / "exhaustive_high_confidence"
+        adjusted_root = coamp_root / "lineage_adjusted"
+        exhaustive_root.mkdir(parents=True)
+        adjusted_root.mkdir(parents=True)
+        for path, payload in (
+            (exhaustive_root / "manifest.json", {"status": "complete", "input_directional_pair_count": 1}),
+            (adjusted_root / "manifest.json", {"status": "complete", "input_directional_pair_count": 1}),
+        ):
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        with gzip.open(exhaustive_root / "screen_pair_catalog.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("screen_pair_id,pair_id,source_gene,partner_gene,source_amp_n,partner_amp_n,coamplified_n,source_only_n,partner_only_n,jaccard\n")
+            handle.write("COAMP-HC-000001,COAMP-1,CTTN,RNF121,70,60,28,42,32,0.27\n")
+        with gzip.open(exhaustive_root / "significant_hits.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("screen_pair_id,source_gene,partner_gene,target_gene,coamplified_n,source_only_n,mean_difference,fdr_coamplified_more_dependent,rank_within_pair\n")
+            handle.write("COAMP-HC-000001,CTTN,RNF121,TFEC,28,42,-0.12,0.013,1\n")
+        with gzip.open(adjusted_root / "significant_hits.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("screen_pair_id,source_gene,partner_gene,target_gene,lineage_adjusted_effect,fdr_within_pair,rank_within_pair\n")
+            handle.write("COAMP-HC-000001,CTTN,RNF121,TFEC,-0.27,0.0005,1\n")
+        with gzip.open(adjusted_root / "pair_lineage_audit.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("screen_pair_id,source_gene,partner_gene,model_n,coamplified_n,source_only_n,informative_lineage_count,estimable\n")
+            handle.write("COAMP-HC-000001,CTTN,RNF121,53,19,34,9,TRUE\n")
         tcga_root = root / "depmap-26q1-tcga"
         tcga_project = tcga_root / "projects" / "TCGA-BRCA"
         tcga_project.mkdir(parents=True)
@@ -128,9 +180,11 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 4)
+        self.assertEqual(response.json()["query_contract_version"], 5)
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
+        self.assertIn("subtype", response.json()["query_modes"])
+        self.assertIn("coamplification", response.json()["query_modes"])
         self.assertIn("NOT_RETAINED", response.json()["evidence_statuses"])
 
     def test_pair_query_is_bounded_and_forwarded(self):
@@ -173,6 +227,42 @@ class DepMapApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_precomputed_subtype_query_supports_catalog_gene_and_ranking(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            catalog = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "subtype", "lineage": "结肠癌", "limit": 10},
+            ).json()
+            gene = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "subtype", "lineage": "Bowel", "gene": "wrn"},
+            ).json()
+            ranked = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "subtype", "contrast": "FEATURE__BOWEL__MSI", "limit": 10},
+            ).json()
+        self.assertEqual(catalog["status"], "FOUND")
+        self.assertEqual(catalog["rows"][0]["contrast_id"], "FEATURE__BOWEL__MSI")
+        self.assertEqual(gene["status"], "FOUND")
+        self.assertEqual(gene["rows"][0]["gene"], "WRN")
+        self.assertEqual(ranked["rows"][0]["effect_size"], -1.6)
+
+    def test_precomputed_coamplification_query_distinguishes_retained_state(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            found = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "coamplification", "source": "cttn", "partner": "rnf121", "target": "tfec"},
+            ).json()
+            not_retained = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "coamplification", "source": "CTTN", "partner": "RNF121", "target": "TP53"},
+            ).json()
+        self.assertEqual(found["status"], "FOUND")
+        self.assertEqual(found["hits"][0]["lineage_adjusted_effect"], -0.27)
+        self.assertEqual(not_retained["status"], "NOT_RETAINED")
 
     def test_precomputed_tcga_query_returns_bounded_expression_survival_row(self):
         client = TestClient(create_app(self.settings))
@@ -253,6 +343,40 @@ class DepMapApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.queries[0]["lineage"], "Bowel")
+
+    def test_cancer_dependency_ranking_is_canonical_and_bounded(self):
+        response = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={
+                "mode": "lineage_dependency",
+                "lineage": "乳腺癌",
+                "ranking": "selective",
+                "limit": 10,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.queries[0],
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Breast",
+                "ranking": "selective",
+                "limit": 10,
+            },
+        )
+
+        invalid = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={
+                "mode": "lineage_dependency",
+                "lineage": "Breast",
+                "ranking": "logfc",
+                "limit": 10,
+            },
+        )
+        self.assertEqual(invalid.status_code, 422)
 
     def test_every_canonical_lineage_has_working_chinese_aliases(self):
         self.assertEqual(set(CHINESE_LINEAGE_ALIASES), set(CANONICAL_LINEAGES))
@@ -555,13 +679,19 @@ class DepMapApiTests(unittest.TestCase):
         result = response.json()
         self.assertEqual(result["lineage"], "Bowel")
         self.assertEqual(result["scope"], "lineage_availability_only")
-        self.assertEqual(result["summary"]["available_module_count"], 1)
+        self.assertEqual(result["summary"]["available_module_count"], 2)
         effect = next(
             item for item in result["modules"]
             if item["label"] == "network:effect_correlation"
         )
         self.assertEqual(effect["status"], "FOUND")
         self.assertEqual(effect["manifest"]["lineage_sample_n"], 63)
+        subtype = next(
+            item for item in result["modules"]
+            if item["label"] == "subtype:dependency"
+        )
+        self.assertEqual(subtype["status"], "FOUND")
+        self.assertEqual(subtype["contrasts"], ["FEATURE__BOWEL__MSI"])
 
     def test_lineage_drug_requires_a_drug_or_gene(self):
         with TestClient(create_app(self.settings)) as client:

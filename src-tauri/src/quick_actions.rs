@@ -437,7 +437,7 @@ impl Tool for CreateWorkflowTool {
     }
 }
 
-/// Launch a registered Workflow from semantic intent. The tool creates a draft
+/// Propose a registered Workflow for explicit or durable execution. The tool creates a draft
 /// run that waits for the user's approval in the Agents panel; it never starts
 /// the Workflow itself. This is the semantic counterpart of the composer
 /// Workflow chip: the model picks the template, the user keeps the click.
@@ -479,23 +479,31 @@ async fn workflow_context_selection(
         DEPMAP_TOPIC_TEMPLATE_ID | DEPMAP_REPORT_TEMPLATE_ID
     ) {
         // The model chooses a registered template; it must not rewrite the
-        // scientific scope. Bind the exact latest user request so a broad term
-        // such as 肝癌 cannot silently become HCC in model-supplied context.
-        if let Some(request) = store
+        // scientific scope. Bind a short chain of exact user requests so a
+        // follow-up such as "方向 C" retains the cancer/gene named one or two
+        // turns earlier, while model-supplied context still cannot silently
+        // narrow a broad term such as 肝癌 to HCC.
+        let requests = store
             .load_messages(frame_id)
             .await
             .ok()
             .into_iter()
             .flatten()
             .rev()
-            .find(|message| message.role == wisp_llm::Role::User && message.tool_name.is_none())
+            .filter(|message| message.role == wisp_llm::Role::User && message.tool_name.is_none())
             .map(|message| message.content.as_text())
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty())
-        {
-            return Some(format!(
-                "Exact current user request (verbatim; do not broaden or narrow it): {request}"
-            ));
+            .take(4)
+            .collect::<Vec<_>>();
+        if !requests.is_empty() {
+            let mut context = String::from(
+                "Exact recent user requests (newest first; verbatim; do not broaden or narrow them):",
+            );
+            for (index, request) in requests.iter().enumerate() {
+                context.push_str(&format!("\n{}. {}", index + 1, request));
+            }
+            return Some(truncate_workflow_text(&context, MAX_SELECTION_CHARS));
         }
     }
     args.get("context")
@@ -551,7 +559,7 @@ impl Tool for StartWorkflowTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "start_workflow",
-            "Launch a registered Workflow whose purpose matches the user's intent. Creates a draft run in this conversation and waits for the user's approval in the Agents panel; it does not execute the Workflow. Bind only the user's concrete request (e.g. resolved gene symbol and cancer scope) into context, not remembered evidence or an improvised analysis plan. Use this before direct evidence queries when the intent matches a registered Workflow. If launch is blocked, report the blocker and stop; never rebuild the Workflow by hand. After the draft is approved, the host executes its persisted task graph: do not duplicate any node with direct evidence tools, delegate_tasks, browser search, or an improvised replacement Workflow.",
+            "Propose a registered Workflow only when the user explicitly requests one or a routed task genuinely requires durable multi-stage execution such as new computation or a formal report. Creates a draft run in this conversation and waits for the user's approval in the Agents panel; it does not execute the Workflow. Ordinary status, inventory, gene, pair, drug, interpretation, and initial topic-exploration requests must use direct domain tools instead. Bind only the user's concrete request into context, not remembered evidence or an improvised plan. If launch is blocked, report the blocker and stop; never rebuild the Workflow by hand. After approval, the host executes its persisted task graph: do not duplicate any node with direct evidence tools, delegate_tasks, browser search, or a replacement Workflow.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -1342,22 +1350,10 @@ fn depmap_topic_task(
     }
 }
 
-fn with_tool_call_budget(
-    mut task: dynamic_workflow::DynamicAgentTaskProposal,
-    max_tool_calls: u32,
-) -> dynamic_workflow::DynamicAgentTaskProposal {
-    task.budget = Some(dynamic_workflow::AgentBudgetProposal {
-        max_tokens: None,
-        max_tool_calls: Some(max_tool_calls),
-        max_cost_microunits: None,
-    });
-    task
-}
-
 fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposal {
     dynamic_workflow::DynamicAgentWorkflowProposal {
-        goal: "Turn one gene's bounded DepMap evidence into ranked, reviewable cancer research topics".into(),
-        context: "Supply exactly one resolved gene symbol and a cancer scope such as breast cancer. First inventory which precomputed data families are analyzable in that cancer, then use only bounded query results in Agent context; never load a full DepMap matrix. This Workflow proposes topics and a report blueprint. It does not claim experimental validation and does not write a manuscript or figure until the user selects a topic in a later turn.".into(),
+        goal: "Turn a bounded DepMap cancer direction, with an optional explicit gene, into ranked and reviewable research topics".into(),
+        context: "Supply a cancer scope such as breast cancer and preserve the exact recent user wording. A gene is optional, but it must never be invented: if the user did not name one, the Workflow must remain cancer/direction-level until returned evidence nominates candidates. First inventory which precomputed data families are analyzable in that cancer, then use only bounded query results in Agent context; never load a full DepMap matrix. This Workflow proposes topics and a report blueprint. It does not claim experimental validation and does not write a manuscript or figure until the user selects a topic in a later turn.".into(),
         approval_policy: dynamic_workflow::AgentApprovalPolicy::AutoSafe,
         tasks: vec![
             depmap_topic_task(
@@ -1371,24 +1367,21 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
             ),
             depmap_topic_task(
                 "depmap_evidence",
-                "Act as the project DepMap specialist; call depmap_evidence once for the user-supplied gene and canonical cancer lineage, and do not load historical Runs for this query-only task. Use the returned focus.core.requested_lineage_summary for current lineage counts and descriptive values; never import a rank, p-value, or sample count from memory. Use depmap_query only for one surgical follow-up not present in the bundle. Cover core dependency, lineage networks, mutation, CNV, pathway/TF enrichment, and drug evidence when available. Preserve exact numbers, metric type, sample sizes, correction status, scope, release provenance, evidence references, and coverage gaps. Mutation/CNV mean differences are not correlations; damaging events are not automatically pathogenic. If no row survives multiple-testing correction, report the null result and do not turn nominal targets into a mechanism or drug hypothesis. A continuous association does not define a high/low subgroup, and one significant section is not the only significant signal when another section also has FDR below threshold. `not_testable` and `INELIGIBLE` are current-provider eligibility states, not proof that a biological route is infeasible. A zero count below a descriptive dependency cutoff must be reported as that observation, not as a categorical no-dependency conclusion. Do not run a new analysis, infer a subgroup from aggregate summaries, or name a drug without returned evidence.",
+                "Act as the project DepMap specialist. If the exact recent user requests contain an explicit gene symbol and a canonical cancer lineage, call depmap_evidence once for that gene and lineage. If the user supplied no gene, do not invent one, do not repeat a provider-wide catalog query, and do not call depmap_evidence with an empty gene: return a schema-valid gene_not_supplied coverage gap so downstream tasks remain explicitly cancer/direction-level. Do not load historical Runs for this query-only task. For a real gene bundle, use focus.core.requested_lineage_summary for current lineage counts and descriptive values; never import a rank, p-value, or sample count from memory. Use depmap_query only for one surgical follow-up not present in the bundle. Cover core dependency, lineage networks, mutation, CNV, pathway/TF enrichment, and drug evidence when available. Preserve exact numbers, metric type, sample sizes, correction status, scope, release provenance, evidence references, and coverage gaps. Mutation/CNV mean differences are not correlations; damaging events are not automatically pathogenic. If no row survives multiple-testing correction, report the null result and do not turn nominal targets into a mechanism or drug hypothesis. A continuous association does not define a high/low subgroup, and one significant section is not the only significant signal when another section also has FDR below threshold. `not_testable` and `INELIGIBLE` are current-provider eligibility states, not proof that a biological route is infeasible. A zero count below a descriptive dependency cutoff must be reported as that observation, not as a categorical no-dependency conclusion. Do not run a new analysis, infer a subgroup from aggregate summaries, or name a drug without returned evidence.",
                 &[],
                 &["depmap_read"],
                 &["depmap-knowledge-query"],
                 Some(crate::specialists::DEPMAP_SPECIALIST_ID),
                 depmap_evidence_schema(),
             ),
-            with_tool_call_budget(
-                depmap_topic_task(
-                    "novelty_landscape",
-                    "Search verified scholarly evidence for the supplied gene in the user-supplied cancer scope, using a deliberately bounded plan. Start with a broad gene+cancer search, add a targeted contradiction or treatment search only when the first result leaves that downstream claim unsupported, batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Treat the visible Workflow tool budget as a resource ceiling rather than a scientific completeness target: preserve enough budget to synthesize a schema-valid final result, and return verified partial coverage with explicit gaps instead of pursuing exhaustive retrieval until the wall-time deadline. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
-                    &[],
-                    &["literature_search"],
-                    &["literature-review"],
-                    None,
-                    depmap_novelty_schema(),
-                ),
-                8,
+            depmap_topic_task(
+                "novelty_landscape",
+                "Search verified scholarly evidence for the exact cancer and research direction in the recent user requests, adding the supplied gene only when the user explicitly named one. Never invent an anchor gene. Begin broadly, then adapt the next query to unresolved downstream claim classes, contradictions, identifier gaps, and treatment or clinical claims actually encountered. Batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Stop by evidence saturation rather than a predetermined query or tool-call count: finish when additional queries no longer change the established-findings, contradiction, open-question, or prior-art map. If a source is unavailable or a claim class remains unsupported, return the verified partial evidence set with an explicit coverage gap instead of silently extending the search or inventing support. Always reserve a final synthesis step so the task returns a schema-valid result. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
+                &[],
+                &["literature_search"],
+                &["literature-review"],
+                None,
+                depmap_novelty_schema(),
             ),
             depmap_topic_task(
                 "candidate_topics",
@@ -1446,7 +1439,7 @@ fn builtin_depmap_topic_template() -> WorkflowTemplate {
     WorkflowTemplate {
         id: DEPMAP_TOPIC_TEMPLATE_ID.into(),
         name: "DepMap gene-to-cancer topics".into(),
-        description: "Query bounded DepMap and literature evidence, generate cancer research topics, independently review feasibility and clinical translation, then rank them with a figure and manuscript blueprint.".into(),
+        description: "Query bounded cancer-level DepMap and literature evidence, optionally add an explicitly user-supplied gene, generate research topics, independently review feasibility and clinical translation, then rank them with a figure and manuscript blueprint.".into(),
         proposal: depmap_topic_base_proposal(),
         builtin: true,
     }
@@ -1866,18 +1859,21 @@ const WORKFLOW_CATALOG_PROMPT_START: &str = "\n\n<workflow_catalog>";
 const WORKFLOW_CATALOG_PROMPT_END: &str = "</workflow_catalog>";
 const MAX_CATALOG_DESCRIPTION_CHARS: usize = 200;
 
-/// Compact Workflow directory for the system prompt so the model can match
-/// user intent to a registered Workflow without keyword trigger phrases.
+/// Compact Workflow directory for durable execution without making semantic
+/// similarity an automatic launch rule.
 pub(crate) fn workflow_catalog_section(templates: &[WorkflowTemplate]) -> String {
     if templates.is_empty() {
         return String::new();
     }
     let mut section = String::from(WORKFLOW_CATALOG_PROMPT_START);
     section.push_str(
-        "\nRegistered reusable Workflows for this project. When the user's intent \
-         semantically matches one of them, call start_workflow with that template_id \
-         (and a short context carrying the user's specifics) instead of decomposing \
-         ad-hoc delegate_tasks batches or asking the user for trigger phrases. \
+        "\nRegistered reusable Workflows for durable project execution. Do not call \
+         start_workflow merely because an ordinary query semantically resembles a \
+         template. Use domain tools for status, inventory, direct evidence, \
+         interpretation, and initial topic exploration. Call start_workflow with a \
+         template_id only when the user explicitly requests it or the routed task \
+         requires durable multi-stage execution, instead of decomposing that durable \
+         work into ad-hoc delegate_tasks batches. \
          start_workflow only creates a draft for the user to approve in the Agents \
          panel; it never runs the Workflow itself, so afterwards describe what the \
          Workflow will do and ask the user to approve it. Approval and execution are \
@@ -1933,36 +1929,6 @@ pub(crate) async fn render_workflow_reference(
          Workflow proposal JSON:\n{}\n\
          </selected_workflow_template>",
         template.name, template.id, template.description, proposal
-    ))
-}
-
-pub(crate) fn render_automatic_skill_workflow(
-    draft: &skill_portfolio::SkillPortfolioDraft,
-) -> Result<String, String> {
-    let proposal =
-        serde_json::to_string_pretty(&draft.proposal).map_err(|error| error.to_string())?;
-    let selected = draft
-        .plan
-        .tasks
-        .iter()
-        .flat_map(|task| task.skill_ids.iter())
-        .collect::<std::collections::BTreeSet<_>>();
-    Ok(format!(
-        "<automatically_planned_skill_workflow>\n\
-         Wisp's semantic intent router selected a bounded Skill portfolio from the effective \n\
-         project catalog by Skill name, description, tags, and declared metadata. Apply this \n\
-         validated plan to the current request: call `delegate_tasks` once with the exact DAG, \n\
-         preserve every dependency, and do not replace selected Skill ids with invented ones. \n\
-         This routing decision is execution guidance, not scientific evidence.\n\
-         Planner: {}\n\
-         Rationale: {}\n\
-         Selected Skills: {}\n\
-         Workflow proposal JSON:\n{}\n\
-         </automatically_planned_skill_workflow>",
-        draft.plan.planner_model_label,
-        draft.plan.rationale,
-        selected.into_iter().cloned().collect::<Vec<_>>().join(", "),
-        proposal
     ))
 }
 
@@ -2620,6 +2586,10 @@ mod tests {
         assert_eq!(evidence.skill_ids, ["depmap-knowledge-query"]);
         assert_eq!(evidence.capabilities, ["depmap_read"]);
         assert!(evidence.instruction.contains("call depmap_evidence once"));
+        assert!(evidence.instruction.contains("gene_not_supplied"));
+        assert!(evidence
+            .instruction
+            .contains("do not call depmap_evidence with an empty gene"));
         assert!(evidence
             .instruction
             .contains("never import a rank, p-value, or sample count from memory"));
@@ -2628,19 +2598,22 @@ mod tests {
         assert_eq!(literature.id, "novelty_landscape");
         assert!(literature.depends_on.is_empty());
         assert_eq!(literature.capabilities, ["literature_search"]);
-        assert_eq!(
-            literature
-                .budget
-                .as_ref()
-                .and_then(|budget| budget.max_tool_calls),
-            Some(8)
-        );
+        assert!(literature.budget.is_none());
         assert!(literature
             .instruction
-            .contains("visible Workflow tool budget"));
+            .contains("exact cancer and research direction"));
         assert!(literature
             .instruction
-            .contains("verified partial coverage with explicit gaps"));
+            .contains("Never invent an anchor gene"));
+        assert!(literature.instruction.contains("evidence saturation"));
+        assert!(literature.instruction.contains("explicit coverage gap"));
+        assert!(!literature.instruction.contains("resource ceiling"));
+        assert!(literature
+            .instruction
+            .contains("additional queries no longer change"));
+        assert!(literature
+            .instruction
+            .contains("verified partial evidence set"));
         assert!(!literature.instruction.contains("after six"));
 
         let candidates = &proposal.tasks[3];
@@ -2698,11 +2671,7 @@ mod tests {
             .unwrap();
         assert!(required.contains(&json!("figure_plan")));
         assert!(required.contains(&json!("manuscript_plan")));
-        assert!(proposal
-            .tasks
-            .iter()
-            .filter(|task| task.id != "novelty_landscape")
-            .all(|task| task.budget.is_none()));
+        assert!(proposal.tasks.iter().all(|task| task.budget.is_none()));
     }
 
     #[test]
@@ -3182,13 +3151,16 @@ mod tests {
     }
 
     #[test]
-    fn workflow_catalog_section_lists_templates_with_semantic_guidance() {
+    fn workflow_catalog_section_keeps_direct_queries_agent_first() {
         let section = workflow_catalog_section(&[builtin_depmap_topic_template()]);
         assert!(section.contains(DEPMAP_TOPIC_TEMPLATE_ID));
         assert!(section.contains("DepMap gene-to-cancer topics"));
         assert!(section.contains("start_workflow"));
         assert!(section.contains("approve"));
         assert!(section.contains("do not manually duplicate"));
+        assert!(section.contains("Do not call"));
+        assert!(section.contains("domain tools"));
+        assert!(!section.contains("semantically matches one of them"));
         assert!(workflow_catalog_section(&[]).is_empty());
     }
 
@@ -3388,6 +3360,10 @@ mod tests {
             .append_message("f", 1, &Message::user("我的课题是肝癌与ATF5 设计课题"))
             .await
             .unwrap();
+        store
+            .append_message("f", 2, &Message::user("方向C"))
+            .await
+            .unwrap();
         let context = workflow_context_selection(
             &store,
             "f",
@@ -3396,6 +3372,8 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(context.contains("Exact recent user requests"));
+        assert!(context.find("方向C").unwrap() < context.find("我的课题是肝癌").unwrap());
         assert!(context.contains("我的课题是肝癌与ATF5 设计课题"));
         assert!(!context.contains("肝细胞癌"));
         assert!(!context.contains("HCC"));

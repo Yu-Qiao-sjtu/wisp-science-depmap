@@ -129,7 +129,7 @@ if(a$mode=="lineage"){map<-c(damaging="lineage_damaging_mutation_dependency",cus
 if(a$mode=="pathway"){p<-file.path(full,"progeny_dependency","progeny_pathway_dependency_associations.csv");x<-fread(p);hit<-x[toupper(pathway)==toupper(a$pathway)&clean(target_gene)==clean(a$target)];emit(list(mode="pathway",result=hit,provenance=p));quit(save="no")}
 if(a$mode=="drug"){module<-paste0("prism_auc_",a$omic,"_correlation");root<-file.path(full,module);d<-fread(file.path(root,"drug_order.csv"));g<-fread(file.path(root,"feature_gene_order.csv"));i<-which(toupper(d$CompoundID)==toupper(a$drug)|toupper(d$ConditionCompoundName)==toupper(a$drug));j<-which(clean(g$symbol)==clean(a$target));if(!length(i)||!length(j))stop("drug or target not found");st<-floor((i-1L)/16L)*16L+1L;en<-min(st+15L,nrow(d));p<-file.path(root,"blocks",sprintf("block_%05d_%05d.rds",st,en));x<-readRDS(p);k<-i-st+1L;emit(list(mode="drug",drug=d[i],target=g$symbol[j],omic=a$omic,n=x$n[k,j],pearson_r=x$pearson_r[k,j],p_value=x$p_value[k,j],fdr=x$fdr[k,j],provenance=p));quit(save="no")}
 
-sparse_modes<-c("lineage_catalog","lineage_network","lineage_cnv","lineage_drug","enrichment")
+sparse_modes<-c("lineage_catalog","lineage_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
 if(a$mode%in%sparse_modes){
   if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for sparse lineage queries")
   lineage_key<-function(x)gsub("^_+|_+$","",gsub("[^A-Za-z0-9]+","_",trimws(x)))
@@ -173,6 +173,27 @@ if(a$mode%in%sparse_modes){
     modules[[length(modules)+1L]]<-list(label="tcga:expression_survival",status=if(length(tcga_projects))"FOUND" else "NOT_COMPUTED",reason=if(length(tcga_projects))"completed TCGA expression-survival projects are available" else "no completed TCGA project maps to this DepMap lineage",projects=tcga_projects,manifest=list(project_count=length(tcga_projects)),provenance=tcga_catalog_path)
     available<-sum(vapply(modules,function(x)identical(x$status,"FOUND"),logical(1)))
     emit(list(mode="lineage_catalog",state=if(available)"precomputed_query" else "coverage_gap",lineage=a$lineage,modules=modules,summary=list(module_count=length(modules),available_module_count=available,coverage_gap_count=length(modules)-available),scope="lineage_availability_only",new_analysis_started=FALSE));quit(save="no")
+  }
+  if(a$mode=="lineage_dependency"){
+    root<-file.path(core,"lineage_dependency_tests");manifest_path<-file.path(root,"manifest.json");manifest<-manifest_at(root)
+    ranking<-tolower(if(is.null(a$ranking))"selective" else trimws(a$ranking));limit<-if(is.null(a$limit))20L else as.integer(a$limit)
+    if(!ranking%in%c("selective","mean_dependency"))stop("ranking must be selective or mean_dependency")
+    if(!dir.exists(root)){emit(evidence("MODULE_UNAVAILABLE",a$mode,"the precomputed lineage dependency-test module is not installed",lineage=a$lineage,ranking=ranking,provenance=root));quit(save="no")}
+    lineage_file_key<-lineage_key(a$lineage);paths<-list.files(root,pattern=paste0("^[0-9]+_",lineage_file_key,"\\.parquet$"),full.names=TRUE)
+    if(!length(paths)){emit(evidence("NOT_COMPUTED",a$mode,"no completed lineage-vs-rest dependency table matches this lineage",lineage=a$lineage,ranking=ranking,manifest=manifest,provenance=manifest_path));quit(save="no")}
+    compact_manifest<-if(is.null(manifest))NULL else list(schema_version=manifest$schema_version,release=manifest$release,method=manifest$method,effect_interpretation=manifest$effect_interpretation,lineage_count=manifest$lineage_count,gene_count=manifest$gene_count)
+    p<-paths[[1L]];x<-as.data.table(arrow::read_parquet(p));tested<-x[test_status=="tested"&is.finite(effect_mean_lineage)]
+    if(ranking=="selective"){
+      candidates<-tested[is.finite(fdr_lineage_more_dependent)&fdr_lineage_more_dependent<=0.05&is.finite(effect_mean_difference)&effect_mean_difference<0]
+      setorder(candidates,rank_more_dependent,effect_mean_difference,na.last=TRUE)
+      ranking_rule<-"tested genes with one-sided within-lineage BH FDR <= 0.05 and negative lineage-minus-rest Gene Effect difference, ordered by precomputed rank_more_dependent"
+    }else{
+      candidates<-copy(tested);setorder(candidates,effect_mean_lineage,effect_mean_difference,na.last=TRUE)
+      ranking_rule<-"tested genes ordered by ascending descriptive lineage mean Gene Effect; no lineage-vs-rest significance filter"
+    }
+    rows<-candidates[seq_len(min(limit,.N)),.(symbol,lineage_n,rest_n,effect_mean_lineage,effect_mean_rest,effect_mean_difference,effect_median_lineage,effect_median_rest,effect_median_difference,welch_t,p_lineage_more_dependent,fdr_lineage_more_dependent,dependency_probability_mean_lineage,dependency_probability_mean_rest,dependency_probability_mean_difference,effect_direction,rank_more_dependent)]
+    status<-if(nrow(rows))"FOUND" else "NOT_RETAINED";reason<-if(nrow(rows))"bounded rows selected from the completed precomputed lineage dependency test" else "the completed table contains no rows satisfying the requested fixed ranking rule"
+    emit(evidence(status,a$mode,reason,lineage=a$lineage,ranking=ranking,ranking_rule=ranking_rule,housekeeping_filter_applied=FALSE,housekeeping_filter_note="the precomputed lineage test has no validated housekeeping/common-essential exclusion field; selective means statistically stronger dependency versus the rest, not non-housekeeping",rows=rows,summary=list(total_gene_rows=nrow(x),tested_gene_count=nrow(tested),eligible_ranked_gene_count=nrow(candidates),returned_count=nrow(rows),lineage_n_modal=if(nrow(tested))as.integer(names(sort(table(tested$lineage_n),decreasing=TRUE))[1L]) else NA_integer_),manifest=compact_manifest,provenance=c(manifest_path,p)));quit(save="no")
   }
   source_index<-function(order,source){
     if(!file.exists(order))return(NA_integer_)

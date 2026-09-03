@@ -2795,10 +2795,11 @@ fn App() -> impl IntoView {
                         }
                     });
                 }
-                // A delegated batch continues after the parent tool call returns.
-                // Surface its live per-task state immediately instead of leaving
-                // the user with only a static "tasks running" tool row.
-                if name == "delegate_tasks"
+                // A delegated batch continues after the parent tool call returns,
+                // while a registered Workflow launch leaves an approval draft in
+                // the same conversation. Surface either state immediately instead
+                // of making the user discover the Agents panel manually.
+                if matches!(name.as_str(), "delegate_tasks" | "start_workflow")
                     && ok
                     && active_cb.get_untracked().as_deref() == Some(frame_id.as_str())
                 {

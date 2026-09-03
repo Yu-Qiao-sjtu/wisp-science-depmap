@@ -34,6 +34,7 @@ mod research;
 mod resources;
 mod runs;
 mod schedules;
+mod scientific_evidence;
 pub mod secrets;
 mod session_imports;
 mod sessions;
@@ -78,6 +79,7 @@ pub use projects::{is_scratch_project_id, SCRATCH_PROJECT_PREFIX};
 pub use provenance::{canonical_json, canonical_json_sha256};
 pub use remote_staging::RemoteStagingEntry;
 pub use schedules::{next_slot_after, ScheduleRecord, ScheduleRunRecord};
+pub use scientific_evidence::{NewScientificEvidence, ScientificEvidenceRecord};
 pub use sessions::{
     ModelTokenUsage, ProjectTokenUsage, SessionBranchDeltaMessage, SessionBranchLink,
     SessionBranchMerge, SessionBranchMergeCard, SessionBranchMergePreview, SessionTokenUsage,
@@ -176,6 +178,9 @@ const SESSION_SERVICE_TIER_MIGRATION: &str = "0053_session_service_tier";
 const MCP_APP_SNAPSHOTS_MIGRATION: &str = "0054_mcp_app_snapshots";
 const MCP_APP_SNAPSHOTS_MIGRATION_SQL: &str =
     include_str!("../migrations/0054_mcp_app_snapshots.sql");
+const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION: &str = "0055_scientific_evidence_ledger";
+const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL: &str =
+    include_str!("../migrations/0055_scientific_evidence_ledger.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -724,6 +729,10 @@ impl Store {
         if !Self::migration_applied(pool, MCP_APP_SNAPSHOTS_MIGRATION).await? {
             Self::execute_sql_script(pool, MCP_APP_SNAPSHOTS_MIGRATION_SQL).await?;
             Self::record_migration(pool, MCP_APP_SNAPSHOTS_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION).await? {
+            Self::execute_sql_script(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL).await?;
+            Self::record_migration(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION).await?;
         }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was

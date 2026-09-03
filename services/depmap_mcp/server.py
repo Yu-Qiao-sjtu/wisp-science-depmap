@@ -146,6 +146,25 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "metric": "module_availability",
             "interpretation": "coverage and eligibility only; absence is not negative biological evidence",
         }
+    if mode == "lineage_dependency":
+        return {
+            "metric": "gene_effect_lineage_vs_rest",
+            "interpretation": (
+                "effect_mean_difference is lineage mean Gene Effect minus the rest "
+                "mean; negative means stronger lineage dependency. It is not logFC, "
+                "and selective does not imply a housekeeping/common-essential exclusion."
+            ),
+        }
+    if mode == "subtype":
+        return {
+            "metric": "within_lineage_subtype_gene_effect_difference",
+            "interpretation": "negative effect_size means stronger dependency in the subtype-positive group; retained significance is BH FDR within one contrast",
+        }
+    if mode == "coamplification":
+        return {
+            "metric": "coamplification_dependency_difference",
+            "interpretation": "negative effect means stronger dependency in coamplified source-positive models; lineage_adjusted controls for OncoTree lineage",
+        }
     if mode == "lineage_directions":
         return {
             "metric": "family_specific_shortlists",
@@ -247,21 +266,38 @@ class DepMapEvidenceService:
                 tcga_qa = json.loads(tcga_qa_path.read_text(encoding="utf-8-sig"))
             except (OSError, json.JSONDecodeError):
                 tcga_qa = {"status": "INVALID_QA"}
+        full_root = self.settings.knowledge_root / "depmap-26q1-full"
+        subtype_qa_path = full_root / "subtype_dependency" / "qa.json"
+        coamp_qa_path = (
+            full_root / "coamplification_dependency" / "lineage_adjusted" / "qa.json"
+        )
+        def read_qa(path: Path) -> dict[str, Any]:
+            if not path.is_file():
+                return {"status": "MODULE_UNAVAILABLE"}
+            try:
+                return json.loads(path.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError):
+                return {"status": "INVALID_QA"}
+        subtype_qa = read_qa(subtype_qa_path)
+        coamp_qa = read_qa(coamp_qa_path)
         evidence = {
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 3,
+            "query_contract_version": 5,
             "lineage_resolution_contract_version": 1,
-            "coverage_manifest_version": 2,
+            "coverage_manifest_version": 3,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
             "tool_boundary": [
                 "status_and_coverage",
                 "lineage_resolution",
                 "cancer_level_direction_discovery",
+                "cancer_level_dependency_ranking",
                 "gene_evidence",
                 "exact_gene_pair_evidence",
                 "drug_gene_evidence",
+                "molecular_subtype_evidence",
+                "coamplification_dependency_evidence",
                 "tcga_gene_expression_survival",
             ],
             "data_sources": {
@@ -274,6 +310,18 @@ class DepMapEvidenceService:
                     "installed": tcga_qa_path.is_file(),
                     "qa_status": (tcga_qa or {}).get("status", "MODULE_UNAVAILABLE"),
                     "scope": "patient primary-tumor expression and survival association evidence",
+                },
+            },
+            "analysis_modules": {
+                "subtype_dependency": {
+                    "installed": subtype_qa_path.is_file(),
+                    "qa_status": subtype_qa.get("status", "MODULE_UNAVAILABLE"),
+                    "scope": "within-parent-lineage frozen subtype contrasts",
+                },
+                "coamplification_dependency": {
+                    "installed": coamp_qa_path.is_file(),
+                    "qa_status": coamp_qa.get("status", "MODULE_UNAVAILABLE"),
+                    "scope": "constrained observed high-confidence directional pairs",
                 },
             },
             "integration_rule": (
@@ -300,6 +348,35 @@ class DepMapEvidenceService:
         return self._envelope(
             tool="depmap_lineage_catalog",
             request={"lineage": lineage},
+            evidence=item,
+        )
+
+    async def lineage_dependencies(
+        self,
+        lineage: str,
+        ranking: Literal["selective", "mean_dependency"] = "selective",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        if ranking not in {"selective", "mean_dependency"}:
+            raise ValueError("ranking must be selective or mean_dependency")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        item = await self._execute(
+            {
+                "mode": "lineage_dependency",
+                "lineage": lineage,
+                "ranking": ranking,
+                "limit": limit,
+            }
+        )
+        canonical_lineage = item.get("query", {}).get("lineage", lineage)
+        return self._envelope(
+            tool="depmap_lineage_dependencies",
+            request={
+                "lineage": canonical_lineage,
+                "ranking": ranking,
+                "limit": limit,
+            },
             evidence=item,
         )
 
@@ -520,6 +597,70 @@ class DepMapEvidenceService:
         }
         return self._envelope(tool="depmap_pair_evidence", request=request, evidence=evidence)
 
+    async def subtype_evidence(
+        self,
+        gene: str | None = None,
+        lineage: str | None = None,
+        contrast_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        query: dict[str, Any] = {"mode": "subtype", "limit": limit}
+        if gene:
+            query["gene"] = gene.strip().upper()
+        if lineage:
+            query["lineage"] = lineage
+        if contrast_id:
+            query["contrast"] = contrast_id.strip()
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {
+            "gene": validated.get("gene"),
+            "lineage": validated.get("lineage"),
+            "contrast_id": validated.get("contrast"),
+            "limit": limit,
+        }
+        return self._envelope(
+            tool="depmap_subtype_evidence", request=request, evidence=item
+        )
+
+    async def coamplification_evidence(
+        self,
+        source: str,
+        partner: str | None = None,
+        target: str | None = None,
+        layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] = "lineage_adjusted",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        source_symbol = source.strip().upper()
+        if not source_symbol:
+            raise ValueError("source must be non-empty")
+        query: dict[str, Any] = {
+            "mode": "coamplification",
+            "source": source_symbol,
+            "layer": layer,
+            "limit": limit,
+        }
+        if partner:
+            query["partner"] = partner.strip().upper()
+        if target:
+            query["target"] = target.strip().upper()
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {
+            "source": validated["source"],
+            "partner": validated.get("partner"),
+            "target": validated.get("target"),
+            "layer": validated["layer"],
+            "limit": limit,
+        }
+        return self._envelope(
+            tool="depmap_coamplification_evidence", request=request, evidence=item
+        )
+
     async def drug_evidence(
         self,
         drug: str,
@@ -633,6 +774,24 @@ def build_mcp_server(
         return await service.lineage_catalog(lineage)
 
     @mcp.tool(
+        title="DepMap cancer lineage dependency ranking",
+        description=(
+            "Return a bounded ranking from the completed precomputed lineage-vs-rest "
+            "CRISPR Gene Effect test without requiring a gene and without starting a "
+            "new analysis. selective uses the precomputed one-sided Welch/BH result; "
+            "mean_dependency is descriptive. Gene Effect mean difference is not logFC."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_lineage_dependencies(
+        lineage: str,
+        ranking: Literal["selective", "mean_dependency"] = "selective",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return await service.lineage_dependencies(lineage, ranking, limit)
+
+    @mcp.tool(
         title="DepMap cancer-level direction discovery",
         description=(
             "Select auditable family-specific candidate shortlists for a cancer lineage "
@@ -720,6 +879,47 @@ def build_mcp_server(
         limit: int = 10,
     ) -> dict[str, Any]:
         return await service.drug_evidence(drug, gene, lineage, limit)
+
+    @mcp.tool(
+        title="DepMap molecular-subtype dependency evidence",
+        description=(
+            "Read the QA-complete subtype dependency module. With no gene or "
+            "contrast, list eligible contrasts; with a gene, return its complete "
+            "within-lineage subtype rows; with contrast_id and no gene, return only "
+            "retained selective dependencies. Never infer an arbitrary subtype label."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_subtype_evidence(
+        gene: str | None = None,
+        lineage: str | None = None,
+        contrast_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.subtype_evidence(gene, lineage, contrast_id, limit)
+
+    @mcp.tool(
+        title="DepMap coamplification dependency evidence",
+        description=(
+            "Query constrained, observed source-partner double-amplification pairs "
+            "and retained target dependencies from the QA-complete high-confidence "
+            "or lineage-adjusted layer. A missing retained row is NOT_RETAINED, not "
+            "negative biological evidence."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_coamplification_evidence(
+        source: str,
+        partner: str | None = None,
+        target: str | None = None,
+        layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] = "lineage_adjusted",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.coamplification_evidence(
+            source, partner, target, layer, limit
+        )
 
     return mcp
 

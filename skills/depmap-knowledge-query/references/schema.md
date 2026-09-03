@@ -5,6 +5,11 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
 - `catalog`: unified QA and module catalog.
 - `lineage_catalog --lineage NAME`: cancer-lineage module availability and
   eligibility manifests without selecting a gene.
+- `lineage_dependency --lineage NAME [--ranking selective|mean_dependency] [--limit N]`:
+  bounded gene ranking from the completed lineage-vs-rest dependency-test
+  table. `selective` is the default and uses the precomputed one-sided Welch
+  test, within-lineage BH FDR, and `rank_more_dependent` ordering;
+  `mean_dependency` is descriptive and orders the lineage Gene Effect mean.
 - `core --gene GENE`: core dependency and lineage summary from Parquet.
 - `pair --module MODULE --source GENE --target GENE`: one matrix cell.
 - `top --module MODULE --source GENE --limit N`: strongest source-row associations.
@@ -15,6 +20,8 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
 - `lineage_cnv --lineage NAME --source GENE [--target GENE] [--limit N]`.
 - `lineage_drug --omic effect|expression|cnv --lineage NAME [--drug NAME_OR_DPC_ID] [--target GENE] [--limit N]`; at least one of drug or target is required.
 - `enrichment --lineage NAME --source GENE [--collection NAME] [--term NAME] [--limit N]`.
+- `subtype [--gene GENE] [--lineage NAME] [--contrast EXACT_ID] [--limit N]`.
+- `coamplification --source GENE [--partner GENE] [--target GENE] [--layer exhaustive_high_confidence|lineage_adjusted] [--limit N]`.
 - `tcga_expression_survival --gene GENE [--project TCGA-BRCA] [--lineage NAME] [--endpoint OS|DSS|DFI|PFI] [--limit N]`.
 
 The native tool exposes these fields through one flat model-compatible schema;
@@ -30,6 +37,12 @@ Matrix modules supported by `pair/top`:
 - `cnv_amplification_dependency`: negative mean difference means amplified models are more dependent.
 
 Every response includes file provenance. FDR is adjusted within the family stated by that module's manifest, not globally across the entire knowledge base.
+
+For `lineage_dependency`, `effect_mean_difference` is the lineage mean Gene
+Effect minus the rest mean. It is not log fold-change and must not be labelled
+`logFC`.
+The current table has no validated housekeeping/common-essential exclusion
+field, so `selective` must not be paraphrased as `non-housekeeping`.
 
 `tcga_expression_survival` aligns genes by Ensembl gene ID with an explicit
 gene-symbol fallback, uses primary cancer samples only, keeps one sample per
@@ -59,3 +72,8 @@ negative mean difference means amplified models are more dependent.
 `lineage_drug` reports Pearson association with PRISM AUC and preserves the
 within-drug FDR. `enrichment` returns Hallmark, Reactome 2023.2, or signed
 DoRothEA A-C TF rows stored for the requested source gene and lineage.
+`subtype` compares each subtype only with other CRISPR models in its parent
+lineage; negative `effect_size` means stronger subtype dependency.
+`coamplification` never exhausts arbitrary pairs at query time. It reads the
+fixed high-confidence screen; negative adjusted/difference effects mean
+stronger dependency in coamplified models.

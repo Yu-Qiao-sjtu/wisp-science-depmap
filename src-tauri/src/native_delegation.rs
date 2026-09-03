@@ -281,12 +281,12 @@ pub(crate) async fn run_native_agent(
 
 fn budget_violation(usage: &AgentUsage, budget: &AgentBudget) -> Option<String> {
     let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
-    if budget
+    if let Some(limit) = budget
         .max_tokens
-        .is_some_and(|limit| total_tokens > u64::from(limit))
+        .filter(|limit| total_tokens > u64::from(*limit))
     {
         return Some(format!(
-            "Agent exceeded its token budget ({total_tokens} tokens)"
+            "Agent exceeded its token budget (used {total_tokens} tokens; limit {limit})"
         ));
     }
     if budget
@@ -808,10 +808,9 @@ mod tests {
 
         let run = run_sequence(&provider, &store, &workspace, &tools, &request(10, 4)).await;
 
-        assert!(run
-            .result
-            .unwrap_err()
-            .contains("exceeded its token budget"));
+        let error = run.result.unwrap_err();
+        assert!(error.contains("exceeded its token budget"));
+        assert!(error.contains("used 13 tokens; limit 10"));
         assert_eq!(run.usage.input_tokens, 8);
         assert_eq!(run.usage.output_tokens, 5);
         assert_eq!(run.usage.tool_calls, 1);

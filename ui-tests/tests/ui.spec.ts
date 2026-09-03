@@ -13440,7 +13440,13 @@ test("main-Agent dynamic batches show parallel roots and pending dependencies", 
   await expect(researchA.locator(".agent-attempt-status")).toHaveText("Running");
   await expect(researchA).toContainText("Temporary Agent · native · default");
   await expect(researchA.locator(".agent-chip.capability")).toHaveText("project_read");
-  await expect(card.locator('[data-step-id$=":research_b"] .agent-attempt-status')).toHaveText("Running");
+  await expect(researchA.locator(".agent-current-activity")).toContainText("Waiting for the model's first response");
+  await expect(researchA.locator(".agent-current-activity")).toContainText("37s");
+  await expect(researchA.locator(".agent-usage")).toContainText("— tokens · 0 tools");
+  const researchB = card.locator('[data-step-id$=":research_b"]');
+  await expect(researchB.locator(".agent-attempt-status")).toHaveText("Running");
+  await expect(researchB.locator(".agent-current-activity")).toContainText("Using tools and consolidating evidence");
+  await expect(researchB.locator(".agent-usage")).toContainText("5 events");
   const synthesis = card.locator('[data-step-id$=":synthesize"]');
   await expect(synthesis.locator(".agent-attempt-status")).toHaveText("Pending");
   await expect(synthesis.locator(".agent-chip.dependency")).toHaveText(["research_a", "research_b"]);
@@ -13466,6 +13472,33 @@ test("starting delegated tasks opens live per-Agent progress automatically", asy
   await expect(card.getByTestId("agent-workflow-progress")).toContainText(
     "research_a、research_b",
   );
+  await expect.poll(() => lastInvokeArgs(page, "list_agent_workflows"))
+    .toMatchObject({ sessionId: "s-current" });
+});
+
+test("a registered Workflow draft opens Agents for approval without starting", async ({ page }) => {
+  await enterApp(page, "/?mockAgentWorkflow=draft");
+  await page.evaluate(() => {
+    (window as any).__tauriEmit("agent", {
+      kind: "ToolResult",
+      frame_id: "s-current",
+      name: "start_workflow",
+      ok: true,
+      content: JSON.stringify({
+        workflow_id: "workflow-1",
+        status: "awaiting_user_approval",
+        started: false,
+      }),
+      duration_ms: 12,
+    });
+  });
+
+  const panel = page.getByTestId("agent-workflows");
+  await expect(panel).toBeVisible();
+  const card = panel.locator(".agent-workflow-card.dynamic").first();
+  await expect(card.locator(".agent-workflow-status")).toHaveText("Draft");
+  await expect(card.getByTestId("agent-approve")).toBeVisible();
+  await expect(card.getByTestId("agent-run")).toHaveCount(0);
   await expect.poll(() => lastInvokeArgs(page, "list_agent_workflows"))
     .toMatchObject({ sessionId: "s-current" });
 });
@@ -13515,6 +13548,25 @@ test("failed dynamic tasks and dependency-blocked tasks stay distinct", async ({
   await card.getByTestId("agent-run").click();
   await expect(card.locator(".agent-workflow-status")).toHaveText("Succeeded", { timeout: 2_000 });
   await expect(card.locator('[data-step-id$=":research_b"] .agent-attempt-status')).toHaveText("Succeeded");
+});
+
+test("clearing a failed task retry token limit requests unlimited budget", async ({ page }) => {
+  await enterApp(page, "/?mockAgentWorkflow=partial");
+  await enableDelegation(page);
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
+  const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();
+  const retryBudget = card.locator('[data-step-id$=":research_a"]')
+    .getByTestId("agent-retry-max-tokens");
+  await expect(retryBudget).toHaveValue("8000");
+  await expect(retryBudget.locator("xpath=..")).toContainText("blank/0 = unlimited");
+  await retryBudget.fill("");
+  const workflowId = await card.getAttribute("data-workflow-id");
+  await card.getByTestId("agent-retry").click();
+  await expect.poll(() => lastInvokeArgs(page, "retry_agent_workflow")).toMatchObject({
+    workflowId,
+    budgetOverrides: { research_a: { max_tokens: 0 } },
+  });
 });
 
 test("task results are readable without exposing the child Agent conversation", async ({ page }) => {

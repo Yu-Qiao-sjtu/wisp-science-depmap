@@ -132,6 +132,35 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.queries[0], {"mode": "lineage_directions", "lineage": "Bowel", "limit": 20})
         self.assertNotIn("gene", result["request"])
 
+    async def test_cancer_dependency_ranking_is_one_bounded_precomputed_query(self):
+        result = await self.service.lineage_dependencies("乳腺癌", "selective", 10)
+        self.assertEqual(
+            self.queries[0],
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Breast",
+                "ranking": "selective",
+                "limit": 10,
+            },
+        )
+        self.assertEqual(
+            result["request"],
+            {"lineage": "Breast", "ranking": "selective", "limit": 10},
+        )
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["metric"],
+            "gene_effect_lineage_vs_rest",
+        )
+        self.assertIn("not logFC", result["evidence"]["metric_semantics"]["interpretation"])
+        self.assertFalse(result["new_analysis_started"])
+
+        breast_cancer = await self.service.lineage_dependencies(
+            "Breast Cancer", "selective", 10
+        )
+        short_alias = await self.service.lineage_dependencies("乳癌", "selective", 10)
+        self.assertEqual(result["evidence_id"], breast_cancer["evidence_id"])
+        self.assertEqual(result["evidence_id"], short_alias["evidence_id"])
+
     async def test_lineage_resolution_requires_confirmation_for_ambiguity(self):
         exact = await self.service.resolve_lineage("乳腺癌")
         self.assertEqual(exact["evidence"]["status"], "RESOLVED")
@@ -160,6 +189,47 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(semantics["effect_correlation"], "correlation")
         self.assertEqual(
             semantics["damaging_mutation_dependency"], "mean_difference"
+        )
+
+    async def test_subtype_tool_is_one_bounded_query_with_canonical_lineage(self):
+        result = await self.service.subtype_evidence(
+            gene="wrn", lineage="结肠癌", contrast_id="FEATURE__BOWEL__MSI", limit=7
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "subtype",
+                "gene": "WRN",
+                "lineage": "Bowel",
+                "contrast": "FEATURE__BOWEL__MSI",
+                "limit": 7,
+            },
+        )
+        self.assertEqual(result["request"]["lineage"], "Bowel")
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["metric"],
+            "within_lineage_subtype_gene_effect_difference",
+        )
+
+    async def test_coamplification_tool_normalizes_genes_and_preserves_layer(self):
+        result = await self.service.coamplification_evidence(
+            "cttn", "rnf121", "tfec", "lineage_adjusted", 9
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "coamplification",
+                "source": "CTTN",
+                "partner": "RNF121",
+                "target": "TFEC",
+                "layer": "lineage_adjusted",
+                "limit": 9,
+            },
+        )
+        self.assertEqual(result["request"]["source"], "CTTN")
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["metric"],
+            "coamplification_dependency_difference",
         )
 
     def test_expression_dependency_uses_its_real_target_gene_order(self):
@@ -199,11 +269,14 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_status",
                         "depmap_resolve_lineage",
                         "depmap_lineage_catalog",
+                        "depmap_lineage_dependencies",
                         "depmap_lineage_direction_discovery",
                         "depmap_gene_evidence",
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
                         "depmap_drug_evidence",
+                        "depmap_subtype_evidence",
+                        "depmap_coamplification_evidence",
                     },
                 )
                 self.assertTrue(

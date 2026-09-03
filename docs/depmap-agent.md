@@ -1,5 +1,12 @@
 # DepMap Agent
 
+> **Architecture note:** The normative Agent-first orchestration, execution
+> levels, Evidence Ledger, MCP boundary, and Workflow escalation policy are
+> defined in [depmap-agent-engineering-framework.md](depmap-agent-engineering-framework.md).
+> Registered Workflows remain available for durable multi-stage work, but an
+> ordinary DepMap query or initial topic exploration should be handled by the
+> conversational Agent first.
+
 Wisp Science includes a selectable **DepMap Agent** Specialist. It owns the
 project-level scientific workflow: understand the question, route to validated
 precomputed evidence or a new R analysis, monitor the Run, enforce QA, load
@@ -50,20 +57,32 @@ select **DepMap Agent**. Every future conversation in that project inherits the
 Agent automatically. Existing conversations keep their frozen identity, and a
 conversation branch inherits the source conversation's Agent.
 
-Each DepMap conversation chooses the smallest bounded entry point needed:
+Each DepMap conversation is Agent-first and chooses the smallest bounded entry
+point needed:
 
-1. when the requested deliverable matches a registered Workflow, the Agent
-   creates its approval draft first. It does not preload evidence, Run history,
-   remembered statistics, or an improvised report; a blocked launch stops the
-   turn rather than triggering manual reconstruction;
-2. `depmap_project_runs` is used only when the user asks to continue, inspect,
+1. `depmap_agent_route` records one typed, host-validated L1/L2/L3/L4 decision
+   for each new request; the route is observable control data, never scientific
+   evidence;
+2. ordinary query, comparison, interpretation, and initial topic-exploration
+   requests use the bounded query tools directly; semantic similarity to a
+   registered Workflow does not by itself start that Workflow;
+3. a registered Workflow is proposed only when the user explicitly requests
+   it or the task requires durable multi-stage execution, independent review,
+   or formal artifacts. The Agent creates an approval draft before those tasks
+   execute, and a blocked launch never triggers manual reconstruction;
+4. `depmap_project_runs` is used only when the user asks to continue, inspect,
    validate, or create computation; query-only turns do not load Run history.
-3. for a cancer-only question, `depmap_query(mode=lineage_catalog)` inventories
-   canonical lineage manifests without inventing an anchor gene;
-4. for a gene-plus-cancer question that does not request the registered topic
-   Workflow, `depmap_evidence` verifies the configured
+5. for a cancer-only availability question,
+   `depmap_query(mode=lineage_catalog)` inventories canonical lineage manifests
+   without inventing an anchor gene; for a cancer-only dependency-gene ranking,
+   `depmap_query(mode=lineage_dependency)` reads the existing lineage-vs-rest
+   test instead of starting a Run;
+6. for a gene-plus-cancer question, `depmap_evidence` verifies the configured
    local or remote provider and assembles the requested evidence in one tool
-   call; `depmap_query(mode=status)` remains available for provider-only tasks.
+   call; `depmap_query(mode=status)` remains available for provider-only tasks;
+7. successful query and evidence calls persist a stable `evidence_ref` in the
+   project SQLite ledger. `depmap_evidence_history` can recover the exact
+   evidence in the current conversation without treating model memory as data.
 
 This provides multi-session inheritance of identity and work state without
 copying old chat transcripts into the model context.
@@ -128,6 +147,20 @@ or `MODULE_UNAVAILABLE`. These states prevent a missing retained row from
 being reported as a biological negative. A gene evidence view is assembled
 from several bounded results at request time; a full gene-by-lineage evidence
 card corpus is not required.
+
+The 26Q1 local and server knowledge stores contain two QA-complete analysis
+modules exposed through dedicated bounded MCP tools:
+
+- `coamplification_dependency`: observed double-amplification catalogs,
+  exhaustive high-confidence target scans, and a lineage-adjusted layer;
+- `subtype_dependency`: 27 eligible OncoTree subtype contrasts and 6 frozen
+  model-feature contrasts, each with complete 18,531-target coverage.
+
+`depmap_subtype_evidence` uses only eligible catalog entries and exact frozen
+contrast identifiers. `depmap_coamplification_evidence` uses only constrained
+high-confidence directional pairs. Both preserve manifest/file provenance and
+coverage states; neither scans raw matrices, starts computation, or invents a
+subtype/pair outside the stored contract.
 
 ## Execution and context
 

@@ -328,7 +328,6 @@ pub(crate) async fn send_message_inner(
         }
         None => create_session_frame(&state.store, &ap.id).await?,
     };
-    let mut automatic_workflow_injection = None;
     if user_routed_turn {
         state.set_notification_window(&frame_id, window_label);
     }
@@ -347,68 +346,16 @@ pub(crate) async fn send_message_inner(
                 .push(ComposerReferenceArg::Workflow { id });
         }
     }
-    let has_manually_routed_capability = references.as_ref().is_some_and(|references| {
-        references.iter().any(|reference| {
-            matches!(
-                reference,
-                ComposerReferenceArg::Skill { .. } | ComposerReferenceArg::Workflow { .. }
-            )
-        })
-    });
-    if !resume && !has_manually_routed_capability {
-        let routing_specialist = specialists::session_specialist(&state.store, &frame_id).await;
-        match intent_router::automatic_route(
-            &message,
-            routing_specialist
-                .as_ref()
-                .map(|specialist| specialist.id.as_str()),
-        ) {
-            Some(intent_router::AutomaticRoute::SavedWorkflow(id)) => {
-                references
-                    .get_or_insert_with(Vec::new)
-                    .push(ComposerReferenceArg::Workflow { id: id.into() });
-            }
-            Some(intent_router::AutomaticRoute::SkillPortfolio) => {
-                let skills =
-                    specialist_skill_index(&state.store, &ap, routing_specialist.as_ref()).await;
-                let planner_model_id = models::session_profile_id(&state.store, &frame_id).await;
-                match skill_portfolio::plan_skill_portfolio_inner(
-                    state,
-                    &ap,
-                    Some(&frame_id),
-                    &message,
-                    &planner_model_id,
-                    skills.as_ref(),
-                    &[],
-                )
-                .await
-                {
-                    Ok(draft) => {
-                        automatic_workflow_injection =
-                            Some(quick_actions::render_automatic_skill_workflow(&draft)?);
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            "automatic Skill portfolio planning skipped for {frame_id}: {error}"
-                        );
-                    }
-                }
-            }
-            None => {}
-        }
-    }
     // Deliberately no set_active_frame here: see the `AppState::active_frame`
     // doc — a turn writing view state races the user's session/project switch.
     // A workflow reference is itself an accepted capability request. Persist it
     // before a Guide message can be consumed by the current loop; provider
     // profile reads below still wait for the next workflow boundary.
-    if automatic_workflow_injection.is_some()
-        || references.as_ref().is_some_and(|references| {
-            references
-                .iter()
-                .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
-        })
-    {
+    if references.as_ref().is_some_and(|references| {
+        references
+            .iter()
+            .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
+    }) {
         delegation_runtime::save_session_delegation_enabled(&state.store, &ap.id, &frame_id, true)
             .await?;
     }
@@ -696,10 +643,18 @@ pub(crate) async fn send_message_inner(
             .as_ref()
             .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
         {
+            agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool));
+            agent.add_tool(Box::new(depmap_agent::DepMapEvidenceHistoryTool::new(
+                state.store.clone(),
+                ap.id.clone(),
+                frame_id.clone(),
+            )));
             if let Some(tool) = depmap_agent::DepMapQueryTool::from_project(
                 ap.root.clone(),
                 skills.as_ref(),
                 state.store.clone(),
+                ap.id.clone(),
+                frame_id.clone(),
             ) {
                 agent.add_tool(Box::new(tool.evidence_tool()));
                 agent.add_tool(Box::new(tool));
@@ -974,9 +929,6 @@ pub(crate) async fn send_message_inner(
         for injection in
             resolve_composer_references(&state.store, &refs, &frame_id, &ap.root, &skills).await?
         {
-            agent.ctx.inject_user(injection);
-        }
-        if let Some(injection) = automatic_workflow_injection.take() {
             agent.ctx.inject_user(injection);
         }
         if let Some(injection) =

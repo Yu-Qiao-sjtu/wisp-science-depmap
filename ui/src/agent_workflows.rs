@@ -1073,6 +1073,27 @@ fn status_label(locale: Locale, status: &str) -> String {
     t(locale, key).into()
 }
 
+fn attempt_activity_label(
+    locale: Locale,
+    status: &str,
+    activity_messages: i64,
+    tool_calls: i64,
+) -> String {
+    if status != "running" {
+        return status_label(locale, status);
+    }
+    let key = if activity_messages == 0 {
+        "agents.activity.starting"
+    } else if tool_calls == 0 && activity_messages <= 1 {
+        "agents.activity.waiting_first_response"
+    } else if tool_calls == 0 {
+        "agents.activity.reasoning"
+    } else {
+        "agents.activity.using_tools"
+    };
+    t(locale, key).into()
+}
+
 fn risk_label(locale: Locale, risk: &str) -> String {
     let key = match risk {
         "read_only" => "agents.risk.read_only",
@@ -3581,9 +3602,14 @@ fn retry_workflow(snapshot: AgentWorkflowSnapshot, state: AgentPanelState) {
                 Some((task, raw))
             })
             .try_fold(HashMap::new(), |mut overrides, (task, raw)| {
-                let max_tokens = raw.trim().parse::<u32>().map_err(|_| {
-                    "Retry token budget must be a whole number (0 = unlimited)".to_string()
-                })?;
+                let max_tokens = if raw.trim().is_empty() {
+                    0
+                } else {
+                    raw.trim().parse::<u32>().map_err(|_| {
+                        "Retry token budget must be a whole number (blank or 0 = unlimited)"
+                            .to_string()
+                    })?
+                };
                 if task.budget.max_tokens != Some(max_tokens) {
                     overrides.insert(
                         task.id.clone(),
@@ -3866,9 +3892,20 @@ fn dynamic_workflow_card(
                         .unwrap_or_else(|| "—".into());
                     let summary = result.as_ref().and_then(|result| result.summary.clone());
                     let result_error = result.as_ref().and_then(|result| result.error.clone());
+                    let activity_label = result.as_ref().map_or_else(
+                        || status_label(locale.get(), &task_status),
+                        |result| attempt_activity_label(
+                            locale.get(),
+                            &task_status,
+                            result.activity_messages,
+                            result.tool_calls,
+                        ),
+                    );
                     let usage = result.as_ref().map(|result| {
                         let tokens = result.input_tokens.saturating_add(result.output_tokens);
-                        let token_label = if tokens == 0 && result.activity_messages > 0 {
+                        let token_label = if tokens == 0
+                            && (task_status == "running" || result.activity_messages > 0)
+                        {
                             "—".into()
                         } else {
                             tokens.to_string()
@@ -3923,7 +3960,7 @@ fn dynamic_workflow_card(
                                 view! {
                                     <label class="agent-retry-budget">
                                         <span>{t(locale.get(), "agents.retry.max_tokens")}</span>
-                                        <input type="number" min="1" step="1"
+                                        <input type="number" min="0" step="1"
                                             data-testid="agent-retry-max-tokens"
                                             prop:value=retry_budget_value
                                             on:input=move |event| state.retry_budgets.update(|values| {
@@ -3987,7 +4024,7 @@ fn dynamic_workflow_card(
                             })}
                             <div class="agent-current-activity">
                                 <span>{t(locale.get(), "agents.task.activity")}</span>
-                                <strong>{status_label(locale.get(), &task_status)}</strong>
+                                <strong>{activity_label}</strong>
                                 {duration.map(|duration| view! { <small>{duration}</small> })}
                             </div>
                             {summary.map(|summary| view! { <p class="agent-attempt-summary">{summary}</p> })}

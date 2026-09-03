@@ -622,7 +622,10 @@ async fn load_workflow_snapshot(
             .await
             .map_err(|error| error.to_string())?;
         result.activity_messages = message_count;
-        result.last_activity_at = last_activity_at;
+        // A child frame may exist before its first message is committed. Keep
+        // the attempt heartbeat as a fallback instead of replacing it with
+        // `None`, otherwise the UI looks frozen during model startup.
+        result.last_activity_at = last_activity_at.or(result.last_activity_at);
         // Terminal usage remains authoritative when it exists. A timed-out or
         // still-running attempt can have zero finalized usage despite dozens
         // of already-persisted tool results, so fill that blind spot only.
@@ -2593,6 +2596,8 @@ impl AgentDelegator for NativeDelegator {
                 self.project.root.clone(),
                 project_skills.as_ref(),
                 self.store.clone(),
+                self.project.id.clone(),
+                child_frame_id.clone(),
             )
             .is_some_and(|tool| {
                 tools.add(Box::new(tool.evidence_tool()));
@@ -3862,12 +3867,12 @@ impl AcpUsage {
 
 fn runtime_budget_violation(usage: &AgentUsage, budget: &AgentBudget) -> Option<String> {
     let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
-    if budget
+    if let Some(limit) = budget
         .max_tokens
-        .is_some_and(|limit| limit > 0 && total_tokens > u64::from(limit))
+        .filter(|limit| *limit > 0 && total_tokens > u64::from(*limit))
     {
         return Some(format!(
-            "Agent exceeded its token budget ({total_tokens} tokens)"
+            "Agent exceeded its token budget (used {total_tokens} tokens; limit {limit})"
         ));
     }
     if budget
@@ -6922,15 +6927,18 @@ mod tests {
             max_tool_calls: Some(2),
             max_cost_microunits: Some(100),
         };
-        assert!(runtime_budget_violation(
-            &AgentUsage {
-                input_tokens: 6,
-                output_tokens: 5,
-                ..Default::default()
-            },
-            &budget
-        )
-        .is_some());
+        assert_eq!(
+            runtime_budget_violation(
+                &AgentUsage {
+                    input_tokens: 6,
+                    output_tokens: 5,
+                    ..Default::default()
+                },
+                &budget
+            )
+            .as_deref(),
+            Some("Agent exceeded its token budget (used 11 tokens; limit 10)")
+        );
         assert!(runtime_budget_violation(
             &AgentUsage {
                 tool_calls: 3,

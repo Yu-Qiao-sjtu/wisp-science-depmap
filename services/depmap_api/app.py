@@ -8,6 +8,7 @@ matrices or starts new analyses.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hmac
 import json
 import logging
@@ -42,6 +43,7 @@ DRUG_OMICS = {"effect", "expression", "cnv"}
 MODE_REQUIRED_FIELDS = {
     "catalog": set(),
     "lineage_catalog": {"lineage"},
+    "lineage_dependency": {"lineage"},
     "lineage_directions": {"lineage"},
     "core": {"gene"},
     "pair": {"module", "source", "target"},
@@ -53,14 +55,19 @@ MODE_REQUIRED_FIELDS = {
     "lineage_cnv": {"lineage", "source"},
     "lineage_drug": {"omic", "lineage"},
     "enrichment": {"lineage", "source"},
+    "subtype": set(),
+    "coamplification": {"source"},
     "tcga_expression_survival": {"gene"},
 }
 MODE_OPTIONAL_FIELDS = {
     "lineage_network": {"target", "limit", "reciprocal"},
+    "lineage_dependency": {"ranking", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
     "lineage_drug": {"drug", "target", "limit"},
     "enrichment": {"collection", "term", "limit"},
+    "subtype": {"gene", "lineage", "contrast", "limit"},
+    "coamplification": {"partner", "target", "layer", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
 }
 LINEAGE_NETWORK_FAMILIES = {
@@ -88,8 +95,12 @@ QUERY_FIELD_ORDER = (
     "drug",
     "omic",
     "family",
+    "ranking",
     "collection",
     "term",
+    "contrast",
+    "partner",
+    "layer",
     "reciprocal",
     "project",
     "endpoint",
@@ -352,9 +363,10 @@ class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal[
-        "catalog", "lineage_catalog", "core", "pair", "top", "lineage", "pathway", "drug",
+        "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
+        "subtype", "coamplification",
         "tcga_expression_survival",
     ]
     gene: str | None = None
@@ -368,8 +380,12 @@ class QueryRequest(BaseModel):
     drug: str | None = None
     omic: str | None = None
     family: str | None = None
+    ranking: Literal["selective", "mean_dependency"] | None = None
     collection: str | None = None
     term: str | None = None
+    contrast: str | None = None
+    partner: str | None = None
+    layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] | None = None
     reciprocal: bool | None = None
     project: str | None = None
     endpoint: str | None = None
@@ -380,8 +396,8 @@ class QueryRequest(BaseModel):
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
             "gene", "module", "source", "target", "limit", "event", "lineage",
-            "pathway", "drug", "omic", "family", "collection", "term", "reciprocal",
-            "project", "endpoint",
+            "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
+            "project", "endpoint", "contrast", "partner", "layer",
         }
         supplied = {
             name
@@ -408,6 +424,10 @@ class QueryRequest(BaseModel):
             raise ValueError("unsupported TCGA survival endpoint")
         if self.mode == "lineage_drug" and self.drug is None and self.target is None:
             raise ValueError("lineage_drug requires drug, target, or both")
+        if self.mode == "subtype" and self.gene is None and self.contrast is not None and self.limit is None:
+            self.limit = 20
+        if self.mode == "coamplification" and self.layer is None:
+            self.layer = "lineage_adjusted"
         for name in (supplied - {"limit", "reciprocal"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -566,6 +586,216 @@ def _load_manifest(path: Path) -> dict[str, Any] | None:
         return None
     with manifest.open(encoding="utf-8-sig") as handle:
         return json.load(handle)
+
+
+def _coerce_csv_value(value: str) -> Any:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped == "TRUE":
+        return True
+    if stripped == "FALSE":
+        return False
+    if re.fullmatch(r"-?\d+", stripped):
+        return int(stripped)
+    if re.fullmatch(r"-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", stripped):
+        return float(stripped)
+    return value
+
+
+def _read_csv_records(path: Path) -> list[dict[str, Any]]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
+        return [
+            {key: _coerce_csv_value(value) for key, value in row.items()}
+            for row in csv.DictReader(handle)
+        ]
+
+
+def _complete_module(
+    root: Path, *, mode: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not root.is_dir():
+        return None, _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode=mode,
+            reason="the requested precomputed module is not installed",
+            provenance=[str(root.parent)],
+        )
+    manifest = _load_manifest(root)
+    if manifest is None or manifest.get("status") != "complete":
+        return manifest, _evidence_response(
+            "NOT_COMPUTED",
+            mode=mode,
+            reason="the module has no complete terminal manifest",
+            manifest=manifest,
+            provenance=[str(root)],
+        )
+    return manifest, None
+
+
+def _run_subtype_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    root = settings.knowledge_root / "depmap-26q1-full" / "subtype_dependency"
+    manifest, unavailable = _complete_module(root, mode="subtype")
+    if unavailable is not None:
+        return unavailable
+    catalog_path = root / "contrast_catalog.csv"
+    if not catalog_path.is_file():
+        return _evidence_response(
+            "NOT_COMPUTED", mode="subtype",
+            reason="the completed subtype module has no contrast catalog",
+            manifest=manifest, provenance=[str(root / "manifest.json")],
+        )
+    lineage = query.get("lineage")
+    contrast = query.get("contrast")
+    gene = query.get("gene")
+    limit = int(query.get("limit", 20))
+    catalog = [row for row in _read_csv_records(catalog_path) if row.get("eligible") is True]
+    selected = [
+        row for row in catalog
+        if (lineage is None or row.get("lineage") == lineage)
+        and (contrast is None or str(row.get("contrast_id", "")).casefold() == contrast.casefold())
+    ]
+    provenance = [str(root / "manifest.json"), str(catalog_path)]
+    if not selected:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="subtype",
+            reason="no eligible precomputed subtype contrast matches the request",
+            gene=gene.upper() if gene else None, lineage=lineage, contrast=contrast,
+            manifest=manifest, provenance=provenance,
+        )
+    if gene is None and contrast is None:
+        return _evidence_response(
+            "FOUND", mode="subtype",
+            reason="eligible precomputed subtype contrasts found",
+            lineage=lineage, rows=selected[:limit],
+            summary={"matched_contrast_count": len(selected), "returned_count": min(limit, len(selected))},
+            manifest=manifest, provenance=provenance,
+        )
+
+    rows: list[dict[str, Any]] = []
+    symbol = gene.strip().upper() if gene else None
+    for item in selected:
+        unit = root / str(item["contrast_id"])
+        path = unit / ("all_genes.csv.gz" if symbol else "selective_hits.csv.gz")
+        unit_manifest = _load_manifest(unit)
+        if not path.is_file() or unit_manifest is None or unit_manifest.get("status") != "complete":
+            continue
+        candidates = _read_csv_records(path)
+        if symbol:
+            candidates = [row for row in candidates if row.get("gene") == symbol]
+        rows.extend(candidates)
+        provenance.extend((str(unit / "manifest.json"), str(path)))
+        if len(rows) >= limit:
+            break
+    rows = rows[:limit]
+    if rows:
+        return _evidence_response(
+            "FOUND", mode="subtype",
+            reason=("precomputed per-gene subtype rows found" if symbol else "retained selective subtype hits found"),
+            gene=symbol, lineage=lineage, contrast=contrast, rows=rows,
+            summary={"matched_contrast_count": len(selected), "returned_count": len(rows)},
+            manifest=manifest, provenance=provenance,
+        )
+    return _evidence_response(
+        "NOT_RETAINED" if symbol is None else "NOT_COMPUTED",
+        mode="subtype",
+        reason=(
+            "the contrast is complete but has no retained selective dependency hits"
+            if symbol is None else "the gene is absent from the completed subtype target universe"
+        ),
+        gene=symbol, lineage=lineage, contrast=contrast,
+        manifest=manifest, provenance=provenance,
+    )
+
+
+def _run_coamplification_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    root = settings.knowledge_root / "depmap-26q1-full" / "coamplification_dependency"
+    layer = query.get("layer", "lineage_adjusted")
+    layer_root = root / layer
+    manifest, unavailable = _complete_module(layer_root, mode="coamplification")
+    if unavailable is not None:
+        return unavailable
+    catalog_path = root / "exhaustive_high_confidence" / "screen_pair_catalog.csv.gz"
+    if not catalog_path.is_file():
+        return _evidence_response(
+            "NOT_COMPUTED", mode="coamplification",
+            reason="the high-confidence directional pair catalog is unavailable",
+            manifest=manifest, provenance=[str(layer_root / "manifest.json")],
+        )
+    source = query["source"].strip().upper()
+    partner = query.get("partner")
+    partner = partner.strip().upper() if partner else None
+    target = query.get("target")
+    target = target.strip().upper() if target else None
+    limit = int(query.get("limit", 20))
+    pairs = [
+        row for row in _read_csv_records(catalog_path)
+        if row.get("source_gene") == source
+        and (partner is None or row.get("partner_gene") == partner)
+    ]
+    pairs.sort(key=lambda row: (-int(row.get("coamplified_n") or 0), -float(row.get("jaccard") or 0), str(row.get("partner_gene"))))
+    provenance = [str(layer_root / "manifest.json"), str(catalog_path)]
+    if not pairs:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="coamplification",
+            reason="the directed pair did not enter the constrained high-confidence screen",
+            source=source, partner=partner, target=target, layer=layer,
+            manifest=manifest, provenance=provenance,
+        )
+    selected_ids = {str(row["screen_pair_id"]) for row in pairs}
+    audit_rows: list[dict[str, Any]] = []
+    if layer == "lineage_adjusted":
+        audit_path = layer_root / "pair_lineage_audit.csv.gz"
+        if audit_path.is_file():
+            audit_rows = [
+                row for row in _read_csv_records(audit_path)
+                if str(row.get("screen_pair_id")) in selected_ids
+            ]
+            provenance.append(str(audit_path))
+        estimable_ids = {
+            str(row["screen_pair_id"]) for row in audit_rows if row.get("estimable") is True
+        }
+        if partner is not None and not (selected_ids & estimable_ids):
+            return _evidence_response(
+                "INELIGIBLE", mode="coamplification",
+                reason="the screened pair does not meet the lineage-adjusted informative-sample contract",
+                source=source, partner=partner, target=target, layer=layer,
+                pairs=pairs[:limit], audit=audit_rows[:limit],
+                manifest=manifest, provenance=provenance,
+            )
+    hits_path = layer_root / "significant_hits.csv.gz"
+    hits: list[dict[str, Any]] = []
+    if hits_path.is_file():
+        hits = [
+            row for row in _read_csv_records(hits_path)
+            if str(row.get("screen_pair_id")) in selected_ids
+            and (target is None or row.get("target_gene") == target)
+        ]
+        fdr_field = "fdr_within_pair" if layer == "lineage_adjusted" else "fdr_coamplified_more_dependent"
+        hits.sort(key=lambda row: (float(row.get(fdr_field) or 1), int(row.get("rank_within_pair") or 10**9)))
+        provenance.append(str(hits_path))
+    if partner is None and target is None:
+        return _evidence_response(
+            "FOUND", mode="coamplification",
+            reason="bounded high-confidence coamplification partners found",
+            source=source, partner=None, target=None, layer=layer,
+            pairs=pairs[:limit], hits=hits[:limit], audit=audit_rows[:limit],
+            summary={"matched_pair_count": len(pairs), "retained_hit_count": len(hits)},
+            manifest=manifest, provenance=provenance,
+        )
+    status_name = "FOUND" if hits else "NOT_RETAINED"
+    return _evidence_response(
+        status_name, mode="coamplification",
+        reason=(
+            "retained precomputed coamplification dependency hits found"
+            if hits else "the screened pair was computed but no matching dependency hit passed the retained-result contract"
+        ),
+        source=source, partner=partner, target=target, layer=layer,
+        pairs=pairs[:limit], hits=hits[:limit], audit=audit_rows[:limit],
+        summary={"matched_pair_count": len(pairs), "retained_hit_count": len(hits)},
+        manifest=manifest, provenance=provenance,
+    )
 
 
 def _evidence_response(
@@ -1519,6 +1749,29 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
         ]
     )
     modules = [_lineage_catalog_item(label, root, lineage) for label, root in specs]
+    subtype_root = full / "subtype_dependency"
+    subtype_manifest = _load_manifest(subtype_root)
+    subtype_catalog = subtype_root / "contrast_catalog.csv"
+    subtype_rows = []
+    if subtype_manifest and subtype_manifest.get("status") == "complete" and subtype_catalog.is_file():
+        subtype_rows = [
+            row for row in _read_csv_records(subtype_catalog)
+            if row.get("eligible") is True and row.get("lineage") == lineage
+        ]
+    modules.append({
+        "label": "subtype:dependency",
+        "status": "FOUND" if subtype_rows else (
+            "NOT_COMPUTED" if subtype_root.is_dir() else "MODULE_UNAVAILABLE"
+        ),
+        "reason": (
+            "eligible completed subtype contrasts are available"
+            if subtype_rows else "no eligible completed subtype contrast matches this lineage"
+        ),
+        "contrast_count": len(subtype_rows),
+        "contrasts": [row.get("contrast_id") for row in subtype_rows],
+        "manifest": subtype_manifest,
+        "provenance": [str(subtype_root / "manifest.json"), str(subtype_catalog)],
+    })
     tcga_projects = [
         row for row in _tcga_project_catalog(settings)
         if row.get("depmap_lineage") == lineage and row.get("status") == "complete"
@@ -1578,6 +1831,10 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_lineage_drug_query, settings, query)
     if query["mode"] == "enrichment":
         return await asyncio.to_thread(_run_enrichment_query, settings, query)
+    if query["mode"] == "subtype":
+        return await asyncio.to_thread(_run_subtype_query, settings, query)
+    if query["mode"] == "coamplification":
+        return await asyncio.to_thread(_run_coamplification_query, settings, query)
     return await run_r_query(settings, query)
 
 
@@ -1628,8 +1885,8 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 4,
-            "coverage_manifest_version": 2,
+            "query_contract_version": 5,
+            "coverage_manifest_version": 3,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),
             "query_modes": sorted(MODE_REQUIRED_FIELDS),

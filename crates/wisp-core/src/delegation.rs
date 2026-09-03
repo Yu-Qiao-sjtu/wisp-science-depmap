@@ -959,12 +959,12 @@ pub trait AgentDelegator: Send + Sync {
 
 fn budget_violation(usage: &AgentUsage, budget: &AgentBudget) -> Option<String> {
     let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
-    if budget
+    if let Some(limit) = budget
         .max_tokens
-        .is_some_and(|limit| limit > 0 && total_tokens > u64::from(limit))
+        .filter(|limit| *limit > 0 && total_tokens > u64::from(*limit))
     {
         return Some(format!(
-            "Agent exceeded its token budget ({total_tokens} tokens)"
+            "Agent exceeded its token budget (used {total_tokens} tokens; limit {limit})"
         ));
     }
     if budget
@@ -1109,7 +1109,10 @@ mod tests {
             max_tokens: Some(50_000),
             ..AgentBudget::default()
         };
-        assert!(budget_violation(&usage, &capped).is_some());
+        assert_eq!(
+            budget_violation(&usage, &capped).as_deref(),
+            Some("Agent exceeded its token budget (used 1000000 tokens; limit 50000)")
+        );
     }
 
     #[test]

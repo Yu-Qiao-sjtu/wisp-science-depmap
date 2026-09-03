@@ -28,9 +28,13 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    that the developer's build-time drive exists. Read
    [references/workspace-contract.md](references/workspace-contract.md) when a
    root is missing, overlaps a read-only source, or computation may be needed.
-   When the request names only a cancer lineage and no gene, use
+   When the request names only a cancer lineage and asks what data are
+   available, use
    `depmap_lineage_catalog` (or `depmap_query` with `mode=lineage_catalog` on
-   the native fallback). For a direction/topic request, follow it with
+   the native fallback). When it asks for top, strongest, selective, essential,
+   or dependency genes, use `depmap_query` with `mode=lineage_dependency`;
+   this is a bounded view of the existing lineage-vs-rest test, not a new
+   computation. For a direction/topic request, follow the catalog with
    `depmap_lineage_direction_discovery`; select only its returned topic
    candidates. Never choose an anchor gene from model memory and present it as
    the user's scope.
@@ -50,7 +54,7 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    from the resolver; do not infer coverage from the size of the directory.
 4. Use the native `depmap_evidence` tool for gene-plus-lineage inventory,
    topic ideation, and research-direction questions. Use `depmap_query` for
-   catalog, pair, top-hit, lineage-event,
+   catalog, lineage dependency ranking, pair, top-hit, lineage-event,
    lineage-network, lineage-CNV, lineage-PRISM, enrichment, pathway, drug,
    TCGA expression-survival, or core-gene retrieval. Use
    `scripts/query_depmap_kb.R` only
@@ -92,6 +96,10 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
   for every subsequent query, and preserve the user's original disease wording
   separately. If a new or ambiguous synonym is not resolved, report the
   ambiguity instead of guessing a lineage.
+- In `lineage_dependency`, preserve the requested ranking contract.
+  `effect_mean_difference` is lineage mean Gene Effect minus the rest mean and
+  must never be renamed `logFC`; `mean_dependency` is descriptive and does not
+  imply lineage selectivity.
 - A canonical DepMap lineage is a model-grouping proxy, not a clinical
   histology or patient cohort. Do not silently narrow `Liver` to HCC, add a
   neighboring control lineage, or name cell lines unless current model
@@ -149,6 +157,12 @@ mutation, CNV, drug, enrichment, and TCGA expression-survival queries at
 request time; it is not a
 precomputed evidence-card requirement. Use `depmap_query` afterward only when a
 specific pair, drug, pathway, or term needs a narrower lookup.
+
+Use the dedicated `depmap_subtype_evidence` and
+`depmap_coamplification_evidence` MCP tools for the QA-complete subtype and
+double-amplification modules. Do not reinterpret an arbitrary free-text subtype
+as a frozen contrast, and do not treat a pair outside the constrained screen as
+if it had been exhaustively tested.
 
 When a bounded tool result is spilled to a named `.wisp/tool-output` file, read
 or grep only that exact path and only the necessary ranges. Never grep the

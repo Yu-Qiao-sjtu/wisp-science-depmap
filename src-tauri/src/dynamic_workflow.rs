@@ -693,6 +693,12 @@ pub(crate) fn summarize(
     })
 }
 
+fn attempt_duration_secs(attempt: &AgentWorkflowAttempt, now: i64) -> Option<i64> {
+    attempt
+        .started_at
+        .map(|started| attempt.finished_at.unwrap_or(now).saturating_sub(started))
+}
+
 fn result_summary(attempt: &AgentWorkflowAttempt) -> AgentResultSummary {
     let output = serde_json::from_str::<Value>(&attempt.output_json).ok();
     let summary = output
@@ -714,12 +720,13 @@ fn result_summary(attempt: &AgentWorkflowAttempt) -> AgentResultSummary {
         output_tokens: attempt.output_tokens,
         tool_calls: attempt.tool_calls,
         activity_messages: 0,
-        last_activity_at: None,
+        // The workflow snapshot enriches this with child-frame message
+        // activity when available. Until the child persists its first
+        // message, the attempt timestamp still lets the UI distinguish a
+        // freshly-started Agent from a card with no observable heartbeat.
+        last_activity_at: Some(attempt.updated_at),
         cost_microunits: attempt.cost_microunits,
-        duration_secs: attempt
-            .started_at
-            .zip(attempt.finished_at)
-            .map(|(started, finished)| finished.saturating_sub(started)),
+        duration_secs: attempt_duration_secs(attempt, chrono::Utc::now().timestamp()),
         full_result_available: attempt.response_json.is_some(),
     }
 }
@@ -979,6 +986,29 @@ mod tests {
             executor: None,
             budget: None,
         }
+    }
+
+    #[test]
+    fn running_attempt_summary_exposes_elapsed_time_and_start_heartbeat() {
+        let mut attempt = AgentWorkflowAttempt::queued(
+            "attempt-1",
+            "workflow-1",
+            "workflow-1:search",
+            1,
+            "request-1",
+            "native",
+            "{}",
+        )
+        .unwrap();
+        attempt.status = wisp_store::AgentWorkflowAttemptStatus::Running;
+        attempt.started_at = Some(100);
+        attempt.updated_at = 104;
+
+        assert_eq!(attempt_duration_secs(&attempt, 109), Some(9));
+        let summary = result_summary(&attempt);
+        assert_eq!(summary.status, "running");
+        assert_eq!(summary.last_activity_at, Some(104));
+        assert!(summary.duration_secs.is_some());
     }
 
     #[test]

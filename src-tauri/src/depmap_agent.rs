@@ -17,6 +17,8 @@ use wisp_tools::{Tool, ToolEnv, ToolResult};
 
 const TOOL_NAME: &str = "depmap_query";
 const EVIDENCE_TOOL_NAME: &str = "depmap_evidence";
+const ROUTE_TOOL_NAME: &str = "depmap_agent_route";
+const EVIDENCE_HISTORY_TOOL_NAME: &str = "depmap_evidence_history";
 const PROJECT_RUNS_TOOL_NAME: &str = "depmap_project_runs";
 const VALIDATE_RUN_TOOL_NAME: &str = "depmap_validate_run";
 const SKILL_NAME: &str = "depmap-knowledge-query";
@@ -29,6 +31,7 @@ const MAX_TOP_LIMIT: i64 = 100;
 // `depmap_query` after the initial view.
 const MAX_EVIDENCE_LIMIT: i64 = 3;
 const MAX_EVIDENCE_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_LEDGER_PAYLOAD_BYTES: usize = 256 * 1024;
 const EVIDENCE_SECTIONS: &[&str] = &[
     "core",
     "networks",
@@ -54,6 +57,7 @@ const LINEAGE_NETWORK_FAMILIES: &[&str] = &[
     "expression_correlation",
     "expression_dependency",
 ];
+const LINEAGE_DEPENDENCY_RANKINGS: &[&str] = &["selective", "mean_dependency"];
 const CANONICAL_LINEAGES: &[&str] = &[
     "Adrenal Gland",
     "Ampulla of Vater",
@@ -237,10 +241,371 @@ struct KnowledgeWorkspace {
 pub(crate) struct DepMapQueryTool {
     project_root: PathBuf,
     query_script: PathBuf,
+    store: wisp_store::Store,
+    project_id: String,
+    frame_id: String,
 }
 
 pub(crate) struct DepMapEvidenceTool {
     query: DepMapQueryTool,
+}
+
+/// Records a typed, inspectable routing decision before the DepMap Agent uses
+/// evidence or compute tools. The model extracts the user's intent and
+/// entities; the host validates the required slots and chooses the execution
+/// level. This tool never supplies scientific evidence or starts work.
+pub(crate) struct DepMapAgentRouteTool;
+
+pub(crate) struct DepMapEvidenceHistoryTool {
+    store: wisp_store::Store,
+    project_id: String,
+    frame_id: String,
+}
+
+impl DepMapEvidenceHistoryTool {
+    pub(crate) fn new(store: wisp_store::Store, project_id: String, frame_id: String) -> Self {
+        Self {
+            store,
+            project_id,
+            frame_id,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for DepMapEvidenceHistoryTool {
+    fn name(&self) -> &str {
+        EVIDENCE_HISTORY_TOOL_NAME
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            EVIDENCE_HISTORY_TOOL_NAME,
+            "Read persisted DepMap evidence from this conversation. Use mode=recent to recover compact evidence identities, or mode=get with an exact evidence_id to retrieve one stored compact payload. Do not use this instead of a fresh query when the user changed the gene, cancer, release, or scientific scope.",
+            json!({
+                "type":"object",
+                "properties": {
+                    "mode":{"type":"string","enum":["recent","get"]},
+                    "evidence_id":{"type":"string"},
+                    "limit":{"type":"integer","minimum":1,"maximum":20}
+                },
+                "required":["mode"],
+                "additionalProperties":false
+            }),
+        )
+    }
+
+    fn read_only(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        args.get("evidence_id")
+            .and_then(Value::as_str)
+            .unwrap_or("recent DepMap evidence")
+            .to_string()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        match args.get("mode").and_then(Value::as_str) {
+            Some("recent") => {
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10);
+                if !(1..=20).contains(&limit) {
+                    return ToolResult::fail(blocked(
+                        "invalid_evidence_history_request",
+                        "limit must be between 1 and 20",
+                    ));
+                }
+                match self
+                    .store
+                    .list_scientific_evidence(&self.project_id, &self.frame_id, limit as u32)
+                    .await
+                {
+                    Ok(records) => ToolResult::ok(pretty(json!({
+                        "state":"evidence_history",
+                        "records": records.into_iter().map(|record| json!({
+                            "evidence_id":record.evidence_id,
+                            "provider":record.provider,
+                            "provider_version":record.provider_version,
+                            "tool_name":record.tool_name,
+                            "arguments":serde_json::from_str::<Value>(&record.canonical_arguments_json).unwrap_or(Value::Null),
+                            "evidence_state":record.evidence_state,
+                            "updated_at":record.updated_at
+                        })).collect::<Vec<_>>()
+                    }))),
+                    Err(error) => {
+                        ToolResult::fail(blocked("evidence_history_failed", error.to_string()))
+                    }
+                }
+            }
+            Some("get") => {
+                let evidence_id = match required_string(args, "evidence_id") {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return ToolResult::fail(blocked("invalid_evidence_history_request", error))
+                    }
+                };
+                match self
+                    .store
+                    .get_scientific_evidence(&self.project_id, &self.frame_id, &evidence_id)
+                    .await
+                {
+                    Ok(Some(record)) => ToolResult::ok(pretty(json!({
+                        "state":"evidence_recovered",
+                        "evidence_id":record.evidence_id,
+                        "provider":record.provider,
+                        "provider_version":record.provider_version,
+                        "tool_name":record.tool_name,
+                        "arguments":serde_json::from_str::<Value>(&record.canonical_arguments_json).unwrap_or(Value::Null),
+                        "evidence_state":record.evidence_state,
+                        "semantics":serde_json::from_str::<Value>(&record.semantics_json).unwrap_or(Value::Null),
+                        "provenance":serde_json::from_str::<Value>(&record.provenance_json).unwrap_or(Value::Null),
+                        "payload":serde_json::from_str::<Value>(&record.compact_payload_json).unwrap_or(Value::Null),
+                        "updated_at":record.updated_at
+                    }))),
+                    Ok(None) => ToolResult::fail(blocked(
+                        "evidence_not_found",
+                        "No evidence record with that id exists in this conversation.",
+                    )),
+                    Err(error) => {
+                        ToolResult::fail(blocked("evidence_history_failed", error.to_string()))
+                    }
+                }
+            }
+            _ => ToolResult::fail(blocked(
+                "invalid_evidence_history_request",
+                "mode must be recent or get",
+            )),
+        }
+    }
+}
+
+fn depmap_route_schema() -> Value {
+    json!({
+        "type":"object",
+        "properties": {
+            "intent": {
+                "type":"string",
+                "enum":[
+                    "provider_status", "lineage_resolution", "cancer_inventory",
+                    "cancer_dependency_ranking",
+                    "cancer_direction_discovery", "gene_evidence",
+                    "gene_pair_evidence", "drug_gene_evidence",
+                    "evidence_comparison", "result_interpretation",
+                    "topic_exploration", "literature_validation",
+                    "new_analysis", "report_generation"
+                ]
+            },
+            "gene": {"type":"string"},
+            "cancer": {"type":"string"},
+            "source_gene": {"type":"string"},
+            "target_gene": {"type":"string"},
+            "drug": {"type":"string"},
+            "explicit_workflow_request": {"type":"boolean"}
+        },
+        "required":["intent"],
+        "additionalProperties":false
+    })
+}
+
+fn non_empty_arg(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn depmap_route(args: &Value) -> Result<Value, String> {
+    let intent = required_string(args, "intent")?;
+    let gene = non_empty_arg(args, "gene");
+    let cancer = non_empty_arg(args, "cancer");
+    let source_gene = non_empty_arg(args, "source_gene");
+    let target_gene = non_empty_arg(args, "target_gene");
+    let drug = non_empty_arg(args, "drug");
+    let explicit_workflow = args
+        .get("explicit_workflow_request")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let mut missing = Vec::new();
+    match intent.as_str() {
+        "lineage_resolution"
+        | "cancer_inventory"
+        | "cancer_dependency_ranking"
+        | "cancer_direction_discovery" => {
+            if cancer.is_none() {
+                missing.push("cancer");
+            }
+        }
+        "gene_evidence" => {
+            if gene.is_none() {
+                missing.push("gene");
+            }
+        }
+        "gene_pair_evidence" => {
+            if source_gene.is_none() {
+                missing.push("source_gene");
+            }
+            if target_gene.is_none() {
+                missing.push("target_gene");
+            }
+        }
+        "drug_gene_evidence" => {
+            if drug.is_none() {
+                missing.push("drug");
+            }
+            if target_gene.is_none() && gene.is_none() {
+                missing.push("target_gene_or_gene");
+            }
+        }
+        "provider_status"
+        | "evidence_comparison"
+        | "result_interpretation"
+        | "topic_exploration"
+        | "literature_validation"
+        | "new_analysis"
+        | "report_generation" => {}
+        _ => return Err(format!("unsupported DepMap intent '{intent}'")),
+    }
+
+    let (mut execution_level, mut approval, mut strategy, mut tools): (
+        &str,
+        bool,
+        &str,
+        Vec<&str>,
+    ) =
+        match intent.as_str() {
+            "provider_status" => (
+                "L1_DIRECT",
+                false,
+                "Check only the configured provider health.",
+                vec![TOOL_NAME],
+            ),
+            "lineage_resolution" | "cancer_inventory" => (
+                "L1_DIRECT",
+                false,
+                "Resolve the cancer label and read its bounded precomputed catalog.",
+                vec![TOOL_NAME],
+            ),
+            "cancer_dependency_ranking" => (
+                "L1_DIRECT",
+                false,
+                "Read the bounded precomputed lineage dependency ranking; this is a query over an existing lineage-vs-rest test, not a new analysis.",
+                vec![TOOL_NAME],
+            ),
+            "gene_evidence" if cancer.is_some() => (
+                "L1_DIRECT",
+                false,
+                "Read one bounded gene-by-lineage evidence bundle.",
+                vec![EVIDENCE_TOOL_NAME],
+            ),
+            "gene_evidence" => (
+                "L1_DIRECT",
+                false,
+                "Read bounded pan-cancer core or association results; do not call the lineage evidence bundle without a cancer.",
+                vec![TOOL_NAME],
+            ),
+            "result_interpretation" => (
+                "L1_DIRECT",
+                false,
+                "Interpret only the current or recovered persisted evidence fields.",
+                vec![EVIDENCE_HISTORY_TOOL_NAME],
+            ),
+            "gene_pair_evidence" | "drug_gene_evidence" => (
+                "L1_DIRECT",
+                false,
+                "Use one surgical pair or drug query against precomputed results.",
+                vec![TOOL_NAME],
+            ),
+            "cancer_direction_discovery" | "evidence_comparison" | "topic_exploration" => (
+                "L2_INVESTIGATE",
+                false,
+                "Assemble a small bounded set of direct queries, then rank only supported directions.",
+                vec![TOOL_NAME, EVIDENCE_TOOL_NAME],
+            ),
+            "literature_validation" => (
+                "L3_DELEGATE",
+                false,
+                "Keep data evidence fixed and delegate a bounded, independently traceable literature check.",
+                vec!["delegate_tasks"],
+            ),
+            "new_analysis" | "report_generation" => (
+                "L4_DURABLE",
+                true,
+                "Create a persisted Run or registered Workflow only after explicit user approval.",
+                vec!["start_workflow", "run_in_context"],
+            ),
+            _ => unreachable!(),
+        };
+
+    let requires_user_input = !missing.is_empty();
+    if explicit_workflow && !requires_user_input {
+        execution_level = "L4_DURABLE";
+        approval = true;
+        strategy = "The user explicitly requested a registered Workflow; create only its approval-gated draft.";
+        tools = vec!["start_workflow"];
+    }
+
+    let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
+    Ok(json!({
+        "state": if requires_user_input { "needs_input" } else { "routed" },
+        "intent": intent,
+        "execution_level": execution_level,
+        "requires_user_input": requires_user_input,
+        "missing_fields": missing,
+        "requires_approval": approval,
+        "explicit_workflow_request": explicit_workflow,
+        "entities": {
+            "gene": gene,
+            "cancer_term": cancer,
+            "canonical_lineage": canonical_lineage,
+            "source_gene": source_gene,
+            "target_gene": target_gene,
+            "drug": drug
+        },
+        "strategy": strategy,
+        "allowed_next_tools": tools,
+        "guardrails": {
+            "route_is_evidence": false,
+            "workflow_semantic_match_alone_is_sufficient": false,
+            "do_not_invent_missing_entities": true
+        }
+    }))
+}
+
+#[async_trait::async_trait]
+impl Tool for DepMapAgentRouteTool {
+    fn name(&self) -> &str {
+        ROUTE_TOOL_NAME
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            ROUTE_TOOL_NAME,
+            "Classify one new DepMap request into a host-validated execution level before querying evidence. Use cancer_dependency_ranking when the user asks for a cancer's top, strongest, selective, essential, or dependency genes without naming a gene. Use once per new request, not for a follow-up that only interprets the current tool result. This routing record is not scientific evidence. Ordinary status, cancer inventory, dependency ranking, gene, pair, drug, and initial topic exploration requests do not require a Workflow.",
+            depmap_route_schema(),
+        )
+    }
+
+    fn read_only(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        args.get("intent")
+            .and_then(Value::as_str)
+            .unwrap_or("DepMap request")
+            .to_string()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        match depmap_route(args) {
+            Ok(route) if route["state"] == "routed" => ToolResult::ok(pretty(route)),
+            Ok(route) => ToolResult::fail(pretty(route)),
+            Err(error) => ToolResult::fail(blocked("invalid_agent_route", error)),
+        }
+    }
 }
 
 pub(crate) struct DepMapProjectRunsTool {
@@ -622,12 +987,17 @@ impl DepMapQueryTool {
     pub(crate) fn from_project(
         project_root: PathBuf,
         skills: &wisp_skills::SkillIndex,
-        _store: wisp_store::Store,
+        store: wisp_store::Store,
+        project_id: String,
+        frame_id: String,
     ) -> Option<Self> {
         let skill = skills.get(SKILL_NAME)?;
         Some(Self {
             project_root,
             query_script: skill.dir.join("scripts").join("query_depmap_kb.R"),
+            store,
+            project_id,
+            frame_id,
         })
     }
 
@@ -639,6 +1009,83 @@ impl DepMapQueryTool {
 
     async fn workspace(&self) -> Result<KnowledgeWorkspace, String> {
         resolve_workspace(&self.project_root).await
+    }
+
+    async fn persist_scientific_result(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        result: ToolResult,
+    ) -> ToolResult {
+        if !result.success {
+            return result;
+        }
+        let mut parsed = match serde_json::from_str::<Value>(&result.content) {
+            Ok(Value::Object(parsed)) => Value::Object(parsed),
+            _ => return result,
+        };
+        let provider = parsed
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("depmap");
+        let provider_version = parsed.get("release").and_then(Value::as_str);
+        let evidence_state = parsed
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("precomputed_query");
+        let semantics = parsed
+            .get("semantics")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let provenance = parsed
+            .get("provenance")
+            .or_else(|| parsed.pointer("/result/provenance"))
+            .cloned()
+            .unwrap_or_else(|| {
+                json!({
+                    "source":"precomputed_depmap_knowledge",
+                    "tool":tool_name
+                })
+            });
+        let ledger_arguments = parsed.get("query").unwrap_or(args);
+        let compact_payload = compact_ledger_payload(&parsed);
+        let record = match self
+            .store
+            .upsert_scientific_evidence(wisp_store::NewScientificEvidence {
+                project_id: &self.project_id,
+                frame_id: &self.frame_id,
+                provider,
+                provider_version,
+                tool_name,
+                arguments: ledger_arguments,
+                evidence_state,
+                semantics: &semantics,
+                provenance: &provenance,
+                compact_payload: &compact_payload,
+            })
+            .await
+        {
+            Ok(record) => record,
+            Err(error) => {
+                return ToolResult::fail(blocked(
+                    "evidence_ledger_failed",
+                    format!(
+                    "The query succeeded but its evidence record could not be persisted: {error}"
+                ),
+                ))
+            }
+        };
+        parsed["evidence_ref"] = json!({
+            "evidence_id": record.evidence_id,
+            "ledger_record_id": record.id,
+            "project_id": record.project_id,
+            "frame_id": record.frame_id,
+            "provider": record.provider,
+            "provider_version": record.provider_version,
+            "tool_name": record.tool_name,
+            "evidence_state": record.evidence_state
+        });
+        ToolResult::ok(pretty(parsed))
     }
 
     async fn run_status(&self, workspace: &KnowledgeWorkspace) -> ToolResult {
@@ -1194,6 +1641,11 @@ fn query_semantics(query: &Value) -> Value {
             "metric":"module_availability",
             "interpretation":"coverage inventory only; it contains no gene-level association"
         }),
+        "lineage_dependency" => json!({
+            "metric":"gene_effect_lineage_vs_rest",
+            "ranking":query.get("ranking").and_then(Value::as_str).unwrap_or("selective"),
+            "interpretation":"effect_mean_difference is lineage mean Gene Effect minus the rest mean; negative means stronger dependency in the lineage. It is not log fold-change. The selective ranking uses the precomputed one-sided Welch test, within-lineage BH FDR, and rank_more_dependent; mean_dependency is descriptive and sorts the lineage Gene Effect mean. Selective does not imply that a validated housekeeping/common-essential filter was applied."
+        }),
         "tcga_expression_survival" => json!({
             "metric":"cox_score_z",
             "expression_scale":"log2(TPM+1)",
@@ -1429,7 +1881,18 @@ impl Tool for DepMapEvidenceTool {
         if evidence["state"] == "blocked" {
             ToolResult::fail(pretty(evidence))
         } else {
-            ToolResult::ok(pretty(evidence))
+            self.query
+                .persist_scientific_result(
+                    EVIDENCE_TOOL_NAME,
+                    &json!({
+                        "gene":gene,
+                        "lineage":lineage,
+                        "sections":sections,
+                        "limit":limit
+                    }),
+                    ToolResult::ok(pretty(evidence)),
+                )
+                .await
         }
     }
 }
@@ -1443,7 +1906,7 @@ impl Tool for DepMapQueryTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             TOOL_NAME,
-            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for a cancer-only inventory without a gene; use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument call and never start raw-data analysis from a coverage gap.",
+            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, and mode=lineage_dependency for a cancer's bounded precomputed dependency ranking without a gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument call and never start raw-data analysis from a coverage gap.",
             depmap_query_schema(),
         )
     }
@@ -1471,7 +1934,9 @@ impl Tool for DepMapQueryTool {
         if args.get("mode").and_then(Value::as_str) == Some("status") {
             self.run_status(&workspace).await
         } else {
-            self.run_query(&workspace, args).await
+            let result = self.run_query(&workspace, args).await;
+            self.persist_scientific_result(TOOL_NAME, args, result)
+                .await
         }
     }
 }
@@ -1482,7 +1947,7 @@ fn depmap_query_schema() -> Value {
         "description":"Flat model-compatible schema. Runtime validation enforces the fields required by each mode.",
         "properties": {
             "mode": {"type":"string","enum":[
-                "status","catalog","lineage_catalog","core","pair","top",
+                "status","catalog","lineage_catalog","lineage_dependency","core","pair","top",
                 "lineage","pathway","drug","lineage_network","lineage_cnv",
                 "lineage_drug","enrichment","tcga_expression_survival"
             ]},
@@ -1497,6 +1962,7 @@ fn depmap_query_schema() -> Value {
             "drug": {"type":"string"},
             "omic": {"type":"string","enum":DRUG_OMICS},
             "family": {"type":"string","enum":LINEAGE_NETWORK_FAMILIES},
+            "ranking": {"type":"string","enum":LINEAGE_DEPENDENCY_RANKINGS,"description":"For lineage_dependency: selective (default; one-sided FDR-significant lineage-vs-rest effects ordered by precomputed rank) or mean_dependency (descriptive lowest lineage mean Gene Effect)."},
             "collection": {"type":"string"},
             "term": {"type":"string"},
             "reciprocal": {"type":"boolean"},
@@ -1514,7 +1980,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     query.insert("mode".into(), Value::String(mode.clone()));
     let required: &[&str] = match mode.as_str() {
         "catalog" => &[],
-        "lineage_catalog" => &["lineage"],
+        "lineage_catalog" | "lineage_dependency" => &["lineage"],
         "core" => &["gene"],
         "pair" => &["module", "source", "target"],
         "top" => &["module", "source"],
@@ -1548,6 +2014,17 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     }
     if mode == "lineage_network" {
         require_allowed(&query, "family", LINEAGE_NETWORK_FAMILIES)?;
+    }
+    if mode == "lineage_dependency" {
+        let ranking = args
+            .get("ranking")
+            .and_then(Value::as_str)
+            .unwrap_or("selective")
+            .trim();
+        if !LINEAGE_DEPENDENCY_RANKINGS.contains(&ranking) {
+            return Err(format!("unsupported ranking '{ranking}'"));
+        }
+        query.insert("ranking".into(), Value::String(ranking.to_string()));
     }
     if mode == "lineage_drug" {
         require_allowed(&query, "omic", DRUG_OMICS)?;
@@ -1616,6 +2093,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     if matches!(
         mode.as_str(),
         "top"
+            | "lineage_dependency"
             | "lineage_network"
             | "lineage_cnv"
             | "lineage_drug"
@@ -1951,9 +2429,176 @@ fn pretty(value: Value) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
 }
 
+fn compact_ledger_payload(value: &Value) -> Value {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    if bytes.len() <= MAX_LEDGER_PAYLOAD_BYTES {
+        return value.clone();
+    }
+    json!({
+        "state": value.get("state"),
+        "query": value.get("query"),
+        "subject": value.get("subject"),
+        "semantics": value.get("semantics"),
+        "provenance": value.get("provenance"),
+        "payload_omitted": true,
+        "payload_bytes": bytes.len(),
+        "payload_sha256": wisp_store::canonical_json_sha256(value).1,
+        "reason": format!("ledger payload exceeds the {MAX_LEDGER_PAYLOAD_BYTES} byte compact-record limit")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_route_keeps_ordinary_requests_out_of_workflows() {
+        let cancer_only = depmap_route(&json!({
+            "intent":"cancer_inventory",
+            "cancer":"结肠癌"
+        }))
+        .unwrap();
+        assert_eq!(cancer_only["state"], "routed");
+        assert_eq!(cancer_only["execution_level"], "L1_DIRECT");
+        assert_eq!(cancer_only["requires_approval"], false);
+        assert_eq!(cancer_only["entities"]["canonical_lineage"], "Bowel");
+        assert_eq!(cancer_only["allowed_next_tools"], json!(["depmap_query"]));
+
+        let dependency_ranking = depmap_route(&json!({
+            "intent":"cancer_dependency_ranking",
+            "cancer":"乳腺癌"
+        }))
+        .unwrap();
+        assert_eq!(dependency_ranking["execution_level"], "L1_DIRECT");
+        assert_eq!(dependency_ranking["requires_approval"], false);
+        assert_eq!(
+            dependency_ranking["entities"]["canonical_lineage"],
+            "Breast"
+        );
+        assert!(dependency_ranking["strategy"]
+            .as_str()
+            .unwrap()
+            .contains("not a new analysis"));
+
+        let gene_and_cancer = depmap_route(&json!({
+            "intent":"gene_evidence",
+            "gene":"KRAS",
+            "cancer":"肺癌"
+        }))
+        .unwrap();
+        assert_eq!(gene_and_cancer["execution_level"], "L1_DIRECT");
+        assert_eq!(
+            gene_and_cancer["allowed_next_tools"],
+            json!(["depmap_evidence"])
+        );
+
+        let exploration = depmap_route(&json!({
+            "intent":"topic_exploration",
+            "cancer":"乳腺癌"
+        }))
+        .unwrap();
+        assert_eq!(exploration["execution_level"], "L2_INVESTIGATE");
+        assert_eq!(exploration["requires_approval"], false);
+    }
+
+    #[test]
+    fn agent_route_requires_entities_and_approval_only_for_durable_work() {
+        let missing =
+            depmap_route(&json!({"intent":"gene_pair_evidence","source_gene":"KRAS"})).unwrap();
+        assert_eq!(missing["state"], "needs_input");
+        assert_eq!(missing["missing_fields"], json!(["target_gene"]));
+
+        let report = depmap_route(&json!({
+            "intent":"report_generation",
+            "gene":"PTK7",
+            "cancer":"肝癌"
+        }))
+        .unwrap();
+        assert_eq!(report["execution_level"], "L4_DURABLE");
+        assert_eq!(report["requires_approval"], true);
+        assert_eq!(
+            report["guardrails"]["workflow_semantic_match_alone_is_sufficient"],
+            false
+        );
+
+        let explicit = depmap_route(&json!({
+            "intent":"topic_exploration",
+            "cancer":"肝癌",
+            "explicit_workflow_request":true
+        }))
+        .unwrap();
+        assert_eq!(explicit["execution_level"], "L4_DURABLE");
+        assert_eq!(explicit["requires_approval"], true);
+        assert_eq!(explicit["allowed_next_tools"], json!(["start_workflow"]));
+    }
+
+    #[test]
+    fn agent_route_schema_is_flat_and_closed() {
+        let schema = depmap_route_schema();
+        assert_eq!(schema["required"], json!(["intent"]));
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(schema.get("oneOf").is_none());
+    }
+
+    #[test]
+    fn oversized_ledger_payload_is_replaced_by_a_hash_reference() {
+        let payload =
+            json!({"state":"precomputed_query","result":"x".repeat(MAX_LEDGER_PAYLOAD_BYTES)});
+        let compact = compact_ledger_payload(&payload);
+        assert_eq!(compact["payload_omitted"], true);
+        assert!(compact["payload_sha256"]
+            .as_str()
+            .is_some_and(|v| v.len() == 64));
+        assert_eq!(compact["state"], "precomputed_query");
+    }
+
+    #[tokio::test]
+    async fn successful_query_result_returns_a_persisted_evidence_reference() {
+        let root = std::env::temp_dir().join(format!(
+            "wisp-depmap-evidence-ledger-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = wisp_store::Store::open(&root.join("store.sqlite"))
+            .await
+            .unwrap();
+        store.create_project("p", "Project", ".").await.unwrap();
+        store
+            .create_frame("f", "p", "DepMap", "test-model")
+            .await
+            .unwrap();
+        let tool = DepMapQueryTool {
+            project_root: root.clone(),
+            query_script: root.join("query.R"),
+            store: store.clone(),
+            project_id: "p".into(),
+            frame_id: "f".into(),
+        };
+        let result = tool
+            .persist_scientific_result(
+                TOOL_NAME,
+                &json!({"mode":"core","gene":"KRAS"}),
+                ToolResult::ok(pretty(json!({
+                    "state":"precomputed_query",
+                    "provider":"local",
+                    "release":"26Q1",
+                    "query":{"mode":"core","gene":"KRAS"},
+                    "semantics":{"metric":"gene_effect"},
+                    "result":{"status":"FOUND","value":-0.8}
+                }))),
+            )
+            .await;
+        assert!(result.success);
+        let value: Value = serde_json::from_str(&result.content).unwrap();
+        let evidence_id = value["evidence_ref"]["evidence_id"].as_str().unwrap();
+        assert_eq!(evidence_id.len(), 64);
+        let records = store.list_scientific_evidence("p", "f", 10).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].evidence_id, evidence_id);
+        drop(tool);
+        store.close().await;
+        std::fs::remove_dir_all(root).ok();
+    }
 
     #[test]
     fn validates_mode_specific_query_fields_and_bounds_top_limit() {
@@ -1987,6 +2632,29 @@ mod tests {
         assert_eq!(lineage["target"], "RAF1");
         assert_eq!(lineage["reciprocal"], true);
         assert_eq!(lineage["limit"], 5);
+        let dependency = validated_query(&json!({
+            "mode":"lineage_dependency",
+            "lineage":"乳腺癌",
+            "limit":10
+        }))
+        .unwrap();
+        assert_eq!(dependency["lineage"], "Breast");
+        assert_eq!(dependency["ranking"], "selective");
+        assert_eq!(dependency["limit"], 10);
+        let descriptive_dependency = validated_query(&json!({
+            "mode":"lineage_dependency",
+            "lineage":"colorectal cancer",
+            "ranking":"mean_dependency"
+        }))
+        .unwrap();
+        assert_eq!(descriptive_dependency["lineage"], "Bowel");
+        assert_eq!(descriptive_dependency["ranking"], "mean_dependency");
+        assert!(validated_query(&json!({
+            "mode":"lineage_dependency",
+            "lineage":"Breast",
+            "ranking":"logfc"
+        }))
+        .is_err());
         assert!(validated_query(&json!({
             "mode":"lineage_drug","omic":"effect","lineage":"Lung"
         }))
@@ -2022,6 +2690,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("lineage_catalog")));
+        assert!(schema["properties"]["mode"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("lineage_dependency")));
         assert!(schema["properties"]["mode"]["enum"]
             .as_array()
             .unwrap()

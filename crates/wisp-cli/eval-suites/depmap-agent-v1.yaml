@@ -103,7 +103,7 @@ cases:
       - tool_calls:
           - id: evidence-1
             name: depmap_evidence
-            arguments: {gene: ESR1, lineage: Breast, sections: [core, networks, cnv], limit: 5}
+            arguments: {gene: ESR1, lineage: Breast, sections: [core, networks, cnv], limit: 3}
       - tool_calls:
           - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 dynamic evidence for ESR1 in Breast: core Gene Effect mean -0.42; lineage network retained FOXA1 (r=0.48, FDR=0.004). CNV is INELIGIBLE because n=3 is below 5; this is a coverage gap, not a biological negative. Core is release-wide and the network is lineage-scoped. No new analysis was started."}}
     expect:
@@ -115,7 +115,7 @@ cases:
       tool_args:
         - {name: depmap_evidence, pointer: /gene, equals: ESR1}
         - {name: depmap_evidence, pointer: /lineage, equals: Breast}
-        - {name: depmap_evidence, pointer: /limit, equals: 5}
+        - {name: depmap_evidence, pointer: /limit, equals: 3}
 
   - id: ineligible-is-not-biological-negative
     description: Preserve cohort-threshold semantics for an ineligible cancer lineage.
@@ -316,7 +316,7 @@ cases:
       - tool_calls:
           - {id: evidence-1, name: depmap_evidence, arguments: {gene: ATF5, lineage: Liver, sections: [mutation], limit: 3}}
       - tool_calls:
-          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 泛癌 custom-missense 结果使用 mean_difference；返回行的 n=12，最低 FDR=0.8927，没有通过多重检验校正。因此这是未发现显著关联的结果，不能据此提出机制、药物或合成致死结论。damaging_mutation_n=10/1968 仅是 provider 定义的 damaging-event 计数，不等同临床致病突变。"}}
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 泛癌 custom-missense 结果使用 mean_difference；返回行的 n=12，最低 FDR=0.8927，没有通过多重检验校正。因此这是未发现显著关联的结果，不能据此提出机制、药物或成对依赖结论。damaging_mutation_n=10/1968 仅是 provider 定义的 damaging-event 计数，不等同临床致病突变。"}}
     expect:
       completion_contains: [26Q1, 泛癌, mean_difference, "12", "0.8927", 没有通过, damaging-event, 不等同]
       completion_not_contains: [蛋白酶体轴, HSP90, DHODH, DTYMK, 合成致死, "致病突变罕见"]
@@ -344,9 +344,77 @@ cases:
       - tool_calls:
           - {id: evidence-1, name: depmap_evidence, arguments: {gene: ATF5, lineage: Liver, limit: 3}}
       - tool_calls:
-          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 当前结果有两个不同模块达到 FDR<0.05：Liver 共依赖 CARD14（r=0.803，FDR=0.024）以及连续的表达相关富集 OXPHOS（z=3.66，FDR=0.043）。富集是连续关联，没有返回 high/low 分组或阈值，不能称为 ATF5-high 亚组。CNV 为 INELIGIBLE，表示当前队列扩增组低于阈值，不能据此说该生物学路线不可行。Liver 25 个模型中 0 个低于 -0.5，只能报告这一描述性阈值观察。"}}
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 当前结果有两个不同模块达到 FDR<0.05：Liver 共依赖 CARD14（r=0.803，FDR=0.024）以及连续的表达相关富集 OXPHOS（z=3.66，FDR=0.043）。富集是连续关联，没有返回 high/low 分组或阈值，不能创建离散表达亚组标签。CNV 为 INELIGIBLE，表示当前队列扩增组低于阈值，不能据此判定生物学可行性。Liver 25 个模型中 0 个低于 -0.5，只能报告这一描述性阈值观察。"}}
     expect:
       completion_contains: [CARD14, "0.024", OXPHOS, "0.043", 连续, 没有返回, INELIGIBLE, 低于阈值, 描述性]
       completion_not_contains: [唯一, ATF5-high, 路线不可行, 不是直接依赖]
       required_tools: [depmap_evidence, attempt_completion]
       forbidden_tools: [depmap_project_runs, depmap_query, shell, read, write, edit, run_in_context, search_memory]
+
+  - id: cancer-dependency-ranking-chinese-wording
+    description: A cancer-only top-dependency request reads the completed lineage test in one call.
+    tags: [depmap, lineage-dependency, breast, wording-stress, debug-8]
+    prompt: 我的课题是乳腺癌，乳腺癌细胞系的前10名依赖基因是什么？请用已有26Q1结果，不要重新计算。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_dependency]}
+            lineage: {type: string}
+            ranking: {type: string, enum: [selective, mean_dependency]}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_dependency","lineage":"Breast","ranking":"selective","limit":10},"semantics":{"metric":"gene_effect_lineage_vs_rest","interpretation":"lineage minus rest Gene Effect; not logFC"},"result":{"status":"FOUND","ranking":"selective","housekeeping_filter_applied":false,"summary":{"lineage_n_modal":53,"tested_gene_count":18435,"eligible_ranked_gene_count":494,"returned_count":10},"rows":[{"symbol":"FOXA1","effect_mean_difference":-0.6384,"fdr_lineage_more_dependent":0.0033}]},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: dependency-1, name: depmap_query, arguments: {mode: lineage_dependency, lineage: Breast, ranking: selective, limit: 10}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Breast 预计算选择性依赖排行返回 10 个基因；示例首位 FOXA1，lineage-minus-rest Gene Effect 均值差 -0.6384，FDR=0.0033。Breast 众数样本数为 53。该差值不是 logFC；当前表未应用经验证的管家/共同必需基因排除。没有启动新分析。"}}
+    expect:
+      completion_contains: [26Q1, Breast, FOXA1, "-0.6384", "0.0033", "53", "不是 logFC", 未应用, 没有启动]
+      completion_not_contains: ["Rscript", "新 Run", "非管家基因", "重新计算"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_dependency}
+        - {name: depmap_query, pointer: /lineage, equals: Breast}
+        - {name: depmap_query, pointer: /ranking, equals: selective}
+        - {name: depmap_query, pointer: /limit, equals: 10}
+
+  - id: cancer-dependency-ranking-heldout-wording
+    description: Relative-dependency wording maps to the same selective precomputed contract.
+    tags: [depmap, lineage-dependency, breast, wording-stress, holdout, debug-8]
+    prompt: Which ten genes show the strongest Breast-lineage dependency relative to the other DepMap lineages? Use the stored test and do not create a Run.
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_dependency]}
+            lineage: {type: string}
+            ranking: {type: string, enum: [selective, mean_dependency]}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_dependency","lineage":"Breast","ranking":"selective","limit":10},"semantics":{"metric":"gene_effect_lineage_vs_rest"},"result":{"status":"FOUND","ranking":"selective","summary":{"returned_count":10},"rows":[{"symbol":"FOXA1","effect_mean_difference":-0.6384,"fdr_lineage_more_dependent":0.0033}]},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: dependency-1, name: depmap_query, arguments: {mode: lineage_dependency, lineage: Breast, ranking: selective, limit: 10}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "The stored 26Q1 Breast-versus-rest selective-dependency ranking returned 10 genes. FOXA1 has a lineage-minus-rest Gene Effect mean difference of -0.6384 and FDR 0.0033. No new Run or statistical test was started."}}
+    expect:
+      completion_contains: [26Q1, Breast, FOXA1, "-0.6384", "0.0033", "No new Run"]
+      completion_not_contains: ["Rscript", "new analysis completed", logFC]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_dependency}
+        - {name: depmap_query, pointer: /lineage, equals: Breast}
+        - {name: depmap_query, pointer: /ranking, equals: selective}
+        - {name: depmap_query, pointer: /limit, equals: 10}

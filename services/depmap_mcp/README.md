@@ -32,11 +32,14 @@ The exposed tools are intentionally small:
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
+- `depmap_lineage_dependencies`
 - `depmap_lineage_direction_discovery`
 - `depmap_gene_evidence`
 - `tcga_gene_expression_survival`
 - `depmap_pair_evidence`
 - `depmap_drug_evidence`
+- `depmap_subtype_evidence`
+- `depmap_coamplification_evidence`
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
@@ -75,6 +78,24 @@ inventing an anchor gene. It returns fixed-filter shortlists for eight distinct
 families, an unweighted cross-family mention count, and a balanced bounded topic
 candidate list. It never numerically combines correlation, mean difference,
 enrichment, or PRISM metrics.
+
+`depmap_lineage_dependencies` handles cancer-only requests for top, strongest,
+or selective dependency genes. It reads the completed lineage-vs-rest CRISPR
+Gene Effect table in one bounded call. The default `selective` ranking uses the
+precomputed one-sided Welch test, within-lineage BH FDR, and producer rank;
+`mean_dependency` is a separate descriptive ordering. The returned Gene Effect
+mean difference is not logFC.
+The table has no validated housekeeping/common-essential exclusion field;
+`selective` therefore must not be reported as `non-housekeeping`.
+
+`depmap_subtype_evidence` lists the 33 eligible frozen subtype contrasts,
+returns complete per-gene rows within those contrasts, or returns bounded
+retained-hit rankings for an exact `contrast_id`. It does not infer arbitrary
+free-text subtype definitions. `depmap_coamplification_evidence` reads only the
+15,368 constrained high-confidence directional pairs and their exhaustive or
+lineage-adjusted retained target hits. `NOT_RETAINED` means the pair was tested
+but the requested target did not pass the stored result contract; it is not a
+biological null.
 
 ## Connect from Wisp Science
 

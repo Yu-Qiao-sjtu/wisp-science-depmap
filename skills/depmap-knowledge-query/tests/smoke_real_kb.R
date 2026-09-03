@@ -78,6 +78,19 @@ stopifnot(drug$n > 0L)
 tested <- c("catalog", "core", "pair", "top", "lineage", "coverage_gap", "pathway", "drug")
 sparse_statuses <- c("FOUND", "NOT_RETAINED", "INELIGIBLE", "NOT_COMPUTED", "MODULE_UNAVAILABLE")
 
+lineage_dependency_root <- file.path(kb_root, "depmap-26q1-core", "lineage_dependency_tests")
+if (dir.exists(lineage_dependency_root)) {
+  lineage_dependency <- query(
+    "--mode", "lineage_dependency", "--lineage", "Breast",
+    "--ranking", "selective", "--limit", "10"
+  )
+  stopifnot(identical(lineage_dependency$status, "FOUND"))
+  stopifnot(length(lineage_dependency$rows) == 10L)
+  stopifnot(all(vapply(lineage_dependency$rows, function(row) row$effect_mean_difference < 0, logical(1))))
+  stopifnot(all(vapply(lineage_dependency$rows, function(row) row$fdr_lineage_more_dependent <= 0.05, logical(1))))
+  tested <- c(tested, "lineage_dependency")
+}
+
 network_root <- file.path(kb_root, "depmap-26q1-full", "lineage_sparse_networks")
 if (dir.exists(network_root)) {
   network <- query(
