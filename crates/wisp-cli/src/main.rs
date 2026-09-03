@@ -1,7 +1,7 @@
 mod eval;
 mod rpc;
-mod trajectory_eval;
 mod runs;
+mod trajectory_eval;
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
