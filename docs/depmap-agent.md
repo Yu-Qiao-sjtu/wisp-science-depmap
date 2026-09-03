@@ -298,6 +298,25 @@ The graph keeps large data in the query layer and executes eight bounded tasks:
 8. a final task ranks the topics and returns a figure plan, manuscript-section
    blueprint, caveats, and the few questions needed for the next conversation.
 
+The literature task keeps a claim ledger. Search snippets, AI summaries, title
+matches, and reference-list mentions remain candidate leads until the primary
+abstract or full text and a stable PMID, PMCID, DOI, or publisher URL verify
+them. Later corrections mark the old claim contradicted or retracted so it
+cannot flow into topic generation. Search depth remains adaptive: evidence
+saturation, unresolved claim classes, and explicit coverage gaps determine when
+the node stops, not a hard-coded call count. A negative search is reported only
+as “not found within the searched scope”; it is never proof that nobody has done
+the work or that a gap is unique.
+
+For requests that ask which existing data support a proposed study, the Agent
+uses the `study_support_mapping` route and a bounded cancer catalog query. Each
+study claim is separated into direct precomputed evidence, new computation from
+available inputs, missing data/coverage, or literature-only/unverified support.
+This inventory never falls back to shell, an SSH Run, or guessed filesystem
+paths. Installed modules show availability, not that a proposed TF-high
+subgroup, drug combination, mechanism, or cross-platform integration has
+already been analyzed.
+
 The evidence nodes use the policy-scoped `depmap_read` capability. It grants
 the delegated DepMap Specialist only the bounded `depmap_evidence` and
 `depmap_query` tools; it does

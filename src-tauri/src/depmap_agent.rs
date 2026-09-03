@@ -391,7 +391,7 @@ fn depmap_route_schema() -> Value {
                     "cancer_dependency_ranking",
                     "cancer_direction_discovery", "gene_evidence",
                     "gene_pair_evidence", "drug_gene_evidence",
-                    "evidence_comparison", "result_interpretation",
+                    "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
                     "new_analysis", "report_generation"
                 ]
@@ -433,7 +433,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "lineage_resolution"
         | "cancer_inventory"
         | "cancer_dependency_ranking"
-        | "cancer_direction_discovery" => {
+        | "cancer_direction_discovery"
+        | "study_support_mapping" => {
             if cancer.is_none() {
                 missing.push("cancer");
             }
@@ -530,6 +531,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Assemble a small bounded set of direct queries, then rank only supported directions.",
                 vec![TOOL_NAME, EVIDENCE_TOOL_NAME],
             ),
+            "study_support_mapping" => (
+                "L2_INVESTIGATE",
+                false,
+                "Map each proposed study claim to returned precomputed evidence, new computation using available inputs, a data gap, or literature-only support. Stay query-only and never inspect or guess filesystem paths.",
+                vec![TOOL_NAME, EVIDENCE_TOOL_NAME],
+            ),
             "literature_validation" => (
                 "L3_DELEGATE",
                 false,
@@ -573,6 +580,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "limit": 20
             },
             "single_call": true
+        }),
+        ("study_support_mapping", Some(lineage)) if !requires_user_input => json!({
+            "tool": TOOL_NAME,
+            "arguments": {
+                "mode": "lineage_catalog",
+                "lineage": lineage
+            },
+            "single_call": true,
+            "output_contract": {
+                "required_buckets": [
+                    "direct_precomputed_evidence",
+                    "new_computation_from_available_inputs",
+                    "missing_data_or_coverage",
+                    "literature_only_or_unverified_claims"
+                ],
+                "forbidden_shortcuts": ["shell", "run_in_context", "filesystem_inventory"]
+            }
         }),
         _ => Value::Null,
     };
@@ -2550,6 +2574,33 @@ mod tests {
         );
         assert_eq!(directions["recommended_query"]["single_call"], true);
         assert_eq!(directions["allowed_next_tools"], json!(["depmap_query"]));
+
+        let support_mapping = depmap_route(&json!({
+            "intent":"study_support_mapping",
+            "cancer":"肝癌"
+        }))
+        .unwrap();
+        assert_eq!(support_mapping["execution_level"], "L2_INVESTIGATE");
+        assert_eq!(support_mapping["requires_approval"], false);
+        assert_eq!(support_mapping["entities"]["canonical_lineage"], "Liver");
+        assert_eq!(
+            support_mapping["recommended_query"]["arguments"],
+            json!({"mode":"lineage_catalog","lineage":"Liver"})
+        );
+        assert_eq!(support_mapping["recommended_query"]["single_call"], true);
+        assert_eq!(
+            support_mapping["recommended_query"]["output_contract"]["required_buckets"],
+            json!([
+                "direct_precomputed_evidence",
+                "new_computation_from_available_inputs",
+                "missing_data_or_coverage",
+                "literature_only_or_unverified_claims"
+            ])
+        );
+        assert_eq!(
+            support_mapping["recommended_query"]["output_contract"]["forbidden_shortcuts"],
+            json!(["shell", "run_in_context", "filesystem_inventory"])
+        );
 
         let gene_and_cancer = depmap_route(&json!({
             "intent":"gene_evidence",

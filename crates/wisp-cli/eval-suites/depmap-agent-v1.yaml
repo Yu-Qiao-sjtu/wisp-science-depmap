@@ -450,3 +450,69 @@ cases:
         - {name: depmap_query, pointer: /mode, equals: lineage_directions}
         - {name: depmap_query, pointer: /lineage, equals: Liver}
         - {name: depmap_query, pointer: /limit, equals: 20}
+
+  - id: liver-study-support-mapping-separates-existing-from-proposed
+    description: A manuscript support audit uses the bounded catalog and does not equate installed modules with completed subgroup analyses.
+    tags: [depmap, support-mapping, liver, grounding, debug-10]
+    prompt: 这篇肝癌文章计划包含 TF-high 分组、全基因组选择性依赖、NANOG-TRRAP 机制、PRISM 联配和 TCGA 预后。请说明我们已有数据分别能直接支持什么；不要启动新计算，也不要扫描服务器目录。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_catalog]}
+            lineage: {type: string}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_catalog","lineage":"Liver"},"result":{"status":"FOUND","lineage":"Liver","available_modules":["lineage_selective_dependency","lineage_sparse_networks","lineage_prism_associations","tcga_expression_survival"],"coverage_gaps":["No validated TF-high subgroup contrast","No validated PRISM combination analysis","No causal NANOG-TRRAP mechanism test"]},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: catalog-1, name: depmap_query, arguments: {mode: lineage_catalog, lineage: Liver}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Liver 目录可直接支持：既有 lineage_selective_dependency、lineage_sparse_networks、lineage_prism_associations 和 TCGA expression-survival 结果的查询。可用现有输入但仍需新计算：TF-high 分组及组间依赖检验、PRISM 联配。文献或实验验证层：NANOG-TRRAP 因果机制。当前覆盖缺口包括未验证的 TF-high contrast、药物组合和因果机制；没有启动 Run，也没有扫描服务器目录。"}}
+    expect:
+      completion_contains: [26Q1, Liver, 可直接支持, 仍需新计算, 覆盖缺口, 没有启动, 没有扫描]
+      completion_not_contains: ["全部有直接数据支撑", "唯一外部依赖", "/home/data/", "256 核"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_catalog}
+        - {name: depmap_query, pointer: /lineage, equals: Liver}
+
+  - id: continuous-correlation-is-not-tf-high-synthetic-lethality
+    description: A continuous expression-dependency row remains a correlation and cannot be upgraded into a thresholded or synthetic-lethal screen.
+    tags: [depmap, statistics, correlation, debug-10]
+    prompt: NANOG 表达和 TRRAP 依赖在 Liver 中相关。我们是否已经完成 NANOG-high 的合成致死筛选？只解释现有结果。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_network]}
+            family: {type: string, enum: [expression_dependency]}
+            lineage: {type: string}
+            source: {type: string}
+            target: {type: string}
+          required: [mode, family, lineage, source, target]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_network","family":"expression_dependency","lineage":"Liver","source":"NANOG","target":"TRRAP"},"semantics":{"metric":"pearson_expression_dependency_correlation"},"result":{"status":"FOUND","n":25,"r":-0.721,"fdr":0.093,"grouping":null},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: pair-1, name: depmap_query, arguments: {mode: lineage_network, family: expression_dependency, lineage: Liver, source: NANOG, target: TRRAP}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "没有完成 NANOG-high 合成致死筛选。26Q1 Liver 返回的是 n=25 的连续表达-依赖 Pearson 相关（r=-0.721，FDR=0.093），且没有分组阈值。NANOG-high 分组、组间依赖差异和合成致死检验都属于尚未执行的新计算；相关性本身不证明合成致死。"}}
+    expect:
+      completion_contains: [没有完成, "n=25", "-0.721", "0.093", 没有分组阈值, 新计算, 不证明合成致死]
+      completion_not_contains: ["TF-high synthetic dependency screen 已完成", "唯一 FDR", "直接数据支撑"]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_network}
+        - {name: depmap_query, pointer: /family, equals: expression_dependency}
+        - {name: depmap_query, pointer: /lineage, equals: Liver}
+        - {name: depmap_query, pointer: /source, equals: NANOG}
+        - {name: depmap_query, pointer: /target, equals: TRRAP}

@@ -49,9 +49,10 @@ it does not convert them into unverified automatic scores.
 
 ## Run the fixed and held-out fixture suite
 
-The six-case suite includes stale-memory grounding, a one-call dynamic evidence
-bundle, a complete lineage query, an ineligible cohort, a blocked provider, and
-a breast-cancer/gene holdout. Its
+The sixteen-case suite includes stale-memory grounding, one-call dynamic
+evidence, complete lineage queries, ineligible and blocked-provider controls,
+held-out wording, cancer-only inventories and rankings, direction discovery,
+study-support mapping, and continuous-correlation semantics. Its
 tools expose explicit schemas and deterministic results, so it can run offline
 in CI or against a configured live model without contacting the DepMap server:
 

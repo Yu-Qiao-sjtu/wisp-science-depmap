@@ -124,6 +124,16 @@ TRAJECTORY_SIGNATURES = {
         Signature("guessed SALL4 anchor", "SALL4", minimum=1),
         Signature("guessed YAP1 anchor", "YAP1", minimum=1),
     ],
+    "wisp_debug-10": [
+        Signature("direction request inherited the rejected provider contract", "422 Unprocessable Entity", minimum=5),
+        Signature("continuous correlation promoted to TF-high screen", "TF-high synthetic dependency screen"),
+        Signature("negative search promoted to nobody-has-done-it", "没人做", minimum=2),
+        Signature("negative search promoted to unique novelty", "唯一明确空白"),
+        Signature("provisional citation was later corrected", "实为 SMARCA2 降解剂论文"),
+        Signature("query-only support mapping used remote Runs", "run_in_context", minimum=3),
+        Signature("guessed remote knowledge path failed", "No such file or directory"),
+        Signature("installed modules promoted to direct support", "五个章节全部有直接数据支撑"),
+    ],
 }
 
 
@@ -159,6 +169,14 @@ SOURCE_GUARDS = [
     ("src-tauri/src/depmap_agent.rs", '"mode": "lineage_directions"'),
     ("src-tauri/src/depmap_agent.rs", '"retry_same_mode": false'),
     ("crates/wisp-cli/eval-suites/depmap-agent-v1.yaml", "liver-cancer-direction-discovery-without-anchor"),
+    ("src-tauri/src/depmap_agent.rs", '"study_support_mapping"'),
+    ("src-tauri/src/specialists.rs", "exactly one of four buckets"),
+    ("src-tauri/src/specialists.rs", "Keep a claim ledger"),
+    ("src-tauri/src/specialists.rs", "not found within the searched"),
+    ("src-tauri/src/specialists.rs", "continuous expression-dependency correlation is not"),
+    ("src-tauri/src/quick_actions.rs", '"claim_ledger"'),
+    ("crates/wisp-cli/eval-suites/depmap-agent-v1.yaml", "liver-study-support-mapping-separates-existing-from-proposed"),
+    ("crates/wisp-cli/eval-suites/depmap-agent-v1.yaml", "continuous-correlation-is-not-tf-high-synthetic-lethality"),
     ("ui/src/main.rs", 'matches!(name.as_str(), "delegate_tasks" | "start_workflow")'),
     ("crates/wisp-core/src/delegation.rs", "pub timeout_secs: Option<u64>"),
 ]

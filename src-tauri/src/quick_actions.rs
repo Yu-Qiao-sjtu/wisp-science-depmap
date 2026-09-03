@@ -1239,12 +1239,36 @@ fn depmap_cancer_inventory_schema() -> Value {
 fn depmap_novelty_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["established_findings", "contested_findings", "open_questions", "papers", "search_limitations"],
+        "required": ["established_findings", "contested_findings", "open_questions", "claim_ledger", "papers", "search_limitations"],
         "properties": {
             "established_findings": { "type": "array", "items": { "type": "string" } },
             "contested_findings": { "type": "array", "items": { "type": "string" } },
             "open_questions": { "type": "array", "items": { "type": "string" } },
-            "papers": { "type": "array", "items": { "type": "object" } },
+            "claim_ledger": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["claim", "status", "paper_ids"],
+                    "properties": {
+                        "claim": { "type": "string" },
+                        "status": { "type": "string", "enum": ["candidate", "verified", "contradicted", "retracted"] },
+                        "paper_ids": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            "papers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title", "stable_id", "verification_source", "supported_claims"],
+                    "properties": {
+                        "title": { "type": "string" },
+                        "stable_id": { "type": "string" },
+                        "verification_source": { "type": "string" },
+                        "supported_claims": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
             "search_limitations": { "type": "array", "items": { "type": "string" } }
         }
     })
@@ -1389,7 +1413,7 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
             ),
             depmap_topic_task(
                 "novelty_landscape",
-                "Search verified scholarly evidence for the exact cancer and research direction in the recent user requests, adding the supplied gene only when the user explicitly named one. Never invent an anchor gene. Begin broadly, then adapt the next query to unresolved downstream claim classes, contradictions, identifier gaps, and treatment or clinical claims actually encountered. Batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Stop by evidence saturation rather than a predetermined query or tool-call count: finish when additional queries no longer change the established-findings, contradiction, open-question, or prior-art map. If a source is unavailable or a claim class remains unsupported, return the verified partial evidence set with an explicit coverage gap instead of silently extending the search or inventing support. Always reserve a final synthesis step so the task returns a schema-valid result. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
+                "Search verified scholarly evidence for the exact cancer and research direction in the recent user requests, adding the supplied gene only when the user explicitly named one. Never invent an anchor gene. Begin broadly, then adapt the next query to unresolved downstream claim classes, contradictions, identifier gaps, and treatment or clinical claims actually encountered. Batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Treat search snippets, AI summaries, title matches, and reference-list mentions as candidate leads only. Maintain a claim ledger with candidate, verified, contradicted, or retracted status; only a primary abstract/full-text check plus a stable PMID, PMCID, DOI, or publisher URL can verify a claim. A corrected or retracted lead must not flow downstream. Stop by evidence saturation rather than a predetermined query or tool-call count: finish when additional queries no longer change the verified established-findings, contradiction, open-question, or prior-art map. If a source is unavailable or a claim class remains unsupported, return the verified partial evidence set with an explicit coverage gap instead of silently extending the search or inventing support. Always reserve a final synthesis step so the task returns a schema-valid result. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. A negative search means only 'not found within the searched scope'; never claim nobody has done it, a unique gap, or proof that a topic is unpublished. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
                 &[],
                 &["literature_search"],
                 &["literature-review"],
@@ -1398,7 +1422,7 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
             ),
             depmap_topic_task(
                 "candidate_topics",
-                "Using only the DepMap evidence and novelty landscape dependency results, propose 3 to 6 distinct, testable cancer research topics. Every topic must identify its cancer context, falsifiable hypothesis, exact DepMap basis, traceable literature basis, defensible novelty claim, validation plan, expected figures, and key risks. Treat a DepMap lineage as a model-grouping proxy rather than a clinical histology: do not silently narrow Liver to HCC, add an unrequested control lineage, or name cell lines without current model metadata. A non-significant top list is a null result and its nominal targets must not seed a biological module, named drug, or mechanism. Do not disguise a generic correlation as a novel mechanism, relabel a mean difference as correlation, attach an unsupported drug, or call a proposed matrix/test/FDR calculation an already completed query.",
+                "Using only the DepMap evidence and novelty landscape dependency results, propose 3 to 6 distinct, testable cancer research topics. Every topic must identify its cancer context, falsifiable hypothesis, exact DepMap basis, traceable literature basis, defensible novelty claim, validation plan, expected figures, and key risks. Treat a DepMap lineage as a model-grouping proxy rather than a clinical histology: do not silently narrow Liver to HCC, add an unrequested control lineage, or name cell lines without current model metadata. A non-significant top list is a null result and its nominal targets must not seed a biological module, named drug, or mechanism. A continuous expression-dependency association is not a TF-high screen, high/low contrast, selective dependency, or synthetic lethality; any such subgroup analysis belongs in the validation plan as new computation. Use only verified claims from the novelty claim ledger. Phrase negative searches as not found within the searched scope, never as nobody has done it or a unique gap. Do not disguise a generic correlation as a novel mechanism, relabel a mean difference as correlation, attach an unsupported drug, or call a proposed matrix/test/FDR calculation an already completed query.",
                 &["cancer_data_inventory", "depmap_evidence", "novelty_landscape"],
                 &["reasoning"],
                 &[],
@@ -1407,7 +1431,7 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
             ),
             depmap_topic_task(
                 "innovation_review",
-                "Independently review every candidate topic for novelty. Check prior-art collision, whether the proposed mechanism is already established, whether the DepMap angle is genuinely differentiating, and whether the topic closes a specific knowledge gap. Score every topic from 1 to 5 and state the next literature or data check that could falsify its innovation claim. Use only dependency results and never invent citations.",
+                "Independently review every candidate topic for novelty. Check prior-art collision, whether the proposed mechanism is already established, whether the DepMap angle is genuinely differentiating, and whether the topic closes a specific knowledge gap. Score every topic from 1 to 5 and state the next literature or data check that could falsify its innovation claim. Use only verified entries from the novelty claim ledger and dependency results; do not revive candidate, contradicted, or retracted claims, infer proof of absence from a negative search, or invent citations.",
                 &["novelty_landscape", "candidate_topics"],
                 &["reasoning", "review"],
                 &["literature-review"],
@@ -2652,6 +2676,13 @@ mod tests {
             .instruction
             .contains("Never invent an anchor gene"));
         assert!(literature.instruction.contains("evidence saturation"));
+        assert!(literature.instruction.contains("Maintain a claim ledger"));
+        assert!(literature
+            .instruction
+            .contains("candidate, verified, contradicted, or retracted"));
+        assert!(literature
+            .instruction
+            .contains("not found within the searched scope"));
         assert!(literature.instruction.contains("explicit coverage gap"));
         assert!(!literature.instruction.contains("resource ceiling"));
         assert!(literature
@@ -2661,11 +2692,33 @@ mod tests {
             .instruction
             .contains("verified partial evidence set"));
         assert!(!literature.instruction.contains("after six"));
+        let novelty_schema = literature.output_schema.as_ref().unwrap();
+        assert_eq!(
+            novelty_schema.pointer("/properties/claim_ledger/items/properties/status/enum"),
+            Some(&json!([
+                "candidate",
+                "verified",
+                "contradicted",
+                "retracted"
+            ]))
+        );
+        assert!(novelty_schema
+            .pointer("/required")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|field| field == "claim_ledger"));
 
         let candidates = &proposal.tasks[3];
         assert!(candidates
             .instruction
             .contains("non-significant top list is a null result"));
+        assert!(candidates
+            .instruction
+            .contains("continuous expression-dependency association is not a TF-high screen"));
+        assert!(candidates
+            .instruction
+            .contains("not found within the searched scope"));
         assert_eq!(
             candidates.depends_on,
             [
@@ -2696,6 +2749,7 @@ mod tests {
         let feasibility = &proposal.tasks[5];
         let translation = &proposal.tasks[6];
         assert_eq!(innovation.id, "innovation_review");
+        assert!(innovation.instruction.contains("retracted claims"));
         assert_eq!(feasibility.id, "feasibility_review");
         assert_eq!(translation.id, "clinical_translation_review");
         assert!(!feasibility.depends_on.contains(&translation.id));

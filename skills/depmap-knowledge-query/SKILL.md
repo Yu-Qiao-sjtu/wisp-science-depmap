@@ -54,6 +54,15 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    literature claim.
    Use `knowledge.available_query_families` and `knowledge.coverage_checks`
    from the resolver; do not infer coverage from the size of the directory.
+   When the user asks which data support a proposed study or manuscript plan,
+   route it as `study_support_mapping` and query the cancer's
+   `lineage_catalog`. For every requested claim, report exactly one status:
+   `direct_precomputed_evidence`, `new_computation_from_available_inputs`,
+   `missing_data_or_coverage`, or `literature_only_or_unverified`. This is a
+   query-only inventory: never use shell, `run_in_context`, guessed server
+   paths, or a filesystem scan to bypass the provider. A module's presence is
+   not proof that a proposed subgroup, contrast, mechanism, or drug combination
+   has already been analyzed.
 4. Use the native `depmap_evidence` tool for gene-plus-lineage inventory,
    topic ideation, and research-direction questions. Use `depmap_query` for
    catalog, lineage dependency ranking, cancer direction discovery, pair, top-hit, lineage-event,
@@ -114,6 +123,11 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
   high/low subgroup unless the returned contract includes that grouping and its
   threshold. Do not say one section is the only FDR-significant signal when a
   different returned section also has an adjusted P value below the threshold.
+- A continuous expression-dependency correlation is not a `TF-high` screen,
+  high-versus-low contrast, selective dependency, or synthetic lethality.
+  Thresholded subgroups, TF-activity groupings, PRISM combinations, mechanism
+  reconstructions, and cross-platform convergence remain proposed new
+  computations until a validated Run returns them.
 - `not_testable` and `INELIGIBLE` describe current cohort/provider eligibility;
   they do not prove that the biological route or a future study is infeasible.
   Likewise, zero models crossing a descriptive dependency cutoff supports only
@@ -148,6 +162,13 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
 - Skill text and model memory are not literature evidence. Mechanism, novelty,
   treatment, and clinical claims require a completed literature-evidence task
   with traceable paper identifiers.
+- Search snippets, AI summaries, title matches, and reference-list mentions are
+  provisional leads. Track candidate, verified, contradicted, and retracted
+  claims; allow only claims checked in the primary paper's abstract or full
+  text with a stable PMID, PMCID, DOI, or publisher URL into the final answer.
+  Stop adaptively at evidence saturation rather than a fixed tool-call count.
+  A negative search supports only "not found within the searched scope", never
+  "nobody has done this", "unique gap", or proof that a topic is unpublished.
 - Correlation and screen-derived associations are not causation or validated
   synthetic lethality. Negative Gene Effect means stronger dependency; lower
   PRISM AUC means greater sensitivity, so explain correlation direction using

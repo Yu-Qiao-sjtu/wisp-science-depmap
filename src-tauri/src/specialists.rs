@@ -87,6 +87,14 @@ checks provider readiness and assembles a bounded dynamic view. Use \
 `depmap_query` for status/catalog inspection or a surgical pair, drug, pathway, \
 or term follow-up; load \
 `depmap-knowledge-query` when its schemas or fallback scripts are needed. \
+For a request asking which existing data support a proposed study, route it as \
+`study_support_mapping`, run the returned lineage-catalog query, and classify \
+every requested claim into exactly one of four buckets: direct precomputed \
+evidence, new computation from available inputs, missing data or coverage, or \
+literature-only/unverified. Do not call shell, `run_in_context`, or filesystem \
+inventory tools to bypass a provider contract for this query-only mapping. A \
+module's presence does not mean that the proposed subgroup, contrast, mechanism, \
+or drug combination has already been analyzed. \
 Every mode-specific query must include all fields required by the tool schema; \
 never learn the contract by deliberately issuing incomplete calls. For \
 an empty-argument or invalid-schema failure, do not repeat the identical call; \
@@ -152,7 +160,17 @@ multi-stage work, launch the exact user-named custom Workflow or a customized \
 copy whose Native research node explicitly requests the separately approved \
 `browser_research` capability; never infer that grant from `literature_search` \
 or `external_research`. Browser or model output is not scholarly evidence \
-until its cited publication identifiers have been verified.\n\n\
+until its cited publication identifiers have been verified. Treat search-result \
+snippets, AI summaries, reference-list mentions, and title matches as provisional \
+leads. Keep a claim ledger with `candidate`, `verified`, `contradicted`, or \
+`retracted` status; only claims verified against the primary paper's abstract or \
+full text and a stable PMID, PMCID, DOI, or publisher URL may enter the final \
+answer. If a later source corrects a provisional claim, retract it explicitly \
+and prevent the earlier wording from flowing downstream. Stop adaptively when \
+new queries no longer change the verified prior-art map; never use a fixed \
+tool-call count as the stopping rule. Report `not found within the searched \
+scope`, never `nobody has done this`, `unique gap`, or equivalent proof-of-absence \
+language.\n\n\
 Before interpreting results, verify release provenance, identifier alignment, \
 sample counts, missingness, effect direction, cohort filters, confounding, and \
 multiple-testing correction. Separate executed observations, literature \
@@ -192,6 +210,11 @@ Wilcoxon/Kruskal-Wallis test, FDR calculation, model, or subgroup statistic is \
 new computation even if its inputs are precomputed. Do not name a therapeutic \
 agent or assert drug actionability unless a current drug-query row or separately \
 cited literature evidence supports it. \
+In particular, a continuous expression-dependency correlation is not a \
+`TF-high` screen, a high-versus-low contrast, selective dependency, or synthetic \
+lethality. A proposed thresholded subgroup, TF-activity grouping, PRISM \
+combination, mechanistic module reconstruction, or cross-platform convergence \
+must be labeled new computation until a validated Run returns it. \
 Do not relabel `damaging_mutation_n` as pathogenic or clinically causal; it is \
 only the count under the provider's damaging-event definition. If a top list \
 has no multiple-testing-significant row, report the null result and do not use \
@@ -634,6 +657,9 @@ mod tests {
         assert!(rubric.contains("do not rerun an available analysis"));
         assert!(rubric.contains("`mode=lineage_dependency`"));
         assert!(rubric.contains("`mode=lineage_directions`"));
+        assert!(rubric.contains("`study_support_mapping`"));
+        assert!(rubric.contains("exactly one of four buckets"));
+        assert!(rubric.contains("filesystem inventory tools"));
         assert!(rubric.contains("sequence of guessed gene probes"));
         assert!(rubric.contains("must not be escalated to a new Run"));
         assert!(rubric.contains("must never be renamed logFC"));
@@ -653,7 +679,12 @@ mod tests {
         assert!(rubric.contains("Standalone real-browser research"));
         assert!(rubric.contains("`browser_research` capability"));
         assert!(rubric.contains("not scholarly evidence"));
+        assert!(rubric.contains("Keep a claim ledger"));
+        assert!(rubric.contains("not found within the searched"));
+        assert!(rubric.contains("never use a fixed"));
         assert!(rubric.contains("screen-derived candidate"));
+        assert!(rubric.contains("continuous expression-dependency correlation is not"));
+        assert!(rubric.contains("must be labeled new computation"));
     }
 
     #[test]

@@ -2362,7 +2362,7 @@ mod tests {
         let suite: EvalSuite = serde_yaml::from_str(DEPMAP_AGENT_SUITE).unwrap();
         validate_suite(&suite, EvalMode::Offline).unwrap();
         validate_suite(&suite, EvalMode::Live).unwrap();
-        assert_eq!(suite.cases.len(), 14);
+        assert_eq!(suite.cases.len(), 16);
         assert!(suite
             .cases
             .iter()
@@ -2381,6 +2381,10 @@ mod tests {
             .cases
             .iter()
             .any(|case| case.tags.iter().any(|tag| tag == "lineage-directions")));
+        assert!(suite
+            .cases
+            .iter()
+            .any(|case| case.tags.iter().any(|tag| tag == "support-mapping")));
         let tags: BTreeSet<_> = suite
             .cases
             .iter()
