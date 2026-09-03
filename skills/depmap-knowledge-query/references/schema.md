@@ -10,6 +10,10 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
   table. `selective` is the default and uses the precomputed one-sided Welch
   test, within-lineage BH FDR, and `rank_more_dependent` ordering;
   `mean_dependency` is descriptive and orders the lineage Gene Effect mean.
+- `lineage_directions --lineage NAME [--limit N]`: bounded cancer-only topic
+  discovery over separately ranked network, expression-dependency, CNV,
+  pathway/TF, and PRISM sparse outputs. Cross-family recurrence is not a
+  combined significance score.
 - `core --gene GENE`: core dependency and lineage summary from Parquet.
 - `pair --module MODULE --source GENE --target GENE`: one matrix cell.
 - `top --module MODULE --source GENE --limit N`: strongest source-row associations.

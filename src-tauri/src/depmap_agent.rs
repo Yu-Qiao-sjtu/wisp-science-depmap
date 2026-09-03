@@ -518,7 +518,13 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Use one surgical pair or drug query against precomputed results.",
                 vec![TOOL_NAME],
             ),
-            "cancer_direction_discovery" | "evidence_comparison" | "topic_exploration" => (
+            "cancer_direction_discovery" => (
+                "L2_INVESTIGATE",
+                false,
+                "Read one bounded, precomputed lineage direction bundle. Preserve its separate family rankings and do not invent an anchor gene.",
+                vec![TOOL_NAME],
+            ),
+            "evidence_comparison" | "topic_exploration" => (
                 "L2_INVESTIGATE",
                 false,
                 "Assemble a small bounded set of direct queries, then rank only supported directions.",
@@ -548,6 +554,28 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     }
 
     let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
+    let recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
+        ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => json!({
+            "tool": TOOL_NAME,
+            "arguments": {
+                "mode": "lineage_directions",
+                "lineage": lineage,
+                "limit": 20
+            },
+            "single_call": true
+        }),
+        ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => json!({
+            "tool": TOOL_NAME,
+            "arguments": {
+                "mode": "lineage_dependency",
+                "lineage": lineage,
+                "ranking": "selective",
+                "limit": 20
+            },
+            "single_call": true
+        }),
+        _ => Value::Null,
+    };
     Ok(json!({
         "state": if requires_user_input { "needs_input" } else { "routed" },
         "intent": intent,
@@ -565,6 +593,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "drug": drug
         },
         "strategy": strategy,
+        "recommended_query": recommended_query,
         "allowed_next_tools": tools,
         "guardrails": {
             "route_is_evidence": false,
@@ -1273,6 +1302,9 @@ impl DepMapQueryTool {
                 "result": result,
                 "new_analysis_started": false
             }))),
+            Err(error) if error.contains("422 Unprocessable Entity") => {
+                ToolResult::fail(remote_contract_mismatch(query, error))
+            }
             Err(error) => ToolResult::fail(blocked("remote_query_failed", error)),
         }
     }
@@ -1646,6 +1678,10 @@ fn query_semantics(query: &Value) -> Value {
             "ranking":query.get("ranking").and_then(Value::as_str).unwrap_or("selective"),
             "interpretation":"effect_mean_difference is lineage mean Gene Effect minus the rest mean; negative means stronger dependency in the lineage. It is not log fold-change. The selective ranking uses the precomputed one-sided Welch test, within-lineage BH FDR, and rank_more_dependent; mean_dependency is descriptive and sorts the lineage Gene Effect mean. Selective does not imply that a validated housekeeping/common-essential filter was applied."
         }),
+        "lineage_directions" => json!({
+            "metric":"family_specific_shortlists",
+            "interpretation":"fixed-filter selection over precomputed lineage network, expression-dependency, CNV, enrichment, and PRISM sparse rows. Each family keeps its own metric and rank; cross-family recurrence is not a combined significance score. Candidates are hypothesis-generating, not proof of novelty or causality."
+        }),
         "tcga_expression_survival" => json!({
             "metric":"cox_score_z",
             "expression_scale":"log2(TPM+1)",
@@ -1906,7 +1942,7 @@ impl Tool for DepMapQueryTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             TOOL_NAME,
-            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, and mode=lineage_dependency for a cancer's bounded precomputed dependency ranking without a gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument call and never start raw-data analysis from a coverage gap.",
+            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
             depmap_query_schema(),
         )
     }
@@ -1947,7 +1983,7 @@ fn depmap_query_schema() -> Value {
         "description":"Flat model-compatible schema. Runtime validation enforces the fields required by each mode.",
         "properties": {
             "mode": {"type":"string","enum":[
-                "status","catalog","lineage_catalog","lineage_dependency","core","pair","top",
+                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","core","pair","top",
                 "lineage","pathway","drug","lineage_network","lineage_cnv",
                 "lineage_drug","enrichment","tcga_expression_survival"
             ]},
@@ -1980,7 +2016,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     query.insert("mode".into(), Value::String(mode.clone()));
     let required: &[&str] = match mode.as_str() {
         "catalog" => &[],
-        "lineage_catalog" | "lineage_dependency" => &["lineage"],
+        "lineage_catalog" | "lineage_dependency" | "lineage_directions" => &["lineage"],
         "core" => &["gene"],
         "pair" => &["module", "source", "target"],
         "top" => &["module", "source"],
@@ -2094,6 +2130,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
         mode.as_str(),
         "top"
             | "lineage_dependency"
+            | "lineage_directions"
             | "lineage_network"
             | "lineage_cnv"
             | "lineage_drug"
@@ -2425,6 +2462,22 @@ fn blocked(code: &str, message: impl Into<String>) -> String {
     }))
 }
 
+fn remote_contract_mismatch(query: &Value, message: impl Into<String>) -> String {
+    let mode = query
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    pretty(json!({
+        "state": "blocked",
+        "code": "remote_contract_mismatch",
+        "message": message.into(),
+        "rejected_mode": mode,
+        "retry_same_mode": false,
+        "next": "Do not retry this mode or vary its optional arguments. Use the route's recommended_query when it names a different supported mode; otherwise report that the configured provider must be upgraded.",
+        "new_analysis_started": false
+    }))
+}
+
 fn pretty(value: Value) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
 }
@@ -2479,6 +2532,24 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("not a new analysis"));
+        assert_eq!(
+            dependency_ranking["recommended_query"]["arguments"]["mode"],
+            "lineage_dependency"
+        );
+
+        let directions = depmap_route(&json!({
+            "intent":"cancer_direction_discovery",
+            "cancer":"肝癌"
+        }))
+        .unwrap();
+        assert_eq!(directions["execution_level"], "L2_INVESTIGATE");
+        assert_eq!(directions["entities"]["canonical_lineage"], "Liver");
+        assert_eq!(
+            directions["recommended_query"]["arguments"],
+            json!({"mode":"lineage_directions","lineage":"Liver","limit":20})
+        );
+        assert_eq!(directions["recommended_query"]["single_call"], true);
+        assert_eq!(directions["allowed_next_tools"], json!(["depmap_query"]));
 
         let gene_and_cancer = depmap_route(&json!({
             "intent":"gene_evidence",
@@ -2649,6 +2720,14 @@ mod tests {
         .unwrap();
         assert_eq!(descriptive_dependency["lineage"], "Bowel");
         assert_eq!(descriptive_dependency["ranking"], "mean_dependency");
+        let directions = validated_query(&json!({
+            "mode":"lineage_directions",
+            "lineage":"肝癌",
+            "limit":20
+        }))
+        .unwrap();
+        assert_eq!(directions["lineage"], "Liver");
+        assert_eq!(directions["limit"], 20);
         assert!(validated_query(&json!({
             "mode":"lineage_dependency",
             "lineage":"Breast",
@@ -2694,6 +2773,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("lineage_dependency")));
+        assert!(schema["properties"]["mode"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("lineage_directions")));
         assert!(schema["properties"]["mode"]["enum"]
             .as_array()
             .unwrap()
@@ -3000,6 +3083,19 @@ mod tests {
             classify_result_state(&json!({"status":"FOUND"})),
             "precomputed_query"
         );
+    }
+
+    #[test]
+    fn remote_contract_rejection_is_terminal_for_the_rejected_mode() {
+        let value: Value = serde_json::from_str(&remote_contract_mismatch(
+            &json!({"mode":"lineage_dependency","lineage":"Liver"}),
+            "remote provider returned 422 Unprocessable Entity",
+        ))
+        .unwrap();
+        assert_eq!(value["code"], "remote_contract_mismatch");
+        assert_eq!(value["rejected_mode"], "lineage_dependency");
+        assert_eq!(value["retry_same_mode"], false);
+        assert_eq!(value["new_analysis_started"], false);
     }
 
     fn run_summary(id: &str, title: &str, status: wisp_store::RunStatus) -> wisp_store::RunSummary {

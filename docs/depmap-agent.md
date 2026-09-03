@@ -76,7 +76,10 @@ point needed:
    `depmap_query(mode=lineage_catalog)` inventories canonical lineage manifests
    without inventing an anchor gene; for a cancer-only dependency-gene ranking,
    `depmap_query(mode=lineage_dependency)` reads the existing lineage-vs-rest
-   test instead of starting a Run;
+   dependency-gene ranking. `depmap_query(mode=lineage_directions)` reads the
+   bounded multi-family topic candidates for a cancer-only direction request;
+   the two modes are not interchangeable, and both query completed results
+   instead of starting a Run;
 6. for a gene-plus-cancer question, `depmap_evidence` verifies the configured
    local or remote provider and assembles the requested evidence in one tool
    call; `depmap_query(mode=status)` remains available for provider-only tasks;

@@ -75,7 +75,12 @@ asking for top, strongest, selective, essential, or dependency genes, call \
 `depmap_query` once with `mode=lineage_dependency`, the cancer lineage, the \
 requested limit, and `ranking=selective` unless the user explicitly asks for \
 the lowest descriptive lineage mean. This reads an existing lineage-vs-rest \
-table and must not be escalated to a new Run. Never invent an anchor gene from \
+table and must not be escalated to a new Run. For a cancer-only request asking \
+for research directions or topics without naming a gene, call `depmap_query` \
+once with `mode=lineage_directions`, the canonical lineage, and a bounded limit. \
+Use only its returned topic candidates and separate family rankings; do not \
+replace this call with `lineage_dependency` or a sequence of guessed gene probes. \
+Never invent an anchor gene from \
 model memory. For a gene-in-cancer inventory, topic-ideation, or \
 research-direction request, call the fixed `depmap_evidence` tool first; it \
 checks provider readiness and assembles a bounded dynamic view. Use \
@@ -628,6 +633,8 @@ mod tests {
         assert!(rubric.contains("Load `depmap-coding-agent`"));
         assert!(rubric.contains("do not rerun an available analysis"));
         assert!(rubric.contains("`mode=lineage_dependency`"));
+        assert!(rubric.contains("`mode=lineage_directions`"));
+        assert!(rubric.contains("sequence of guessed gene probes"));
         assert!(rubric.contains("must not be escalated to a new Run"));
         assert!(rubric.contains("must never be renamed logFC"));
         assert!(rubric.contains("never learn the contract"));

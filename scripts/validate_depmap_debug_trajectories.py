@@ -113,6 +113,17 @@ TRAJECTORY_SIGNATURES = {
         Signature("repair Run v3", "Breast selective dependency top-10 (26Q1) v3"),
         Signature("repair Run v4", "Breast selective dependency top-10 (26Q1) v4 final"),
     ],
+    "wisp_debug-9": [
+        Signature("request correctly entered cancer direction routing", '"intent":"cancer_direction_discovery"'),
+        Signature("direction request repeatedly used dependency ranking", '"mode":"lineage_dependency"', minimum=5),
+        Signature("remote contract rejected the wrong mode", "422 Unprocessable Entity", minimum=5),
+        Signature("schema was probed with incomplete source queries", "mode requires non-empty 'source'", minimum=1),
+        Signature("provider advertised the unused direction endpoint", "lineage_directions", minimum=1),
+        Signature("guessed SOX2 anchor", "SOX2", minimum=1),
+        Signature("guessed NANOG anchor", "NANOG", minimum=1),
+        Signature("guessed SALL4 anchor", "SALL4", minimum=1),
+        Signature("guessed YAP1 anchor", "YAP1", minimum=1),
+    ],
 }
 
 
@@ -144,7 +155,10 @@ SOURCE_GUARDS = [
     ("src-tauri/src/specialists.rs", "`mode=lineage_dependency`"),
     ("src-tauri/src/specialists.rs", "must not be escalated to a new Run"),
     ("src-tauri/src/depmap_agent.rs", '"intent":"cancer_dependency_ranking"'),
-    ("src-tauri/src/depmap_agent.rs", '"lineage_dependency" => &["lineage"]'),
+    ("src-tauri/src/depmap_agent.rs", '| "lineage_directions" => &["lineage"]'),
+    ("src-tauri/src/depmap_agent.rs", '"mode": "lineage_directions"'),
+    ("src-tauri/src/depmap_agent.rs", '"retry_same_mode": false'),
+    ("crates/wisp-cli/eval-suites/depmap-agent-v1.yaml", "liver-cancer-direction-discovery-without-anchor"),
     ("ui/src/main.rs", 'matches!(name.as_str(), "delegate_tasks" | "start_workflow")'),
     ("crates/wisp-core/src/delegation.rs", "pub timeout_secs: Option<u64>"),
 ]

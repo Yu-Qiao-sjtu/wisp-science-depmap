@@ -39,7 +39,7 @@ query helper, for example:
 }
 ```
 
-Supported modes are `catalog`, `lineage_catalog`, `lineage_dependency`, `core`, `pair`, `top`,
+Supported modes are `catalog`, `lineage_catalog`, `lineage_dependency`, `lineage_directions`, `core`, `pair`, `top`,
 `lineage`, `pathway`, `drug`, `lineage_network`, `lineage_cnv`,
 `lineage_drug`, `enrichment`, `subtype`, `coamplification`, `true_love`,
 `synthetic_lethal`, `three_d`, and
@@ -51,6 +51,11 @@ module manifests without requiring or inventing a gene.
 completed precomputed lineage-vs-rest dependency table. It never starts a new
 test or Run. `effect_mean_difference` is a Gene Effect mean difference, not
 logFC.
+`lineage_directions` requires a canonical `lineage` and optionally accepts
+`limit`. It returns statistically distinct, family-specific shortlists and
+topic candidates for a cancer-only direction request. It is not interchangeable
+with `lineage_dependency`, and its cross-family occurrence count is not a
+combined significance score.
 `tcga_expression_survival` requires `gene` and optionally accepts `project`,
 canonical DepMap `lineage`, `endpoint` (`OS`, `DSS`, `DFI`, or `PFI`), and
 `limit`. It reads only the installed precomputed bridge, never raw TCGA files.

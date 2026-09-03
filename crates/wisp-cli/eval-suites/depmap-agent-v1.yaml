@@ -418,3 +418,35 @@ cases:
         - {name: depmap_query, pointer: /lineage, equals: Breast}
         - {name: depmap_query, pointer: /ranking, equals: selective}
         - {name: depmap_query, pointer: /limit, equals: 10}
+
+  - id: liver-cancer-direction-discovery-without-anchor
+    description: A cancer-only topic request uses one multi-family direction query and never invents or probes anchor genes.
+    tags: [depmap, lineage-directions, liver, wording-stress, debug-9]
+    prompt: 我做的是肝癌，给我 DepMap 能做的课题，主要聚焦肿瘤细胞干性和转录因子。只使用已有 26Q1 结果，不要猜一个基因再逐个试。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [lineage_directions]}
+            lineage: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_directions","lineage":"Liver","limit":20},"semantics":{"metric":"family_specific_shortlists"},"result":{"status":"FOUND","lineage":"Liver","selection_policy":{"network_and_enrichment_fdr_max":0.05,"cross_family_policy":"unweighted family-presence count"},"sections":[{"label":"pathway_tf_enrichment","metric":"enrichment_z","rows":[{"source_gene":"TFX","collection":"DoRothEA","term":"TFX_targets","enrichment_z":3.4,"fdr":0.021}]}],"topic_candidates":[{"candidate_id":"pathway_tf_enrichment:TFX|DoRothEA|TFX_targets","topic_type":"pathway_or_tf_context","anchors":{"source_gene":"TFX","collection":"DoRothEA","term":"TFX_targets"},"observed_value":3.4}],"limitations":["Candidates are hypothesis-generating and are not proof of novelty or causality."],"new_analysis_started":false}}'
+    script:
+      - tool_calls:
+          - {id: directions-1, name: depmap_query, arguments: {mode: lineage_directions, lineage: Liver, limit: 20}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Liver 的预计算方向检索返回一个转录因子候选：TFX 的 DoRothEA 靶基因集富集 z=3.4、FDR=0.021。它可形成‘TFX 调控程序与 Liver 细胞依赖’的可证伪课题，但目前只是 pathway/TF 家族内的假设生成结果，并不证明干性、因果性、创新性或临床可转化性；这些需要后续独立验证。没有启动新分析，也没有猜测额外基因。"}}
+    expect:
+      completion_contains: [26Q1, Liver, TFX, DoRothEA, "3.4", "0.021", 假设, 不证明, 没有启动]
+      completion_not_contains: [SOX2, NANOG, SALL4, YAP1, HCC, "1,482", lineage_dependency]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: lineage_directions}
+        - {name: depmap_query, pointer: /lineage, equals: Liver}
+        - {name: depmap_query, pointer: /limit, equals: 20}

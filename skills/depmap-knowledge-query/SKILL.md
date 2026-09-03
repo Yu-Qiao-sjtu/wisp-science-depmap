@@ -35,8 +35,10 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    or dependency genes, use `depmap_query` with `mode=lineage_dependency`;
    this is a bounded view of the existing lineage-vs-rest test, not a new
    computation. For a direction/topic request, follow the catalog with
-   `depmap_lineage_direction_discovery`; select only its returned topic
-   candidates. Never choose an anchor gene from model memory and present it as
+   `depmap_lineage_direction_discovery` (or native `depmap_query` with
+   `mode=lineage_directions`); select only its returned topic candidates. This
+   is one bounded query, not a sequence of `lineage_dependency` or guessed-gene
+   probes. Never choose an anchor gene from model memory and present it as
    the user's scope.
    Resolve an extracted natural-language cancer term with
    `depmap_resolve_lineage` before the first lineage-scoped evidence call.
@@ -54,7 +56,7 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    from the resolver; do not infer coverage from the size of the directory.
 4. Use the native `depmap_evidence` tool for gene-plus-lineage inventory,
    topic ideation, and research-direction questions. Use `depmap_query` for
-   catalog, lineage dependency ranking, pair, top-hit, lineage-event,
+   catalog, lineage dependency ranking, cancer direction discovery, pair, top-hit, lineage-event,
    lineage-network, lineage-CNV, lineage-PRISM, enrichment, pathway, drug,
    TCGA expression-survival, or core-gene retrieval. Use
    `scripts/query_depmap_kb.R` only
