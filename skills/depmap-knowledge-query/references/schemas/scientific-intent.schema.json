@@ -12,6 +12,8 @@
     "evidence_sources",
     "requested_outputs",
     "execution_policy",
+    "coverage_status",
+    "user_authorized_new_analysis",
     "unresolved_concepts"
   ],
   "properties": {
@@ -40,6 +42,11 @@
     "evidence_sources": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "requested_outputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "execution_policy": {"type": "string", "minLength": 1},
+    "coverage_status": {
+      "type": ["string", "null"],
+      "enum": ["FOUND", "NOT_RETAINED", "INELIGIBLE", "NOT_COMPUTED", "MODULE_UNAVAILABLE", null]
+    },
+    "user_authorized_new_analysis": {"type": "boolean"},
     "unresolved_concepts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "entity_sets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "resolved_entities": {"type": "object"},

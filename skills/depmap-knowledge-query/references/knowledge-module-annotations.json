@@ -2,6 +2,20 @@
   "schema_version": 1,
   "release": "26Q1",
   "purpose": "Scientific and routing annotations for completed knowledge assets. Physical presence, computation completion, query exposure, and claim support are separate fields.",
+  "discovery_contract": {
+    "default_candidate_limit": 8,
+    "minimum_candidate_limit": 3,
+    "maximum_candidate_limit": 8,
+    "score_weights": {
+      "question_tag": 100,
+      "entity_set": 80,
+      "lineage_direct": 30,
+      "query_exposed": 20,
+      "installed": 10
+    },
+    "tie_breakers": ["lineage_direct", "query_exposed", "installed", "capability_id"],
+    "note": "Discovery ranks annotated capabilities only. A match is not a scientific result and does not imply lineage eligibility."
+  },
   "entity_sets": [
     {
       "id": "all_crispr_genes",

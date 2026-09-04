@@ -3967,6 +3967,27 @@ fn dynamic_workflow_card(
                     let linked_run_id = result.as_ref().and_then(|result| result.run_id.clone());
                     let task_approval_reasons = task.approval_reasons.clone();
                     let task_budget = task.budget.clone();
+                    let task_timeout = task.timeout_secs;
+                    let host_watchdog = result.as_ref().and_then(|result| {
+                        if task_status != "running" {
+                            return None;
+                        }
+                        let now = (js_sys::Date::now() / 1000.0) as i64;
+                        let elapsed = result.last_activity_at
+                            .map(|timestamp| now.saturating_sub(timestamp))
+                            .unwrap_or(0);
+                        let stall_after = task_timeout
+                            .map(|seconds| (seconds / 3).clamp(30, 120))
+                            .unwrap_or(120) as i64;
+                        let key = if elapsed >= stall_after {
+                            "agents.watchdog.stalled"
+                        } else if result.activity_messages == 0 && result.tool_calls == 0 {
+                            "agents.watchdog.starting"
+                        } else {
+                            "agents.watchdog.active"
+                        };
+                        Some(format!("{} · {elapsed}s", t(locale.get(), key)))
+                    });
                     let retry_budget_key = (workflow_id.clone(), task.id.clone());
                     let retry_budget_value = task_budget.max_tokens
                         .map(|value| value.to_string())
@@ -3986,9 +4007,11 @@ fn dynamic_workflow_card(
                             <p class="agent-task-instruction">{task.instruction}</p>
                             {(!is_run_activity).then(|| view! {
                                 <div class="agent-step-limits">{format!(
-                                "{} tokens · {} tools",
+                                "{} tokens · {} tools · {} {}",
                                 task_budget.max_tokens.map_or_else(|| "—".into(), |value| value.to_string()),
                                 task_budget.max_tool_calls.map_or_else(|| "—".into(), |value| value.to_string()),
+                                task_timeout.map_or_else(|| "—".into(), |value| format!("{value}s")),
+                                t(locale.get(), "agents.task.wall_timeout"),
                                 )}</div>
                             })}
                             {show_retry_budget.then(|| {
@@ -4063,6 +4086,12 @@ fn dynamic_workflow_card(
                                 <strong>{activity_label}</strong>
                                 {duration.map(|duration| view! { <small>{duration}</small> })}
                             </div>
+                            {host_watchdog.map(|status| view! {
+                                <div class="agent-current-activity" data-testid="agent-host-watchdog" aria-live="polite">
+                                    <span>{"Watchdog"}</span>
+                                    <strong>{status}</strong>
+                                </div>
+                            })}
                             {research_progress.map(|progress| {
                                 let phase = research_phase_label(locale.get(), &progress.phase);
                                 let facets = progress.facets_total.map(|total| {

@@ -254,16 +254,34 @@ queued -> resolving_intent -> discovering_capabilities -> querying
 | Skill | `depmap-knowledge-query`、`depmap-coding-agent` 及报告/文献相关 Skill | 已有，但选择机制仍需评测 |
 | MCP/API | 本地/HTTPS 的有界只读查询，DepMap 与 TCGA 查询入口 | 已有 |
 | 能力注释 | `knowledge-module-annotations.json` 描述模块、能力、实体角色、统计语义与声明边界 | 已有第一版 |
-| 路由注册表 | `agent-capability-registry.json` 描述意图、槽位、执行等级与候选工具 | 已有第一版 |
-| 多槽位意图 | 癌种、基因、表型、分子焦点、机制、证据源、输出、执行策略、未解析概念 | 已有雏形 |
+| 路由注册表 | `agent-capability-registry.json` 描述意图、槽位、执行等级与候选工具 | 当前查询面已实现 |
+| 多槽位意图 | 癌种、基因、表型、分子焦点、机制、证据源、输出、执行策略、未解析概念 | 当前查询面已实现并校验 |
 | 实体解析 | 癌种规范化及 34 个 canonical lineage；基因/模块参数校验 | 部分已有 |
 | 稀疏状态 | `FOUND`、`NOT_RETAINED`、`INELIGIBLE`、`NOT_COMPUTED`、`MODULE_UNAVAILABLE` | 已有 |
 | 证据账本 | 成功查询保存稳定 `evidence_ref`，可恢复当前证据 | 已有 |
-| 运行控制 | 新分析可升级为持久 Run/Workflow 并要求审批 | 已有基础 |
+| 运行控制 | 仅 `NOT_COMPUTED` + 明确授权 + `allow_new_analysis` 可升级为 Run/Workflow | 当前入口门已实现 |
 | 轨迹评测 | DepMap Agent eval suite 与 trajectory rubric | 已有基础 |
-| UI 进度 | Agents 面板、DAG 状态、失败和重试 | 有基础，但长节点的细粒度进度不足 |
+| UI 进度 | Agents 面板、DAG 状态、失败、重试、墙钟预算、宿主 Watchdog；检索节点可上报结构化 checkpoint | 当前查询/工作流面已实现；外部服务只能报告可观测进度 |
 
-最重要的进展是：系统已经不再完全依赖 Prompt 猜测工具，开始把能力与声明边界放入版本化 JSON 注册表。这是正确方向，但仍只是桥梁的“桥墩”，不是完整桥面。
+最重要的进展是：系统已经不再依赖 Prompt 猜测工具。当前 DepMap/TCGA
+预计算查询面已经形成 `ScientificIntent -> capability_catalog ->
+EvidencePlan -> bounded evidence -> Claim Validator` 的可执行桥面。跨领域
+统一执行器和统一错误分类仍是未来工作，不应误报为本轮已完成。
+
+### 4.1 2026-09-05 收口状态
+
+本轮将此前标为“部分实现”的查询链能力全部落到宿主契约中：
+
+- capability 候选由版本化注释中的权重排序，并限制为 3--8 个；响应同时保留总匹配数、截断状态与评分分解；
+- `topic_plan` 可联动多个逻辑分析族，每一步返回依赖、执行状态、缺失绑定和稳定结果引用；物理分块不进入模型观察空间；
+- 新计算入口只接受 `NOT_COMPUTED`、明确用户授权和 `allow_new_analysis` 三项同时成立；
+- 工具参数、默认值和上下限由同一注册表进入 Rust Schema 与 Python 执行校验；
+- Agents 面板显示墙钟预算与宿主 Watchdog；文献检索若主动上报 checkpoint，则同时显示分面、查询、来源、论点和缺口；即使模型尚未输出，宿主状态仍可见；
+- 重复工具调用仍由 Harness 指纹检测和收口机制限制，而不是在 Skill 中写死某一模型的调用次数。
+
+明确待定：把 DepMap、TCGA、文献和新计算 Run 的所有失败统一到一套
+跨领域错误分类/恢复策略，以及任意未来模块的完全通用执行器。这两项
+属于尚未完整实现的未来能力，不在本轮“补齐部分实现”的范围内。
 
 ---
 
@@ -291,20 +309,20 @@ queued -> resolving_intent -> discovering_capabilities -> querying
 
 ### 5.2 语义桥和规划层
 
-1. **缺少稳定的 `ScientificIntent` 中间表示**
-   多槽位已经出现，但仍需成为独立 Schema，而不是散落在工具参数和 Prompt 中。
+1. **`ScientificIntent` 已在当前查询面稳定，跨领域扩展待定**
+   当前多槽位已进入独立 Schema 和宿主校验；未来文献与新计算领域增加新槽位时仍需保持向后兼容。
 
 2. **缺少模型提议 + 确定性验证的通用解析协议**
    不能只靠硬编码 alias，也不能无条件相信模型。模型应输出候选、置信度和歧义；Resolver 再用词表、知识图和数据覆盖验证。
 
-3. **缺少能力图驱动的 Evidence Planner**
-   当前 route 多数选择一个推荐查询；复杂课题需要基于槽位交集生成多模块计划、依赖、预算和停止条件。
+3. **当前查询面已有能力图驱动的 Evidence Planner**
+   复杂课题可按槽位交集选择 3--8 个候选能力，生成多模块计划、依赖、执行状态和结果引用；完全通用的跨领域执行器待定。
 
-4. **缺少集合语义**
-   “转录因子”不是一个焦点字符串，而是一个实体集合；它需要被展开到兼容的 source/target/regulator/feature 角色，并控制查询规模。
+4. **核心集合语义已经接通，领域覆盖仍需扩展**
+   “转录因子”已解析为已安装 DoRothEA A--C 集合，并投影到兼容的 source/target/regulator/feature 角色；未来表型、药物类别和新组学集合仍需逐版登记。
 
-5. **缺少跨分块联动抽象**
-   分块只是存储实现。用户问题应面向逻辑数据集查询，Adapter 在服务端完成分区裁剪、分页、合并、去重和排序；模型不应知道 301 个文件并逐个调用。
+5. **跨分块联动已从模型侧隐藏**
+   用户问题面向逻辑数据集，Adapter 在服务端完成分区裁剪、合并和排序，计划只暴露逻辑结果引用；各模块统一分页/游标仍需继续收口。
 
 6. **缺少从问题到可声明结论的编译检查**
    每个计划步骤都需要说明它支持什么 claim、不支持什么 claim，以及多个相关结果能否组合成同一个机制假设。
@@ -321,10 +339,10 @@ queued -> resolving_intent -> discovering_capabilities -> querying
 
 ### 5.4 交互和异步运行层
 
-1. 长任务阶段事件不够细，导致“运行中但 0 tokens/0 tools”；
-2. 文献检索无稳定的活动心跳和中间产物预览；
+1. 长任务已有宿主 Watchdog 和墙钟预算；业务阶段精度取决于工具是否上报 checkpoint；
+2. 文献检索已有结构化活动 checkpoint 和界面展示；外部服务无事件时只能显示宿主可观测状态，不能伪造进度；
 3. 同步模型调用与持久 Workflow/Run 的升级边界还需更清晰；
-4. 失败重试仍容易暴露“Token 上限”而没有展示真正的墙钟、外部服务和步骤预算；
+4. 失败重试已同时展示 token/tool 与墙钟预算；外部服务细分耗时仍待统一错误分类支持；
 5. 依赖节点失败后的替换、降级、部分交付和继续执行策略不足。
 
 ### 5.5 评测和持续进化层
@@ -828,7 +846,7 @@ DOI/PMID/URL 等定位符与 Workflow/子工具来源，尚未自动判断“原
 
 ### 12.1 我们没有涉及哪些内容，还需要涉及哪些？
 
-已经涉及 Agent、Skill、MCP、Workflow、部分 capability registry、多槽位意图、实体解析、Evidence Ledger、跨 DepMap/TCGA/已验证 Run 的数值 Grounding Gate、文献来源定位门、Run 和轨迹评测。尚需补齐的是正式 Schema 套件、完整领域本体、能力图、集合语义、Evidence Planner、服务端跨块聚合、统一 EvidenceBundle、文献 claim-to-passage 蕴含验证与持久化 ClaimRecord、细粒度异步状态、双向模块审计，以及从 Debug 轨迹到版本化持续进化的闭环。
+已经涉及 Agent、Skill、MCP、Workflow、版本化 capability registry、多槽位 ScientificIntent、实体解析、当前查询面的能力发现与 Evidence Planner、服务端逻辑跨块聚合、Evidence Ledger、跨 DepMap/TCGA/已验证 Run 的数值 Grounding Gate、文献来源定位门、Run、宿主 Watchdog 和轨迹评测。尚需补齐的是完整领域本体、全部结果行 Schema 统一、统一 EvidenceBundle、文献 claim-to-passage 蕴含验证与持久化 ClaimRecord、双向模块审计、跨领域统一错误分类/恢复，以及从 Debug 轨迹到版本化持续进化的闭环。
 
 ### 12.2 我们的空白点和缺点是什么？
 

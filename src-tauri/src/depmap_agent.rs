@@ -551,6 +551,15 @@ fn depmap_route_schema() -> Value {
                 "type":"string","enum":execution_policies,
                 "description":"Use precomputed_only unless the user explicitly authorizes proposing new statistical analysis. Durable execution still requires separate approval."
             },
+            "coverage_status": {
+                "type":"string",
+                "enum":["FOUND","NOT_RETAINED","INELIGIBLE","NOT_COMPUTED","MODULE_UNAVAILABLE"],
+                "description":"For new_analysis only: exact coverage state returned by the preceding validated evidence plan. Only NOT_COMPUTED can open the computation path."
+            },
+            "user_authorized_new_analysis": {
+                "type":"boolean",
+                "description":"For new_analysis only: true only when the user's current request explicitly asks to run a new analysis. This does not replace the separate Run or Workflow approval."
+            },
             "unresolved_concepts": {
                 "type":"array","items":{"type":"string","minLength":1,"maxLength":128},"uniqueItems":true,"maxItems":8,
                 "description":"User-supplied scientific concepts that cannot be mapped to a declared canonical slot. Preserve them; never silently drop or guess them."
@@ -796,6 +805,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         .get("explicit_workflow_request")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let coverage_status = non_empty_arg(args, "coverage_status");
+    let user_authorized_new_analysis = args
+        .get("user_authorized_new_analysis")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let canonical_lineage = cancer.as_deref().and_then(recognized_canonical_lineage);
     let mut bindings: BTreeMap<String, Value> = BTreeMap::new();
@@ -838,6 +852,18 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         && !missing.iter().any(|field| field == "canonical_lineage")
     {
         missing.push("canonical_lineage".into());
+    }
+    let new_analysis_gate = intent == "new_analysis";
+    if new_analysis_gate {
+        if execution_policy != "allow_new_analysis" {
+            missing.push("execution_policy=allow_new_analysis".into());
+        }
+        if coverage_status.as_deref() != Some("NOT_COMPUTED") {
+            missing.push("validated_coverage_status=NOT_COMPUTED".into());
+        }
+        if !user_authorized_new_analysis {
+            missing.push("explicit_user_authorization".into());
+        }
     }
     let resolution_query =
         crate::depmap_capabilities::entity_resolution_query(&missing, &bindings)?;
@@ -991,6 +1017,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "evidence_sources": evidence_sources,
             "requested_outputs": requested_outputs,
             "execution_policy": execution_policy,
+            "coverage_status": coverage_status,
+            "user_authorized_new_analysis": user_authorized_new_analysis,
             "unresolved_concepts": unresolved_concepts
         },
         "scientific_intent": {
@@ -1005,6 +1033,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "evidence_sources": evidence_sources,
             "requested_outputs": requested_outputs,
             "execution_policy": execution_policy,
+            "coverage_status": coverage_status,
+            "user_authorized_new_analysis": user_authorized_new_analysis,
             "unresolved_concepts": unresolved_concepts,
             "resolved_entities": {
                 "depmap_lineage": canonical_lineage
@@ -1027,7 +1057,14 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "guardrails": {
             "route_is_evidence": false,
             "workflow_semantic_match_alone_is_sufficient": false,
-            "do_not_invent_missing_entities": true
+            "do_not_invent_missing_entities": true,
+            "new_analysis_gate": {
+                "required_coverage_status":"NOT_COMPUTED",
+                "requires_explicit_user_authorization":true,
+                "requires_execution_policy":"allow_new_analysis",
+                "requires_separate_run_or_workflow_approval":true,
+                "passed": !new_analysis_gate || missing.is_empty()
+            }
         }
     }))
 }
@@ -2573,6 +2610,8 @@ fn depmap_query_schema() -> Value {
             "requested_outputs": {"type":"array","items":{"type":"string","enum":requested_outputs},"uniqueItems":true,"maxItems":6},
             "execution_policy": {"type":"string","enum":execution_policies},
             "unresolved_concepts": {"type":"array","items":{"type":"string","minLength":1,"maxLength":128},"uniqueItems":true,"maxItems":8},
+            "question_tags": {"type":"array","items":{"type":"string","minLength":1,"maxLength":128},"uniqueItems":true,"maxItems":8,"description":"Canonical intent tags returned by depmap_agent_route routing_hints."},
+            "entity_sets": {"type":"array","items":{"type":"string","minLength":1,"maxLength":128},"uniqueItems":true,"maxItems":8,"description":"Canonical entity-set selectors returned by depmap_agent_route routing_hints."},
             "collection": {"type":"string"},
             "term": {"type":"string"},
             "reciprocal": {"type":"boolean"},
@@ -2675,6 +2714,25 @@ fn validated_query(args: &Value) -> Result<Value, String> {
         }
         query.insert("execution_policy".into(), json!(execution_policy));
     }
+    if mode == "capability_catalog" {
+        for field in ["question_tags", "entity_sets"] {
+            let values = validated_free_text_array(args, field)?;
+            if !values.is_empty() {
+                query.insert(field.into(), json!(values));
+            }
+        }
+        if let Some(lineage) = args
+            .get("lineage")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            query.insert(
+                "lineage".into(),
+                Value::String(canonical_lineage_label(lineage)),
+            );
+        }
+    }
     if mode == "lineage_drug" {
         require_allowed(&query, "omic", DRUG_OMICS)?;
         if args
@@ -2760,8 +2818,12 @@ fn validated_query(args: &Value) -> Result<Value, String> {
             .get("limit")
             .and_then(Value::as_i64)
             .unwrap_or(default_limit);
-        if !(1..=MAX_TOP_LIMIT).contains(&limit) {
-            return Err(format!("limit must be between 1 and {MAX_TOP_LIMIT}"));
+        let maximum_limit = capability.maximum_limit.unwrap_or(MAX_TOP_LIMIT);
+        let minimum_limit = capability.minimum_limit.unwrap_or(1);
+        if !(minimum_limit..=maximum_limit).contains(&limit) {
+            return Err(format!(
+                "limit must be between {minimum_limit} and {maximum_limit}"
+            ));
         }
         query.insert("limit".into(), json!(limit));
     }
@@ -3920,6 +3982,8 @@ mod tests {
                 "evidence_sources":["depmap"],
                 "requested_outputs":["candidate_topics","feasibility"],
                 "execution_policy":"precomputed_only",
+                "coverage_status":null,
+                "user_authorized_new_analysis":false,
                 "unresolved_concepts":[]
             })
         );
@@ -3947,7 +4011,8 @@ mod tests {
             json!([
                 "tumor_cell_stemness",
                 "stemness_proxy",
-                "transcription_factor"
+                "transcription_factor",
+                "regulator"
             ])
         );
         assert_eq!(
@@ -4169,6 +4234,37 @@ mod tests {
         assert_eq!(explicit["execution_level"], "L4_DURABLE");
         assert_eq!(explicit["requires_approval"], true);
         assert_eq!(explicit["allowed_next_tools"], json!(["start_workflow"]));
+
+        let blocked_new_analysis = depmap_route(&json!({
+            "intent":"new_analysis",
+            "execution_policy":"allow_new_analysis",
+            "coverage_status":"NOT_RETAINED",
+            "user_authorized_new_analysis":true
+        }))
+        .unwrap();
+        assert_eq!(blocked_new_analysis["state"], "needs_input");
+        assert!(blocked_new_analysis["missing_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("validated_coverage_status=NOT_COMPUTED")));
+        assert_eq!(
+            blocked_new_analysis["guardrails"]["new_analysis_gate"]["passed"],
+            false
+        );
+
+        let approved_new_analysis = depmap_route(&json!({
+            "intent":"new_analysis",
+            "execution_policy":"allow_new_analysis",
+            "coverage_status":"NOT_COMPUTED",
+            "user_authorized_new_analysis":true
+        }))
+        .unwrap();
+        assert_eq!(approved_new_analysis["state"], "routed");
+        assert_eq!(approved_new_analysis["requires_approval"], true);
+        assert_eq!(
+            approved_new_analysis["guardrails"]["new_analysis_gate"]["passed"],
+            true
+        );
     }
 
     #[test]

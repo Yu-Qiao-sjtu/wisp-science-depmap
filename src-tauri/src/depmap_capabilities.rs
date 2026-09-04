@@ -85,6 +85,10 @@ pub(crate) struct QueryCapability {
     #[serde(default)]
     pub required_any: Vec<Vec<String>>,
     pub default_limit: Option<i64>,
+    #[serde(default)]
+    pub minimum_limit: Option<i64>,
+    #[serde(default)]
+    pub maximum_limit: Option<i64>,
     pub scope: String,
     pub metric: String,
     #[serde(default)]
@@ -180,6 +184,20 @@ fn validate_registry(registry: &CapabilityRegistry) -> Result<(), String> {
                 "query capability '{}' is incomplete",
                 capability.mode
             ));
+        }
+        if let Some(maximum) = capability.maximum_limit {
+            let minimum = capability.minimum_limit.unwrap_or(1);
+            if minimum < 1
+                || maximum < minimum
+                || capability
+                    .default_limit
+                    .is_some_and(|default| default < minimum || default > maximum)
+            {
+                return Err(format!(
+                    "query capability '{}' has inconsistent pagination limits",
+                    capability.mode
+                ));
+            }
         }
     }
     if !modes.contains("status") {
@@ -522,7 +540,7 @@ mod tests {
         let registry = registry().unwrap();
         assert_eq!(registry.schema_version, 2);
         assert_eq!(registry.release, "26Q1");
-        assert_eq!(registry.query_capabilities.len(), 17);
+        assert_eq!(registry.query_capabilities.len(), 18);
         assert_eq!(registry.tool_capabilities.len(), 8);
         assert!(registry.result_states.contains_key("INELIGIBLE"));
         assert!(concept_ids("phenotypes")

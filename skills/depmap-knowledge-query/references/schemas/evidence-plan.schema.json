@@ -28,6 +28,8 @@
           "capability_id",
           "evidence_role",
           "state",
+          "execution_status",
+          "depends_on",
           "input_roles",
           "entity_set_projection",
           "allowed_claims",
@@ -43,6 +45,18 @@
           "state": {
             "enum": ["QUERYABLE", "STORED_NOT_EXPOSED", "MODULE_UNAVAILABLE"]
           },
+          "execution_status": {
+            "enum": [
+              "EXECUTED",
+              "NOT_EXECUTED_MISSING_BINDINGS",
+              "NOT_EXECUTED_NOT_SELECTED",
+              "NOT_EXECUTABLE_STORED_ONLY",
+              "NOT_EXECUTABLE_MODULE_UNAVAILABLE"
+            ]
+          },
+          "depends_on": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "result_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "missing_bindings": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "query_adapter": {"type": ["object", "null"]},
           "input_roles": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "entity_set_projection": {

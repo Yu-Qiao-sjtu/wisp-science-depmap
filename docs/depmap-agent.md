@@ -165,6 +165,26 @@ enrichment. It no longer means "query only the DoRothEA enrichment table".
 Physical Parquet partitions remain provider implementation details and are
 never exposed as planning steps for the model.
 
+Capability discovery is bounded and data-driven. The annotation registry owns
+the scoring weights and the 3--8 candidate window; `capability_catalog` returns
+both the selected candidates and the untruncated match count, plus score
+components and `has_more_candidates`. A topic plan therefore discovers a small
+set of compatible logical modules instead of exposing every module or relying
+on a fixed prompt list.
+
+Each `EvidencePlan` step is executable control data. It records dependencies,
+execution status, missing bindings, and stable JSON-pointer result references.
+The provider executes compatible precomputed steps across the selected logical
+modules and returns bounded evidence buckets; the model never opens physical
+Parquet blocks. A step that cannot run is distinguished as missing bindings,
+not selected, stored-only, or module-unavailable rather than being reported as
+negative biology.
+
+New computation has a hard host-side gate. It can be routed only when the
+coverage state is exactly `NOT_COMPUTED`, the execution policy explicitly
+allows new analysis, and the user has authorized that analysis. `NOT_RETAINED`,
+`INELIGIBLE`, and `MODULE_UNAVAILABLE` cannot silently launch code or a Run.
+
 1. `depmap_agent_route` records one typed, host-validated L1/L2/L3/L4 decision
    for each new request; the route is observable control data, never scientific
    evidence;

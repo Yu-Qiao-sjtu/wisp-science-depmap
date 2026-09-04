@@ -83,7 +83,7 @@ MODE_REQUIRED_FIELDS = {
     "tcga_expression_survival": {"gene"},
 }
 MODE_OPTIONAL_FIELDS = {
-    "capability_catalog": CAPABILITY_LIST_FIELDS | {"lineage"},
+    "capability_catalog": CAPABILITY_LIST_FIELDS | {"lineage", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "limit"},
     "lineage_directions": {"limit", "focus", "entity_sets"},
@@ -237,6 +237,35 @@ def _knowledge_module_annotations() -> dict[str, Any]:
         annotations = json.load(handle)
     if annotations.get("schema_version") != 1:
         raise RuntimeError("unsupported DepMap knowledge-module annotation schema")
+    discovery = annotations.get("discovery_contract")
+    if not isinstance(discovery, dict):
+        raise RuntimeError("DepMap knowledge annotations have no discovery contract")
+    minimum = discovery.get("minimum_candidate_limit")
+    default = discovery.get("default_candidate_limit")
+    maximum = discovery.get("maximum_candidate_limit")
+    if not all(isinstance(value, int) for value in (minimum, default, maximum)):
+        raise RuntimeError("DepMap discovery limits must be integers")
+    if not 1 <= minimum <= default <= maximum <= 32:
+        raise RuntimeError("DepMap discovery limits are inconsistent")
+    weights = discovery.get("score_weights")
+    required_weights = {
+        "question_tag", "entity_set", "lineage_direct", "query_exposed", "installed"
+    }
+    if not isinstance(weights, dict) or set(weights) != required_weights:
+        raise RuntimeError("DepMap discovery score weights are incomplete")
+    if any(not isinstance(value, int) or value < 0 for value in weights.values()):
+        raise RuntimeError("DepMap discovery score weights must be non-negative integers")
+    tie_breakers = discovery.get("tie_breakers")
+    allowed_tie_breakers = {
+        "lineage_direct", "query_exposed", "installed", "capability_id"
+    }
+    if (
+        not isinstance(tie_breakers, list)
+        or not tie_breakers
+        or len(tie_breakers) != len(set(tie_breakers))
+        or any(value not in allowed_tie_breakers for value in tie_breakers)
+    ):
+        raise RuntimeError("DepMap discovery tie breakers are invalid")
     storage_ids = [str(item.get("id", "")) for item in annotations.get("storage_modules", [])]
     capability_ids = [str(item.get("id", "")) for item in annotations.get("capabilities", [])]
     if not storage_ids or len(storage_ids) != len(set(storage_ids)) or any(not item for item in storage_ids):
@@ -896,6 +925,14 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love partner requires gene")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
+        if self.mode == "capability_catalog" and self.limit is not None:
+            discovery = _knowledge_module_annotations()["discovery_contract"]
+            minimum = int(discovery["minimum_candidate_limit"])
+            maximum = int(discovery["maximum_candidate_limit"])
+            if not minimum <= self.limit <= maximum:
+                raise ValueError(
+                    f"capability_catalog limit must be within the discovery range {minimum}-{maximum}"
+                )
         for name in (supplied - {"limit", "reciprocal", "cursor"} - TOPIC_LIST_FIELDS - CAPABILITY_LIST_FIELDS):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -1290,6 +1327,14 @@ def _run_capability_catalog_query(
     """
 
     annotations = _knowledge_module_annotations()
+    discovery = annotations["discovery_contract"]
+    discovery_limit = int(
+        query.get("limit") or discovery["default_candidate_limit"]
+    )
+    discovery_limit = min(
+        discovery_limit, int(discovery["maximum_candidate_limit"])
+    )
+    weights = discovery["score_weights"]
     requested_tags = set(query.get("question_tags", []))
     requested_sets = set(query.get("entity_sets", []))
     lineage = query.get("lineage")
@@ -1337,6 +1382,16 @@ def _run_capability_catalog_query(
             evidence_role = "release_direct"
         matched_tags.update(tag_hits)
         matched_sets.update(set_hits)
+        score_components = {
+            "question_tag": len(tag_hits) * int(weights["question_tag"]),
+            "entity_set": len(set_hits) * int(weights["entity_set"]),
+            "lineage_direct": (
+                int(weights["lineage_direct"])
+                if evidence_role == "lineage_direct" else 0
+            ),
+            "query_exposed": int(weights["query_exposed"]) if query_exposed else 0,
+            "installed": int(weights["installed"]) if installed else 0,
+        }
         matched.append(
             {
                 **capability,
@@ -1345,18 +1400,29 @@ def _run_capability_catalog_query(
                 "installed": installed,
                 "query_exposed": query_exposed,
                 "evidence_role": evidence_role,
+                "discovery_score": sum(score_components.values()),
+                "discovery_score_components": score_components,
                 "storage_states": [
                     {"id": item["id"], "state": item["state"]} for item in storage
                 ],
             }
         )
-    matched.sort(
-        key=lambda item: (
-            0 if item["evidence_role"] == "lineage_direct" else 1,
-            0 if item["query_exposed"] else 1,
-            item["id"],
-        )
-    )
+    def sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+        values: list[Any] = [-item["discovery_score"]]
+        for breaker in discovery["tie_breakers"]:
+            if breaker == "lineage_direct":
+                values.append(0 if item["evidence_role"] == "lineage_direct" else 1)
+            elif breaker == "query_exposed":
+                values.append(0 if item["query_exposed"] else 1)
+            elif breaker == "installed":
+                values.append(0 if item["installed"] else 1)
+            else:
+                values.append(item["id"])
+        return tuple(values)
+
+    matched.sort(key=sort_key)
+    all_matched_count = len(matched)
+    matched = matched[:discovery_limit]
     return {
         "mode": "capability_catalog",
         "status": "FOUND",
@@ -1377,6 +1443,9 @@ def _run_capability_catalog_query(
             ),
             "annotated_capability_count": len(annotations["capabilities"]),
             "matched_capability_count": len(matched),
+            "all_matched_capability_count": all_matched_count,
+            "candidate_limit": discovery_limit,
+            "has_more_candidates": all_matched_count > len(matched),
             "query_exposed_match_count": sum(item["query_exposed"] for item in matched),
             "unmatched_question_tags": sorted(requested_tags - matched_tags),
             "unmatched_entity_sets": sorted(requested_sets - matched_sets),
@@ -1387,6 +1456,7 @@ def _run_capability_catalog_query(
             "query_exposed_false_is_a_coverage_gap": True,
             "physical_blocks_are_not_independent_analyses": True,
         },
+        "discovery_contract": discovery,
         "new_analysis_started": False,
     }
 
@@ -2678,6 +2748,15 @@ def _run_topic_plan_query(settings: Settings, query: dict[str, Any]) -> dict[str
         for entity_set in definition.get("entity_sets", []):
             if entity_set not in entity_sets:
                 entity_sets.append(entity_set)
+    for category, concept_ids in (
+        ("evidence_sources", evidence_sources),
+        ("requested_outputs", requested_outputs),
+    ):
+        for concept_id in concept_ids:
+            definition = _concept_definition(category, concept_id) or {}
+            for tag in definition.get("question_tags", []):
+                if tag not in question_tags:
+                    question_tags.append(tag)
     capability_plan = _run_capability_catalog_query(
         settings,
         {
@@ -2956,6 +3035,32 @@ def _run_topic_plan_query(settings: Settings, query: dict[str, Any]) -> dict[str
         for source in non_depmap_sources
     )
 
+    # Link provider-executed aggregate queries back into the abstract plan.  The
+    # model receives JSON pointers, not physical block paths, and therefore does
+    # not have to guess which capability produced a returned section.
+    section_capabilities = {
+        "effect_correlation": "lineage_codependency",
+        "expression_correlation": "lineage_expression_correlation",
+        "expression_dependency": "lineage_expression_dependency",
+        "cnv_amplification_dependency": "lineage_cnv_dependency",
+        "pathway_tf_enrichment": "lineage_pathway_tf_enrichment",
+        "prism_effect": "lineage_prism_association",
+        "prism_expression": "lineage_prism_association",
+        "prism_cnv": "lineage_prism_association",
+    }
+    executed_result_refs: dict[str, list[str]] = {}
+    # direct_precomputed_evidence[0] is the lineage catalog. Direction results
+    # begin at index 1 and retain their per-section ordering.
+    for direct_index, direction_result in enumerate(direct_queries, start=1):
+        for section_index, section in enumerate(direction_result.get("sections", [])):
+            capability_id = section_capabilities.get(str(section.get("label")))
+            if capability_id is None:
+                continue
+            executed_result_refs.setdefault(capability_id, []).append(
+                f"/evidence_buckets/direct_precomputed_evidence/{direct_index}"
+                f"/result/sections/{section_index}"
+            )
+
     evidence_steps: list[dict[str, Any]] = []
     for index, item in enumerate(capability_plan["capabilities"], start=1):
         installed = bool(item["installed"])
@@ -2966,14 +3071,36 @@ def _run_topic_plan_query(settings: Settings, query: dict[str, Any]) -> dict[str
             capability_state = "STORED_NOT_EXPOSED"
         else:
             capability_state = "MODULE_UNAVAILABLE"
+        result_refs = executed_result_refs.get(item["id"], [])
+        input_roles = sorted(item.get("inputs", {}).keys())
+        available_bindings = {"lineage"}
+        missing_bindings = [
+            role for role in input_roles
+            if role not in available_bindings
+            and not set(item["inputs"][role].get("entity_sets", [])) & set(entity_sets)
+        ]
+        if result_refs:
+            execution_status = "EXECUTED"
+        elif capability_state == "STORED_NOT_EXPOSED":
+            execution_status = "NOT_EXECUTABLE_STORED_ONLY"
+        elif capability_state == "MODULE_UNAVAILABLE":
+            execution_status = "NOT_EXECUTABLE_MODULE_UNAVAILABLE"
+        elif missing_bindings:
+            execution_status = "NOT_EXECUTED_MISSING_BINDINGS"
+        else:
+            execution_status = "NOT_EXECUTED_NOT_SELECTED"
         evidence_steps.append(
             {
                 "step_id": f"capability-{index:02d}-{item['id']}",
                 "capability_id": item["id"],
                 "evidence_role": item["evidence_role"],
                 "state": capability_state,
+                "execution_status": execution_status,
+                "depends_on": [],
+                "result_refs": result_refs,
+                "missing_bindings": missing_bindings,
                 "query_adapter": item.get("query"),
-                "input_roles": sorted(item.get("inputs", {}).keys()),
+                "input_roles": input_roles,
                 "entity_set_projection": {
                     "requested": entity_sets,
                     "matched": item.get("matched_entity_sets", []),
@@ -3023,6 +3150,13 @@ def _run_topic_plan_query(settings: Settings, query: dict[str, Any]) -> dict[str
             ),
             "module_unavailable_count": sum(
                 step["state"] == "MODULE_UNAVAILABLE" for step in evidence_steps
+            ),
+            "executed_count": sum(
+                step["execution_status"] == "EXECUTED" for step in evidence_steps
+            ),
+            "blocked_missing_bindings_count": sum(
+                step["execution_status"] == "NOT_EXECUTED_MISSING_BINDINGS"
+                for step in evidence_steps
             ),
         },
         "execution_contract": {

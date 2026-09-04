@@ -416,8 +416,11 @@ class DepMapEvidenceService:
         lineage: str | None = None,
         question_tags: list[str] | None = None,
         entity_sets: list[str] | None = None,
+        limit: int = 8,
     ) -> dict[str, Any]:
-        query: dict[str, Any] = {"mode": "capability_catalog"}
+        if not 3 <= limit <= 8:
+            raise ValueError("limit must be between 3 and 8")
+        query: dict[str, Any] = {"mode": "capability_catalog", "limit": limit}
         if lineage:
             query["lineage"] = lineage
         if question_tags:
@@ -1050,8 +1053,9 @@ def build_mcp_server(
         lineage: str | None = None,
         question_tags: list[str] | None = None,
         entity_sets: list[str] | None = None,
+        limit: int = 8,
     ) -> dict[str, Any]:
-        return await service.describe_capabilities(lineage, question_tags, entity_sets)
+        return await service.describe_capabilities(lineage, question_tags, entity_sets, limit)
 
     @mcp.tool(
         title="DepMap lineage coverage",

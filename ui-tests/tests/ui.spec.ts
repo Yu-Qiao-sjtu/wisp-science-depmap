@@ -13586,12 +13586,14 @@ test("main-Agent dynamic batches show parallel roots and pending dependencies", 
   await expect(researchA.locator(".agent-attempt-status")).toHaveText("Running");
   await expect(researchA).toContainText("Temporary Agent · native · default");
   await expect(researchA.locator(".agent-chip.capability")).toHaveText("project_read");
-  await expect(researchA.locator(".agent-current-activity")).toContainText("Waiting for the model's first response");
-  await expect(researchA.locator(".agent-current-activity")).toContainText("37s");
+  await expect(researchA.locator(".agent-current-activity").first()).toContainText("Waiting for the model's first response");
+  await expect(researchA.locator(".agent-current-activity").first()).toContainText("37s");
+  await expect(researchA.locator(".agent-step-limits")).toContainText("600s wall timeout");
+  await expect(researchA.getByTestId("agent-host-watchdog")).toContainText("Host observed recent activity");
   await expect(researchA.locator(".agent-usage")).toContainText("— tokens · 0 tools");
   const researchB = card.locator('[data-step-id$=":research_b"]');
   await expect(researchB.locator(".agent-attempt-status")).toHaveText("Running");
-  await expect(researchB.locator(".agent-current-activity")).toContainText("Using tools and consolidating evidence");
+  await expect(researchB.locator(".agent-current-activity").first()).toContainText("Using tools and consolidating evidence");
   await expect(researchB.locator(".agent-usage")).toContainText("5 events");
   const researchProgress = researchB.getByTestId("agent-research-progress");
   await expect(researchProgress).toContainText("Research progress");

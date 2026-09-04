@@ -466,8 +466,11 @@ class DepMapApiTests(unittest.TestCase):
         self.assertIn("lineage_expression_dependency", capability_ids)
         self.assertIn("lineage_cnv_dependency", capability_ids)
         self.assertIn("lineage_prism_association", capability_ids)
-        self.assertIn("true_love_gene", capability_ids)
-        self.assertIn("observational_synthetic_lethal", capability_ids)
+        self.assertIn("lineage_pathway_tf_enrichment", capability_ids)
+        self.assertLessEqual(len(capability_ids), 8)
+        self.assertTrue(
+            annotated["summary"]["has_more_candidates"]
+        )
         planned_ids = {
             item["capability_id"] for item in payload["evidence_plan"]["steps"]
         }
@@ -484,6 +487,16 @@ class DepMapApiTests(unittest.TestCase):
         self.assertIn(
             "target_gene",
             expression_dependency["entity_set_projection"]["compatible_roles"],
+        )
+        pathway_enrichment = next(
+            item
+            for item in payload["evidence_plan"]["steps"]
+            if item["capability_id"] == "lineage_pathway_tf_enrichment"
+        )
+        self.assertEqual(pathway_enrichment["execution_status"], "EXECUTED")
+        self.assertTrue(pathway_enrichment["result_refs"])
+        self.assertGreater(
+            payload["evidence_plan"]["summary"]["executed_count"], 0
         )
         self.assertEqual(
             annotated["summary"]["unmatched_question_tags"],
@@ -528,12 +541,44 @@ class DepMapApiTests(unittest.TestCase):
         self.assertIn("lineage_pathway_tf_enrichment", ids)
         self.assertIn("lineage_prism_association", ids)
         self.assertIn("subtype_dependency", ids)
-        self.assertIn("three_d_dependency", ids)
-        self.assertIn("tcga_expression_survival", ids)
+        self.assertEqual(len(ids), 8)
+        self.assertTrue(payload["summary"]["has_more_candidates"])
+        self.assertGreater(payload["summary"]["all_matched_capability_count"], len(ids))
+        self.assertTrue(all(item["discovery_score"] > 0 for item in payload["capabilities"]))
         self.assertNotIn("lineage_sparse_networks.previous_20260829", {
             item["id"] for item in payload["storage_inventory"]
         })
         self.assertTrue(payload["claim_boundary"]["annotation_match_is_not_a_result_hit"])
+
+    def test_capability_catalog_enforces_annotation_driven_candidate_bound(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            rejected = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "capability_catalog",
+                    "question_tags": ["transcription_factor"],
+                    "limit": 9,
+                },
+            )
+        self.assertEqual(rejected.status_code, 422)
+        self.assertIn("discovery range 3-8", rejected.text)
+
+        with client:
+            accepted = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "capability_catalog",
+                    "question_tags": ["transcription_factor"],
+                    "limit": 3,
+                },
+            )
+        self.assertEqual(accepted.status_code, 200)
+        payload = accepted.json()
+        self.assertEqual(payload["summary"]["candidate_limit"], 3)
+        self.assertEqual(len(payload["capabilities"]), 3)
 
     def test_topic_plan_compiles_relations_without_phenotype_specific_code(self):
         client = TestClient(create_app(self.settings))

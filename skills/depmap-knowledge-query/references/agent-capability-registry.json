@@ -12,7 +12,7 @@
       {"id":"immune_evasion","aliases":["免疫逃逸","免疫逃避","immune evasion"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"],"proposed_analysis":"continuous_phenotype_dependency"}
     ],
     "molecular_focus": [
-      {"id":"transcription_factor","aliases":["转录因子","转录因子方向","TF","transcription factor","transcription factors"],"direction_focus":"transcription_factor","question_tags":["transcription_factor"],"entity_sets":["dorothea_tf_abc"]},
+      {"id":"transcription_factor","aliases":["转录因子","转录因子方向","TF","transcription factor","transcription factors"],"direction_focus":"transcription_factor","question_tags":["transcription_factor","regulator"],"entity_sets":["dorothea_tf_abc"]},
       {"id":"pathway","aliases":["通路","pathway"],"direction_focus":"pathway","question_tags":["pathway"],"entity_sets":["hallmark_gene_sets","reactome_2023_2_gene_sets"]},
       {"id":"dependency_network","aliases":["依赖网络","共依赖","dependency network","codependency"],"direction_focus":"network","question_tags":["dependency_network","gene_relationship"],"entity_sets":[]},
       {"id":"copy_number","aliases":["拷贝数","CNV","扩增","copy number"],"direction_focus":"cnv","question_tags":["copy_number","amplification"],"entity_sets":[]},
@@ -32,10 +32,10 @@
       {"id":"literature","aliases":["文献","literature"]}
     ],
     "requested_outputs": [
-      {"id":"candidate_topics","aliases":["课题","研究方向","candidate topics"]},
-      {"id":"feasibility","aliases":["可行性","feasibility"]},
-      {"id":"innovation","aliases":["创新性","novelty","innovation"]},
-      {"id":"validation_plan","aliases":["验证方案","validation plan"]},
+      {"id":"candidate_topics","aliases":["课题","研究方向","candidate topics"],"question_tags":["candidate_discovery"]},
+      {"id":"feasibility","aliases":["可行性","feasibility"],"question_tags":["validation"]},
+      {"id":"innovation","aliases":["创新性","novelty","innovation"],"question_tags":["literature"]},
+      {"id":"validation_plan","aliases":["验证方案","validation plan"],"question_tags":["validation"]},
       {"id":"report","aliases":["报告","report"]}
     ],
     "execution_policies": [
@@ -247,6 +247,7 @@
   "query_capabilities": [
     {"id":"provider_status","mode":"status","required_arguments":[],"scope":"provider","metric":"provider_health","allowed_claims":["configured provider readiness"],"forbidden_claims":["scientific result"]},
     {"id":"catalog","mode":"catalog","required_arguments":[],"scope":"release","metric":"module_availability","allowed_claims":["installed query coverage"],"forbidden_claims":["analysis completion inferred only from file presence"]},
+    {"id":"capability_catalog","mode":"capability_catalog","required_arguments":[],"default_limit":8,"minimum_limit":3,"maximum_limit":8,"scope":"annotated_capability_registry","metric":"intent_to_capability_match","allowed_claims":["bounded ranked capability candidates and their declared contracts"],"forbidden_claims":["scientific result from an annotation match","lineage eligibility from installation state"]},
     {"id":"lineage_catalog","mode":"lineage_catalog","required_arguments":["lineage"],"scope":"lineage","metric":"module_availability","allowed_claims":["lineage-scoped query coverage"],"forbidden_claims":["subgroup, contrast, mechanism, or drug-combination completion not returned by the provider"]},
     {"id":"lineage_dependency","mode":"lineage_dependency","required_arguments":["lineage"],"default_limit":20,"scope":"lineage_vs_rest","metric":"effect_mean_difference","allowed_claims":["precomputed lineage-selective or descriptive mean dependency ranking"],"forbidden_claims":["logFC","causality","clinical selectivity"]},
     {"id":"lineage_directions","mode":"lineage_directions","required_arguments":["lineage"],"default_limit":20,"scope":"lineage","metric":"family_specific_shortlists","allowed_claims":["hypothesis-generating candidates returned by the provider","focus-specific non-retention under the declared collection filter"],"forbidden_claims":["invented anchor genes","proof of novelty","proof of causality","treating transcription-factor non-retention as proof that no TF biology exists"]},

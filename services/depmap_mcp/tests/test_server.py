@@ -151,6 +151,27 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.queries[0]["lineage"], "Liver")
         self.assertEqual(self.queries[0]["focus"], "transcription_factor")
 
+    async def test_capability_discovery_preserves_the_bounded_candidate_limit(self):
+        result = await self.service.describe_capabilities(
+            "肝癌",
+            question_tags=["regulator"],
+            entity_sets=["dorothea_tf_abc"],
+            limit=4,
+        )
+        self.assertEqual(result["request"]["limit"], 4)
+        self.assertEqual(
+            self.queries[0],
+            {
+                "mode": "capability_catalog",
+                "lineage": "Liver",
+                "question_tags": ["regulator"],
+                "entity_sets": ["dorothea_tf_abc"],
+                "limit": 4,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "between 3 and 8"):
+            await self.service.describe_capabilities(limit=9)
+
     async def test_topic_plan_preserves_phenotype_and_molecular_focus(self):
         result = await self.service.topic_plan(
             "肝癌",

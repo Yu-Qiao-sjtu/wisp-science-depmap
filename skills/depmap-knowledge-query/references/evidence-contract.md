@@ -77,6 +77,25 @@ Use `depmap_query` after the bundle only for a surgical lookup that needs a
 specific target, drug, pathway, term, reciprocal constraint, or catalog field.
 Do not repeat all bundle subqueries manually.
 
+For open-ended questions, call `depmap_query(mode=capability_catalog)` before
+querying evidence. Candidate ranking, score weights, and the allowed 3--8
+candidate window come from the versioned annotation registry. The response
+reports the selected and total matched capability counts, score components,
+and whether more candidates exist; those fields are discovery metadata, not
+scientific evidence.
+
+`topic_plan` returns an executable `wisp.evidence-plan.v1`. Every step carries
+`depends_on`, `execution_status`, and, when executed, stable `result_refs` into
+the returned bounded evidence buckets. Preserve non-executed states and
+`missing_bindings`; do not reinterpret them as null biological results. The
+provider performs logical cross-partition aggregation. A model must not iterate
+physical Parquet/RDS blocks.
+
+Starting a new computation is outside this read-only evidence contract. The
+host may create a Run only for an exact `NOT_COMPUTED` coverage state, an
+`allow_new_analysis` policy, and explicit user authorization. Sparse or
+ineligible stored results never satisfy that gate.
+
 If the result is spilled because it exceeds the inline display budget, use the
 exact file path returned by the tool and read only bounded ranges from that one
 file. The parent `.wisp/tool-output` directory is not a valid evidence scope.
