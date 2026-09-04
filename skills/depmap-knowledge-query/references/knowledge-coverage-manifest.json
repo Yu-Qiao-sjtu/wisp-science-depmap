@@ -4,6 +4,14 @@
   "purpose": "Describe which bounded query families can be answered from the precomputed knowledge base. This is not the raw-data computation capability manifest.",
   "query_families": [
     {
+      "id": "capability_catalog",
+      "mode": "capability_catalog",
+      "required_references": [
+        "skills/depmap-knowledge-query/references/knowledge-module-annotations.json"
+      ],
+      "note": "Repository-owned scientific annotations are joined with installed storage and terminal manifests at query time."
+    },
+    {
       "id": "catalog",
       "mode": "catalog",
       "required_paths": [

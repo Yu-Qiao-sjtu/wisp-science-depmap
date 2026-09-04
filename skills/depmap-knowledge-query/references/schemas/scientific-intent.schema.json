@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wisp.scientific-intent.v1",
+  "title": "Wisp scientific intent",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_type",
+    "phenotypes",
+    "molecular_focus",
+    "mechanisms",
+    "evidence_sources",
+    "requested_outputs",
+    "execution_policy",
+    "unresolved_concepts"
+  ],
+  "properties": {
+    "schema_version": {"const": "wisp.scientific-intent.v1"},
+    "task_type": {"type": "string", "minLength": 1},
+    "disease": {"type": "object"},
+    "disease_mentions": {"type": "array", "items": {"type": "object"}},
+    "gene_mentions": {"type": "array", "items": {"type": "object"}},
+    "phenotypes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "molecular_focus": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "research_relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subject", "predicate", "object", "evidence_requirement"],
+        "properties": {
+          "subject": {"type": "object"},
+          "predicate": {"type": "string", "minLength": 1},
+          "object": {"type": "object"},
+          "evidence_requirement": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "mechanisms": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "evidence_sources": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "requested_outputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "execution_policy": {"type": "string", "minLength": 1},
+    "unresolved_concepts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "entity_sets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "resolved_entities": {"type": "object"},
+    "entity_resolutions": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "entity_registry": {"type": "object"},
+    "routing_hints": {
+      "type": "object",
+      "properties": {
+        "question_tags": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "entity_sets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

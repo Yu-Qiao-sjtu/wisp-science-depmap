@@ -373,6 +373,7 @@ pub(crate) fn publish_agent_event(event: &crate::AgentEvent) {
             (frame_id, ProgressEvent::AssistantDelta(delta.clone()))
         }
         crate::AgentEvent::Reasoning { frame_id, .. }
+        | crate::AgentEvent::Phase { frame_id, .. }
         | crate::AgentEvent::Stdout { frame_id, .. } => (frame_id, ProgressEvent::Activity),
         crate::AgentEvent::ToolCall { frame_id, name, .. } => {
             (frame_id, ProgressEvent::ToolStarted(name.clone()))

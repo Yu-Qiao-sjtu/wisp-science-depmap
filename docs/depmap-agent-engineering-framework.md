@@ -476,7 +476,7 @@ coverage_gap
 | 注册 Workflow | 已降级为 escalation | 仅显式请求或 L4 durable 路由 |
 | 子 Agent进度 | 已修复基础 | 继续加入结构化科学阶段 |
 | 显式 Intent Router | 已有最小闭环 | 后续增加活动时间线 DTO/UI |
-| Evidence Ledger | 已有最小闭环 | 后续增加 Claim 校验和跨会话复用 |
+| Evidence Ledger | 已有账本与最终回答硬门 | 后续增加文献/TCGA统一 ClaimRecord 和证据详情 UI |
 | MCP 结果缓存 | 部分依赖底层 | 增加 release-aware 两级缓存 |
 | Agent 路由评测 | 部分轨迹测试 | 建立黄金场景与自动评分 |
 
@@ -504,7 +504,28 @@ coverage_gap
 4. `depmap_evidence_history` 支持列出本会话证据或按 id 恢复；
 5. 超过 256 KiB 的账本 payload 只保留元数据、字节数和 SHA-256，不把大结果复制进 SQLite。
 
-待补：ClaimRecord、回答生成前的数值 Claim 校验、证据详情 UI 和跨会话 release-aware 复用。
+已完成 DepMap 最终回答 Grounding Gate：
+
+6. DepMap Specialist 用宿主受控实现替换通用 `attempt_completion`，普通 Agent 不受影响；
+7. 每条数据声明提交 `evidence_id + JSON Pointer + exact claim`，并在正文中带 `[E#]`；
+8. 宿主只接受当前轮次写入或刷新的证据，拒绝跨轮陈旧证据；
+9. 数值按声明显示精度与 Pointer 指向的 JSON 数值核对，允许正常四舍五入但拒绝无来源数值；
+10. `coverage_gap`、`blocked`、`validation_failed` 不得作为阳性证据；绑定结果中的
+    `NOT_RETAINED`、`INELIGIBLE`、`NOT_COMPUTED`、`MODULE_UNAVAILABLE` 必须在回答中显式披露；
+11. 未限定的因果、已验证合成致死和临床疗效声明会在答案发布前被拒绝；
+12. 验证成功后自动附加可见的机器核验证据索引；
+13. Agent 内核按 DepMap 会话声明强制使用完成工具：自由文本草稿既不流式展示也不持久化，
+    会被回送给模型补查证据并重新提交，因此模型不能通过省略工具调用绕过核验；达到迭代上限
+    时失败关闭，不生成未核验的兜底总结；
+14. TCGA 表达/生存结果已通过现有 DepMap 查询入口写入同一账本；通过
+    `depmap_validate_run` 的 manifest/result/QC 以 `run_validated` 登记并可按 Pointer 核验；
+15. 明确声明 `literature_search` 能力的后台检索结果按 Workflow、delivery 和子工具轨迹登记。
+    有 DOI/PMID/URL/paper id/reference 的记录标为 `literature_retrieval`，无定位符的记录标为
+    `literature_unverified` 并禁止作为阳性依据。当前文献门验证可追溯性，不宣称自动完成语义蕴含判断。
+
+待补：持久化 ClaimRecord、文献 claim-to-passage 蕴含验证器、证据详情 UI、跨会话
+release-aware 复用。超过 256 KiB
+而被哈希化的结果不能直接支持数值声明；Agent 必须先执行更窄的查询取得可定位字段。
 
 ### Phase 3：缓存与工具发现
 

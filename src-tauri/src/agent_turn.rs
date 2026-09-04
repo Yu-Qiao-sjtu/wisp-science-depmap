@@ -647,6 +647,11 @@ pub(crate) async fn send_message_inner(
             .as_ref()
             .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
         {
+            agent.replace_tool(Box::new(depmap_agent::DepMapCompletionGateTool::new(
+                state.store.clone(),
+                ap.id.clone(),
+                frame_id.clone(),
+            )));
             agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool));
             agent.add_tool(Box::new(depmap_agent::DepMapEvidenceHistoryTool::new(
                 state.store.clone(),
@@ -671,6 +676,8 @@ pub(crate) async fn send_message_inner(
                 state.store.clone(),
                 frame_scope.clone(),
                 ap.root.clone(),
+                ap.id.clone(),
+                frame_id.clone(),
             )));
         }
         agent.add_tool(Box::new(research_graph::ResearchGraphTool::new_in_scope(
@@ -902,13 +909,14 @@ pub(crate) async fn send_message_inner(
         agent.provider.model(),
         reused_agent,
     );
-    let completion_delivery_ids = state
+    let completion_deliveries = state
         .store
         .list_unpresented_agent_workflow_deliveries(&frame_id)
         .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|delivery| delivery.id)
+        .map_err(|error| error.to_string())?;
+    let completion_delivery_ids = completion_deliveries
+        .iter()
+        .map(|delivery| delivery.id.clone())
         .collect::<Vec<_>>();
     agent.ctx.clear_runtime_injections();
     if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
@@ -918,6 +926,22 @@ pub(crate) async fn send_message_inner(
         exploration_commands::exploration_runtime_injection(&ap.root, &frame_scope)?
     {
         agent.ctx.inject_user(injection);
+    }
+    if specialist
+        .as_ref()
+        .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
+    {
+        let literature_refs = depmap_agent::register_literature_deliveries(
+            &state.store,
+            &ap.id,
+            &frame_id,
+            &completion_deliveries,
+        )
+        .await
+        .map_err(|error| format!("Failed to register literature evidence: {error}"))?;
+        if let Some(injection) = depmap_agent::literature_evidence_prompt(&literature_refs) {
+            agent.ctx.inject_user(injection);
+        }
     }
     if project_write_locked {
         agent.ctx.inject_user(
@@ -1164,6 +1188,9 @@ pub(crate) async fn send_message_inner(
         provenance_scope,
         turn_id: browser_turn_id.clone(),
         force_ask_mutations: origin.force_ask_mutations(),
+        requires_completion_tool: specialist
+            .as_ref()
+            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID),
     };
 
     let turn_start = agent.ctx.messages.len();

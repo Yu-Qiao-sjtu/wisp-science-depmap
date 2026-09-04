@@ -7303,6 +7303,19 @@ test("reasoning details stays open while more thinking streams in", async ({ pag
   expect(await rz.evaluate((element) => (element as any).__stableProbe === true)).toBe(true);
 });
 
+test("agent harness phases remain visible while the final answer is pending", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("PHASESTREAM");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await page.getByTestId("trajectory-topbar").click();
+  const overlay = page.getByTestId("trajectory-overlay");
+  await expect(overlay.getByTestId("traj-row-phase")).toContainText(
+    "Evidence ready · preparing final answer",
+  );
+  await expect(page.getByText("Bounded synthesis finished.")).toBeVisible();
+});
+
 test("active session Runs appear automatically with elapsed time and heartbeat (#593)", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {

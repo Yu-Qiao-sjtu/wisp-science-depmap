@@ -299,6 +299,61 @@ pub struct ProviderConfig {
     pub proxy: Option<String>,
 }
 
+/// Model-specific defaults used by the agent harness. These are transport
+/// policies, not task or Skill instructions: an explicitly configured value
+/// always wins, and matching is by exact model id so one model family cannot
+/// silently absorb a sibling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelHarnessPolicy {
+    pub default_reasoning_effort: Option<&'static str>,
+    pub post_tool_response_timeout: std::time::Duration,
+}
+
+const DEFAULT_POST_TOOL_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+#[derive(Debug, Clone, Copy)]
+struct ModelHarnessProfile {
+    model_id: &'static str,
+    policy: ModelHarnessPolicy,
+}
+
+/// Declarative model adapters. Add an exact model id here only when a real
+/// replay demonstrates that the provider default needs correction. User or
+/// profile settings still take precedence over these defaults.
+const MODEL_HARNESS_PROFILES: &[ModelHarnessProfile] = &[ModelHarnessProfile {
+    model_id: "glm-5.3-flash",
+    policy: ModelHarnessPolicy {
+        default_reasoning_effort: Some("minimal"),
+        post_tool_response_timeout: std::time::Duration::from_secs(90),
+    },
+}];
+
+pub fn model_harness_policy(model: &str) -> ModelHarnessPolicy {
+    // Gateway ids may be `vendor/model`; match only the complete tail id, just
+    // like the baked model catalog, and never by family prefix.
+    let exact = model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    MODEL_HARNESS_PROFILES
+        .iter()
+        .find(|profile| profile.model_id == exact)
+        .map(|profile| profile.policy)
+        .unwrap_or(ModelHarnessPolicy {
+            default_reasoning_effort: None,
+            post_tool_response_timeout: DEFAULT_POST_TOOL_RESPONSE_TIMEOUT,
+        })
+}
+
+fn apply_model_harness_defaults(cfg: &mut ProviderConfig) {
+    let policy = model_harness_policy(&cfg.model);
+    if cfg.reasoning_effort.is_none() {
+        cfg.reasoning_effort = policy.default_reasoning_effort.map(str::to_string);
+    }
+}
+
 /// Shared reqwest client for all providers, honoring `cfg.proxy`.
 /// Process-wide connection pool for the default proxy configuration. Review /
 /// follow-up / memory side calls used to build a fresh `reqwest::Client` per
@@ -444,13 +499,46 @@ pub trait Provider: Send + Sync {
 }
 
 /// Construct the concrete provider for a config.
-pub fn build(cfg: ProviderConfig) -> Box<dyn Provider> {
+pub fn build(mut cfg: ProviderConfig) -> Box<dyn Provider> {
+    apply_model_harness_defaults(&mut cfg);
     match cfg.kind {
         ProviderKind::OpenAiCompatible => Box::new(crate::openai::OpenAiProvider::new(cfg)),
         ProviderKind::OpenAiResponses => {
             Box::new(crate::responses::OpenAiResponsesProvider::new(cfg))
         }
         ProviderKind::Anthropic => Box::new(crate::anthropic::AnthropicProvider::new(cfg)),
+    }
+}
+
+#[cfg(test)]
+mod harness_policy_tests {
+    use super::*;
+
+    #[test]
+    fn glm_flash_gets_minimal_effort_only_when_unset() {
+        let mut cfg = ProviderConfig::openai("https://example.test/v1", "key", "GLM-5.3-Flash");
+        apply_model_harness_defaults(&mut cfg);
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("minimal"));
+
+        cfg.reasoning_effort = Some("high".into());
+        apply_model_harness_defaults(&mut cfg);
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn harness_policy_uses_exact_model_ids() {
+        assert_eq!(
+            model_harness_policy("GLM-5.3-Flash").default_reasoning_effort,
+            Some("minimal")
+        );
+        assert_eq!(
+            model_harness_policy("vendor/GLM-5.3-Flash").default_reasoning_effort,
+            Some("minimal")
+        );
+        assert_eq!(
+            model_harness_policy("GLM-5.3-Flash-Preview").default_reasoning_effort,
+            None
+        );
     }
 }
 

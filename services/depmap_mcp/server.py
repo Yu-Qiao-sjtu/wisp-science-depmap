@@ -25,8 +25,11 @@ from services.depmap_api.app import (
     LINEAGE_NETWORK_FAMILIES,
     QueryRequest,
     Settings,
+    preload_native_query_runtime,
+    run_query_with_page_contract,
     run_bounded_query,
     resolve_lineage_term,
+    resolve_scientific_entity,
     verify_installation,
 )
 
@@ -185,6 +188,11 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "metric": "family_specific_shortlists",
             "interpretation": "fixed-filter selection over precomputed sparse rows; metrics remain separate and ranks are hypothesis-generating",
         }
+    if mode == "topic_plan":
+        return {
+            "metric": "typed_coverage_and_evidence_plan",
+            "interpretation": "slot-preserving plan that separates direct evidence, coverage gaps, and unstarted new computation",
+        }
     return {
         "metric": "provider_fields",
         "interpretation": "use the returned field names and provenance; no causal claim",
@@ -201,6 +209,10 @@ class DepMapEvidenceService:
     def __init__(self, settings: Settings, runner: Runner = run_bounded_query) -> None:
         self.settings = settings
         self.runner = runner
+        # Do this before FastMCP starts its async worker pools.  It prevents a
+        # first Parquet-backed tool call from stalling on Windows import locks.
+        if runner is run_bounded_query:
+            preload_native_query_runtime()
         self.semaphore = asyncio.Semaphore(settings.max_concurrency)
         self.qa = verify_installation(settings)
 
@@ -246,7 +258,9 @@ class DepMapEvidenceService:
         validated = QueryRequest.model_validate(query).bounded_dict()
         try:
             async with self.semaphore:
-                result = await self.runner(self.settings, validated)
+                result = await run_query_with_page_contract(
+                    self.settings, self.runner, validated
+                )
         except HTTPException as exc:
             return {
                 "query": validated,
@@ -299,14 +313,19 @@ class DepMapEvidenceService:
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 6,
+            "query_contract_version": 9,
             "lineage_resolution_contract_version": 1,
+            "scientific_entity_registry_version": 1,
             "coverage_manifest_version": 4,
+            "knowledge_annotation_schema_version": 1,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
             "tool_boundary": [
                 "status_and_coverage",
+                "scientific_capability_annotation",
                 "lineage_resolution",
+                "scientific_entity_resolution",
                 "cancer_level_direction_discovery",
+                "multi_slot_topic_planning",
                 "cancer_level_dependency_ranking",
                 "gene_evidence",
                 "exact_gene_pair_evidence",
@@ -373,6 +392,45 @@ class DepMapEvidenceService:
             evidence=evidence,
         )
 
+    async def resolve_entity(
+        self,
+        entity_type: str,
+        term: str,
+        candidate_values: list[str] | None = None,
+    ) -> dict[str, Any]:
+        evidence = resolve_scientific_entity(
+            self.settings, entity_type, term, candidate_values
+        )
+        return self._envelope(
+            tool="depmap_resolve_entity",
+            request={
+                "entity_type": entity_type,
+                "term": term,
+                "candidate_values": candidate_values or [],
+            },
+            evidence=evidence,
+        )
+
+    async def describe_capabilities(
+        self,
+        lineage: str | None = None,
+        question_tags: list[str] | None = None,
+        entity_sets: list[str] | None = None,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {"mode": "capability_catalog"}
+        if lineage:
+            query["lineage"] = lineage
+        if question_tags:
+            query["question_tags"] = question_tags
+        if entity_sets:
+            query["entity_sets"] = entity_sets
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_describe_capabilities",
+            request={key: value for key, value in query.items() if key != "mode"},
+            evidence=item,
+        )
+
     async def lineage_catalog(self, lineage: str) -> dict[str, Any]:
         item = await self._execute({"mode": "lineage_catalog", "lineage": lineage})
         return self._envelope(
@@ -386,39 +444,98 @@ class DepMapEvidenceService:
         lineage: str,
         ranking: Literal["selective", "mean_dependency"] = "selective",
         limit: int = 10,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        item = await self._execute(
-            {
+        query = {
                 "mode": "lineage_dependency",
                 "lineage": lineage,
                 "ranking": ranking,
                 "limit": limit,
             }
-        )
+        if cursor:
+            query["cursor"] = cursor
+        item = await self._execute(query)
         canonical_lineage = item.get("query", {}).get("lineage", lineage)
         return self._envelope(
             tool="depmap_lineage_dependencies",
             request={
-                "lineage": canonical_lineage,
-                "ranking": ranking,
-                "limit": limit,
+                key: value
+                for key, value in {
+                    "lineage": canonical_lineage,
+                    "ranking": ranking,
+                    "limit": limit,
+                    "cursor": cursor,
+                }.items()
+                if value is not None
             },
             evidence=item,
         )
 
-    async def lineage_directions(self, lineage: str, limit: int = 20) -> dict[str, Any]:
+    async def lineage_directions(
+        self,
+        lineage: str,
+        limit: int = 20,
+        focus: Literal["all", "transcription_factor", "pathway", "network", "cnv", "drug"] = "all",
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
-        item = await self._execute(
-            {"mode": "lineage_directions", "lineage": lineage, "limit": limit}
-        )
+        query = {
+                "mode": "lineage_directions",
+                "lineage": lineage,
+                "limit": limit,
+                "focus": focus,
+            }
+        if cursor:
+            query["cursor"] = cursor
+        item = await self._execute(query)
         return self._envelope(
             tool="depmap_lineage_direction_discovery",
-            request={"lineage": lineage, "limit": limit},
+            request={
+                key: value
+                for key, value in {
+                    "lineage": lineage, "limit": limit, "focus": focus, "cursor": cursor
+                }.items()
+                if value is not None
+            },
+            evidence=item,
+        )
+
+    async def topic_plan(
+        self,
+        lineage: str,
+        phenotypes: list[str] | None = None,
+        molecular_focus: list[str] | None = None,
+        mechanisms: list[str] | None = None,
+        evidence_sources: list[str] | None = None,
+        requested_outputs: list[str] | None = None,
+        execution_policy: str = "precomputed_only",
+        unresolved_concepts: list[str] | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        query = {
+            "mode": "topic_plan",
+            "lineage": lineage,
+            "phenotypes": phenotypes or [],
+            "molecular_focus": molecular_focus or [],
+            "mechanisms": mechanisms or [],
+            "evidence_sources": evidence_sources or ["depmap"],
+            "requested_outputs": requested_outputs or ["candidate_topics"],
+            "execution_policy": execution_policy,
+            "unresolved_concepts": unresolved_concepts or [],
+            "limit": limit,
+        }
+        if cursor:
+            query["cursor"] = cursor
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_topic_plan",
+            request={key: value for key, value in query.items() if key != "mode"},
             evidence=item,
         )
 
@@ -526,6 +643,7 @@ class DepMapEvidenceService:
         lineage: str | None = None,
         endpoint: str = "OS",
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         symbol = gene.strip().upper()
         if not symbol:
@@ -547,6 +665,8 @@ class DepMapEvidenceService:
             query["project"] = project.strip().upper()
         if lineage:
             query["lineage"] = lineage
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         request = {
             "gene": symbol,
@@ -554,7 +674,9 @@ class DepMapEvidenceService:
             "lineage": lineage,
             "endpoint": normalized_endpoint,
             "limit": limit,
+            "cursor": cursor,
         }
+        request = {key: value for key, value in request.items() if value is not None}
         evidence = {
             "patient_evidence": item,
             "integration_rule": (
@@ -633,6 +755,7 @@ class DepMapEvidenceService:
         lineage: str | None = None,
         contrast_id: str | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -643,6 +766,8 @@ class DepMapEvidenceService:
             query["lineage"] = lineage
         if contrast_id:
             query["contrast"] = contrast_id.strip()
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {
@@ -650,7 +775,9 @@ class DepMapEvidenceService:
             "lineage": validated.get("lineage"),
             "contrast_id": validated.get("contrast"),
             "limit": limit,
+            "cursor": cursor,
         }
+        request = {key: value for key, value in request.items() if value is not None}
         return self._envelope(
             tool="depmap_subtype_evidence", request=request, evidence=item
         )
@@ -662,6 +789,7 @@ class DepMapEvidenceService:
         target: str | None = None,
         layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] = "lineage_adjusted",
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -678,6 +806,8 @@ class DepMapEvidenceService:
             query["partner"] = partner.strip().upper()
         if target:
             query["target"] = target.strip().upper()
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {
@@ -686,7 +816,9 @@ class DepMapEvidenceService:
             "target": validated.get("target"),
             "layer": validated["layer"],
             "limit": limit,
+            "cursor": cursor,
         }
+        request = {key: value for key, value in request.items() if value is not None}
         return self._envelope(
             tool="depmap_coamplification_evidence", request=request, evidence=item
         )
@@ -696,6 +828,7 @@ class DepMapEvidenceService:
         gene: str | None = None,
         partner: str | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -704,13 +837,17 @@ class DepMapEvidenceService:
             query["gene"] = gene.strip().upper()
         if partner:
             query["partner"] = partner.strip().upper()
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {
             "gene": validated.get("gene"),
             "partner": validated.get("partner"),
             "limit": limit,
+            "cursor": cursor,
         }
+        request = {key: value for key, value in request.items() if value is not None}
         return self._envelope(tool="depmap_true_love_evidence", request=request, evidence=item)
 
     async def synthetic_lethal_evidence(
@@ -719,6 +856,7 @@ class DepMapEvidenceService:
         target: str | None = None,
         event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if not source and not target:
             raise ValueError("source, target, or both are required")
@@ -731,10 +869,14 @@ class DepMapEvidenceService:
             query["target"] = target.strip().upper()
         if event:
             query["event"] = event
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {key: validated.get(key) for key in ("source", "target", "event")}
         request["limit"] = limit
+        if cursor:
+            request["cursor"] = cursor
         return self._envelope(tool="depmap_synthetic_lethal_evidence", request=request, evidence=item)
 
     async def three_d_evidence(
@@ -747,6 +889,7 @@ class DepMapEvidenceService:
         contrast: str | None = None,
         omic: Literal["expression", "cnv", "damaging", "hotspot"] | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -757,10 +900,14 @@ class DepMapEvidenceService:
         for key, value in (("cohort", cohort), ("contrast", contrast), ("omic", omic)):
             if value:
                 query[key] = value.strip()
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {key: validated.get(key) for key in ("family", "gene", "source", "target", "cohort", "contrast", "omic")}
         request["limit"] = limit
+        if cursor:
+            request["cursor"] = cursor
         return self._envelope(tool="depmap_3d_evidence", request=request, evidence=item)
 
     async def drug_evidence(
@@ -867,6 +1014,46 @@ def build_mcp_server(
         return await service.resolve_lineage(term, candidate_lineages)
 
     @mcp.tool(
+        title="Resolve a scientific entity against the installed knowledge base",
+        description=(
+            "Resolve a model-extracted cancer, gene, drug, pathway, phenotype, "
+            "molecular focus, mechanism, evidence source, or requested output. "
+            "RESOLVED means a maintained registry or installed catalog matched; "
+            "NORMALIZED_UNVERIFIED is only query-safe spelling and is not evidence. "
+            "Use candidate_values only to validate model-proposed cancer candidates."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_resolve_entity(
+        entity_type: Literal[
+            "cancer", "gene", "drug", "pathway", "phenotype",
+            "molecular_focus", "mechanism", "evidence_source", "requested_output",
+        ],
+        term: str,
+        candidate_values: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return await service.resolve_entity(entity_type, term, candidate_values)
+
+    @mcp.tool(
+        title="Describe annotated DepMap capabilities",
+        description=(
+            "Map scientific question tags and entity sets to installed precomputed "
+            "analysis capabilities. This reads metadata and manifests only: a matched "
+            "capability is not itself a result hit. Use entity_sets=['dorothea_tf_abc'] "
+            "to plan transcription-factor fan-out across every compatible module."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_describe_capabilities(
+        lineage: str | None = None,
+        question_tags: list[str] | None = None,
+        entity_sets: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return await service.describe_capabilities(lineage, question_tags, entity_sets)
+
+    @mcp.tool(
         title="DepMap lineage coverage",
         description="List precomputed modules that are eligible and complete for one cancer lineage.",
         annotations=READ_ONLY,
@@ -890,8 +1077,9 @@ def build_mcp_server(
         lineage: str,
         ranking: Literal["selective", "mean_dependency"] = "selective",
         limit: int = 10,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        return await service.lineage_dependencies(lineage, ranking, limit)
+        return await service.lineage_dependencies(lineage, ranking, limit, cursor)
 
     @mcp.tool(
         title="DepMap cancer-level direction discovery",
@@ -906,8 +1094,46 @@ def build_mcp_server(
     async def depmap_lineage_direction_discovery(
         lineage: str,
         limit: int = 20,
+        focus: Literal["all", "transcription_factor", "pathway", "network", "cnv", "drug"] = "all",
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        return await service.lineage_directions(lineage, limit)
+        return await service.lineage_directions(lineage, limit, focus, cursor)
+
+    @mcp.tool(
+        title="DepMap multi-slot topic plan",
+        description=(
+            "Preserve a cancer topic request across phenotype, molecular focus, "
+            "mechanism, evidence source, requested output, and execution-policy "
+            "slots. Returns direct precomputed evidence separately from composable "
+            "evidence, unstarted new computation, and unsupported scope."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_topic_plan(
+        lineage: str,
+        phenotypes: list[str] | None = None,
+        molecular_focus: list[str] | None = None,
+        mechanisms: list[str] | None = None,
+        evidence_sources: list[str] | None = None,
+        requested_outputs: list[str] | None = None,
+        execution_policy: Literal["precomputed_only", "allow_new_analysis"] = "precomputed_only",
+        unresolved_concepts: list[str] | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return await service.topic_plan(
+            lineage,
+            phenotypes,
+            molecular_focus,
+            mechanisms,
+            evidence_sources,
+            requested_outputs,
+            execution_policy,
+            unresolved_concepts,
+            limit,
+            cursor,
+        )
 
     @mcp.tool(
         title="DepMap gene evidence",
@@ -944,9 +1170,10 @@ def build_mcp_server(
         lineage: str | None = None,
         endpoint: str = "OS",
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         return await service.tcga_expression_survival(
-            gene, project, lineage, endpoint, limit
+            gene, project, lineage, endpoint, limit, cursor
         )
 
     @mcp.tool(
@@ -998,8 +1225,9 @@ def build_mcp_server(
         lineage: str | None = None,
         contrast_id: str | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        return await service.subtype_evidence(gene, lineage, contrast_id, limit)
+        return await service.subtype_evidence(gene, lineage, contrast_id, limit, cursor)
 
     @mcp.tool(
         title="DepMap coamplification dependency evidence",
@@ -1018,9 +1246,10 @@ def build_mcp_server(
         target: str | None = None,
         layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] = "lineage_adjusted",
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         return await service.coamplification_evidence(
-            source, partner, target, layer, limit
+            source, partner, target, layer, limit, cursor
         )
 
     @mcp.tool(
@@ -1037,8 +1266,9 @@ def build_mcp_server(
         gene: str | None = None,
         partner: str | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        return await service.true_love_evidence(gene, partner, limit)
+        return await service.true_love_evidence(gene, partner, limit, cursor)
 
     @mcp.tool(
         title="DepMap observational synthetic-lethal evidence",
@@ -1055,8 +1285,9 @@ def build_mcp_server(
         target: str | None = None,
         event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        return await service.synthetic_lethal_evidence(source, target, event, limit)
+        return await service.synthetic_lethal_evidence(source, target, event, limit, cursor)
 
     @mcp.tool(
         title="DepMap 3D screening evidence",
@@ -1077,9 +1308,10 @@ def build_mcp_server(
         contrast: str | None = None,
         omic: Literal["expression", "cnv", "damaging", "hotspot"] | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         return await service.three_d_evidence(
-            family, gene, source, target, cohort, contrast, omic, limit
+            family, gene, source, target, cohort, contrast, omic, limit, cursor
         )
 
     return mcp

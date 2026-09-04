@@ -8,13 +8,17 @@ matrices or starts new analyses.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import gzip
+import hashlib
 import hmac
 import json
 import logging
 import os
 import csv
 import re
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +44,12 @@ MATRIX_MODULES = {
 }
 LINEAGE_EVENTS = {"damaging", "custom_missense", "hotspot"}
 DRUG_OMICS = {"effect", "expression", "cnv"}
+DIRECTION_FOCI = {"all", "transcription_factor", "pathway", "network", "cnv", "drug"}
+TOPIC_LIST_FIELDS = {
+    "phenotypes", "molecular_focus", "mechanisms", "evidence_sources",
+    "requested_outputs", "unresolved_concepts",
+}
+CAPABILITY_LIST_FIELDS = {"question_tags", "entity_sets"}
 SYNTHETIC_LETHAL_EVENTS = {
     "damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"
 }
@@ -50,9 +60,11 @@ THREE_D_FAMILIES = {
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 MODE_REQUIRED_FIELDS = {
     "catalog": set(),
+    "capability_catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
     "lineage_directions": {"lineage"},
+    "topic_plan": {"lineage"},
     "core": {"gene"},
     "pair": {"module", "source", "target"},
     "top": {"module", "source", "limit"},
@@ -71,9 +83,11 @@ MODE_REQUIRED_FIELDS = {
     "tcga_expression_survival": {"gene"},
 }
 MODE_OPTIONAL_FIELDS = {
+    "capability_catalog": CAPABILITY_LIST_FIELDS | {"lineage"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "limit"},
-    "lineage_directions": {"limit"},
+    "lineage_directions": {"limit", "focus", "entity_sets"},
+    "topic_plan": TOPIC_LIST_FIELDS | {"execution_policy", "limit"},
     "lineage_cnv": {"target", "limit"},
     "lineage_drug": {"drug", "target", "limit"},
     "enrichment": {"collection", "term", "limit"},
@@ -84,6 +98,21 @@ MODE_OPTIONAL_FIELDS = {
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
 }
+PAGINATED_MODES = {
+    "lineage_dependency", "lineage_directions", "topic_plan", "top",
+    "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
+    "subtype", "coamplification", "true_love", "synthetic_lethal",
+    "three_d", "tcga_expression_survival",
+}
+PAGE_COLLECTION_KEYS = {
+    "lineage_directions": ("topic_candidates",),
+    "topic_plan": ("topic_candidates", "rows"),
+    "coamplification": ("pairs", "hits", "rows"),
+    "true_love": ("pairs", "rows"),
+    "lineage_dependency": ("rows", "results"),
+}
+DEFAULT_PAGE_SIZE = 20
+MAX_CURSOR_OFFSET = 100_000
 LINEAGE_NETWORK_FAMILIES = {
     "effect_correlation",
     "expression_correlation",
@@ -119,6 +148,17 @@ QUERY_FIELD_ORDER = (
     "reciprocal",
     "project",
     "endpoint",
+    "focus",
+    "phenotypes",
+    "molecular_focus",
+    "mechanisms",
+    "evidence_sources",
+    "requested_outputs",
+    "execution_policy",
+    "unresolved_concepts",
+    "question_tags",
+    "entity_sets",
+    "cursor",
 )
 TCGA_SURVIVAL_ENDPOINTS = {"OS", "DSS", "DFI", "PFI"}
 CANONICAL_LINEAGES = (
@@ -168,6 +208,87 @@ CHINESE_LINEAGE_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _agent_capability_registry() -> dict[str, Any]:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "depmap-knowledge-query"
+        / "references"
+        / "agent-capability-registry.json"
+    )
+    with path.open(encoding="utf-8") as handle:
+        registry = json.load(handle)
+    if registry.get("schema_version") != 2:
+        raise RuntimeError("unsupported DepMap Agent capability registry")
+    return registry
+
+
+@lru_cache(maxsize=1)
+def _knowledge_module_annotations() -> dict[str, Any]:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "depmap-knowledge-query"
+        / "references"
+        / "knowledge-module-annotations.json"
+    )
+    with path.open(encoding="utf-8") as handle:
+        annotations = json.load(handle)
+    if annotations.get("schema_version") != 1:
+        raise RuntimeError("unsupported DepMap knowledge-module annotation schema")
+    storage_ids = [str(item.get("id", "")) for item in annotations.get("storage_modules", [])]
+    capability_ids = [str(item.get("id", "")) for item in annotations.get("capabilities", [])]
+    if not storage_ids or len(storage_ids) != len(set(storage_ids)) or any(not item for item in storage_ids):
+        raise RuntimeError("invalid or duplicate DepMap storage-module annotation")
+    if not capability_ids or len(capability_ids) != len(set(capability_ids)) or any(not item for item in capability_ids):
+        raise RuntimeError("invalid or duplicate DepMap capability annotation")
+    known = set(capability_ids)
+    for storage in annotations["storage_modules"]:
+        unknown = set(storage.get("capabilities", [])) - known
+        if unknown:
+            raise RuntimeError(
+                f"storage module {storage['id']} references unknown capabilities: {sorted(unknown)}"
+            )
+    return annotations
+
+
+def _concept_definitions(category: str) -> list[dict[str, Any]]:
+    concepts = _agent_capability_registry().get("concepts", {}).get(category)
+    if not isinstance(concepts, list):
+        raise RuntimeError(f"missing DepMap Agent concept category: {category}")
+    return concepts
+
+
+def _concept_definition(category: str, concept_id: str) -> dict[str, Any] | None:
+    return next(
+        (item for item in _concept_definitions(category) if item.get("id") == concept_id),
+        None,
+    )
+
+
+def _concept_ids(category: str) -> set[str]:
+    return {str(item["id"]) for item in _concept_definitions(category)}
+
+
+def _entity_set_ids() -> set[str]:
+    return {
+        str(item["id"])
+        for item in _knowledge_module_annotations().get("entity_sets", [])
+    }
+
+
+def _entity_set_definition(entity_set_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in _knowledge_module_annotations().get("entity_sets", [])
+            if item.get("id") == entity_set_id
+        ),
+        None,
+    )
+
+
 def _lineage_match_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
 
@@ -210,6 +331,93 @@ AMBIGUOUS_LINEAGE_TERMS: dict[str, tuple[str, ...]] = {
 }
 
 
+@lru_cache(maxsize=1)
+def _scientific_entity_registry() -> dict[str, Any]:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "depmap-knowledge-query"
+        / "references"
+        / "scientific-entity-registry.json"
+    )
+    with path.open(encoding="utf-8") as handle:
+        registry = json.load(handle)
+    if registry.get("schema_version") != 1:
+        raise RuntimeError("unsupported scientific entity registry schema")
+    lineages = registry.get("cancer_lineages")
+    if not isinstance(lineages, list) or not lineages:
+        raise RuntimeError("scientific entity registry has no cancer lineages")
+    labels = [str(item.get("label", "")).strip() for item in lineages]
+    identifiers = [str(item.get("id", "")).strip() for item in lineages]
+    if (
+        any(not value for value in labels + identifiers)
+        or len(labels) != len(set(labels))
+        or len(identifiers) != len(set(identifiers))
+    ):
+        raise RuntimeError("scientific entity registry has invalid cancer entities")
+    alias_keys = [
+        _unicode_lineage_alias_key(value)
+        for item in lineages
+        for value in [str(item["label"]), *(str(alias) for alias in item.get("aliases", []))]
+    ]
+    if any(not value for value in alias_keys) or len(alias_keys) != len(set(alias_keys)):
+        raise RuntimeError("scientific entity registry has empty or ambiguous cancer aliases")
+    known_ids = set(identifiers)
+    for item in registry.get("ambiguous_cancer_terms", []):
+        unknown = set(item.get("candidate_ids", [])) - known_ids
+        if unknown:
+            raise RuntimeError(f"ambiguous cancer term references unknown ids: {sorted(unknown)}")
+    return registry
+
+
+# The JSON registry is the runtime source of truth.  The declarations above are
+# retained only as a backward-compatible import fallback for older packaged
+# resources; a valid current registry deterministically replaces them here.
+_ENTITY_REGISTRY = _scientific_entity_registry()
+CANONICAL_LINEAGES = tuple(
+    str(item["label"]) for item in _ENTITY_REGISTRY["cancer_lineages"]
+)
+CHINESE_LINEAGE_ALIASES = {
+    str(item["label"]): tuple(str(alias) for alias in item.get("aliases", []))
+    for item in _ENTITY_REGISTRY["cancer_lineages"]
+}
+_LINEAGE_BY_ID = {
+    str(item["id"]): str(item["label"])
+    for item in _ENTITY_REGISTRY["cancer_lineages"]
+}
+AMBIGUOUS_LINEAGE_TERMS = {
+    term: tuple(_LINEAGE_BY_ID[identifier] for identifier in item["candidate_ids"])
+    for item in _ENTITY_REGISTRY.get("ambiguous_cancer_terms", [])
+    for term in [str(item["term"]), *(str(alias) for alias in item.get("aliases", []))]
+}
+CHINESE_LINEAGE_LOOKUP = {
+    _unicode_lineage_alias_key(alias): canonical
+    for canonical, aliases in CHINESE_LINEAGE_ALIASES.items()
+    for alias in aliases
+}
+
+
+def preload_native_query_runtime() -> None:
+    """Load binary scientific modules before query work enters a worker thread.
+
+    On Windows, importing NumPy/PyArrow for the first time from an executor
+    thread can contend with imports performed by the async MCP runtime.  The
+    resulting import-lock wait looks like a slow DepMap query and eventually
+    trips the transport timeout even though the same Parquet scan takes only a
+    few seconds.  MCP calls this once while it is still on the main thread.
+    """
+
+    try:
+        import numpy  # noqa: F401
+        import pyarrow.compute  # noqa: F401
+        import pyarrow.dataset  # noqa: F401
+        import pyarrow.parquet  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "NumPy and PyArrow are required for native DepMap knowledge queries"
+        ) from exc
+
+
 def _canonical_lineage_label(value: str) -> str:
     requested = value.strip()
     unicode_alias = CHINESE_LINEAGE_LOOKUP.get(_unicode_lineage_alias_key(requested))
@@ -228,20 +436,8 @@ def _canonical_lineage_label(value: str) -> str:
     direct = canonical_by_key.get(_lineage_match_key(without_suffix))
     if direct is not None:
         return direct
-    aliases = {
-        "brain": "CNS Brain", "cns": "CNS Brain",
-        "centralnervoussystem": "CNS Brain", "colon": "Bowel",
-        "colorectal": "Bowel", "rectal": "Bowel",
-        "esophageal": "Esophagus Stomach", "gastric": "Esophagus Stomach",
-        "stomach": "Esophagus Stomach", "headneck": "Head and Neck",
-        "headandneck": "Head and Neck", "ovarian": "Ovary Fallopian Tube",
-        "ovary": "Ovary Fallopian Tube", "fallopiantube": "Ovary Fallopian Tube",
-        "pns": "Peripheral Nervous System", "bladder": "Bladder Urinary Tract",
-        "urinarytract": "Bladder Urinary Tract", "vulvar": "Vulva Vagina",
-        "vaginal": "Vulva Vagina", "vulva": "Vulva Vagina",
-        "vagina": "Vulva Vagina",
-    }
-    return aliases.get(_lineage_match_key(without_suffix), requested)
+    alias = CHINESE_LINEAGE_LOOKUP.get(_unicode_lineage_alias_key(without_suffix))
+    return alias if alias is not None else requested
 
 
 def resolve_lineage_term(
@@ -374,13 +570,242 @@ class Settings:
         )
 
 
+def _entity_token(value: str) -> str:
+    return re.sub(r"[\s\-_/，、,（）()]+", "", value.strip().casefold())
+
+
+def _entity_candidate(
+    entity_id: str,
+    label: str,
+    *,
+    namespace: str,
+    matched_by: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "canonical_id": entity_id,
+        "label": label,
+        "namespace": namespace,
+        "matched_by": matched_by,
+        "metadata": metadata or {},
+    }
+
+
+@lru_cache(maxsize=4)
+def _gene_entity_index(catalog_path: str) -> dict[str, tuple[dict[str, Any], ...]]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(
+        catalog_path,
+        columns=[
+            "hgnc_id", "symbol", "name", "alias_symbol", "prev_symbol",
+            "in_crispr_effect", "in_crispr_dependency", "in_analysis_set",
+        ],
+    )
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in table.to_pylist():
+        symbol = str(row.get("symbol") or "").strip()
+        identifier = str(row.get("hgnc_id") or "").strip()
+        if not symbol or not identifier:
+            continue
+        record = _entity_candidate(
+            identifier,
+            symbol,
+            namespace="hgnc",
+            matched_by="symbol",
+            metadata={
+                "name": row.get("name"),
+                "in_crispr_effect": bool(row.get("in_crispr_effect")),
+                "in_crispr_dependency": bool(row.get("in_crispr_dependency")),
+                "in_analysis_set": bool(row.get("in_analysis_set")),
+            },
+        )
+        keys = [(symbol, "symbol")]
+        for field in ("alias_symbol", "prev_symbol"):
+            keys.extend(
+                (alias.strip(), field)
+                for alias in str(row.get(field) or "").split("|")
+                if alias.strip()
+            )
+        for value, matched_by in keys:
+            candidate = dict(record)
+            candidate["matched_by"] = matched_by
+            bucket = index.setdefault(_entity_token(value), [])
+            if not any(item["canonical_id"] == identifier for item in bucket):
+                bucket.append(candidate)
+    return {key: tuple(values) for key, values in index.items()}
+
+
+@lru_cache(maxsize=4)
+def _drug_entity_index(catalog_path: str) -> dict[str, tuple[dict[str, Any], ...]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    with Path(catalog_path).open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            identifier = str(row.get("CompoundID") or "").strip()
+            label = str(row.get("ConditionCompoundName") or "").strip()
+            if not identifier or not label:
+                continue
+            record = _entity_candidate(
+                f"depmap-prism-compound:{identifier}",
+                label,
+                namespace="depmap-prism-compound",
+                matched_by="ConditionCompoundName",
+                metadata={
+                    "compound_id": identifier,
+                    "condition_sample_id": row.get("ConditionSampleID") or None,
+                    "target_genes": row.get("GeneSymbolOfTargets") or None,
+                    "target_or_mechanism": row.get("TargetOrMechanism") or None,
+                    "chembl_id": row.get("ChEMBLID") or None,
+                    "pubchem_cid": row.get("PubChemCID") or None,
+                },
+            )
+            for field in (
+                "CompoundID", "ConditionCompoundName", "ConditionSampleID",
+                "ChEMBLID", "PubChemCID",
+            ):
+                value = str(row.get(field) or "").strip()
+                if not value:
+                    continue
+                candidate = dict(record)
+                candidate["matched_by"] = field
+                bucket = index.setdefault(_entity_token(value), [])
+                if not any(item["canonical_id"] == record["canonical_id"] for item in bucket):
+                    bucket.append(candidate)
+    return {key: tuple(values) for key, values in index.items()}
+
+
+def _resolution_result(
+    entity_type: str,
+    term: str,
+    candidates: list[dict[str, Any]],
+    *,
+    status: str | None = None,
+    requires_user_confirmation: bool | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    state = status or ("RESOLVED" if len(candidates) == 1 else "AMBIGUOUS" if candidates else "NOT_FOUND")
+    confirmation = (
+        requires_user_confirmation
+        if requires_user_confirmation is not None
+        else state in {"AMBIGUOUS", "INVALID_CANDIDATES"}
+    )
+    return {
+        "schema_version": "wisp.entity-resolution.v1",
+        "registry_version": _ENTITY_REGISTRY["schema_version"],
+        "release": _ENTITY_REGISTRY["release"],
+        "entity_type": entity_type,
+        "original_term": term.strip(),
+        "status": state,
+        "selected": candidates[0] if state == "RESOLVED" and len(candidates) == 1 else None,
+        "candidates": candidates,
+        "requires_user_confirmation": confirmation,
+        "is_scientific_evidence": False,
+        "note": note,
+    }
+
+
+def resolve_scientific_entity(
+    settings: Settings,
+    entity_type: str,
+    term: str,
+    candidate_values: list[str] | None = None,
+) -> dict[str, Any]:
+    """Resolve one model-extracted mention without turning a guess into evidence."""
+
+    requested = term.strip()
+    if not requested:
+        raise ValueError("term must be non-empty")
+    definition = _ENTITY_REGISTRY.get("entity_types", {}).get(entity_type)
+    if not isinstance(definition, dict):
+        raise ValueError(f"unsupported entity_type '{entity_type}'")
+
+    if entity_type == "cancer":
+        lineage = resolve_lineage_term(requested, candidate_values)
+        candidates = [
+            _entity_candidate(
+                f"depmap-lineage:{label}", label,
+                namespace="depmap-lineage", matched_by=lineage["resolution_basis"],
+                metadata={"relation": "model_grouping_proxy"},
+            )
+            for label in lineage.get("candidates", [])
+        ]
+        status = lineage["status"]
+        if status == "UNRESOLVED":
+            status = "NOT_FOUND"
+        elif status == "PROPOSED":
+            status = "AMBIGUOUS"
+        return _resolution_result(
+            entity_type, requested, candidates, status=status,
+            requires_user_confirmation=lineage["requires_user_confirmation"],
+            note=lineage.get("proxy_note") or lineage.get("reason"),
+        )
+
+    if entity_type == "gene":
+        catalog = settings.knowledge_root / str(definition["catalog"])
+        if not catalog.is_file():
+            return _resolution_result(
+                entity_type, requested, [], status="NOT_FOUND",
+                note=f"installed gene catalog is unavailable: {definition['catalog']}",
+            )
+        candidates = list(_gene_entity_index(str(catalog)).get(_entity_token(requested), ()))
+        return _resolution_result(entity_type, requested, candidates)
+
+    if entity_type == "drug":
+        catalog = next(
+            (
+                settings.knowledge_root / relative
+                for relative in definition.get("catalog_candidates", [])
+                if (settings.knowledge_root / relative).is_file()
+            ),
+            None,
+        )
+        if catalog is None:
+            return _resolution_result(
+                entity_type, requested, [], status="NOT_FOUND",
+                note="no installed PRISM compound catalog is available",
+            )
+        candidates = list(_drug_entity_index(str(catalog)).get(_entity_token(requested), ()))
+        return _resolution_result(entity_type, requested, candidates)
+
+    if definition.get("resolver") == "capability_concepts":
+        category = str(definition["concept_category"])
+        normalized = _entity_token(requested)
+        matches = []
+        for concept in _concept_definitions(category):
+            values = [str(concept["id"]), *(str(value) for value in concept.get("aliases", []))]
+            if any(_entity_token(value) == normalized for value in values):
+                matches.append(
+                    _entity_candidate(
+                        f"{definition['namespace']}:{concept['id']}",
+                        str(concept["id"]),
+                        namespace=str(definition["namespace"]),
+                        matched_by="concept_id_or_alias",
+                        metadata={"concept_category": category},
+                    )
+                )
+        return _resolution_result(entity_type, requested, matches)
+
+    if entity_type == "pathway":
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", requested).strip("_").upper()
+        candidate = _entity_candidate(
+            f"depmap-pathway:{normalized}", normalized,
+            namespace="depmap-pathway", matched_by="query_safe_normalization",
+        )
+        return _resolution_result(
+            entity_type, requested, [candidate], status="NORMALIZED_UNVERIFIED",
+            note=str(definition.get("verification_note")),
+        )
+
+    raise ValueError(f"entity_type '{entity_type}' has no resolver implementation")
+
+
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal[
-        "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
+        "catalog", "capability_catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
-        "lineage_directions",
+        "lineage_directions", "topic_plan",
         "subtype", "coamplification",
         "true_love", "synthetic_lethal", "three_d",
         "tcga_expression_survival",
@@ -406,15 +831,31 @@ class QueryRequest(BaseModel):
     reciprocal: bool | None = None
     project: str | None = None
     endpoint: str | None = None
+    focus: Literal["all", "transcription_factor", "pathway", "network", "cnv", "drug"] | None = None
+    phenotypes: list[str] | None = None
+    molecular_focus: list[str] | None = None
+    mechanisms: list[str] | None = None
+    evidence_sources: list[str] | None = None
+    requested_outputs: list[str] | None = None
+    execution_policy: str | None = None
+    unresolved_concepts: list[str] | None = None
+    question_tags: list[str] | None = None
+    entity_sets: list[str] | None = None
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
+        if self.mode in PAGINATED_MODES:
+            allowed = allowed | {"cursor"}
         all_fields = {
             "gene", "module", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
-            "project", "endpoint", "contrast", "partner", "layer", "cohort",
+            "project", "endpoint", "contrast", "partner", "layer", "cohort", "focus",
+            "phenotypes", "molecular_focus", "mechanisms", "evidence_sources",
+            "requested_outputs", "execution_policy", "unresolved_concepts",
+            "question_tags", "entity_sets", "cursor",
         }
         supplied = {
             name
@@ -455,12 +896,58 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love partner requires gene")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
-        for name in (supplied - {"limit", "reciprocal"}):
+        for name in (supplied - {"limit", "reciprocal", "cursor"} - TOPIC_LIST_FIELDS - CAPABILITY_LIST_FIELDS):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
             if len(value) > 256 or any(not char.isprintable() for char in value):
                 raise ValueError(f"{name} must be at most 256 printable characters")
+        concept_categories = {
+            "phenotypes": "phenotypes",
+            "molecular_focus": "molecular_focus",
+            "mechanisms": "mechanisms",
+            "evidence_sources": "evidence_sources",
+            "requested_outputs": "requested_outputs",
+        }
+        for field, category in concept_categories.items():
+            values = getattr(self, field)
+            if values is None:
+                continue
+            if len(values) > 6 or len(set(values)) != len(values):
+                raise ValueError(f"{field} must contain at most 6 unique values")
+            unsupported = sorted(set(values) - _concept_ids(category))
+            if unsupported:
+                raise ValueError(f"unsupported {field}: {', '.join(unsupported)}")
+        for field in CAPABILITY_LIST_FIELDS:
+            values = getattr(self, field)
+            if values is None:
+                continue
+            if len(values) > 8 or len(set(values)) != len(values):
+                raise ValueError(f"{field} must contain at most 8 unique values")
+            for value in values:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{field} values must be non-empty strings")
+                if len(value) > 128 or any(not char.isprintable() for char in value):
+                    raise ValueError(f"{field} values must be at most 128 printable characters")
+        if self.entity_sets is not None:
+            unsupported_sets = sorted(set(self.entity_sets) - _entity_set_ids())
+            if unsupported_sets:
+                raise ValueError(
+                    f"unsupported entity_sets: {', '.join(unsupported_sets)}"
+                )
+        if self.unresolved_concepts is not None:
+            if len(self.unresolved_concepts) > 8 or len(set(self.unresolved_concepts)) != len(self.unresolved_concepts):
+                raise ValueError("unresolved_concepts must contain at most 8 unique values")
+            if any(
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 128
+                or any(not char.isprintable() for char in value)
+                for value in self.unresolved_concepts
+            ):
+                raise ValueError("unresolved_concepts values must be non-empty printable strings")
+        if self.execution_policy is not None and self.execution_policy not in _concept_ids("execution_policies"):
+            raise ValueError("unsupported execution_policy")
         return self
 
     def bounded_dict(self) -> dict[str, Any]:
@@ -472,7 +959,126 @@ class QueryRequest(BaseModel):
             result["project"] = project if project.startswith("TCGA-") else f"TCGA-{project}"
         if self.endpoint is not None:
             result["endpoint"] = self.endpoint.strip().upper()
+        for field in TOPIC_LIST_FIELDS | CAPABILITY_LIST_FIELDS:
+            if field in result:
+                result[field] = [value.strip() for value in result[field]]
         return result
+
+
+def _page_query_fingerprint(query: dict[str, Any]) -> str:
+    identity = {key: value for key, value in query.items() if key not in {"cursor", "limit"}}
+    payload = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _encode_page_cursor(query: dict[str, Any], offset: int) -> str:
+    payload = json.dumps(
+        {"v": 1, "offset": offset, "query": _page_query_fingerprint(query)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_page_cursor(query: dict[str, Any]) -> int:
+    cursor = query.get("cursor")
+    if cursor is None:
+        return 0
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        offset = int(payload["offset"])
+        if payload.get("v") != 1 or payload.get("query") != _page_query_fingerprint(query):
+            raise ValueError("cursor does not match this query")
+        if not 0 <= offset <= MAX_CURSOR_OFFSET:
+            raise ValueError("cursor offset is outside the supported range")
+        return offset
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail=f"invalid pagination cursor: {exc}") from exc
+
+
+def prepare_paginated_query(query: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Expand a bounded list query just enough to determine and return one page."""
+
+    if query["mode"] not in PAGINATED_MODES:
+        return query, None
+    offset = _decode_page_cursor(query)
+    page_size = int(query.get("limit", DEFAULT_PAGE_SIZE))
+    execution = {key: value for key, value in query.items() if key != "cursor"}
+    execution["limit"] = offset + page_size + 1
+    return execution, {"offset": offset, "page_size": page_size, "request": query}
+
+
+def _page_collection(result: dict[str, Any], mode: str) -> tuple[str | None, list[Any] | None]:
+    keys = PAGE_COLLECTION_KEYS.get(mode, ()) + ("rows", "pairs", "hits", "results")
+    for key in keys:
+        value = result.get(key)
+        if isinstance(value, list):
+            return key, value
+    return None, None
+
+
+def _exact_total(result: dict[str, Any]) -> int | None:
+    summary = result.get("summary")
+    if not isinstance(summary, dict):
+        return None
+    for key in (
+        "total_retained_rows", "matched_row_count", "matched_pair_count",
+        "matched_contrast_count", "catalog_count",
+    ):
+        value = summary.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+    return None
+
+
+def attach_page_contract(
+    result: dict[str, Any], page: dict[str, Any] | None, release: str
+) -> dict[str, Any]:
+    """Attach an honest result-window contract without changing scientific fields."""
+
+    if page is None:
+        return result
+    mode = page["request"]["mode"]
+    key, collection = _page_collection(result, mode)
+    if collection is None:
+        return result
+    offset = page["offset"]
+    page_size = page["page_size"]
+    end = offset + page_size
+    exact_total = _exact_total(result)
+    has_more = (exact_total > end) if exact_total is not None else len(collection) > end
+    window = collection[offset:end]
+    result[key] = window
+    summary = result.get("summary")
+    if isinstance(summary, dict) and "returned_count" in summary:
+        summary["returned_count"] = len(window)
+    request = page["request"]
+    result["page_info"] = {
+        "returned_rows": len(window),
+        "total_retained_rows": exact_total,
+        "total_is_exact": exact_total is not None,
+        "has_more": has_more,
+        "next_cursor": _encode_page_cursor(request, end) if has_more else None,
+        "collection": key,
+        "analysis_scope": {
+            "release": release,
+            **{
+                name: request[name]
+                for name in ("mode", "lineage", "module", "family", "omic", "event", "project")
+                if name in request
+            },
+        },
+    }
+    return result
+
+
+async def run_query_with_page_contract(
+    settings: Settings, runner: Runner, query: dict[str, Any]
+) -> dict[str, Any]:
+    execution, page = prepare_paginated_query(query)
+    result = await runner(settings, execution)
+    return attach_page_contract(result, page, settings.release)
 
 
 Runner = Callable[[Settings, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -613,6 +1219,176 @@ def _load_manifest(path: Path) -> dict[str, Any] | None:
         return None
     with manifest.open(encoding="utf-8-sig") as handle:
         return json.load(handle)
+
+
+def _storage_annotation_state(root: Path) -> dict[str, Any]:
+    """Summarize manifest evidence without reading scientific result blocks."""
+
+    if not root.is_dir():
+        return {
+            "installed": False,
+            "state": "MODULE_UNAVAILABLE",
+            "manifest_count": 0,
+            "complete_manifest_count": 0,
+            "noncomplete_manifest_count": 0,
+            "legacy_manifest_count": 0,
+        }
+    manifest_paths = sorted(root.rglob("manifest.json"))
+    complete = 0
+    noncomplete = 0
+    legacy = 0
+    invalid = 0
+    terminal_states: dict[str, int] = {}
+    for path in manifest_paths:
+        try:
+            with path.open(encoding="utf-8-sig") as handle:
+                manifest = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            invalid += 1
+            continue
+        raw_state = manifest.get("status", manifest.get("state", manifest.get("qa_status")))
+        if raw_state is None:
+            legacy += 1
+            continue
+        state = str(raw_state).strip().lower()
+        terminal_states[state] = terminal_states.get(state, 0) + 1
+        if state in {"complete", "completed", "pass", "passed"}:
+            complete += 1
+        else:
+            noncomplete += 1
+    if invalid:
+        state = "INVALID_MANIFEST"
+    elif complete and noncomplete:
+        state = "PARTIAL_COVERAGE"
+    elif complete and not legacy:
+        state = "COMPLETE"
+    elif complete or legacy:
+        state = "QA_VERIFIED_LEGACY"
+    elif manifest_paths:
+        state = "INCOMPLETE"
+    else:
+        state = "INSTALLED_NO_MANIFEST"
+    return {
+        "installed": True,
+        "state": state,
+        "manifest_count": len(manifest_paths),
+        "complete_manifest_count": complete,
+        "noncomplete_manifest_count": noncomplete,
+        "legacy_manifest_count": legacy,
+        "invalid_manifest_count": invalid,
+        "terminal_states": terminal_states,
+    }
+
+
+def _run_capability_catalog_query(
+    settings: Settings, query: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve scientific intent tags to installed, annotated capabilities.
+
+    This is a metadata query. It does not scan Parquet/RDS blocks and it does
+    not claim that an eligible row exists for a particular entity.
+    """
+
+    annotations = _knowledge_module_annotations()
+    requested_tags = set(query.get("question_tags", []))
+    requested_sets = set(query.get("entity_sets", []))
+    lineage = query.get("lineage")
+    storage_by_capability: dict[str, list[dict[str, Any]]] = {}
+    storage_inventory: list[dict[str, Any]] = []
+    for item in annotations["storage_modules"]:
+        root = settings.knowledge_root / item["path"]
+        state = _storage_annotation_state(root)
+        storage_item = {
+            "id": item["id"],
+            "relative_path": item["path"],
+            "capabilities": item["capabilities"],
+            "scope_note": item.get("scope_note"),
+            **state,
+        }
+        storage_inventory.append(storage_item)
+        for capability_id in item["capabilities"]:
+            storage_by_capability.setdefault(capability_id, []).append(storage_item)
+
+    matched: list[dict[str, Any]] = []
+    matched_tags: set[str] = set()
+    matched_sets: set[str] = set()
+    for capability in annotations["capabilities"]:
+        capability_tags = set(capability.get("question_tags", []))
+        capability_sets = {
+            entity_set
+            for contract in capability.get("inputs", {}).values()
+            for entity_set in contract.get("entity_sets", [])
+        }
+        tag_hits = sorted(requested_tags & capability_tags)
+        set_hits = sorted(requested_sets & capability_sets)
+        if requested_tags and not tag_hits:
+            continue
+        if requested_sets and not set_hits:
+            continue
+        storage = storage_by_capability.get(capability["id"], [])
+        installed = any(item["installed"] for item in storage)
+        query_exposed = capability.get("query") is not None
+        scope = capability.get("scope", [])
+        if lineage and "lineage" in scope:
+            evidence_role = "lineage_direct"
+        elif lineage:
+            evidence_role = "cross_lineage_composable"
+        else:
+            evidence_role = "release_direct"
+        matched_tags.update(tag_hits)
+        matched_sets.update(set_hits)
+        matched.append(
+            {
+                **capability,
+                "matched_question_tags": tag_hits,
+                "matched_entity_sets": set_hits,
+                "installed": installed,
+                "query_exposed": query_exposed,
+                "evidence_role": evidence_role,
+                "storage_states": [
+                    {"id": item["id"], "state": item["state"]} for item in storage
+                ],
+            }
+        )
+    matched.sort(
+        key=lambda item: (
+            0 if item["evidence_role"] == "lineage_direct" else 1,
+            0 if item["query_exposed"] else 1,
+            item["id"],
+        )
+    )
+    return {
+        "mode": "capability_catalog",
+        "status": "FOUND",
+        "state": "ANNOTATION_PLAN_READY",
+        "release": settings.release,
+        "request": {
+            "lineage": lineage,
+            "question_tags": sorted(requested_tags),
+            "entity_sets": sorted(requested_sets),
+        },
+        "entity_sets": annotations["entity_sets"],
+        "capabilities": matched,
+        "storage_inventory": storage_inventory,
+        "summary": {
+            "annotated_storage_module_count": len(storage_inventory),
+            "installed_storage_module_count": sum(
+                item["installed"] for item in storage_inventory
+            ),
+            "annotated_capability_count": len(annotations["capabilities"]),
+            "matched_capability_count": len(matched),
+            "query_exposed_match_count": sum(item["query_exposed"] for item in matched),
+            "unmatched_question_tags": sorted(requested_tags - matched_tags),
+            "unmatched_entity_sets": sorted(requested_sets - matched_sets),
+        },
+        "claim_boundary": {
+            "annotation_match_is_not_a_result_hit": True,
+            "installed_is_not_lineage_eligibility": True,
+            "query_exposed_false_is_a_coverage_gap": True,
+            "physical_blocks_are_not_independent_analyses": True,
+        },
+        "new_analysis_started": False,
+    }
 
 
 def _coerce_csv_value(value: str) -> Any:
@@ -1359,7 +2135,7 @@ def _top_precomputed_rows(
     paths: list[Path],
     *,
     columns: list[str],
-    filters: list[tuple[str, str, Any]],
+    filters: Any,
     value_key: str,
     limit: int,
     identity: Callable[[dict[str, Any]], Any],
@@ -1380,11 +2156,17 @@ def _top_precomputed_rows(
         eligible_row_count += table.num_rows
         if table.num_rows == 0:
             continue
-        table = table.append_column(
-            "_selection_score", compute.abs(table[value_key])
-        ).sort_by([("_selection_score", "descending")])
-        candidates.extend(table.slice(0, local_limit).to_pylist())
-        provenance.append(str(path))
+        table = table.append_column("_selection_score", compute.abs(table[value_key]))
+        take = min(local_limit, table.num_rows)
+        indices = compute.select_k_unstable(
+            table,
+            k=take,
+            sort_keys=[("_selection_score", "descending")],
+        )
+        local_rows = table.take(indices).to_pylist()
+        for row in local_rows:
+            row["_source_path"] = str(path)
+        candidates.extend(local_rows)
     candidates.sort(
         key=lambda row: float(row.get("_selection_score") or 0.0), reverse=True
     )
@@ -1395,11 +2177,76 @@ def _top_precomputed_rows(
         if key is None or key in seen:
             continue
         seen.add(key)
+        source_path = row.pop("_source_path", None)
+        if source_path is not None and source_path not in provenance:
+            provenance.append(source_path)
         row["selection_score"] = row.pop("_selection_score", None)
         selected.append(row)
         if len(selected) >= limit:
             break
     return selected, eligible_row_count, provenance
+
+
+@lru_cache(maxsize=256)
+def _entity_set_members(
+    knowledge_root: str, lineage_key: str, entity_set_id: str
+) -> tuple[str, ...]:
+    """Resolve one declared entity set without embedding domain names in code."""
+
+    definition = _entity_set_definition(entity_set_id)
+    resolver = definition.get("resolver", {}) if definition else {}
+    if resolver.get("kind") != "enrichment_term_members":
+        return ()
+    module = str(resolver.get("module") or "").strip()
+    collection = str(resolver.get("collection") or "").strip()
+    member_column = str(resolver.get("member_column") or "").strip()
+    if not module or not collection or not member_column:
+        return ()
+    root = Path(knowledge_root) / "depmap-26q1-full" / module / lineage_key / "blocks"
+    if not root.is_dir():
+        return ()
+    try:
+        import pyarrow.dataset as dataset
+    except ImportError:
+        return ()
+    try:
+        table = dataset.dataset(root, format="parquet").to_table(
+            columns=[member_column],
+            filter=dataset.field("collection") == collection,
+        )
+    except (OSError, ValueError):
+        return ()
+    members: set[str] = set()
+    strip_suffix = str(resolver.get("strip_suffix") or "").upper()
+    for value in table[member_column].to_pylist():
+        name = str(value or "").strip().upper()
+        if strip_suffix and name.endswith(strip_suffix):
+            name = name[: -len(strip_suffix)]
+        if name:
+            members.add(name)
+    return tuple(sorted(members))
+
+
+def _dorothea_tf_members(knowledge_root: str, lineage_key: str) -> tuple[str, ...]:
+    """Compatibility wrapper for the public TF-focused query mode."""
+
+    return _entity_set_members(knowledge_root, lineage_key, "dorothea_tf_abc")
+
+
+def _filters_for_entity_roles(
+    base_filters: list[tuple[str, str, Any]],
+    roles: tuple[str, ...],
+    members: tuple[str, ...],
+) -> Any:
+    """Return PyArrow DNF filters matching any compatible entity role."""
+
+    if not members:
+        return base_filters
+    values = list(members)
+    return [
+        [*base_filters, (role, "in", values)]
+        for role in roles
+    ]
 
 
 def _pair_identity(row: dict[str, Any]) -> tuple[str, str] | None:
@@ -1448,6 +2295,16 @@ def _run_lineage_directions_query(
 ) -> dict[str, Any]:
     lineage = query["lineage"]
     limit = query.get("limit", 20)
+    focus = query.get("focus", "all")
+    requested_entity_sets = set(query.get("entity_sets", []))
+    if focus == "transcription_factor":
+        requested_entity_sets.add("dorothea_tf_abc")
+    tf_set_requested = "dorothea_tf_abc" in requested_entity_sets
+    tf_members = (
+        _dorothea_tf_members(str(settings.knowledge_root), _lineage_key(lineage))
+        if tf_set_requested
+        else ()
+    )
     full = settings.knowledge_root / "depmap-26q1-full"
     sections: list[dict[str, Any]] = []
 
@@ -1470,9 +2327,14 @@ def _run_lineage_directions_query(
                 )
             )
             continue
+        network_filters: list[tuple[str, str, Any]] = [
+            ("fdr", "<=", 0.05), ("pair_n", ">=", 30)
+        ]
         rows, count, provenance = _top_precomputed_rows(
             [path], columns=reciprocal_columns,
-            filters=[("fdr", "<=", 0.05), ("pair_n", ">=", 30)],
+            filters=_filters_for_entity_roles(
+                network_filters, ("source_gene", "target_gene"), tf_members
+            ),
             value_key="reciprocal_score", limit=limit, identity=_pair_identity,
         )
         for row in rows:
@@ -1495,13 +2357,20 @@ def _run_lineage_directions_query(
         full / "lineage_sparse_networks" / "expression_dependency" / _lineage_key(lineage)
     )
     expression_dependency_paths = sorted((expression_dependency_root / "blocks").glob("*.parquet"))
+    expression_dependency_filters: list[tuple[str, str, Any]] = [
+        ("fdr", "<=", 0.05), ("pair_n", ">=", 30)
+    ]
     rows, count, provenance = _top_precomputed_rows(
         expression_dependency_paths,
         columns=[
             "family", "lineage", "source_gene", "target_gene", "correlation",
             "pair_n", "p_value", "fdr", "rank_absolute",
         ],
-        filters=[("fdr", "<=", 0.05), ("pair_n", ">=", 30)],
+        filters=_filters_for_entity_roles(
+            expression_dependency_filters,
+            ("source_gene", "target_gene"),
+            tf_members,
+        ),
         value_key="correlation", limit=limit, identity=_directed_pair_identity,
     )
     sections.append(
@@ -1515,6 +2384,10 @@ def _run_lineage_directions_query(
 
     cnv_root = full / "lineage_cnv_amplification_dependency" / _lineage_key(lineage)
     cnv_paths = sorted((cnv_root / "blocks").glob("*.parquet"))
+    cnv_filters: list[tuple[str, str, Any]] = [
+        ("fdr", "<=", 0.05), ("amplified_n", ">=", 5),
+        ("wildtype_n", ">=", 10),
+    ]
     rows, count, provenance = _top_precomputed_rows(
         cnv_paths,
         columns=[
@@ -1522,10 +2395,9 @@ def _run_lineage_directions_query(
             "amplified_mean_effect", "wildtype_mean_effect", "amplified_n",
             "wildtype_n", "p_value", "fdr", "direction",
         ],
-        filters=[
-            ("fdr", "<=", 0.05), ("amplified_n", ">=", 5),
-            ("wildtype_n", ">=", 10),
-        ],
+        filters=_filters_for_entity_roles(
+            cnv_filters, ("source_gene", "target_gene"), tf_members
+        ),
         value_key="mean_difference", limit=limit, identity=_directed_pair_identity,
     )
     sections.append(
@@ -1540,13 +2412,18 @@ def _run_lineage_directions_query(
 
     enrichment_root = full / "lineage_gene_enrichment" / _lineage_key(lineage)
     enrichment_paths = sorted((enrichment_root / "blocks").glob("*.parquet"))
+    enrichment_filters: list[tuple[str, str, Any]] = [("fdr", "<=", 0.05)]
+    if focus == "transcription_factor":
+        enrichment_filters.append(("collection", "=", "DOROTHEA_TF_ABC"))
+    elif focus == "pathway":
+        enrichment_filters.append(("collection", "=", "PATHWAY"))
     rows, count, provenance = _top_precomputed_rows(
         enrichment_paths,
         columns=[
             "source_gene", "collection", "term", "enrichment_z", "p_value",
             "fdr", "gene_set_collection", "lineage",
         ],
-        filters=[("fdr", "<=", 0.05)], value_key="enrichment_z", limit=limit,
+        filters=enrichment_filters, value_key="enrichment_z", limit=limit,
         identity=lambda row: (
             row.get("source_gene"), row.get("collection"), row.get("term")
         ),
@@ -1565,13 +2442,18 @@ def _run_lineage_directions_query(
         path = drug_root / "associations.parquet"
         metadata_path = drug_root / "drug_metadata.parquet"
         paths = [path] if path.is_file() else []
+        prism_filters: list[tuple[str, str, Any]] = [
+            ("fdr_within_drug", "<=", 0.05), ("n", ">=", 10)
+        ]
         rows, count, provenance = _top_precomputed_rows(
             paths,
             columns=[
                 "lineage", "feature", "drug_id", "gene", "n", "pearson_r",
                 "p_value", "fdr_within_drug", "retained_by",
             ],
-            filters=[("fdr_within_drug", "<=", 0.05), ("n", ">=", 10)],
+            filters=_filters_for_entity_roles(
+                prism_filters, ("gene",), tf_members
+            ),
             value_key="pearson_r", limit=limit,
             identity=lambda row: (row.get("drug_id"), row.get("gene")),
         )
@@ -1591,6 +2473,29 @@ def _run_lineage_directions_query(
                 provenance=[str(drug_root / "manifest.json"), str(metadata_path), *provenance],
             )
         )
+
+    focus_labels = {
+        "pathway": {"pathway_tf_enrichment"},
+        "network": {
+            "effect_correlation",
+            "expression_correlation",
+            "expression_dependency",
+        },
+        "cnv": {"cnv_amplification_dependency"},
+        "drug": {"prism_effect", "prism_expression", "prism_cnv"},
+    }
+    if tf_set_requested and not tf_members:
+        sections = [
+            section
+            for section in sections
+            if section["label"] == "pathway_tf_enrichment"
+        ]
+    elif focus in focus_labels:
+        sections = [
+            section
+            for section in sections
+            if section["label"] in focus_labels[focus]
+        ]
 
     gene_support: dict[str, dict[str, Any]] = {}
     for section in sections:
@@ -1693,7 +2598,25 @@ def _run_lineage_directions_query(
         "status": "FOUND" if any(section["rows"] for section in sections) else "NOT_RETAINED",
         "release": settings.release,
         "lineage": lineage,
+        "requested_focus": focus,
+        "entity_set_selection": {
+            "requested": sorted(requested_entity_sets),
+            "resolved": ["dorothea_tf_abc"] if tf_members else [],
+            "dorothea_tf_abc_member_count": len(tf_members),
+            "application": (
+                "TF membership is applied across compatible source, target, event-feature, "
+                "drug-feature, and regulator roles; it is not limited to enrichment rows."
+                if tf_members else None
+            ),
+            "status": (
+                "RESOLVED"
+                if not tf_set_requested or tf_members
+                else "ENTITY_SET_UNAVAILABLE"
+            ),
+        },
         "selection_policy": {
+            "requested_focus": focus,
+            "transcription_factor_collection": "DOROTHEA_TF_ABC",
             "network_and_enrichment_fdr_max": 0.05,
             "network_pair_n_min": 30,
             "cnv_fdr_max": 0.05,
@@ -1713,10 +2636,483 @@ def _run_lineage_directions_query(
         ),
         "limitations": [
             "Candidates are selected from retained sparse outputs, not raw dense matrices.",
+            "Entity-set filtering changes candidate scope, not the statistical tests already stored in each module.",
             "Top rank is hypothesis-generating and is not proof of causality, novelty, druggability, or clinical actionability.",
             "Expression-correlation near-perfect edges require variance and identifier QC.",
             "Literature and clinical validation are separate downstream steps.",
         ],
+        "new_analysis_started": False,
+    }
+
+
+def _run_topic_plan_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    """Build a bounded, slot-preserving evidence plan from declared capabilities.
+
+    This is not a statistical analysis. It reads the lineage catalog and only
+    the precomputed direction families implied by molecular_focus. Phenotypes
+    without a registered precomputed output remain explicit NOT_COMPUTED gaps.
+    """
+
+    lineage = query["lineage"]
+    limit = query.get("limit", 20)
+    phenotypes = query.get("phenotypes", [])
+    molecular_focus = query.get("molecular_focus", [])
+    mechanisms = query.get("mechanisms", [])
+    evidence_sources = query.get("evidence_sources", ["depmap"])
+    requested_outputs = query.get("requested_outputs", ["candidate_topics"])
+    execution_policy = query.get("execution_policy", "precomputed_only")
+    unresolved = query.get("unresolved_concepts", [])
+
+    question_tags = ["cancer", *phenotypes, *mechanisms]
+    entity_sets: list[str] = []
+    for phenotype_id in phenotypes:
+        definition = _concept_definition("phenotypes", phenotype_id) or {}
+        for tag in definition.get("question_tags", []):
+            if tag not in question_tags:
+                question_tags.append(tag)
+    for focus_id in molecular_focus:
+        definition = _concept_definition("molecular_focus", focus_id) or {}
+        for tag in definition.get("question_tags", []):
+            if tag not in question_tags:
+                question_tags.append(tag)
+        for entity_set in definition.get("entity_sets", []):
+            if entity_set not in entity_sets:
+                entity_sets.append(entity_set)
+    capability_plan = _run_capability_catalog_query(
+        settings,
+        {
+            "mode": "capability_catalog",
+            "lineage": lineage,
+            "question_tags": question_tags,
+            "entity_sets": entity_sets,
+        },
+    )
+
+    catalog = _run_lineage_catalog_query(settings, {"mode": "lineage_catalog", "lineage": lineage})
+    focus_values: list[str] = []
+    focus_contracts: list[dict[str, Any]] = []
+    for concept_id in molecular_focus:
+        definition = _concept_definition("molecular_focus", concept_id)
+        if definition is None:
+            continue
+        focus = definition.get("direction_focus")
+        focus_contracts.append(definition)
+        if focus and focus not in focus_values:
+            focus_values.append(focus)
+    if not focus_values:
+        focus_values.append("all")
+
+    direct_queries: list[dict[str, Any]] = []
+    for focus in focus_values:
+        focus_entity_sets: list[str] = []
+        for contract in focus_contracts:
+            if contract.get("direction_focus") == focus:
+                focus_entity_sets.extend(contract.get("entity_sets", []))
+        direct_queries.append(
+            _run_lineage_directions_query(
+                settings,
+                {
+                    "mode": "lineage_directions",
+                    "lineage": lineage,
+                    "focus": focus,
+                    "entity_sets": sorted(set(focus_entity_sets)),
+                    "limit": limit,
+                },
+            )
+        )
+
+    relation_predicate = next(
+        (
+            str(definition["relation_predicate"])
+            for mechanism in mechanisms
+            if (definition := _concept_definition("mechanisms", mechanism))
+            and definition.get("relation_predicate")
+        ),
+        "candidate_association_with",
+    )
+    research_relations = [
+        {
+            "subject": {"slot": "molecular_focus", "id": focus},
+            "predicate": relation_predicate,
+            "object": {"slot": "phenotype", "id": phenotype},
+            "evidence_requirement": "direct_result_or_declared_proxy",
+        }
+        for phenotype in phenotypes
+        for focus in molecular_focus
+    ]
+
+    declared_proxy_evidence: list[dict[str, Any]] = []
+    for phenotype in phenotypes:
+        definition = _concept_definition("phenotypes", phenotype) or {}
+        for proxy in definition.get("proxy_evidence", []):
+            compatible = proxy.get("compatible_molecular_focus", [])
+            matched_focuses = sorted(set(compatible) & set(molecular_focus))
+            if not matched_focuses:
+                continue
+            adapter = proxy.get("query_adapter", {})
+            adapter_kind = adapter.get("kind")
+            source_module = str(proxy.get("source_module") or "").strip()
+            subject_entity_set = str(adapter.get("subject_entity_set") or "").strip()
+            subject_column = str(adapter.get("subject_column") or "").strip()
+            term_column = str(adapter.get("term_column") or "").strip()
+            value_column = str(adapter.get("value_column") or "").strip()
+            columns = [str(column) for column in adapter.get("columns", [])]
+            terms = [str(term) for term in proxy.get("terms", [])]
+            module_root = (
+                settings.knowledge_root
+                / "depmap-26q1-full"
+                / source_module
+                / _lineage_key(lineage)
+            )
+            paths = sorted((module_root / "blocks").glob("*.parquet"))
+            members = _entity_set_members(
+                str(settings.knowledge_root),
+                _lineage_key(lineage),
+                subject_entity_set,
+            )
+            declared_filters: list[tuple[str, str, Any]] = []
+            adapter_valid = adapter_kind == "lineage_enrichment_relation"
+            for filter_spec in adapter.get("filters", []):
+                operator = filter_spec.get("operator")
+                column = filter_spec.get("column")
+                if operator not in {"=", "!=", "<", "<=", ">", ">=", "in"} or not column:
+                    adapter_valid = False
+                    break
+                declared_filters.append((str(column), str(operator), filter_spec.get("value")))
+            adapter_valid = bool(
+                adapter_valid
+                and source_module
+                and subject_entity_set
+                and subject_column
+                and term_column
+                and value_column
+                and columns
+                and terms
+            )
+            if not adapter_valid:
+                proxy_status = "MODULE_UNAVAILABLE"
+                rows: list[dict[str, Any]] = []
+                count = 0
+                provenance = ["invalid declarative proxy query adapter"]
+            elif not paths:
+                proxy_status = "NOT_COMPUTED"
+                rows = []
+                count = 0
+                provenance = [str(module_root)]
+            elif not members:
+                proxy_status = "MODULE_UNAVAILABLE"
+                rows = []
+                count = 0
+                provenance = [str(module_root / "manifest.json")]
+            else:
+                rows, count, provenance = _top_precomputed_rows(
+                    paths,
+                    columns=columns,
+                    filters=[
+                        *declared_filters,
+                        (subject_column, "in", list(members)),
+                        (term_column, "in", terms),
+                    ],
+                    value_key=value_column,
+                    limit=limit,
+                    identity=lambda row: (
+                        row.get(subject_column), row.get(term_column)
+                    ),
+                )
+                proxy_status = "FOUND" if rows else "NOT_RETAINED"
+                provenance = [str(module_root / "manifest.json"), *provenance]
+            declared_proxy_evidence.append(
+                {
+                    "relation": {
+                        "subject": matched_focuses[0],
+                        "predicate": proxy.get("predicate", "candidate_association_with"),
+                        "object": phenotype,
+                    },
+                    "proxy_id": proxy.get("proxy_id"),
+                    "capability_id": proxy.get("capability_id"),
+                    "claim_level": proxy.get("claim_level", "DECLARED_PROXY"),
+                    "status": proxy_status,
+                    "eligible_row_count": count,
+                    "rows": rows,
+                    "terms": terms,
+                    "query_adapter": {
+                        "kind": adapter_kind,
+                        "source_module": source_module,
+                        "subject_entity_set": subject_entity_set,
+                        "subject_column": subject_column,
+                        "term_column": term_column,
+                        "value_column": value_column,
+                    },
+                    "interpretation": proxy.get("interpretation"),
+                    "provenance": provenance,
+                }
+            )
+
+    phenotype_coverage: list[dict[str, Any]] = []
+    proposed_analyses: list[dict[str, Any]] = []
+    for phenotype in phenotypes:
+        definition = _concept_definition("phenotypes", phenotype)
+        if definition is None:
+            continue
+        item = {
+            "phenotype": phenotype,
+            "status": definition.get("precomputed_status", "NOT_COMPUTED"),
+            "available_inputs": definition.get("available_inputs", []),
+            "proposed_analysis": definition.get("proposed_analysis"),
+            "reason": "no registered phenotype-specific precomputed output is exposed by the current capability registry",
+        }
+        phenotype_coverage.append(item)
+        if item["status"] != "FOUND" and item["available_inputs"] and item["proposed_analysis"]:
+            proposed_analyses.append({
+                "phenotype": phenotype,
+                "analysis": item["proposed_analysis"],
+                "required_inputs": item["available_inputs"],
+                "status": "NEW_COMPUTATION_REQUIRED",
+                "started": False,
+            })
+
+    intersection_coverage: list[dict[str, Any]] = []
+    for phenotype in phenotypes:
+        for focus in molecular_focus:
+            intersection_coverage.append({
+                "dimensions": {"phenotype": phenotype, "molecular_focus": focus},
+                "status": "NOT_COMPUTED",
+                "reason": "the exact phenotype-by-molecular-focus analysis is not registered as a direct precomputed result",
+                "declared_proxy_statuses": [
+                    item["status"]
+                    for item in declared_proxy_evidence
+                    if item["relation"]["object"] == phenotype
+                    and item["relation"]["subject"] == focus
+                ],
+            })
+
+    candidates: list[dict[str, Any]] = []
+    for proxy_result in declared_proxy_evidence:
+        adapter = proxy_result["query_adapter"]
+        subject_column = adapter["subject_column"]
+        term_column = adapter["term_column"]
+        value_column = adapter["value_column"]
+        for row in proxy_result["rows"]:
+            candidates.append({
+                "candidate_id": (
+                    f"{proxy_result['proxy_id']}:"
+                    f"{row.get(subject_column)}|{row.get(term_column)}"
+                ),
+                "topic_type": "phenotype_molecular_relation_proxy",
+                "priority_tier": 1,
+                "anchors": {
+                    "gene": row.get(subject_column),
+                    "phenotype": proxy_result["relation"]["object"],
+                    "proxy_term": row.get(term_column),
+                },
+                "metric": value_column,
+                "observed_value": row.get(value_column),
+                "claim_level": proxy_result["claim_level"],
+                "basis": proxy_result["interpretation"],
+            })
+            if len(candidates) >= limit:
+                break
+        if len(candidates) >= limit:
+            break
+    for result in direct_queries:
+        if len(candidates) >= limit:
+            break
+        for candidate in result.get("topic_candidates", []):
+            tagged = dict(candidate)
+            tagged["evidence_focus"] = result.get("requested_focus")
+            candidates.append(tagged)
+            if len(candidates) >= limit:
+                break
+        if len(candidates) >= limit:
+            break
+
+    direct_evidence = [
+        {
+            "kind": "lineage_catalog",
+            "status": "FOUND" if catalog["summary"]["available_module_count"] else "NOT_COMPUTED",
+            "result": catalog,
+        },
+        *[
+            {
+                "kind": "lineage_directions",
+                "focus": result["requested_focus"],
+                "status": result["status"],
+                "result": result,
+            }
+            for result in direct_queries
+        ],
+    ]
+    unsupported = [
+        {"concept": concept, "status": "UNRESOLVED", "reason": "no canonical capability mapping was supplied"}
+        for concept in unresolved
+    ]
+    non_depmap_sources = [source for source in evidence_sources if source != "depmap"]
+    unsupported.extend(
+        {
+            "concept": source,
+            "status": "NOT_QUERIED",
+            "reason": "this bounded DepMap topic-plan call does not query that external evidence source",
+        }
+        for source in non_depmap_sources
+    )
+
+    evidence_steps: list[dict[str, Any]] = []
+    for index, item in enumerate(capability_plan["capabilities"], start=1):
+        installed = bool(item["installed"])
+        query_exposed = bool(item["query_exposed"])
+        if installed and query_exposed:
+            capability_state = "QUERYABLE"
+        elif installed:
+            capability_state = "STORED_NOT_EXPOSED"
+        else:
+            capability_state = "MODULE_UNAVAILABLE"
+        evidence_steps.append(
+            {
+                "step_id": f"capability-{index:02d}-{item['id']}",
+                "capability_id": item["id"],
+                "evidence_role": item["evidence_role"],
+                "state": capability_state,
+                "query_adapter": item.get("query"),
+                "input_roles": sorted(item.get("inputs", {}).keys()),
+                "entity_set_projection": {
+                    "requested": entity_sets,
+                    "matched": item.get("matched_entity_sets", []),
+                    "compatible_roles": sorted(
+                        role
+                        for role, contract in item.get("inputs", {}).items()
+                        if set(contract.get("entity_sets", [])) & set(entity_sets)
+                    ),
+                },
+                "metric_outputs": item.get("outputs", []),
+                "allowed_claims": item.get("allowed_claims", []),
+                "forbidden_claims": item.get("forbidden_claims", []),
+                "storage_states": item.get("storage_states", []),
+            }
+        )
+    evidence_plan = {
+        "schema_version": "wisp.evidence-plan.v1",
+        "planner": "capability_registry",
+        "lineage": lineage,
+        "entity_sets": entity_sets,
+        "research_relations": research_relations,
+        "relation_routes": [
+            {
+                "relation": item["relation"],
+                "route_kind": "declared_proxy",
+                "proxy_id": item["proxy_id"],
+                "state": item["status"],
+                "claim_level": item["claim_level"],
+            }
+            for item in declared_proxy_evidence
+        ],
+        "steps": evidence_steps,
+        "summary": {
+            "planned_capability_count": len(evidence_steps),
+            "lineage_direct_count": sum(
+                step["evidence_role"] == "lineage_direct" for step in evidence_steps
+            ),
+            "cross_lineage_composable_count": sum(
+                step["evidence_role"] == "cross_lineage_composable"
+                for step in evidence_steps
+            ),
+            "queryable_count": sum(
+                step["state"] == "QUERYABLE" for step in evidence_steps
+            ),
+            "stored_not_exposed_count": sum(
+                step["state"] == "STORED_NOT_EXPOSED" for step in evidence_steps
+            ),
+            "module_unavailable_count": sum(
+                step["state"] == "MODULE_UNAVAILABLE" for step in evidence_steps
+            ),
+        },
+        "execution_contract": {
+            "physical_partition_iteration": "provider_only",
+            "model_must_not_read_blocks": True,
+            "annotation_match_is_not_result_hit": True,
+            "precomputed_only": execution_policy == "precomputed_only",
+            "new_analysis_requires_separate_approval": True,
+        },
+    }
+
+    return {
+        "mode": "topic_plan",
+        "status": "FOUND",
+        "state": "PLAN_READY",
+        "release": settings.release,
+        "scientific_intent": {
+            "schema_version": "wisp.scientific-intent.v1",
+            "task_type": "topic_exploration",
+            "disease": {"canonical_lineage": lineage},
+            "phenotypes": phenotypes,
+            "molecular_focus": molecular_focus,
+            "research_relations": research_relations,
+            "mechanisms": mechanisms,
+            "evidence_sources": evidence_sources,
+            "requested_outputs": requested_outputs,
+            "execution_policy": execution_policy,
+            "unresolved_concepts": unresolved,
+            "entity_sets": entity_sets,
+        },
+        "evidence_plan": evidence_plan,
+        "semantic_request": {
+            "disease": {"canonical_lineage": lineage},
+            "phenotypes": phenotypes,
+            "molecular_focus": molecular_focus,
+            "mechanisms": mechanisms,
+            "evidence_sources": evidence_sources,
+            "requested_outputs": requested_outputs,
+            "execution_policy": execution_policy,
+            "unresolved_concepts": unresolved,
+        },
+        "plan_steps": [
+            {"step": "lineage_coverage", "status": "complete"},
+            {
+                "step": "capability_annotation",
+                "status": "complete",
+                "matched_capability_count": capability_plan["summary"]["matched_capability_count"],
+            },
+            {"step": "phenotype_coverage", "status": "complete"},
+            {"step": "molecular_evidence", "status": "complete", "focuses": focus_values},
+            {"step": "intersection_coverage", "status": "complete"},
+            {"step": "topic_synthesis", "status": "ready"},
+        ],
+        "coverage": {
+            "phenotypes": phenotype_coverage,
+            "molecular_focus": focus_contracts,
+            "intersections": intersection_coverage,
+            "capability_annotations": capability_plan,
+        },
+        "evidence_buckets": {
+            "direct_precomputed_evidence": direct_evidence,
+            "declared_proxy_evidence": declared_proxy_evidence,
+            "composable_evidence": [
+                {
+                    "capability_id": item["id"],
+                    "evidence_role": item["evidence_role"],
+                    "query": item["query"],
+                    "storage_states": item["storage_states"],
+                    "status": (
+                        "QUERYABLE"
+                        if item["installed"] and item["query_exposed"]
+                        else "STORED_NOT_EXPOSED"
+                        if item["installed"]
+                        else "MODULE_UNAVAILABLE"
+                    ),
+                    "note": "Capability match only; an entity-level result has not yet been fetched.",
+                }
+                for item in capability_plan["capabilities"]
+            ],
+            "new_computation_from_available_inputs": proposed_analyses,
+            "missing_or_unsupported": unsupported,
+        },
+        "topic_candidates": candidates,
+        "claim_boundary": {
+            "direct_evidence_may_be_reported_as_observed": True,
+            "proposed_analysis_must_be_reported_as_not_started": True,
+            "not_computed_is_not_a_biological_null": True,
+            "do_not_invent_candidate_genes": True,
+            "propose_only_returned_analysis_templates": True,
+        },
         "new_analysis_started": False,
     }
 
@@ -2000,10 +3396,14 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
 
 
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    if query["mode"] == "capability_catalog":
+        return await asyncio.to_thread(_run_capability_catalog_query, settings, query)
     if query["mode"] == "lineage_catalog":
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":
         return await asyncio.to_thread(_run_lineage_directions_query, settings, query)
+    if query["mode"] == "topic_plan":
+        return await asyncio.to_thread(_run_topic_plan_query, settings, query)
     if query["mode"] == "core":
         result = await asyncio.to_thread(_run_core_query, settings, query["gene"])
         if not result["summary"]:
@@ -2086,8 +3486,9 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 6,
+            "query_contract_version": 9,
             "coverage_manifest_version": 4,
+            "knowledge_annotation_schema_version": 1,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),
             "query_modes": sorted(MODE_REQUIRED_FIELDS),
@@ -2097,7 +3498,9 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     @api.post("/api/v1/query", dependencies=[Depends(authorize)])
     async def query(payload: QueryRequest) -> dict[str, Any]:
         async with api.state.semaphore:
-            return await api.state.runner(api.state.settings, payload.bounded_dict())
+            return await run_query_with_page_contract(
+                api.state.settings, api.state.runner, payload.bounded_dict()
+            )
 
     return api
 

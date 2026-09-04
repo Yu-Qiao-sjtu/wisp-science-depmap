@@ -20,8 +20,9 @@ are ready. Recommended fields:
   "schema_version": 1,
   "status": "ready",
   "release": "26Q1",
-  "query_contract_version": 6,
-  "coverage_manifest_version": 4
+  "query_contract_version": 9,
+  "coverage_manifest_version": 4,
+  "knowledge_annotation_schema_version": 1
 }
 ```
 
@@ -62,6 +63,34 @@ canonical DepMap `lineage`, `endpoint` (`OS`, `DSS`, `DFI`, or `PFI`), and
 The server returns JSON with source provenance and must never return a full
 matrix. Every bounded limit is at most 100. The desktop rejects responses
 larger than 4 MiB and does not follow redirects.
+
+Every pageable list response includes a code-generated `page_info` object.
+`limit` is the requested page size, not evidence that the retained result set
+contains only that many rows. Continue only with the opaque `next_cursor` and
+the same scientific filters; clients must never construct or edit cursors.
+
+```json
+{
+  "page_info": {
+    "returned_rows": 20,
+    "total_retained_rows": 1842,
+    "total_is_exact": true,
+    "has_more": true,
+    "next_cursor": "opaque-server-cursor",
+    "collection": "rows",
+    "analysis_scope": {
+      "release": "26Q1",
+      "mode": "lineage_dependency",
+      "lineage": "Liver"
+    }
+  }
+}
+```
+
+When a module cannot cheaply establish the exact retained total,
+`total_retained_rows` is `null` and `total_is_exact` is `false`; `has_more`
+still comes from a one-row lookahead. This must not be paraphrased as a zero
+or complete result set.
 
 `subtype` optionally accepts `gene`, canonical `lineage`, exact `contrast`, and
 `limit`. With no gene/contrast it inventories eligible contrasts; an exact

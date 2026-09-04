@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wisp.entity-resolution.v1",
+  "title": "Wisp scientific entity resolution",
+  "type": "object",
+  "required": [
+    "schema_version", "registry_version", "release", "entity_type",
+    "original_term", "status", "selected", "candidates",
+    "requires_user_confirmation", "is_scientific_evidence"
+  ],
+  "properties": {
+    "schema_version": {"const": "wisp.entity-resolution.v1"},
+    "registry_version": {"type": "integer", "minimum": 1},
+    "release": {"type": "string", "minLength": 1},
+    "entity_type": {
+      "enum": [
+        "cancer", "gene", "drug", "pathway", "phenotype",
+        "molecular_focus", "mechanism", "evidence_source", "requested_output"
+      ]
+    },
+    "original_term": {"type": "string", "minLength": 1},
+    "status": {
+      "enum": ["RESOLVED", "AMBIGUOUS", "NOT_FOUND", "NORMALIZED_UNVERIFIED", "INVALID_CANDIDATES"]
+    },
+    "selected": {
+      "oneOf": [{"$ref": "#/$defs/candidate"}, {"type": "null"}]
+    },
+    "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+    "requires_user_confirmation": {"type": "boolean"},
+    "is_scientific_evidence": {"const": false},
+    "note": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "required": ["canonical_id", "label", "namespace", "matched_by", "metadata"],
+      "properties": {
+        "canonical_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "namespace": {"type": "string", "minLength": 1},
+        "matched_by": {"type": "string", "minLength": 1},
+        "metadata": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

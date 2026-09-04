@@ -31,6 +31,7 @@ The exposed tools are intentionally small:
 
 - `depmap_status`
 - `depmap_resolve_lineage`
+- `depmap_resolve_entity`
 - `depmap_lineage_catalog`
 - `depmap_lineage_dependencies`
 - `depmap_lineage_direction_discovery`
@@ -69,12 +70,15 @@ labels. The MCP accepts the maintained Chinese main names and common synonyms
 always preserved in the evidence query. These mappings describe DepMap model
 groups; they do not turn a broad group into an exact clinical histology.
 
-`depmap_resolve_lineage` is the natural-language boundary. An exact maintained
-alias returns `RESOLVED` with one selected lineage. A broad term such as
-`白血病` returns `AMBIGUOUS` with valid candidates and no selection. For an
-unknown phrase, the language model may submit candidate lineage labels; the
-tool validates that they belong to the 34-label vocabulary but returns
-`PROPOSED`, so user confirmation is still required before evidence retrieval.
+`depmap_resolve_entity` is the primary natural-language boundary. It returns
+the same versioned resolution shape for cancer, gene, drug, pathway, phenotype,
+molecular focus, mechanism, evidence source, and requested output. Cancer
+aliases resolve against the maintained 34-lineage registry; gene and drug names
+resolve against the installed HGNC/PRISM catalogs. `NORMALIZED_UNVERIFIED` is a
+query candidate, not a verified entity or scientific result. The legacy
+`depmap_resolve_lineage` tool keeps its earlier response shape for compatibility:
+an exact alias returns `RESOLVED`, a broad term such as `白血病` returns
+`AMBIGUOUS`, and a model-proposed mapping still requires confirmation.
 
 `depmap_lineage_direction_discovery` handles cancer-only topic requests without
 inventing an anchor gene. It returns fixed-filter shortlists for eight distinct

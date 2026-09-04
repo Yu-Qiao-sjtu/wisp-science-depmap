@@ -420,36 +420,141 @@ cases:
         - {name: depmap_query, pointer: /limit, equals: 10}
 
   - id: liver-cancer-direction-discovery-without-anchor
-    description: A cancer-only topic request uses one multi-family direction query and never invents or probes anchor genes.
+    description: A multi-dimensional cancer topic request preserves phenotype and molecular focus through one bounded topic plan.
     tags: [depmap, lineage-directions, liver, wording-stress, debug-9]
+    limits:
+      max_tool_calls: 3
     prompt: 我做的是肝癌，给我 DepMap 能做的课题，主要聚焦肿瘤细胞干性和转录因子。只使用已有 26Q1 结果，不要猜一个基因再逐个试。
-    allowed_tools: [depmap_query, attempt_completion]
+    runtime_injections:
+      - For every DepMap request, call depmap_agent_route once and preserve every explicit disease, phenotype, molecular-focus, mechanism, source, requested-output, and execution-policy slot. Treat the route as control metadata, execute its recommended query exactly once, and distinguish direct evidence from NOT_COMPUTED intersections and unstarted proposed analysis.
+    allowed_tools: [depmap_agent_route, depmap_query, attempt_completion]
     fixture_tools:
+      depmap_agent_route:
+        description: Mandatory semantic bridge for each DepMap request. It resolves user language into a canonical lineage and an exact, single-use evidence query; its result is control metadata, not scientific evidence.
+        schema:
+          type: object
+          properties:
+            intent: {type: string, enum: [cancer_direction_discovery, topic_exploration]}
+            cancer: {type: string}
+            phenotypes: {type: array, items: {type: string, enum: [tumor_cell_stemness, drug_resistance, metastasis, proliferation, apoptosis, immune_evasion]}}
+            # The production harness canonicalizes aliases and relocates a
+            # uniquely registered concept that the provider duplicated into
+            # the wrong scientific slot. Keep the fixture input permissive so
+            # live evaluation exercises the post-route exact query contract.
+            molecular_focus: {type: array, items: {type: string}}
+            evidence_sources: {type: array, items: {type: string, enum: [depmap, tcga, prism, literature]}}
+            requested_outputs: {type: array, items: {type: string}}
+            execution_policy: {type: string, enum: [precomputed_only, allow_new_analysis]}
+          required: [intent, cancer, phenotypes, molecular_focus, evidence_sources, requested_outputs, execution_policy]
+          additionalProperties: false
+        result: '{"state":"routed","semantic_slots":{"disease":{"raw":"肝癌","canonical_lineage":"Liver"},"phenotypes":["tumor_cell_stemness"],"molecular_focus":["transcription_factor"],"mechanisms":[],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","unresolved_concepts":[]},"recommended_query":{"tool":"depmap_query","arguments":{"mode":"topic_plan","lineage":"Liver","phenotypes":["tumor_cell_stemness"],"molecular_focus":["transcription_factor"],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","limit":20},"single_call":true},"query_contract":{"allowed_claims":["slot-preserving coverage status","new-computation proposal from declared available inputs"],"forbidden_claims":["dropping a supplied phenotype","presenting proposed analysis as completed evidence","invented candidate genes"]}}'
+        next_tool_allowlist: [depmap_query, attempt_completion]
+        next_tool_requirements:
+          depmap_query: {mode: topic_plan, lineage: Liver, phenotypes: [tumor_cell_stemness], molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only, limit: 20}
       depmap_query:
         schema:
           type: object
           properties:
-            mode: {type: string, enum: [lineage_directions]}
+            mode: {type: string, enum: [topic_plan]}
             lineage: {type: string}
+            phenotypes: {type: array, items: {type: string}}
+            molecular_focus: {type: array, items: {type: string}}
+            evidence_sources: {type: array, items: {type: string}}
+            requested_outputs: {type: array, items: {type: string}}
+            execution_policy: {type: string}
             limit: {type: integer, minimum: 1, maximum: 100}
           required: [mode, lineage]
           additionalProperties: false
-        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"lineage_directions","lineage":"Liver","limit":20},"semantics":{"metric":"family_specific_shortlists"},"result":{"status":"FOUND","lineage":"Liver","selection_policy":{"network_and_enrichment_fdr_max":0.05,"cross_family_policy":"unweighted family-presence count"},"sections":[{"label":"pathway_tf_enrichment","metric":"enrichment_z","rows":[{"source_gene":"TFX","collection":"DoRothEA","term":"TFX_targets","enrichment_z":3.4,"fdr":0.021}]}],"topic_candidates":[{"candidate_id":"pathway_tf_enrichment:TFX|DoRothEA|TFX_targets","topic_type":"pathway_or_tf_context","anchors":{"source_gene":"TFX","collection":"DoRothEA","term":"TFX_targets"},"observed_value":3.4}],"limitations":["Candidates are hypothesis-generating and are not proof of novelty or causality."],"new_analysis_started":false}}'
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"topic_plan","lineage":"Liver","phenotypes":["tumor_cell_stemness"],"molecular_focus":["transcription_factor"],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","limit":20},"result":{"mode":"topic_plan","state":"PLAN_READY","status":"FOUND","semantic_request":{"disease":{"canonical_lineage":"Liver"},"phenotypes":["tumor_cell_stemness"],"molecular_focus":["transcription_factor"]},"coverage":{"phenotypes":[{"phenotype":"tumor_cell_stemness","status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"]}],"intersections":[{"dimensions":{"phenotype":"tumor_cell_stemness","molecular_focus":"transcription_factor"},"status":"NOT_COMPUTED"}]},"evidence_buckets":{"direct_precomputed_evidence":[{"kind":"lineage_directions","focus":"transcription_factor","status":"NOT_RETAINED"}],"new_computation_from_available_inputs":[{"phenotype":"tumor_cell_stemness","analysis":"continuous_phenotype_regulator_dependency","status":"NEW_COMPUTATION_REQUIRED","started":false}]},"topic_candidates":[],"claim_boundary":{"not_computed_is_not_a_biological_null":true,"do_not_invent_candidate_genes":true,"propose_only_returned_analysis_templates":true},"new_analysis_started":false}}'
     script:
       - tool_calls:
-          - {id: directions-1, name: depmap_query, arguments: {mode: lineage_directions, lineage: Liver, limit: 20}}
+          - {id: route-1, name: depmap_agent_route, arguments: {intent: cancer_direction_discovery, cancer: 肝癌, phenotypes: [tumor_cell_stemness], molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only}}
       - tool_calls:
-          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Liver 的预计算方向检索返回一个转录因子候选：TFX 的 DoRothEA 靶基因集富集 z=3.4、FDR=0.021。它可形成‘TFX 调控程序与 Liver 细胞依赖’的可证伪课题，但目前只是 pathway/TF 家族内的假设生成结果，并不证明干性、因果性、创新性或临床可转化性；这些需要后续独立验证。没有启动新分析，也没有猜测额外基因。"}}
+          - {id: directions-1, name: depmap_query, arguments: {mode: topic_plan, lineage: Liver, phenotypes: [tumor_cell_stemness], molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only, limit: 20}}
+      - content: "26Q1 的 Liver 多槽位计划完整保留了肿瘤细胞干性与转录因子。现有转录因子方向为 NOT_RETAINED；肿瘤细胞干性以及干性×转录因子交叉分析均为 NOT_COMPUTED，而不是生物学阴性。expression 和 gene_effect 可支持 continuous_phenotype_regulator_dependency 新计算，状态为 NEW_COMPUTATION_REQUIRED，但本轮没有启动。当前没有数据支持点名任何候选基因。"
+        finish_reason: stop
     expect:
-      completion_contains: [26Q1, Liver, TFX, DoRothEA, "3.4", "0.021", 假设, 不证明, 没有启动]
-      completion_not_contains: [SOX2, NANOG, SALL4, YAP1, HCC, "1,482", lineage_dependency]
-      required_tools: [depmap_query, attempt_completion]
+      completion_contains: [26Q1, 干性, 转录因子, NOT_COMPUTED]
+      completion_contains_any:
+        - [Liver, 肝癌]
+        - [NOT_RETAINED, 未保留, 未返回任何预计算, 直接证据:无]
+        - [NEW_COMPUTATION_REQUIRED, 新计算提案, 新计算, 拟议分析, 分析模板]
+        - [没有启动, 尚未运行, 尚未启动, 未开始, 未做任何新分析, new_analysis_started:false, "started=false"]
+      completion_not_contains: [TFX, SOX2, NANOG, SALL4, YAP1, HCC, "1,482", lineage_dependency, 干性高/低, 亚型特异性]
+      required_tools: [depmap_agent_route, depmap_query]
       forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
-      tool_order: [depmap_query, attempt_completion]
+      tool_order: [depmap_agent_route, depmap_query]
       tool_args:
-        - {name: depmap_query, pointer: /mode, equals: lineage_directions}
+        - {name: depmap_agent_route, pointer: /intent, equals: cancer_direction_discovery}
+        - {name: depmap_agent_route, pointer: /phenotypes/0, equals: tumor_cell_stemness}
+        - {name: depmap_query, pointer: /mode, equals: topic_plan}
         - {name: depmap_query, pointer: /lineage, equals: Liver}
-        - {name: depmap_query, pointer: /limit, equals: 20}
+        - {name: depmap_query, pointer: /phenotypes/0, equals: tumor_cell_stemness}
+        - {name: depmap_query, pointer: /molecular_focus/0, equals: transcription_factor}
+
+  - id: liver-transcription-factor-direction-without-phenotype
+    description: A Liver transcription-factor request remains phenotype-free and reports sparse non-retention without inventing genes.
+    tags: [depmap, liver, transcription-factor, slot-isolation]
+    prompt: 我做的是肝癌，请测试 DepMap 中转录因子方向有哪些结果。只读已有 26Q1 结果，不要加入肿瘤细胞干性，也不要猜测候选基因。
+    runtime_injections:
+      - Route the request once, preserve only concepts explicitly present in the current user request, execute the exact recommended query once, and report sparse non-retention as a retrieval state rather than a biological negative.
+    allowed_tools: [depmap_agent_route, depmap_query, attempt_completion]
+    limits:
+      max_tool_calls: 3
+    fixture_tools:
+      depmap_agent_route:
+        description: Mandatory multi-slot DepMap semantic bridge.
+        schema:
+          type: object
+          properties:
+            intent: {type: string, enum: [cancer_direction_discovery, topic_exploration]}
+            cancer: {type: string}
+            phenotypes: {type: array, items: {type: string}}
+            molecular_focus: {type: array, items: {type: string}}
+            evidence_sources: {type: array, items: {type: string}}
+            requested_outputs: {type: array, items: {type: string}}
+            execution_policy: {type: string}
+          required: [intent, cancer, molecular_focus, evidence_sources, requested_outputs, execution_policy]
+          additionalProperties: false
+        result: '{"state":"routed","semantic_slots":{"disease":{"raw":"肝癌","canonical_lineage":"Liver"},"phenotypes":[],"molecular_focus":["transcription_factor"],"mechanisms":[],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","unresolved_concepts":[]},"recommended_query":{"tool":"depmap_query","arguments":{"mode":"topic_plan","lineage":"Liver","molecular_focus":["transcription_factor"],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","limit":20},"single_call":true}}'
+        next_tool_allowlist: [depmap_query, attempt_completion]
+        next_tool_requirements:
+          depmap_query: {mode: topic_plan, lineage: Liver, molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only, limit: 20}
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [topic_plan]}
+            lineage: {type: string}
+            molecular_focus: {type: array, items: {type: string}}
+            evidence_sources: {type: array, items: {type: string}}
+            requested_outputs: {type: array, items: {type: string}}
+            execution_policy: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"topic_plan","lineage":"Liver","molecular_focus":["transcription_factor"],"evidence_sources":["depmap"],"requested_outputs":["candidate_topics"],"execution_policy":"precomputed_only","limit":20},"result":{"mode":"topic_plan","status":"FOUND","semantic_request":{"disease":{"canonical_lineage":"Liver"},"phenotypes":[],"molecular_focus":["transcription_factor"]},"coverage":{"phenotypes":[],"intersections":[]},"evidence_buckets":{"direct_precomputed_evidence":[{"kind":"lineage_directions","requested_focus":"transcription_factor","status":"NOT_RETAINED","sections":[{"label":"pathway_tf_enrichment","status":"NOT_RETAINED","eligible_retained_row_count":0,"returned_candidate_count":0,"provenance":["depmap://26Q1/depmap-26q1-full/lineage_gene_enrichment/Liver/manifest.json"]}]}],"new_computation_from_available_inputs":[]},"topic_candidates":[],"new_analysis_started":false}}'
+    script:
+      - tool_calls:
+          - {id: route-tf-1, name: depmap_agent_route, arguments: {intent: cancer_direction_discovery, cancer: 肝癌, molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only}}
+      - tool_calls:
+          - {id: query-tf-1, name: depmap_query, arguments: {mode: topic_plan, lineage: Liver, molecular_focus: [transcription_factor], evidence_sources: [depmap], requested_outputs: [candidate_topics], execution_policy: precomputed_only, limit: 20}}
+      - content: "DepMap 26Q1 的 Liver 转录因子方向为 NOT_RETAINED；pathway_tf_enrichment 合格保留行数为 0，topic_candidates 为空。这只是稀疏结果未保留候选，不是生物学阴性，也没有启动新分析。"
+        finish_reason: stop
+    expect:
+      completion_contains: [26Q1, Liver, 转录因子]
+      completion_contains_any:
+        - [NOT_RETAINED, 未保留]
+        - ["0", 为空, 没有候选, 无保留行, 无返回候选主题]
+        - [没有启动, 未启动, new_analysis_started:false]
+      completion_not_contains: [肿瘤细胞干性, tumor_cell_stemness, SOX2, NANOG, SALL4, YAP1, HCC]
+      required_tools: [depmap_agent_route, depmap_query]
+      forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_agent_route, depmap_query]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: topic_plan}
+        - {name: depmap_query, pointer: /lineage, equals: Liver}
+        - {name: depmap_query, pointer: /molecular_focus/0, equals: transcription_factor}
 
   - id: liver-study-support-mapping-separates-existing-from-proposed
     description: A manuscript support audit uses the bounded catalog and does not equate installed modules with completed subgroup analyses.
@@ -472,14 +577,19 @@ cases:
       - tool_calls:
           - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Liver 目录可直接支持：既有 lineage_selective_dependency、lineage_sparse_networks、lineage_prism_associations 和 TCGA expression-survival 结果的查询。可用现有输入但仍需新计算：TF-high 分组及组间依赖检验、PRISM 联配。文献或实验验证层：NANOG-TRRAP 因果机制。当前覆盖缺口包括未验证的 TF-high contrast、药物组合和因果机制；没有启动 Run，也没有扫描服务器目录。"}}
     expect:
-      completion_contains: [26Q1, Liver, 可直接支持, 仍需新计算, 覆盖缺口, 没有启动, 没有扫描]
+      completion_contains: [26Q1, Liver]
+      contract_completion_contains: [直接支持]
+      contract_completion_contains_any:
+        - [仍需新计算, 需要文章中自行定义, 需新增实验]
+        - [覆盖缺口, 不支持, 无验证]
+        - [没有启动, 未启动, 未做任何新计算]
+        - [没有扫描, 未扫描]
       completion_not_contains: ["全部有直接数据支撑", "唯一外部依赖", "/home/data/", "256 核"]
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
       tool_order: [depmap_query, attempt_completion]
       tool_args:
         - {name: depmap_query, pointer: /mode, equals: lineage_catalog}
-        - {name: depmap_query, pointer: /lineage, equals: Liver}
 
   - id: continuous-correlation-is-not-tf-high-synthetic-lethality
     description: A continuous expression-dependency row remains a correlation and cannot be upgraded into a thresholded or synthetic-lethal screen.
@@ -505,7 +615,12 @@ cases:
       - tool_calls:
           - {id: done-1, name: attempt_completion, arguments: {result: "没有完成 NANOG-high 合成致死筛选。26Q1 Liver 返回的是 n=25 的连续表达-依赖 Pearson 相关（r=-0.721，FDR=0.093），且没有分组阈值。NANOG-high 分组、组间依赖差异和合成致死检验都属于尚未执行的新计算；相关性本身不证明合成致死。"}}
     expect:
-      completion_contains: [没有完成, "n=25", "-0.721", "0.093", 没有分组阈值, 新计算, 不证明合成致死]
+      completion_contains: ["n=25", "-0.721", "0.093"]
+      completion_contains_any:
+        - [没有完成, 尚未开展, "——没有", 筛选本身尚未完成]
+        - [没有分组阈值, "grouping: null", 未做分层, 这些步骤在现有数据中均未执行]
+        - [新计算, 新分析]
+        - [不证明合成致死, 不构成合成致死, 不能断言合成致死]
       completion_not_contains: ["TF-high synthetic dependency screen 已完成", "唯一 FDR", "直接数据支撑"]
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]

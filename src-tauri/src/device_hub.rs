@@ -145,6 +145,7 @@ impl DeviceHub {
             AgentEvent::User { frame_id, .. }
             | AgentEvent::Text { frame_id, .. }
             | AgentEvent::Reasoning { frame_id, .. }
+            | AgentEvent::Phase { frame_id, .. }
             | AgentEvent::ToolCall { frame_id, .. }
             | AgentEvent::Stdout { frame_id, .. }
             | AgentEvent::CompactionStarted { frame_id, .. }

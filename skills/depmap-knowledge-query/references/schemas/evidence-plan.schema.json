@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wisp.evidence-plan.v1",
+  "title": "Wisp evidence plan",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "planner",
+    "lineage",
+    "entity_sets",
+    "steps",
+    "summary",
+    "execution_contract"
+  ],
+  "properties": {
+    "schema_version": {"const": "wisp.evidence-plan.v1"},
+    "planner": {"const": "capability_registry"},
+    "lineage": {"type": "string", "minLength": 1},
+    "entity_sets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "research_relations": {"type": "array", "items": {"type": "object"}},
+    "relation_routes": {"type": "array", "items": {"type": "object"}},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "step_id",
+          "capability_id",
+          "evidence_role",
+          "state",
+          "input_roles",
+          "entity_set_projection",
+          "allowed_claims",
+          "forbidden_claims",
+          "storage_states"
+        ],
+        "properties": {
+          "step_id": {"type": "string", "minLength": 1},
+          "capability_id": {"type": "string", "minLength": 1},
+          "evidence_role": {
+            "enum": ["lineage_direct", "cross_lineage_composable", "release_direct"]
+          },
+          "state": {
+            "enum": ["QUERYABLE", "STORED_NOT_EXPOSED", "MODULE_UNAVAILABLE"]
+          },
+          "query_adapter": {"type": ["object", "null"]},
+          "input_roles": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "entity_set_projection": {
+            "type": "object",
+            "required": ["requested", "matched", "compatible_roles"],
+            "properties": {
+              "requested": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+              "matched": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+              "compatible_roles": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+            },
+            "additionalProperties": false
+          },
+          "metric_outputs": {"type": "array", "items": {"type": "string"}},
+          "allowed_claims": {"type": "array", "items": {"type": "string"}},
+          "forbidden_claims": {"type": "array", "items": {"type": "string"}},
+          "storage_states": {"type": "array", "items": {"type": "object"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {"type": "object"},
+    "execution_contract": {
+      "type": "object",
+      "required": [
+        "physical_partition_iteration",
+        "model_must_not_read_blocks",
+        "annotation_match_is_not_result_hit",
+        "precomputed_only",
+        "new_analysis_requires_separate_approval"
+      ],
+      "properties": {
+        "physical_partition_iteration": {"const": "provider_only"},
+        "model_must_not_read_blocks": {"const": true},
+        "annotation_match_is_not_result_hit": {"const": true},
+        "precomputed_only": {"type": "boolean"},
+        "new_analysis_requires_separate_approval": {"const": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

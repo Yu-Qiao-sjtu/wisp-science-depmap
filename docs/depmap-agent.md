@@ -1,5 +1,57 @@
 # DepMap Agent
 
+## Knowledge annotation bridge
+
+The Agent does not infer scientific coverage from the roughly 180 GiB storage
+size or from directory names. The versioned
+`skills/depmap-knowledge-query/references/knowledge-module-annotations.json`
+registry separates:
+
+- physical storage modules and their terminal manifests;
+- scientific capabilities and their supported questions;
+- input entity roles and reusable entity sets;
+- statistical metrics, direction rules, and multiple-testing families;
+- query exposure, allowed claims, and forbidden claims.
+
+`depmap_describe_capabilities` joins this registry to the installed knowledge
+root at query time. It returns a metadata plan, not evidence hits. In
+particular, `dorothea_tf_abc` represents a 270-gene transcription-factor entity
+set that can fan out through compatible source, target, event, feature, and
+regulator roles. It must not be reduced to the DoRothEA enrichment table.
+
+The intended query path is:
+
+`structured intent -> entity/entity-set resolution -> annotated capability plan -> bounded evidence queries -> evidence aggregation -> model interpretation`.
+
+Before a DepMap Specialist publishes its final answer, a host-enforced
+Grounding Gate validates every submitted data claim against the current-turn
+Evidence Ledger. Quantitative claims carry an invisible structured binding and
+a visible `[E#]` marker; the binding names an exact `evidence_id` and RFC 6901
+JSON Pointer. Unsupported or stale numbers, positive use of coverage-gap
+evidence, hidden sparse-result states, and unqualified causal/clinical
+overclaims are rejected without ending the turn. A successful answer receives
+a compact machine-verified evidence index. This is a runtime boundary, not a
+prompt-only convention. DepMap sessions also declare a kernel-level
+completion contract: ordinary assistant prose is withheld and not persisted,
+then recycled as an unpublished draft until the model submits it through the
+validated `attempt_completion` tool. Switching models therefore cannot bypass
+the gate by omitting the tool call.
+
+The ledger and gate are source-aware rather than DepMap-file-only:
+
+- DepMap and the precomputed TCGA expression/survival bridge are registered by
+  `depmap_query` / `depmap_evidence` and may support exact pointed values.
+- A successful `depmap_validate_run` now registers the QA-passed manifest,
+  result, and QC documents as `run_validated`; failed validation never creates
+  positive Run evidence.
+- Completed delegated tasks that explicitly declared the
+  `literature_search` capability are registered with their workflow and child
+  tool provenance. Only deliveries containing a traceable DOI, PMID, URL,
+  paper id, or source reference become `literature_retrieval`; other deliveries
+  are `literature_unverified` and cannot support a positive claim. Literature
+  locator validation establishes traceability, not automatic entailment of a
+  paraphrased scientific claim.
+
 > **Architecture note:** The normative Agent-first orchestration, execution
 > levels, Evidence Ledger, MCP boundary, and Workflow escalation policy are
 > defined in [depmap-agent-engineering-framework.md](depmap-agent-engineering-framework.md).
@@ -60,6 +112,59 @@ conversation branch inherits the source conversation's Agent.
 Each DepMap conversation is Agent-first and chooses the smallest bounded entry
 point needed:
 
+The semantic bridge is declared in
+`skills/depmap-knowledge-query/references/agent-capability-registry.json`.
+It is the single machine-readable source for supported intents, entity
+requirements, execution levels, recommended bounded queries, query modes,
+metric families, and claim boundaries. Rust validates and loads this registry
+on first use; the route schema, query-mode schema, required fields, default
+limits, and returned `capability_contract` are derived from it. The model still
+extracts intent and entities from natural language, while the host—not the
+prompt—decides which stored capability that meaning may invoke.
+The same registry covers the dedicated MCP evidence tools for frozen molecular
+subtypes, constrained coamplification, True Love reciprocal screens,
+observational synthetic-lethal screens, and 3D analysis families. An
+unrecognized cancer term produces a `needs_resolution` route to
+`depmap_resolve_entity`; it is not passed through as if it were a valid storage
+label. Exact maintained aliases remain deterministic vocabulary data, while
+ambiguous or model-proposed mappings still require the resolver contract.
+
+Scientific entities have a separate, versioned source of truth at
+`skills/depmap-knowledge-query/references/scientific-entity-registry.json`.
+The generic `depmap_resolve_entity` MCP tool resolves cancer, gene, drug,
+pathway, phenotype, molecular-focus, mechanism, evidence-source, and requested-
+output mentions through one `wisp.entity-resolution.v1` result shape. Gene and
+drug resolution verifies installed `gene_catalog.parquet` and PRISM compound
+catalogs. A pathway spelling may be normalized for a later query but remains
+`NORMALIZED_UNVERIFIED` until the provider verifies it. Entity resolution is
+control data, not scientific evidence, and `NOT_FOUND` never means negative
+biology. `depmap_resolve_lineage` remains available for compatibility.
+
+Topic-design requests use a multi-slot semantic contract instead of collapsing
+the whole question into one `focus` string. The route preserves the user's
+disease wording and canonical lineage separately, plus arrays for phenotype,
+molecular focus, mechanism, evidence source, and requested output. It also
+records an execution policy and any unresolved concepts. For example, “肝癌、
+肿瘤细胞干性、转录因子、课题方向” becomes `Liver`,
+`tumor_cell_stemness`, `transcription_factor`, and `candidate_topics`.
+`depmap_query(mode=topic_plan)` then reports coverage for every slot and their
+intersection. A phenotype marked `NOT_COMPUTED` remains a visible coverage gap;
+it is never silently discarded and never converted into a negative biological
+claim. Under `precomputed_only`, proposed calculations are described but not
+started.
+
+The route now emits a versioned `wisp.scientific-intent.v1` object, and
+`topic_plan` compiles it into `wisp.evidence-plan.v1`. The corresponding JSON
+Schemas live under
+`skills/depmap-knowledge-query/references/schemas/`. Molecular-focus routing
+hints come from the capability registry rather than API conditionals. In
+particular, `transcription_factor` resolves the frozen DoRothEA A-C regulator
+set from the installed release and projects that set across every compatible
+gene role in lineage networks, expression-dependency, CNV, PRISM, and TF
+enrichment. It no longer means "query only the DoRothEA enrichment table".
+Physical Parquet partitions remain provider implementation details and are
+never exposed as planning steps for the model.
+
 1. `depmap_agent_route` records one typed, host-validated L1/L2/L3/L4 decision
    for each new request; the route is observable control data, never scientific
    evidence;
@@ -77,15 +182,24 @@ point needed:
    without inventing an anchor gene; for a cancer-only dependency-gene ranking,
    `depmap_query(mode=lineage_dependency)` reads the existing lineage-vs-rest
    dependency-gene ranking. `depmap_query(mode=lineage_directions)` reads the
-   bounded multi-family topic candidates for a cancer-only direction request;
-   the two modes are not interchangeable, and both query completed results
-   instead of starting a Run;
+   bounded multi-family topic candidates for a simple cancer-only direction
+   request. Multi-dimensional topic requests use
+   `depmap_query(mode=topic_plan)` so phenotype, molecular focus, mechanisms,
+   evidence sources, outputs, and execution policy remain independently
+   inspectable. These modes query completed results and do not start a Run;
 6. for a gene-plus-cancer question, `depmap_evidence` verifies the configured
    local or remote provider and assembles the requested evidence in one tool
    call; `depmap_query(mode=status)` remains available for provider-only tasks;
 7. successful query and evidence calls persist a stable `evidence_ref` in the
    project SQLite ledger. `depmap_evidence_history` can recover the exact
    evidence in the current conversation without treating model memory as data.
+
+When a route returns a `single_call` recommendation, the host also installs a
+single-use next-tool argument contract. The model may ask the user or finish,
+but it cannot silently broaden `focus`, increase `limit`, change the canonical
+lineage, or substitute another query. A mismatched call is rejected before the
+provider executes; after the exact call runs, that evidence tool is removed
+from the active route so it cannot be repeated in the same turn.
 
 This provides multi-session inheritance of identity and work state without
 copying old chat transcripts into the model context.
@@ -260,6 +374,66 @@ cancer-label-centric.
 
 Mutation and CNV are deliberately outside this first stage and remain visible
 future coverage rather than being inferred from the expression-survival rows.
+
+## Agent harness behavior
+
+The scientific Skill does not own provider tuning or turn termination. Those
+controls live in the shared Agent harness:
+
+- model profiles may explicitly select reasoning effort; when unset, an exact
+  model-id adapter may supply a conservative default (currently
+  `GLM-5.3-Flash` uses `minimal`);
+- after a tool result, the UI receives coarse phase events for model reasoning,
+  final synthesis, and bounded recovery without exposing chain-of-thought;
+- a post-tool response that exceeds the model policy deadline is cancelled and
+  retried once with only `attempt_completion` available, so recovery cannot
+  launch another evidence search;
+- query defaults and normalized lineage labels are recorded in the returned
+  `query` object and remain the authoritative effective parameters.
+- scientific focus is a controlled entity set, not a guessed gene list. A
+  TF-focused request resolves the release's `DOROTHEA_TF_ABC` regulator set and
+  projects those genes over every compatible precomputed family rather than
+  limiting retrieval to one enrichment table;
+- phenotype and molecular slots are connected by an explicit research
+  relation. For example, stemness plus TF means “find TF candidates associated
+  with stemness,” not two independent filters. When a direct stemness score was
+  not precomputed, the planner may use only registry-declared pathway proxies
+  and must label them `DECLARED_PROXY`; WNT, NOTCH, Hedgehog, EMT, TGF-beta,
+  Hippo/YAP, MYC, or pluripotency context is not promoted to a direct stemness
+  measurement or causal regulation claim;
+- a `NOT_RETAINED` result means no row passed that stored filter; it does not
+  prove that the requested biology is absent.
+
+Explicit user model settings always override adapter defaults. The bounded
+recovery is a failure path, not a replacement for normal multi-tool research.
+
+### Relation-driven semantic bridge
+
+Topic discovery is compiled as a typed relation rather than a bag of filters:
+
+```text
+molecular focus --predicate--> phenotype
+```
+
+The predicate defaults conservatively to `candidate_association_with`. A
+mechanism concept may declare a more specific predicate in the capability
+registry, such as `candidate_regulator_of`; the model must not infer a causal
+predicate from a generic request. Concepts may also declare proxy evidence and
+a data adapter. The generic planner reads those declarations and produces four
+separate evidence classes: direct, declared proxy, supporting/composable, and
+new computation required.
+
+This separation is the extension contract. Adding a new scientific case should
+normally require:
+
+1. a canonical concept and aliases;
+2. optional declared proxies with claim boundaries;
+3. an entity-set resolver or query adapter already supported by the provider;
+4. one semantic regression test and, when data exists, one result test.
+
+It must not require a phenotype-named branch in the planner. Unsupported
+concepts remain unresolved, malformed adapters fail closed, and absence from a
+sparse retained table is never converted into a biological null.
 
 ## Scientific boundary
 

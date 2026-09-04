@@ -53,7 +53,9 @@ reviewable R analysis, validation, and stage-specific interpretation.\n\n\
 For each new DepMap request, call `depmap_agent_route` once with a typed intent \
 and only the entities actually supplied by the user. Follow its execution level; \
 the routing record is not scientific evidence. Do not repeat routing merely to \
-interpret the current result. Ordinary provider status, cancer inventory, gene, \
+interpret the current result. If it returns `needs_resolution`, execute its \
+declared entity resolver; re-route once with the resolver's selected canonical \
+lineage only after a resolved or user-confirmed result. Ordinary provider status, cancer inventory, gene, \
 gene-pair, drug, comparison, and initial topic-exploration requests are \
 Agent-first bounded queries and must not be diverted to a Workflow only because \
 their wording resembles a registered template. Use `start_workflow` only when \
@@ -68,33 +70,22 @@ recover that exact prior evidence when the scope and release have not changed; \
 never cite route records, prompt text, or model memory as scientific evidence. \
 Recover the project cycle with `depmap_project_runs` only when the user asks to \
 continue, inspect, validate, or create a Run/report; do not load historical Runs \
-for a query-only evidence or topic-inventory request. For a cancer-only \
-availability request without a user-supplied gene, call `depmap_query` once \
-with `mode=lineage_catalog` and the cancer lineage. For a cancer-only request \
-asking for top, strongest, selective, essential, or dependency genes, call \
-`depmap_query` once with `mode=lineage_dependency`, the cancer lineage, the \
-requested limit, and `ranking=selective` unless the user explicitly asks for \
-the lowest descriptive lineage mean. This reads an existing lineage-vs-rest \
-table and must not be escalated to a new Run. For a cancer-only request asking \
-for research directions or topics without naming a gene, call `depmap_query` \
-once with `mode=lineage_directions`, the canonical lineage, and a bounded limit. \
-Use only its returned topic candidates and separate family rankings; do not \
-replace this call with `lineage_dependency` or a sequence of guessed gene probes. \
-Never invent an anchor gene from \
-model memory. For a gene-in-cancer inventory, topic-ideation, or \
-research-direction request, call the fixed `depmap_evidence` tool first; it \
-checks provider readiness and assembles a bounded dynamic view. Use \
-`depmap_query` for status/catalog inspection or a surgical pair, drug, pathway, \
-or term follow-up; load \
-`depmap-knowledge-query` when its schemas or fallback scripts are needed. \
-For a request asking which existing data support a proposed study, route it as \
-`study_support_mapping`, run the returned lineage-catalog query, and classify \
-every requested claim into exactly one of four buckets: direct precomputed \
-evidence, new computation from available inputs, missing data or coverage, or \
-literature-only/unverified. Do not call shell, `run_in_context`, or filesystem \
-inventory tools to bypass a provider contract for this query-only mapping. A \
-module's presence does not mean that the proposed subgroup, contrast, mechanism, \
-or drug combination has already been analyzed. \
+for a query-only evidence or topic-inventory request. The route's \
+`capability_registry`, `recommended_query`, `query_contract`, and \
+`candidate_query_contracts` and `allowed_next_tools` fields are the authoritative semantic bridge from the \
+user's intent to stored data. Execute the returned recommended query exactly \
+once when it is present; do not substitute a nearby mode, invent an anchor \
+gene, or reconstruct the mapping from model memory. When the route recommends \
+`depmap_evidence`, use that bounded dynamic view first. When no recommended \
+query is present, select only a mode exposed by the current `depmap_query` \
+schema whose capability contract matches the requested scope and metric. The \
+returned `capability_contract.allowed_claims` and `forbidden_claims` constrain \
+all interpretation. Load `depmap-knowledge-query` only when its schemas, \
+registry, or fallback scripts are needed. For support mapping, follow the \
+route's output contract and do not use shell, `run_in_context`, or filesystem \
+inventory tools to bypass the provider boundary. A module's presence does not \
+mean that the proposed subgroup, contrast, mechanism, or drug combination has \
+already been analyzed. \
 Every mode-specific query must include all fields required by the tool schema; \
 never learn the contract by deliberately issuing incomplete calls. For \
 an empty-argument or invalid-schema failure, do not repeat the identical call; \
@@ -652,16 +643,17 @@ mod tests {
         assert!(rubric.contains("must not be diverted to a Workflow"));
         assert!(rubric.contains("`depmap_evidence_history`"));
         assert!(!rubric.contains("call `start_workflow` before any evidence query"));
-        assert!(rubric.contains("load `depmap-knowledge-query`"));
+        assert!(rubric.contains("Load `depmap-knowledge-query`"));
         assert!(rubric.contains("Load `depmap-coding-agent`"));
         assert!(rubric.contains("do not rerun an available analysis"));
-        assert!(rubric.contains("`mode=lineage_dependency`"));
-        assert!(rubric.contains("`mode=lineage_directions`"));
-        assert!(rubric.contains("`study_support_mapping`"));
-        assert!(rubric.contains("exactly one of four buckets"));
+        assert!(rubric.contains("`capability_registry`"));
+        assert!(rubric.contains("`recommended_query`"));
+        assert!(rubric.contains("`query_contract`"));
+        assert!(rubric.contains("`capability_contract.allowed_claims`"));
+        assert!(rubric.contains("Execute the returned recommended query exactly"));
         assert!(rubric.contains("filesystem inventory tools"));
-        assert!(rubric.contains("sequence of guessed gene probes"));
-        assert!(rubric.contains("must not be escalated to a new Run"));
+        assert!(rubric.contains("do not substitute a nearby mode"));
+        assert!(rubric.contains("invent an anchor gene"));
         assert!(rubric.contains("must never be renamed logFC"));
         assert!(rubric.contains("never learn the contract"));
         assert!(rubric.contains("stay query-only"));

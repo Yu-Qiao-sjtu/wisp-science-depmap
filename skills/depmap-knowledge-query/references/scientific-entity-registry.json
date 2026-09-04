@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "release": "26Q1",
+  "purpose": "Canonical, auditable entity boundary between model-extracted scientific language and DepMap/TCGA query identifiers.",
+  "resolution_states": {
+    "RESOLVED": "Exactly one registry or installed-catalog entity is selected.",
+    "AMBIGUOUS": "Multiple valid entities remain and user confirmation is required.",
+    "NOT_FOUND": "No registry or installed-catalog entity matched; this is not a biological result.",
+    "NORMALIZED_UNVERIFIED": "A query-safe spelling was produced but existence has not been verified against an installed catalog.",
+    "INVALID_CANDIDATES": "One or more model-proposed candidates are outside the maintained registry."
+  },
+  "entity_types": {
+    "cancer": {
+      "namespace": "depmap-lineage",
+      "resolver": "maintained_vocabulary",
+      "selection_policy": "exact aliases auto-resolve; broad or ambiguous terms require confirmation",
+      "relation": "model_grouping_proxy"
+    },
+    "gene": {
+      "namespace": "hgnc",
+      "resolver": "installed_catalog",
+      "catalog": "depmap-26q1-core/gene_catalog.parquet",
+      "canonical_field": "symbol",
+      "identifier_field": "hgnc_id",
+      "alias_fields": ["alias_symbol", "prev_symbol"],
+      "membership_fields": ["in_crispr_effect", "in_crispr_dependency", "in_analysis_set"]
+    },
+    "drug": {
+      "namespace": "depmap-prism-compound",
+      "resolver": "installed_catalog",
+      "catalog_candidates": [
+        "depmap-26q1-full/prism_auc_effect_correlation/drug_order.csv",
+        "depmap-26q1-full/prism_auc_expression_correlation/drug_order.csv",
+        "depmap-26q1-full/prism_auc_cnv_correlation/drug_order.csv"
+      ],
+      "canonical_field": "ConditionCompoundName",
+      "identifier_field": "CompoundID",
+      "alias_fields": ["ConditionSampleID", "ChEMBLID", "PubChemCID"]
+    },
+    "pathway": {
+      "namespace": "depmap-pathway",
+      "resolver": "query_validated",
+      "normalization": "uppercase_underscore",
+      "verification_note": "The enrichment query and its manifest determine whether the term exists and was retained."
+    },
+    "phenotype": {"namespace": "wisp-phenotype", "resolver": "capability_concepts", "concept_category": "phenotypes"},
+    "molecular_focus": {"namespace": "wisp-molecular-focus", "resolver": "capability_concepts", "concept_category": "molecular_focus"},
+    "mechanism": {"namespace": "wisp-mechanism", "resolver": "capability_concepts", "concept_category": "mechanisms"},
+    "evidence_source": {"namespace": "wisp-evidence-source", "resolver": "capability_concepts", "concept_category": "evidence_sources"},
+    "requested_output": {"namespace": "wisp-requested-output", "resolver": "capability_concepts", "concept_category": "requested_outputs"}
+  },
+  "cancer_lineages": [
+    {"id":"depmap-lineage:Adrenal Gland","label":"Adrenal Gland","aliases":["肾上腺","肾上腺癌","肾上腺肿瘤"]},
+    {"id":"depmap-lineage:Ampulla of Vater","label":"Ampulla of Vater","aliases":["Vater壶腹","壶腹部","壶腹癌","壶腹部癌"]},
+    {"id":"depmap-lineage:Biliary Tract","label":"Biliary Tract","aliases":["胆道","胆道癌","胆管癌","胆囊癌"]},
+    {"id":"depmap-lineage:Bladder Urinary Tract","label":"Bladder Urinary Tract","aliases":["膀胱","膀胱癌","尿路","尿路癌","尿路上皮癌","bladder","urinary tract"]},
+    {"id":"depmap-lineage:Bone","label":"Bone","aliases":["骨","骨癌","骨肿瘤","骨肉瘤"]},
+    {"id":"depmap-lineage:Bowel","label":"Bowel","aliases":["肠道","肠癌","大肠癌","结肠癌","直肠癌","结直肠癌","colon","colorectal","rectal"]},
+    {"id":"depmap-lineage:Breast","label":"Breast","aliases":["乳腺","乳腺癌","乳癌"]},
+    {"id":"depmap-lineage:Cervix","label":"Cervix","aliases":["宫颈","宫颈癌","子宫颈癌"]},
+    {"id":"depmap-lineage:CNS Brain","label":"CNS Brain","aliases":["中枢神经系统","脑","脑癌","脑肿瘤","胶质瘤","brain","cns","central nervous system"]},
+    {"id":"depmap-lineage:Embryonal","label":"Embryonal","aliases":["胚胎性","胚胎性肿瘤","胚胎肿瘤"]},
+    {"id":"depmap-lineage:Esophagus Stomach","label":"Esophagus Stomach","aliases":["食管","食管癌","胃","胃癌","食管胃","食管胃癌","胃食管癌","esophageal","gastric","stomach"]},
+    {"id":"depmap-lineage:Eye","label":"Eye","aliases":["眼","眼部","眼部肿瘤","眼癌","葡萄膜黑色素瘤"]},
+    {"id":"depmap-lineage:Fibroblast","label":"Fibroblast","aliases":["成纤维细胞","成纤维细胞系"]},
+    {"id":"depmap-lineage:Hair","label":"Hair","aliases":["毛发","毛囊"]},
+    {"id":"depmap-lineage:Head and Neck","label":"Head and Neck","aliases":["头颈","头颈癌","口腔癌","咽癌","喉癌","head neck"]},
+    {"id":"depmap-lineage:Kidney","label":"Kidney","aliases":["肾","肾癌","肾脏癌","肾细胞癌"]},
+    {"id":"depmap-lineage:Liver","label":"Liver","aliases":["肝","肝癌","肝脏癌","肝脏肿瘤"]},
+    {"id":"depmap-lineage:Lung","label":"Lung","aliases":["肺","肺癌","肺部肿瘤"]},
+    {"id":"depmap-lineage:Lymphoid","label":"Lymphoid","aliases":["淋巴","淋巴系统","淋巴系统肿瘤","淋巴瘤","淋巴细胞白血病"]},
+    {"id":"depmap-lineage:Muscle","label":"Muscle","aliases":["肌肉","肌肉肿瘤"]},
+    {"id":"depmap-lineage:Myeloid","label":"Myeloid","aliases":["髓系","髓系肿瘤","髓系白血病","急性髓系白血病"]},
+    {"id":"depmap-lineage:Normal","label":"Normal","aliases":["正常","正常组织","正常细胞"]},
+    {"id":"depmap-lineage:Other","label":"Other","aliases":["其他","其他肿瘤"]},
+    {"id":"depmap-lineage:Ovary Fallopian Tube","label":"Ovary Fallopian Tube","aliases":["卵巢","卵巢癌","输卵管","输卵管癌","卵巢输卵管","ovarian","ovary","fallopian tube"]},
+    {"id":"depmap-lineage:Pancreas","label":"Pancreas","aliases":["胰腺","胰腺癌","胰癌"]},
+    {"id":"depmap-lineage:Peripheral Nervous System","label":"Peripheral Nervous System","aliases":["外周神经系统","周围神经系统","外周神经系统肿瘤","神经母细胞瘤","pns"]},
+    {"id":"depmap-lineage:Pleura","label":"Pleura","aliases":["胸膜","胸膜肿瘤","胸膜间皮瘤","间皮瘤"]},
+    {"id":"depmap-lineage:Prostate","label":"Prostate","aliases":["前列腺","前列腺癌"]},
+    {"id":"depmap-lineage:Skin","label":"Skin","aliases":["皮肤","皮肤癌","皮肤肿瘤","黑色素瘤"]},
+    {"id":"depmap-lineage:Soft Tissue","label":"Soft Tissue","aliases":["软组织","软组织肿瘤","软组织肉瘤"]},
+    {"id":"depmap-lineage:Testis","label":"Testis","aliases":["睾丸","睾丸癌","睾丸肿瘤"]},
+    {"id":"depmap-lineage:Thyroid","label":"Thyroid","aliases":["甲状腺","甲状腺癌","甲状腺肿瘤"]},
+    {"id":"depmap-lineage:Uterus","label":"Uterus","aliases":["子宫","子宫癌","子宫体癌","子宫内膜癌"]},
+    {"id":"depmap-lineage:Vulva Vagina","label":"Vulva Vagina","aliases":["外阴","外阴癌","阴道","阴道癌","外阴阴道","vulvar","vaginal","vulva","vagina"]}
+  ],
+  "ambiguous_cancer_terms": [
+    {"term":"白血病","aliases":["leukemia"],"candidate_ids":["depmap-lineage:Myeloid","depmap-lineage:Lymphoid"]},
+    {"term":"血液肿瘤","aliases":["血液系统肿瘤","hematologic cancer"],"candidate_ids":["depmap-lineage:Myeloid","depmap-lineage:Lymphoid"]},
+    {"term":"肉瘤","aliases":["sarcoma"],"candidate_ids":["depmap-lineage:Bone","depmap-lineage:Soft Tissue","depmap-lineage:Muscle"]},
+    {"term":"妇科肿瘤","aliases":["gynecologic cancer"],"candidate_ids":["depmap-lineage:Cervix","depmap-lineage:Ovary Fallopian Tube","depmap-lineage:Uterus","depmap-lineage:Vulva Vagina"]},
+    {"term":"神经系统肿瘤","aliases":["nervous system cancer"],"candidate_ids":["depmap-lineage:CNS Brain","depmap-lineage:Peripheral Nervous System"]},
+    {"term":"消化系统肿瘤","aliases":["gastrointestinal cancer"],"candidate_ids":["depmap-lineage:Biliary Tract","depmap-lineage:Bowel","depmap-lineage:Esophagus Stomach","depmap-lineage:Liver","depmap-lineage:Pancreas"]},
+    {"term":"消化道肿瘤","aliases":[],"candidate_ids":["depmap-lineage:Bowel","depmap-lineage:Esophagus Stomach"]},
+    {"term":"泌尿生殖系统肿瘤","aliases":["genitourinary cancer"],"candidate_ids":["depmap-lineage:Bladder Urinary Tract","depmap-lineage:Kidney","depmap-lineage:Prostate","depmap-lineage:Testis"]}
+  ]
+}

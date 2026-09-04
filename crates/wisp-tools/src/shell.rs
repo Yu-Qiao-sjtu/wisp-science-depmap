@@ -17,6 +17,23 @@ const TIMEOUT_SECS: u64 = 60;
 const MAX_LINES: usize = 1000;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+fn sensitive_env_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    [
+        "API_KEY",
+        "APIKEY",
+        "ACCESS_KEY",
+        "PRIVATE_KEY",
+        "_TOKEN",
+        "_SECRET",
+        "_PASSWORD",
+        "_PASSWD",
+        "_CREDENTIAL",
+    ]
+    .iter()
+    .any(|marker| upper.contains(marker))
+}
+
 /// Resolves once the env's cancel flag is set. Polls at 100ms — cheap, and
 /// bounds Stop-button latency to ~100ms while a command is mid-run.
 async fn cancel_watch(env: &dyn ToolEnv) {
@@ -107,6 +124,13 @@ async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duratio
         c
     };
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Provider and connector credentials belong to the host process.  A
+    // model-issued generic shell command must not be able to enumerate them.
+    for (name, _) in std::env::vars_os() {
+        if sensitive_env_name(&name.to_string_lossy()) {
+            command.env_remove(name);
+        }
+    }
     crate::process::hide_console_async(&mut command);
     command.current_dir(env.project_root());
 
@@ -363,6 +387,23 @@ mod tests {
             desc.contains("pixi"),
             "scientific env guidance missing: {desc}"
         );
+    }
+
+    #[test]
+    fn secret_shaped_environment_names_are_not_shell_inheritable() {
+        for name in [
+            "WISP_API_KEY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "CLIENT_SECRET",
+            "DB_PASSWORD",
+            "AWS_ACCESS_KEY_ID",
+        ] {
+            assert!(sensitive_env_name(name), "{name}");
+        }
+        for name in ["PATH", "PATHEXT", "WISP_PROVIDER", "DEPMAP_KNOWLEDGE_ROOT"] {
+            assert!(!sensitive_env_name(name), "{name}");
+        }
     }
 
     #[test]

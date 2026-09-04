@@ -5,6 +5,12 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCallRequirement {
+    pub tool_name: String,
+    pub arguments: Value,
+}
+
 /// A host-side bridge that lets a just-presented MCP App call tools on the
 /// same MCP Server that produced it (MCP Apps `serverTools`). The desktop host
 /// registers the handle when a `Presentation { kind: "mcp_app" }` flows to the
@@ -331,6 +337,14 @@ pub struct ToolResult {
     /// boundaries out of prompt wording: stale sibling calls can be skipped,
     /// and tools such as `ask_user` can end the turn outright.
     pub control: ToolControl,
+    /// Optional host-enforced tool scope for the next model iteration.  This
+    /// is control data, not prompt guidance: the agent hides every other tool
+    /// schema and rejects a hallucinated out-of-scope call.
+    pub next_tool_allowlist: Option<Vec<String>>,
+    /// Optional exact argument contracts for routed next-tool calls. A model
+    /// may still ask the user or finish, but it cannot silently broaden a
+    /// host-selected scientific query by changing its arguments.
+    pub next_tool_requirements: Option<Vec<ToolCallRequirement>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -356,6 +370,8 @@ impl ToolResult {
             content: content.into(),
             image: None,
             control: ToolControl::Continue,
+            next_tool_allowlist: None,
+            next_tool_requirements: None,
         }
     }
     pub fn fail(content: impl Into<String>) -> Self {
@@ -364,6 +380,8 @@ impl ToolResult {
             content: content.into(),
             image: None,
             control: ToolControl::Continue,
+            next_tool_allowlist: None,
+            next_tool_requirements: None,
         }
     }
     pub fn image(img: ImageData) -> Self {
@@ -373,6 +391,8 @@ impl ToolResult {
             content: label,
             image: Some(img),
             control: ToolControl::Continue,
+            next_tool_allowlist: None,
+            next_tool_requirements: None,
         }
     }
     /// Skip tool calls that the model placed later in the same batch, then let
@@ -385,6 +405,33 @@ impl ToolResult {
     /// issuing another model request.
     pub fn stop_turn(mut self) -> Self {
         self.control = ToolControl::StopTurn;
+        self
+    }
+
+    /// Replace the next iteration's visible and executable tool set.  Later
+    /// calls from the current model batch were planned before this boundary,
+    /// so they are skipped and the model receives a fresh scoped iteration.
+    pub fn restrict_next_tools(mut self, allowed: Vec<String>) -> Self {
+        self.next_tool_allowlist = Some(allowed);
+        self.control = ToolControl::StopBatch;
+        self
+    }
+
+    /// Require an exact, single-use argument object when the named routed tool
+    /// is called next. The agent kernel consumes the requirement only after a
+    /// matching call reaches the tool registry.
+    pub fn require_next_tool_call(
+        mut self,
+        tool_name: impl Into<String>,
+        arguments: Value,
+    ) -> Self {
+        self.next_tool_requirements
+            .get_or_insert_with(Vec::new)
+            .push(ToolCallRequirement {
+                tool_name: tool_name.into(),
+                arguments,
+            });
+        self.control = ToolControl::StopBatch;
         self
     }
 }
@@ -410,5 +457,34 @@ mod tests {
     #[test]
     fn report_written_paths_default_is_noop() {
         StubEnv.report_written_paths(&["a.txt".into()]);
+    }
+
+    #[test]
+    fn next_tool_scope_is_a_code_level_batch_boundary() {
+        let result = ToolResult::ok("routed")
+            .restrict_next_tools(vec!["depmap_query".into(), "attempt_completion".into()]);
+        assert_eq!(result.control, ToolControl::StopBatch);
+        assert_eq!(
+            result.next_tool_allowlist.as_deref(),
+            Some(["depmap_query".to_string(), "attempt_completion".to_string()].as_slice())
+        );
+
+        let result = result.require_next_tool_call(
+            "depmap_query",
+            serde_json::json!({"mode":"lineage_directions","focus":"transcription_factor"}),
+        );
+        assert_eq!(
+            result.next_tool_requirements.as_deref(),
+            Some(
+                [ToolCallRequirement {
+                    tool_name: "depmap_query".into(),
+                    arguments: serde_json::json!({
+                        "mode":"lineage_directions",
+                        "focus":"transcription_factor"
+                    }),
+                }]
+                .as_slice()
+            )
+        );
     }
 }

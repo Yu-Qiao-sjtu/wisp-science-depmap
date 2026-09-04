@@ -9,14 +9,14 @@ use crate::provenance;
 use crate::Output;
 use anyhow::Result;
 use sha2::{Digest, Sha256};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use wisp_llm::{
     is_retriable, Completion, Content, LlmError, Message, Part, Provider, ToolCall, ToolSchema,
 };
-use wisp_tools::{ImageData, Registry, ToolControl, ToolEnv, ToolResult};
+use wisp_tools::{ImageData, Registry, ToolCallRequirement, ToolControl, ToolEnv, ToolResult};
 
 const RETRY_DELAYS: [u64; 5] = [2_000, 10_000, 30_000, 60_000, 120_000];
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -28,6 +28,10 @@ const STREAM_CUT_MESSAGE: &str = "模型响应流在中途被断开（未收到�
 const EMPTY_RESPONSE_MESSAGE: &str = "模型完成了本轮推理，但没有返回可显示的文本或工具调用。对话上下文和已完成的工具结果均已保留；请点击“继续执行”重新生成最终回复。若长对话中反复出现，请先发送 /compact 压缩上下文。(model returned no visible response)";
 const ABNORMAL_FINISH_MESSAGE: &str = "模型服务没有正常完成本轮响应，已生成的部分内容不会作为最终答案提交。已完成的工具结果均已保留；请点击“继续执行”重试。(provider returned an unsuccessful finish reason)";
 const ITERATION_LIMIT_SUMMARY_FAILURE: &str = "已达到本轮 Agent 最大迭代次数，但模型未能生成无工具收尾总结。已完成的工具结果均已保留；请点击“继续执行”接着做。(failed to summarize after reaching max agent iterations)";
+const POST_TOOL_SYNTHESIS_PROMPT: &str = "The required tool result is already available. Stop further investigation and synthesize the final user-facing answer now. Use only the completed evidence, preserve its limitations, do not call another evidence tool, and call attempt_completion if that tool is available.";
+const POST_TOOL_SYNTHESIS_TIMEOUT: &str = "模型在工具结果已经返回后仍未及时生成可显示的最终答复。系统已尝试一次仅允许收口的恢复，但模型仍未完成；工具结果和对话上下文均已保留，可直接重试或切换模型。(post-tool synthesis timed out)";
+const COMPLETION_TOOL_REQUIRED_PROMPT: &str = "Your draft was not published because this specialist requires every final answer to pass its host validation tool. Do not answer with free-form text. Query the available evidence tools first if the draft is not fully grounded, then call attempt_completion with the complete answer and every required evidence binding. Unpublished draft:\n\n";
+const COMPLETION_TOOL_ITERATION_LIMIT: &str = "已达到本轮 Agent 最大迭代次数，但模型没有通过专员的最终证据核验工具，因此未发布未经核验的草稿。工具结果和上下文均已保留；可继续执行或切换模型重试。(completion tool required)";
 /// How many consecutive repetitions of the same completed tool-call/result
 /// cycle count as "stuck".
 const STUCK_REPEAT_LIMIT: usize = 5;
@@ -308,8 +312,13 @@ async fn agent_loop_inner(
     };
     let mut iteration = 0usize;
     let mut auto_continues = 0usize;
+    let mut has_completed_tools = false;
+    let mut synthesis_recovery_used = false;
+    let mut force_synthesis = false;
+    let mut next_tool_allowlist: Option<HashSet<String>> = None;
+    let mut next_tool_requirements: Option<HashMap<String, serde_json::Value>> = None;
     let mut recent_observations: VecDeque<[u8; 32]> = VecDeque::with_capacity(STUCK_WINDOW);
-    loop {
+    'agent: loop {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             anyhow::bail!("stopped by user");
         }
@@ -332,7 +341,43 @@ async fn agent_loop_inner(
             }
         }
         iteration += 1;
-        let (schemas, schema_origins) = tools.schemas_with_origins();
+        let (mut schemas, mut schema_origins) = tools.schemas_with_origins();
+        if let Some(allowed) = &next_tool_allowlist {
+            let deferred_allowed = allowed
+                .iter()
+                .any(|name| tools.get(name).is_some_and(|tool| tool.defer_schema()));
+            let mut index = 0usize;
+            schemas.retain(|schema| {
+                let name = schema.function.name.as_str();
+                let keep = allowed.contains(name)
+                    || (deferred_allowed && matches!(name, "search_mcp_tools" | "use_mcp_tool"));
+                if !keep {
+                    schema_origins.remove(index);
+                } else {
+                    index += 1;
+                }
+                keep
+            });
+        }
+        if force_synthesis {
+            let keep = schemas
+                .iter()
+                .position(|schema| schema.function.name == "attempt_completion");
+            match keep {
+                Some(index) => {
+                    let schema = schemas.swap_remove(index);
+                    let origin = schema_origins.swap_remove(index);
+                    schemas.clear();
+                    schemas.push(schema);
+                    schema_origins.clear();
+                    schema_origins.push(origin);
+                }
+                None => {
+                    schemas.clear();
+                    schema_origins.clear();
+                }
+            }
+        }
         let fixed_request_tokens = ContextManager::estimated_tool_tokens(&schemas);
         ctx.note_request_boundary(fixed_request_tokens);
         // Match the long-context behaviour used by mangopi-cli: check the
@@ -364,6 +409,13 @@ async fn agent_loop_inner(
                 }
             }
         }
+        output.phase(if force_synthesis {
+            "recovery_synthesis"
+        } else if has_completed_tools {
+            "final_synthesis"
+        } else {
+            "model_reasoning"
+        });
         let mut sink = match cancel {
             Some(c) => StreamSinkAdapter::with_cancel(output, c),
             None => StreamSinkAdapter::new(output),
@@ -371,7 +423,29 @@ async fn agent_loop_inner(
         let mut overflow_recovery_used = false;
         let comp = loop {
             let messages = ctx.prepare_for_api_with_tools(output, &schemas);
-            match stream_with_retry(provider, &messages, &schemas, &mut sink, cancel).await {
+            let streamed = if has_completed_tools {
+                let timeout =
+                    wisp_llm::model_harness_policy(provider.model()).post_tool_response_timeout;
+                match tokio::time::timeout(
+                    timeout,
+                    stream_with_retry(provider, &messages, &schemas, &mut sink, cancel),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) if !synthesis_recovery_used => {
+                        synthesis_recovery_used = true;
+                        force_synthesis = true;
+                        output.phase("recovery_synthesis");
+                        ctx.inject_user(POST_TOOL_SYNTHESIS_PROMPT);
+                        continue 'agent;
+                    }
+                    Err(_) => anyhow::bail!(POST_TOOL_SYNTHESIS_TIMEOUT),
+                }
+            } else {
+                stream_with_retry(provider, &messages, &schemas, &mut sink, cancel).await
+            };
+            match streamed {
                 Ok(comp) => break comp,
                 Err(LlmError::Incomplete) => anyhow::bail!(STREAM_CUT_MESSAGE),
                 Err(error) if error.is_context_overflow() && !overflow_recovery_used => {
@@ -457,8 +531,26 @@ async fn agent_loop_inner(
             anyhow::bail!(EMPTY_RESPONSE_MESSAGE);
         }
 
+        // A specialist with a host-side grounding gate must not be able to
+        // bypass it by returning ordinary assistant prose. Streaming text was
+        // already withheld by `StreamSinkAdapter`; keep this draft out of the
+        // durable transcript too, and feed it back as a runtime instruction so
+        // the model can gather missing evidence and submit `attempt_completion`.
+        if comp.tool_calls.is_empty() && output.requires_completion_tool() {
+            ctx.inject_user(format!("{COMPLETION_TOOL_REQUIRED_PROMPT}{}", comp.content));
+            if iteration_limit_reached(iteration, max_iter) {
+                anyhow::bail!(COMPLETION_TOOL_ITERATION_LIMIT);
+            }
+            continue 'agent;
+        }
+
+        let assistant_content = if output.requires_completion_tool() {
+            String::new()
+        } else {
+            comp.content.clone()
+        };
         ctx.append_assistant(
-            comp.content.clone(),
+            assistant_content,
             comp.tool_calls.clone(),
             comp.reasoning.clone(),
         );
@@ -498,7 +590,14 @@ async fn agent_loop_inner(
                 anyhow::bail!(STOPPED_BY_USER);
             }
             let name = tc.function.name.clone();
-            let args = tc.args_value();
+            let supplied_args = tc.args_value();
+            let reconciled_args = reconcile_tool_call_arguments(
+                next_tool_requirements.as_ref(),
+                &name,
+                &supplied_args,
+            );
+            let requirement_error = reconciled_args.as_ref().err().cloned();
+            let args = reconciled_args.unwrap_or_else(|_| supplied_args.clone());
             let producing = provenance::is_producing(&name);
             let root = producing.then(|| env.project_root().to_path_buf());
             let source = provenance::source_of(&name, &args);
@@ -527,11 +626,54 @@ async fn agent_loop_inner(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let result = tools.run(&name, &args, &env).await;
+            let routed_target = routed_tool_target(&name, &args).map(str::to_string);
+            let matched_requirement = requirement_error.is_none()
+                && routed_target.as_ref().is_some_and(|target| {
+                    next_tool_requirements
+                        .as_ref()
+                        .is_some_and(|requirements| requirements.get(target) == Some(&args))
+                });
+            let result = if !tool_call_allowed(tools, next_tool_allowlist.as_ref(), &name, &args) {
+                ToolResult::fail(format!(
+                    "tool '{name}' is outside the active capability route; use only the host-approved next tools"
+                ))
+                .stop_batch()
+            } else if let Some(error) = requirement_error {
+                ToolResult::fail(error).stop_batch()
+            } else {
+                let result = tools.run(&name, &args, &env).await;
+                if matched_requirement {
+                    if let Some(target) = &routed_target {
+                        if let Some(requirements) = &mut next_tool_requirements {
+                            requirements.remove(target);
+                            if requirements.is_empty() {
+                                next_tool_requirements = None;
+                            }
+                        }
+                        if let Some(allowed) = &mut next_tool_allowlist {
+                            allowed.remove(target);
+                        }
+                    }
+                }
+                result
+            };
             // Drain even for non-producing calls so a stale kernel report
             // cannot leak into the next call's provenance record.
             let reported = env.take_reported_writes();
             let control = result.control;
+            if let Some(allowed) = &result.next_tool_allowlist {
+                next_tool_allowlist = Some(allowed.iter().cloned().collect());
+            }
+            if let Some(requirements) = &result.next_tool_requirements {
+                next_tool_requirements = Some(
+                    requirements
+                        .iter()
+                        .map(|requirement| {
+                            (requirement.tool_name.clone(), requirement.arguments.clone())
+                        })
+                        .collect(),
+                );
+            }
             hash_tool_result(&mut observation, &result);
             let duration_ms = t0.elapsed().as_millis() as u64;
             if let Some(root) = &root {
@@ -615,6 +757,7 @@ async fn agent_loop_inner(
                 )
             };
             output.tool_result(&tools.event_name(&name, &args), ok, &tool_text, duration_ms);
+            has_completed_tools = true;
             ctx.append_tool(
                 &tc.id,
                 &name,
@@ -651,6 +794,7 @@ async fn agent_loop_inner(
         if batch_control == ToolControl::StopTurn {
             return Ok(AgentLoopOutcome::Completed);
         }
+        output.phase("final_synthesis");
         // Stuck-loop guard: compare completed tool-call/result observations,
         // then require a consecutively repeated suffix cycle. The result is
         // part of the observation because stateful tools can legitimately use
@@ -666,6 +810,9 @@ async fn agent_loop_inner(
             anyhow::bail!(STUCK_LOOP_MESSAGE);
         }
         if iteration_limit_reached(iteration, max_iter) {
+            if output.requires_completion_tool() {
+                anyhow::bail!(COMPLETION_TOOL_ITERATION_LIMIT);
+            }
             summarize_at_iteration_limit(
                 ctx,
                 provider,
@@ -1018,6 +1165,86 @@ fn hash_tool_result(hasher: &mut Sha256, result: &ToolResult) {
         ToolControl::StopBatch => 1,
         ToolControl::StopTurn => 2,
     }]);
+    if let Some(allowed) = &result.next_tool_allowlist {
+        hasher.update([1]);
+        for name in allowed {
+            hash_observation_part(hasher, name.as_bytes());
+        }
+    } else {
+        hasher.update([0]);
+    }
+    if let Some(requirements) = &result.next_tool_requirements {
+        hasher.update([1]);
+        for ToolCallRequirement {
+            tool_name,
+            arguments,
+        } in requirements
+        {
+            hash_observation_part(hasher, tool_name.as_bytes());
+            hash_observation_part(hasher, arguments.to_string().as_bytes());
+        }
+    } else {
+        hasher.update([0]);
+    }
+}
+
+fn routed_tool_target<'a>(name: &'a str, args: &'a serde_json::Value) -> Option<&'a str> {
+    if name == "use_mcp_tool" {
+        args.get("tool_name").and_then(serde_json::Value::as_str)
+    } else {
+        Some(name)
+    }
+}
+
+fn reconcile_tool_call_arguments(
+    requirements: Option<&HashMap<String, serde_json::Value>>,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let Some(target) = routed_tool_target(name, args) else {
+        return Ok(args.clone());
+    };
+    let Some(expected) = requirements.and_then(|requirements| requirements.get(target)) else {
+        return Ok(args.clone());
+    };
+    if expected == args {
+        return Ok(args.clone());
+    }
+    if let (Some(expected), Some(supplied)) = (expected.as_object(), args.as_object()) {
+        let supplied_is_matching_subset = supplied
+            .iter()
+            .all(|(key, value)| expected.get(key) == Some(value));
+        if supplied_is_matching_subset {
+            return Ok(serde_json::Value::Object(expected.clone()));
+        }
+    }
+    Err(format!(
+            "tool '{target}' arguments violate the active capability route; expected exactly {}, received {}",
+            expected, args
+        ))
+}
+
+fn tool_call_allowed(
+    tools: &Registry,
+    allowed: Option<&HashSet<String>>,
+    name: &str,
+    args: &serde_json::Value,
+) -> bool {
+    let Some(allowed) = allowed else {
+        return true;
+    };
+    if name == "use_mcp_tool" {
+        return args
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|target| allowed.contains(target));
+    }
+    if name == "search_mcp_tools" {
+        return allowed
+            .iter()
+            .any(|target| tools.get(target).is_some_and(|tool| tool.defer_schema()));
+    }
+    allowed.contains(name)
 }
 
 /// Whether the retained observations end in the same cycle repeated
@@ -1051,7 +1278,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use wisp_llm::{FunctionCall, Role, ToolCall};
+    use wisp_llm::{
+        FunctionCall, Role, ScriptedCompletion, ScriptedProvider, ScriptedToolCall, ToolCall,
+    };
     use wisp_tools::ask_user::ASK_USER;
     use wisp_tools::{Approval, Registry, Tool, ToolEnv, ToolResult};
 
@@ -1127,6 +1356,71 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read_to_string(spill.path()).unwrap(), raw);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn capability_scope_rejects_shell_after_routing() {
+        let tools = Registry::builtins();
+        let allowed = HashSet::from(["attempt_completion".to_string()]);
+        assert!(!tool_call_allowed(
+            &tools,
+            Some(&allowed),
+            "shell",
+            &serde_json::json!({"command":"Get-ChildItem Env:"})
+        ));
+        assert!(tool_call_allowed(
+            &tools,
+            Some(&allowed),
+            "attempt_completion",
+            &serde_json::json!({"result":"done"})
+        ));
+    }
+
+    #[test]
+    fn capability_route_rejects_silent_query_broadening() {
+        let requirements = HashMap::from([(
+            "depmap_query".to_string(),
+            serde_json::json!({
+                "mode":"lineage_directions",
+                "lineage":"Liver",
+                "focus":"transcription_factor",
+                "limit":20
+            }),
+        )]);
+        assert!(reconcile_tool_call_arguments(
+            Some(&requirements),
+            "depmap_query",
+            &serde_json::json!({
+                "mode":"lineage_directions",
+                "lineage":"liver",
+                "focus":"all",
+                "limit":100
+            })
+        )
+        .unwrap_err()
+        .contains("expected exactly"));
+        assert_eq!(
+            reconcile_tool_call_arguments(
+                Some(&requirements),
+                "depmap_query",
+                &requirements["depmap_query"]
+            )
+            .unwrap(),
+            requirements["depmap_query"]
+        );
+        assert_eq!(
+            reconcile_tool_call_arguments(
+                Some(&requirements),
+                "depmap_query",
+                &serde_json::json!({
+                    "mode":"lineage_directions",
+                    "lineage":"Liver",
+                    "focus":"transcription_factor"
+                })
+            )
+            .unwrap(),
+            requirements["depmap_query"]
+        );
     }
 
     #[test]
@@ -2533,6 +2827,73 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct PhaseOutput(Mutex<Vec<String>>);
+
+    impl Output for PhaseOutput {
+        fn phase(&self, phase: &str) {
+            self.0.lock().unwrap().push(phase.to_string());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn post_tool_timeout_retries_once_with_only_completion_available() {
+        let provider = ScriptedProvider::new(
+            "GLM-5.3-Flash",
+            vec![
+                ScriptedCompletion {
+                    tool_calls: vec![ScriptedToolCall {
+                        id: "call-1".into(),
+                        name: "ok_tool".into(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    ..ScriptedCompletion::default()
+                },
+                ScriptedCompletion {
+                    reasoning: Some("still thinking".into()),
+                    delay_ms: 91_000,
+                    ..ScriptedCompletion::default()
+                },
+                ScriptedCompletion {
+                    content: "bounded final answer".into(),
+                    ..ScriptedCompletion::default()
+                },
+            ],
+        );
+        let mut tools = Registry::builtins();
+        tools.add(Box::new(OkTool));
+        let output = PhaseOutput::default();
+        let mut ctx = ContextManager::new(100_000);
+
+        agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &output,
+            "use the evidence",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let requests = provider.snapshot().requests;
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].tool_names, vec!["attempt_completion"]);
+        assert!(requests[2].messages.iter().any(|message| message
+            .content
+            .as_text()
+            .contains("Stop further investigation")));
+        assert!(output
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|phase| phase == "recovery_synthesis"));
+    }
+
     struct ProgressTool {
         calls: Arc<AtomicUsize>,
     }
@@ -3515,6 +3876,96 @@ mod tests {
         let last = ctx.messages.last().unwrap();
         assert_eq!(last.role, wisp_llm::Role::Assistant);
         assert_eq!(last.content.as_text(), "计数完成 — the tool ran.");
+    }
+
+    struct CompletionToolRequiredOutput {
+        text: Mutex<String>,
+        published_tool_results: Mutex<Vec<String>>,
+    }
+
+    impl Output for CompletionToolRequiredOutput {
+        fn requires_completion_tool(&self) -> bool {
+            true
+        }
+
+        fn assistant_text(&self, delta: &str) {
+            self.text.lock().unwrap().push_str(delta);
+        }
+
+        fn tool_result(&self, name: &str, ok: bool, content: &str, _duration_ms: u64) {
+            if name == "attempt_completion" && ok {
+                self.published_tool_results
+                    .lock()
+                    .unwrap()
+                    .push(content.to_string());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn required_completion_tool_blocks_and_recycles_plain_text_draft() {
+        let provider = StreamingSequenceProvider {
+            completions: Mutex::new(VecDeque::from([
+                Completion {
+                    content: "未经核验的 73% 结论".into(),
+                    finish_reason: Some("stop".into()),
+                    ..Completion::default()
+                },
+                Completion {
+                    content: "this preamble is also withheld".into(),
+                    tool_calls: vec![call(
+                        "complete-1",
+                        "attempt_completion",
+                        serde_json::json!({"result":"已核验结论"}),
+                    )],
+                    finish_reason: Some("tool_calls".into()),
+                    ..Completion::default()
+                },
+            ])),
+            stream_calls: AtomicUsize::new(0),
+        };
+        let tools = Registry::builtins();
+        let output = CompletionToolRequiredOutput {
+            text: Mutex::new(String::new()),
+            published_tool_results: Mutex::new(Vec::new()),
+        };
+        let mut ctx = ContextManager::new(100_000);
+
+        let outcome = agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &output,
+            "give me a grounded answer",
+            4,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, AgentLoopOutcome::Completed);
+        assert_eq!(provider.stream_calls.load(Ordering::SeqCst), 2);
+        assert!(
+            output.text.lock().unwrap().is_empty(),
+            "unvalidated streamed prose must never reach the visible sink"
+        );
+        assert_eq!(
+            *output.published_tool_results.lock().unwrap(),
+            vec!["已核验结论"]
+        );
+        assert!(ctx.messages.iter().all(|message| {
+            !message.content.as_text().contains("未经核验的 73% 结论")
+                && !message
+                    .content
+                    .as_text()
+                    .contains("this preamble is also withheld")
+        }));
+        assert!(ctx.runtime_injections.iter().any(|message| message
+            .content
+            .as_text()
+            .contains(COMPLETION_TOOL_REQUIRED_PROMPT)));
     }
 
     /// Fails with a retriable 503 `fail_times` times (the same error shape as

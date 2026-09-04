@@ -53,6 +53,11 @@ the full provider requests, messages, tool call IDs, parsed tool arguments,
 tool results, approvals, compaction events, and usage. The JSON summary uses
 `wisp.agent-eval-report.v1`.
 
+The evaluator treats either a successful `attempt_completion` result or a
+non-empty assistant message with no tool calls as the terminal completion.
+This matches the runtime Agent loop and avoids misclassifying providers that
+finish with ordinary response text as incomplete.
+
 ### Budgets and baselines
 
 The runner fails when a selected case fails, a budget is exceeded, the pass
@@ -160,6 +165,15 @@ token usage, cost, latency, compaction count, aggregate before/after token
 estimates, and `compaction_ratio_percent`. Every scenario also records its
 model and individual compaction measurements. Trajectory filenames include the
 model, case, and repetition so matrix runs never overwrite one another.
+
+Each failed scenario also includes `failure_classes`: `execution` covers
+timeouts/provider failures, `contract` covers tool/order/output-shape
+violations, and `content` covers answer/evidence assertions. Suites can use
+`contract_completion_contains` for required headings or boundary labels and
+`contract_completion_contains_any` for accepted wording variants, so a format
+miss is not reported as a scientific-content error. Scientific assertions can
+similarly use `completion_contains_any` instead of treating one phrase as the
+only correct expression.
 
 Models in one invocation share the provider kind, URL, API key, and request
 settings. Run separate invocations when comparing models hosted by different

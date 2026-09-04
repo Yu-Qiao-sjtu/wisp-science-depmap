@@ -1,10 +1,11 @@
 //! OS keyring-backed secret storage for API keys.
 //!
-//! In **debug** builds we bypass the OS keyring and persist to a plaintext JSON
-//! file in the user's home dir. macOS binds each keychain item to the calling
-//! app's code signature, which `tauri dev` regenerates on every rebuild — so the
-//! real keyring pops the login-keychain password prompt on every dev run. Dev
-//! keys aren't worth that friction. Release builds use the OS keyring unchanged.
+//! Windows debug builds use the same OS credential manager as release builds,
+//! which lets `tauri dev` reproduce a configured installation without copying
+//! real provider keys into source files or plaintext developer configuration.
+//! Other debug targets keep the isolated test/development file backend: macOS
+//! binds keychain entries to the calling app's changing development signature,
+//! while CI must not require a real keyring daemon.
 
 /// A named secret (e.g. an API key) stored in the OS credential manager.
 pub struct Secret;
@@ -23,11 +24,13 @@ impl Secret {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(any(not(debug_assertions), target_os = "windows"))]
 mod backend {
     use keyring::Entry;
 
     const SERVICE: &str = "wisp";
+    #[cfg(test)]
+    pub const KIND: &str = "os-keyring";
 
     pub fn set(name: &str, value: &str) -> anyhow::Result<()> {
         Entry::new(SERVICE, name)?.set_password(value)?;
@@ -44,13 +47,16 @@ mod backend {
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(target_os = "windows")))]
 mod backend {
     // Dev-only plaintext file. Serialize load+store so parallel `cargo test`
     // workers cannot clobber each other's whole-file rewrites.
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
+
+    #[cfg(test)]
+    pub const KIND: &str = "isolated-debug-file";
 
     fn file() -> PathBuf {
         std::env::var_os("HOME")
@@ -101,7 +107,22 @@ mod backend {
     }
 }
 
-#[cfg(all(test, debug_assertions))]
+#[cfg(test)]
+mod backend_policy_tests {
+    #[test]
+    fn platform_selects_the_intended_secret_backend() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(super::backend::KIND, "os-keyring");
+
+        #[cfg(all(debug_assertions, not(target_os = "windows")))]
+        assert_eq!(super::backend::KIND, "isolated-debug-file");
+
+        #[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+        assert_eq!(super::backend::KIND, "os-keyring");
+    }
+}
+
+#[cfg(all(test, debug_assertions, not(target_os = "windows")))]
 mod tests {
     use super::Secret;
 

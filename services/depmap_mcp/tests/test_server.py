@@ -109,7 +109,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "gene": "KRAS",
                 "lineage": "Bowel",
                 "endpoint": "PFI",
-                "limit": 6,
+                "limit": 7,
             },
         )
         self.assertIn("patient_evidence", result["evidence"])
@@ -128,9 +128,54 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancer_only_direction_discovery_needs_no_anchor_gene(self):
         result = await self.service.lineage_directions("结肠癌", 20)
-        self.assertEqual(result["request"], {"lineage": "结肠癌", "limit": 20})
-        self.assertEqual(self.queries[0], {"mode": "lineage_directions", "lineage": "Bowel", "limit": 20})
+        self.assertEqual(
+            result["request"],
+            {"lineage": "结肠癌", "limit": 20, "focus": "all"},
+        )
+        self.assertEqual(
+            self.queries[0],
+            {
+                "mode": "lineage_directions",
+                "lineage": "Bowel",
+                "limit": 21,
+                "focus": "all",
+            },
+        )
         self.assertNotIn("gene", result["request"])
+
+    async def test_cancer_direction_focus_is_forwarded_to_the_provider(self):
+        result = await self.service.lineage_directions(
+            "肝癌", 8, "transcription_factor"
+        )
+        self.assertEqual(result["request"]["focus"], "transcription_factor")
+        self.assertEqual(self.queries[0]["lineage"], "Liver")
+        self.assertEqual(self.queries[0]["focus"], "transcription_factor")
+
+    async def test_topic_plan_preserves_phenotype_and_molecular_focus(self):
+        result = await self.service.topic_plan(
+            "肝癌",
+            phenotypes=["tumor_cell_stemness"],
+            molecular_focus=["transcription_factor"],
+            evidence_sources=["depmap"],
+            requested_outputs=["candidate_topics", "feasibility"],
+        )
+        self.assertEqual(
+            self.queries[0],
+            {
+                "mode": "topic_plan",
+                "lineage": "Liver",
+                "phenotypes": ["tumor_cell_stemness"],
+                "molecular_focus": ["transcription_factor"],
+                "mechanisms": [],
+                "evidence_sources": ["depmap"],
+                "requested_outputs": ["candidate_topics", "feasibility"],
+                "execution_policy": "precomputed_only",
+                "unresolved_concepts": [],
+                "limit": 21,
+            },
+        )
+        self.assertEqual(result["request"]["phenotypes"], ["tumor_cell_stemness"])
+        self.assertFalse(result["new_analysis_started"])
 
     async def test_cancer_dependency_ranking_is_one_bounded_precomputed_query(self):
         result = await self.service.lineage_dependencies("乳腺癌", "selective", 10)
@@ -140,7 +185,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "mode": "lineage_dependency",
                 "lineage": "Breast",
                 "ranking": "selective",
-                "limit": 10,
+                "limit": 11,
             },
         )
         self.assertEqual(
@@ -161,6 +206,28 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["evidence_id"], breast_cancer["evidence_id"])
         self.assertEqual(result["evidence_id"], short_alias["evidence_id"])
 
+    async def test_mcp_page_cursor_returns_the_next_window(self):
+        async def paged_runner(_settings, query):
+            rows = [{"rank": rank} for rank in range(1, min(query["limit"], 5) + 1)]
+            return {
+                "mode": "lineage_dependency",
+                "status": "FOUND",
+                "rows": rows,
+                "summary": {"total_retained_rows": 5, "returned_count": len(rows)},
+            }
+
+        service = DepMapEvidenceService(self.settings, paged_runner)
+        first = await service.lineage_dependencies("Liver", limit=2)
+        first_result = first["evidence"]["result"]
+        cursor = first_result["page_info"]["next_cursor"]
+        second = await service.lineage_dependencies("Liver", limit=2, cursor=cursor)
+        second_result = second["evidence"]["result"]
+
+        self.assertEqual([row["rank"] for row in first_result["rows"]], [1, 2])
+        self.assertEqual([row["rank"] for row in second_result["rows"]], [3, 4])
+        self.assertEqual(second_result["page_info"]["total_retained_rows"], 5)
+        self.assertTrue(second_result["page_info"]["has_more"])
+
     async def test_lineage_resolution_requires_confirmation_for_ambiguity(self):
         exact = await self.service.resolve_lineage("乳腺癌")
         self.assertEqual(exact["evidence"]["status"], "RESOLVED")
@@ -178,6 +245,16 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(proposed["evidence"]["status"], "PROPOSED")
         self.assertIsNone(proposed["evidence"]["selected_lineage"])
+
+    async def test_generic_entity_resolution_uses_one_typed_contract(self):
+        result = await self.service.resolve_entity(
+            "molecular_focus", "转录因子"
+        )
+        evidence = result["evidence"]
+        self.assertEqual(evidence["schema_version"], "wisp.entity-resolution.v1")
+        self.assertEqual(evidence["status"], "RESOLVED")
+        self.assertEqual(evidence["selected"]["label"], "transcription_factor")
+        self.assertFalse(evidence["is_scientific_evidence"])
 
     async def test_pair_semantics_distinguish_correlation_and_group_difference(self):
         result = await self.service.pair_evidence("KRAS", "RAF1")
@@ -202,7 +279,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "gene": "WRN",
                 "lineage": "Bowel",
                 "contrast": "FEATURE__BOWEL__MSI",
-                "limit": 7,
+                "limit": 8,
             },
         )
         self.assertEqual(result["request"]["lineage"], "Bowel")
@@ -223,7 +300,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "partner": "RNF121",
                 "target": "TFEC",
                 "layer": "lineage_adjusted",
-                "limit": 9,
+                "limit": 10,
             },
         )
         self.assertEqual(result["request"]["source"], "CTTN")
@@ -236,7 +313,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         true_love = await self.service.true_love_evidence("kras", "nras", 8)
         self.assertEqual(
             self.queries[-1],
-            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8},
+            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 9},
         )
         self.assertIn("not proof", true_love["evidence"]["metric_semantics"]["interpretation"])
         synthetic = await self.service.synthetic_lethal_evidence(
@@ -249,7 +326,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "source": "ARID1A",
                 "target": "ARID1B",
                 "event": "damaging_mutation",
-                "limit": 6,
+                "limit": 7,
             },
         )
         self.assertIn("not causal", synthetic["evidence"]["metric_semantics"]["interpretation"])
@@ -265,7 +342,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "family": "dependency_profiles",
                 "gene": "KRAS",
                 "cohort": "three_d_all",
-                "limit": 4,
+                "limit": 5,
             },
         )
         self.assertEqual(result["request"]["family"], "dependency_profiles")
@@ -306,10 +383,14 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                     names,
                     {
                         "depmap_status",
+                        "depmap_describe_capabilities",
                         "depmap_resolve_lineage",
+                        "depmap_resolve_entity",
                         "depmap_lineage_catalog",
                         "depmap_lineage_dependencies",
                         "depmap_lineage_direction_discovery",
+                        "depmap_topic_plan",
+                        "depmap_topic_plan",
                         "depmap_gene_evidence",
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
@@ -324,6 +405,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(
                     all(tool.annotations.readOnlyHint for tool in tools.tools)
                 )
+                dependency_tool = next(
+                    tool for tool in tools.tools
+                    if tool.name == "depmap_lineage_dependencies"
+                )
+                self.assertIn("cursor", dependency_tool.inputSchema["properties"])
                 called = await session.call_tool("depmap_status", {})
                 self.assertFalse(called.isError)
                 self.assertEqual(called.structuredContent["release"], "26Q1")

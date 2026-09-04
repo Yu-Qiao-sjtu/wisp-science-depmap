@@ -207,6 +207,10 @@ pub enum AgentEvent {
         frame_id: String,
         delta: String,
     },
+    Phase {
+        frame_id: String,
+        phase: String,
+    },
     ToolCall {
         frame_id: String,
         name: String,
@@ -294,6 +298,24 @@ pub enum AgentEvent {
         frame_id: String,
         model: String,
     },
+}
+
+#[cfg(test)]
+mod agent_event_contract_tests {
+    use super::AgentEvent;
+
+    #[test]
+    fn phase_event_deserializes_for_the_webview_contract() {
+        let event: AgentEvent = serde_json::from_str(
+            r#"{"kind":"Phase","frame_id":"frame-1","phase":"final_synthesis"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            event,
+            AgentEvent::Phase { frame_id, phase }
+                if frame_id == "frame-1" && phase == "final_synthesis"
+        ));
+    }
 }
 
 #[derive(Deserialize, Clone, Hash, PartialEq, Eq)]

@@ -3,6 +3,12 @@
 The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
 
 - `catalog`: unified QA and module catalog.
+- `capability_catalog [--lineage NAME] [--question-tags TAGS] [--entity-sets SETS]`:
+  metadata-only mapping from scientific question/entity-set tags to installed
+  analysis capabilities. A match means the module is relevant, not that a
+  gene-level result was retained. `dorothea_tf_abc` is expanded as a gene set
+  across every compatible gene role rather than being restricted to TF
+  enrichment.
 - `lineage_catalog --lineage NAME`: cancer-lineage module availability and
   eligibility manifests without selecting a gene.
 - `lineage_dependency --lineage NAME [--ranking selective|mean_dependency] [--limit N]`:
@@ -10,7 +16,7 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
   table. `selective` is the default and uses the precomputed one-sided Welch
   test, within-lineage BH FDR, and `rank_more_dependent` ordering;
   `mean_dependency` is descriptive and orders the lineage Gene Effect mean.
-- `lineage_directions --lineage NAME [--limit N]`: bounded cancer-only topic
+- `lineage_directions --lineage NAME [--focus all|transcription_factor|pathway|network|cnv|drug] [--limit N]`: bounded cancer-only topic
   discovery over separately ranked network, expression-dependency, CNV,
   pathway/TF, and PRISM sparse outputs. Cross-family recurrence is not a
   combined significance score.
@@ -30,6 +36,11 @@ The query helper accepts `--kb-root`, `--mode`, and mode-specific fields.
 - `synthetic_lethal (--source GENE | --target GENE) [--event damaging_mutation|custom_missense_mutation|hotspot_mutation|cnv_amplification] [--limit N]`.
 - `three_d --family dependency_profiles|differential_dependency|codependency|true_love_gene|omics_dependency|lineage_dependency_enrichment [--gene GENE] [--source GENE] [--target GENE] [--cohort ID] [--contrast ID] [--omic expression|cnv|damaging|hotspot] [--limit N]`.
 - `tcga_expression_survival --gene GENE [--project TCGA-BRCA] [--lineage NAME] [--endpoint OS|DSS|DFI|PFI] [--limit N]`.
+
+For every pageable mode, treat `limit` as a page size. Read `page_info` and
+pass its opaque `next_cursor` back as `cursor` with unchanged scientific
+filters to continue. `total_retained_rows: null` means the exact total was not
+computed; it never means zero.
 
 The native tool exposes these fields through one flat model-compatible schema;
 `mode` is always required and runtime validation enforces the remaining fields.

@@ -17,6 +17,7 @@ from services.depmap_api.app import (
     _coverage_gap_reason,
     create_app,
     resolve_lineage_term,
+    resolve_scientific_entity,
 )
 
 
@@ -209,7 +210,8 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 6)
+        self.assertEqual(response.json()["query_contract_version"], 9)
+        self.assertEqual(response.json()["knowledge_annotation_schema_version"], 1)
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
         self.assertIn("subtype", response.json()["query_modes"])
@@ -217,6 +219,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertIn("true_love", response.json()["query_modes"])
         self.assertIn("synthetic_lethal", response.json()["query_modes"])
         self.assertIn("three_d", response.json()["query_modes"])
+        self.assertIn("topic_plan", response.json()["query_modes"])
         self.assertIn("NOT_RETAINED", response.json()["evidence_statuses"])
 
     def test_pair_query_is_bounded_and_forwarded(self):
@@ -398,6 +401,221 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.queries[0]["lineage"], "Bowel")
 
+    def test_topic_plan_preserves_stemness_and_transcription_factor_slots(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            response = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "topic_plan",
+                    "lineage": "肝癌",
+                    "phenotypes": ["tumor_cell_stemness"],
+                    "molecular_focus": ["transcription_factor"],
+                    "evidence_sources": ["depmap"],
+                    "requested_outputs": ["candidate_topics", "feasibility"],
+                    "execution_policy": "precomputed_only",
+                    "limit": 20,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["state"], "PLAN_READY")
+        self.assertEqual(payload["semantic_request"]["disease"]["canonical_lineage"], "Liver")
+        self.assertEqual(payload["semantic_request"]["phenotypes"], ["tumor_cell_stemness"])
+        self.assertEqual(payload["semantic_request"]["molecular_focus"], ["transcription_factor"])
+        self.assertEqual(
+            payload["scientific_intent"]["schema_version"],
+            "wisp.scientific-intent.v1",
+        )
+        self.assertEqual(
+            payload["scientific_intent"]["entity_sets"],
+            ["dorothea_tf_abc"],
+        )
+        self.assertEqual(
+            payload["scientific_intent"]["research_relations"],
+            [{
+                "subject": {"slot": "molecular_focus", "id": "transcription_factor"},
+                "predicate": "candidate_association_with",
+                "object": {"slot": "phenotype", "id": "tumor_cell_stemness"},
+                "evidence_requirement": "direct_result_or_declared_proxy",
+            }],
+        )
+        self.assertEqual(
+            payload["evidence_plan"]["schema_version"],
+            "wisp.evidence-plan.v1",
+        )
+        self.assertGreater(
+            payload["evidence_plan"]["summary"]["planned_capability_count"],
+            1,
+        )
+        self.assertTrue(
+            payload["evidence_plan"]["execution_contract"]["model_must_not_read_blocks"]
+        )
+        self.assertEqual(payload["coverage"]["phenotypes"][0]["status"], "NOT_COMPUTED")
+        self.assertEqual(payload["coverage"]["intersections"][0]["status"], "NOT_COMPUTED")
+        self.assertEqual(
+            payload["evidence_buckets"]["new_computation_from_available_inputs"][0]["status"],
+            "NEW_COMPUTATION_REQUIRED",
+        )
+        self.assertFalse(payload["new_analysis_started"])
+
+        annotated = payload["coverage"]["capability_annotations"]
+        capability_ids = {item["id"] for item in annotated["capabilities"]}
+        self.assertIn("lineage_codependency", capability_ids)
+        self.assertIn("lineage_expression_dependency", capability_ids)
+        self.assertIn("lineage_cnv_dependency", capability_ids)
+        self.assertIn("lineage_prism_association", capability_ids)
+        self.assertIn("true_love_gene", capability_ids)
+        self.assertIn("observational_synthetic_lethal", capability_ids)
+        planned_ids = {
+            item["capability_id"] for item in payload["evidence_plan"]["steps"]
+        }
+        self.assertEqual(planned_ids, capability_ids)
+        expression_dependency = next(
+            item
+            for item in payload["evidence_plan"]["steps"]
+            if item["capability_id"] == "lineage_expression_dependency"
+        )
+        self.assertIn(
+            "source_gene",
+            expression_dependency["entity_set_projection"]["compatible_roles"],
+        )
+        self.assertIn(
+            "target_gene",
+            expression_dependency["entity_set_projection"]["compatible_roles"],
+        )
+        self.assertEqual(
+            annotated["summary"]["unmatched_question_tags"],
+            ["stemness_proxy", "tumor_cell_stemness"],
+        )
+        self.assertEqual(
+            payload["coverage"]["intersections"][0]["declared_proxy_statuses"],
+            ["NOT_COMPUTED"],
+        )
+        self.assertEqual(
+            payload["evidence_buckets"]["declared_proxy_evidence"][0]["claim_level"],
+            "DECLARED_PROXY",
+        )
+        self.assertTrue(
+            all(
+                item["note"].startswith("Capability match only")
+                for item in payload["evidence_buckets"]["composable_evidence"]
+            )
+        )
+
+    def test_capability_catalog_expands_tf_as_cross_module_entity_set(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            response = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "capability_catalog",
+                    "lineage": "肝癌",
+                    "question_tags": ["transcription_factor"],
+                    "entity_sets": ["dorothea_tf_abc"],
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["state"], "ANNOTATION_PLAN_READY")
+        self.assertEqual(payload["request"]["lineage"], "Liver")
+        ids = {item["id"] for item in payload["capabilities"]}
+        self.assertIn("lineage_codependency", ids)
+        self.assertIn("lineage_expression_correlation", ids)
+        self.assertIn("lineage_expression_dependency", ids)
+        self.assertIn("lineage_pathway_tf_enrichment", ids)
+        self.assertIn("lineage_prism_association", ids)
+        self.assertIn("subtype_dependency", ids)
+        self.assertIn("three_d_dependency", ids)
+        self.assertIn("tcga_expression_survival", ids)
+        self.assertNotIn("lineage_sparse_networks.previous_20260829", {
+            item["id"] for item in payload["storage_inventory"]
+        })
+        self.assertTrue(payload["claim_boundary"]["annotation_match_is_not_a_result_hit"])
+
+    def test_topic_plan_compiles_relations_without_phenotype_specific_code(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            response = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "topic_plan",
+                    "lineage": "Liver",
+                    "phenotypes": ["drug_resistance"],
+                    "molecular_focus": ["drug_response"],
+                    "execution_policy": "precomputed_only",
+                    "limit": 5,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["scientific_intent"]["research_relations"],
+            [{
+                "subject": {"slot": "molecular_focus", "id": "drug_response"},
+                "predicate": "candidate_association_with",
+                "object": {"slot": "phenotype", "id": "drug_resistance"},
+                "evidence_requirement": "direct_result_or_declared_proxy",
+            }],
+        )
+        self.assertEqual(
+            payload["evidence_buckets"]["declared_proxy_evidence"], []
+        )
+
+    def test_declared_mechanism_selects_registry_relation_predicate(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            response = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "topic_plan",
+                    "lineage": "Liver",
+                    "phenotypes": ["tumor_cell_stemness"],
+                    "molecular_focus": ["transcription_factor"],
+                    "mechanisms": ["transcriptional_regulation"],
+                    "execution_policy": "precomputed_only",
+                    "limit": 5,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        relation = response.json()["scientific_intent"]["research_relations"][0]
+        self.assertEqual(relation["predicate"], "candidate_regulator_of")
+
+    def test_unknown_entity_set_is_rejected_before_capability_planning(self):
+        response = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={
+                "mode": "capability_catalog",
+                "entity_sets": ["invented_tf_collection"],
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("unsupported entity_sets", response.text)
+
+    def test_topic_plan_rejects_unknown_canonical_concept_but_preserves_unresolved_text(self):
+        unknown = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={"mode": "topic_plan", "lineage": "Liver", "phenotypes": ["made_up_state"]},
+        )
+        self.assertEqual(unknown.status_code, 422)
+        unresolved = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={
+                "mode": "topic_plan",
+                "lineage": "Liver",
+                "unresolved_concepts": ["自定义稀有细胞状态"],
+            },
+        )
+        self.assertEqual(unresolved.status_code, 200)
+        self.assertEqual(self.queries[-1]["unresolved_concepts"], ["自定义稀有细胞状态"])
+
     def test_cancer_dependency_ranking_is_canonical_and_bounded(self):
         response = self.client.post(
             "/api/v1/query",
@@ -416,7 +634,7 @@ class DepMapApiTests(unittest.TestCase):
                 "mode": "lineage_dependency",
                 "lineage": "Breast",
                 "ranking": "selective",
-                "limit": 10,
+                "limit": 11,
             },
         )
 
@@ -470,6 +688,55 @@ class DepMapApiTests(unittest.TestCase):
         unresolved = resolve_lineage_term("一种未知肿瘤")
         self.assertEqual(unresolved["status"], "UNRESOLVED")
         self.assertEqual(unresolved["candidates"], [])
+
+    def test_scientific_entity_registry_resolves_catalog_entities_and_preserves_unverified_terms(self):
+        core = self.settings.knowledge_root / "depmap-26q1-core"
+        pq.write_table(
+            pa.table(
+                {
+                    "hgnc_id": ["HGNC:6407"],
+                    "symbol": ["KRAS"],
+                    "name": ["KRAS proto-oncogene, GTPase"],
+                    "alias_symbol": ["K-RAS"],
+                    "prev_symbol": ["KRAS2"],
+                    "in_crispr_effect": [True],
+                    "in_crispr_dependency": [True],
+                    "in_analysis_set": [True],
+                }
+            ),
+            core / "gene_catalog.parquet",
+        )
+        drug_root = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "prism_auc_effect_correlation"
+        )
+        drug_root.mkdir(parents=True, exist_ok=True)
+        (drug_root / "drug_order.csv").write_text(
+            "CompoundID,ConditionSampleID,ConditionCompoundName,GeneSymbolOfTargets,TargetOrMechanism,ChEMBLID,PubChemCID\n"
+            "DPC-1,BRD:1,Trametinib,MAP2K1;MAP2K2,MEK inhibitor,CHEMBL2103875,11707110\n",
+            encoding="utf-8",
+        )
+
+        cancer = resolve_scientific_entity(self.settings, "cancer", "肝癌")
+        self.assertEqual(cancer["selected"]["canonical_id"], "depmap-lineage:Liver")
+        gene = resolve_scientific_entity(self.settings, "gene", "KRAS2")
+        self.assertEqual(gene["status"], "RESOLVED")
+        self.assertEqual(gene["selected"]["canonical_id"], "HGNC:6407")
+        self.assertEqual(gene["selected"]["matched_by"], "prev_symbol")
+        drug = resolve_scientific_entity(self.settings, "drug", "trametinib")
+        self.assertEqual(drug["selected"]["label"], "Trametinib")
+        phenotype = resolve_scientific_entity(
+            self.settings, "phenotype", "肿瘤细胞干性"
+        )
+        self.assertEqual(phenotype["selected"]["label"], "tumor_cell_stemness")
+        pathway = resolve_scientific_entity(
+            self.settings, "pathway", "TGF beta signaling"
+        )
+        self.assertEqual(pathway["status"], "NORMALIZED_UNVERIFIED")
+        self.assertFalse(pathway["is_scientific_evidence"])
+        missing = resolve_scientific_entity(self.settings, "gene", "NOT_A_GENE")
+        self.assertEqual(missing["status"], "NOT_FOUND")
 
     def test_coverage_gap_reason_uses_the_scientific_cause_not_r_stack_header(self):
         stderr = "\n".join(
@@ -652,6 +919,111 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(payload["topic_candidates"][0]["anchors"]["target_gene"], "TSC2")
         self.assertFalse(payload["new_analysis_started"])
 
+    def test_lineage_direction_discovery_projects_tf_set_across_analysis_families(self):
+        enrichment_root = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "lineage_gene_enrichment"
+            / "Liver"
+        )
+        blocks = enrichment_root / "blocks"
+        blocks.mkdir(parents=True)
+        self._write_manifest(enrichment_root, status="complete", lineage="Liver")
+        pq.write_table(
+            pa.table(
+                {
+                    "source_gene": ["TFX", "METABOLIC_GENE"],
+                    "collection": ["DOROTHEA_TF_ABC", "PATHWAY"],
+                    "term": ["TFX_targets", "HALLMARK_GLYCOLYSIS"],
+                    "enrichment_z": [3.4, 9.8],
+                    "p_value": [0.001, 1e-12],
+                    "fdr": [0.02, 1e-8],
+                    "gene_set_collection": ["DOROTHEA", "HALLMARK"],
+                    "lineage": ["Liver", "Liver"],
+                }
+            ),
+            blocks / "part-00001.parquet",
+        )
+        network_root = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "lineage_sparse_networks"
+            / "effect_correlation"
+            / "Liver"
+        )
+        self._write_manifest(
+            network_root,
+            release="26Q1",
+            status="complete",
+            family="effect_correlation",
+            lineage="Liver",
+            lineage_sample_n=50,
+        )
+        pq.write_table(
+            pa.table(
+                {
+                    "family": ["effect_correlation", "effect_correlation"],
+                    "lineage": ["Liver", "Liver"],
+                    "source_gene": ["TFX", "NOT_A_TF"],
+                    "target_gene": ["PARTNER", "OTHER"],
+                    "correlation": [-0.8, -0.95],
+                    "pair_n": [50, 50],
+                    "p_value": [1e-7, 1e-9],
+                    "fdr": [1e-5, 1e-7],
+                    "direction": ["negative", "negative"],
+                    "reverse_correlation": [-0.8, -0.95],
+                    "reciprocal_rank_max": [1, 1],
+                    "reciprocal_score": [-0.8, -0.95],
+                }
+            ),
+            network_root / "reciprocal_pairs.parquet",
+        )
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "lineage_directions",
+                    "lineage": "肝癌",
+                    "focus": "transcription_factor",
+                    "limit": 5,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["lineage"], "Liver")
+        self.assertEqual(payload["requested_focus"], "transcription_factor")
+        self.assertEqual(
+            payload["entity_set_selection"]["resolved"],
+            ["dorothea_tf_abc"],
+        )
+        self.assertEqual(
+            payload["entity_set_selection"]["dorothea_tf_abc_member_count"], 1
+        )
+        effect = next(
+            section
+            for section in payload["sections"]
+            if section["label"] == "effect_correlation"
+        )
+        self.assertEqual(effect["returned_candidate_count"], 1)
+        self.assertEqual(effect["rows"][0]["source_gene"], "TFX")
+        enrichment = next(
+            section
+            for section in payload["sections"]
+            if section["label"] == "pathway_tf_enrichment"
+        )
+        self.assertEqual(enrichment["returned_candidate_count"], 1)
+        self.assertEqual(
+            enrichment["rows"][0]["collection"],
+            "DOROTHEA_TF_ABC",
+        )
+        self.assertTrue(
+            any(
+                candidate["anchors"].get("source_gene") == "TFX"
+                for candidate in payload["topic_candidates"]
+            )
+        )
+
     def test_lineage_statuses_distinguish_ineligible_not_computed_and_unavailable(self):
         cnv = (
             self.settings.knowledge_root
@@ -817,6 +1189,78 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "FOUND")
         self.assertEqual(response.json()["rows"][0]["drug_name"], "Example inhibitor")
         self.assertEqual(response.json()["rows"][0]["n"], 58)
+
+    def test_page_contract_distinguishes_window_from_retained_total_and_continues(self):
+        calls = []
+
+        async def paged_runner(_settings, query):
+            calls.append(query)
+            rows = [{"rank": rank} for rank in range(1, min(query["limit"], 5) + 1)]
+            return {
+                "mode": "lineage_dependency",
+                "status": "FOUND",
+                "lineage": "Liver",
+                "rows": rows,
+                "summary": {"total_retained_rows": 5, "returned_count": len(rows)},
+            }
+
+        app = create_app(self.settings, runner=paged_runner)
+        with TestClient(app) as client:
+            first = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_dependency", "lineage": "Liver", "limit": 2},
+            ).json()
+            second = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "lineage_dependency",
+                    "lineage": "Liver",
+                    "limit": 2,
+                    "cursor": first["page_info"]["next_cursor"],
+                },
+            ).json()
+
+        self.assertEqual([row["rank"] for row in first["rows"]], [1, 2])
+        self.assertEqual(first["page_info"]["returned_rows"], 2)
+        self.assertEqual(first["page_info"]["total_retained_rows"], 5)
+        self.assertTrue(first["page_info"]["total_is_exact"])
+        self.assertTrue(first["page_info"]["has_more"])
+        self.assertEqual(first["page_info"]["analysis_scope"]["lineage"], "Liver")
+        self.assertEqual([row["rank"] for row in second["rows"]], [3, 4])
+        self.assertTrue(second["page_info"]["has_more"])
+        self.assertEqual(calls[0]["limit"], 3)
+        self.assertEqual(calls[1]["limit"], 5)
+
+    def test_page_cursor_cannot_be_reused_with_different_filters(self):
+        async def paged_runner(_settings, query):
+            return {
+                "mode": "lineage_dependency",
+                "status": "FOUND",
+                "rows": [{"rank": rank} for rank in range(query["limit"])],
+            }
+
+        app = create_app(self.settings, runner=paged_runner)
+        with TestClient(app) as client:
+            first = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_dependency", "lineage": "Liver", "limit": 2},
+            ).json()
+            rejected = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "lineage_dependency",
+                    "lineage": "Lung",
+                    "limit": 2,
+                    "cursor": first["page_info"]["next_cursor"],
+                },
+            )
+
+        self.assertEqual(rejected.status_code, 422)
+        self.assertIn("does not match this query", rejected.json()["detail"])
 
 
 if __name__ == "__main__":

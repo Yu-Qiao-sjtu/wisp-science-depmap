@@ -2713,6 +2713,32 @@ fn App() -> impl IntoView {
                 set_pet_activity(&frame_id, "running");
                 queue(frame_id, PendingDelta::Reasoning(delta));
             }
+            AgentEvent::Phase { frame_id, phase } => {
+                finish_compaction(&frame_id);
+                set_pet_activity(&frame_id, "running");
+                flush_now();
+                let summary = match phase.as_str() {
+                    "model_reasoning" => t(locale.get_untracked(), "agent.phase.reasoning"),
+                    "final_synthesis" => t(locale.get_untracked(), "agent.phase.synthesis"),
+                    "recovery_synthesis" => t(locale.get_untracked(), "agent.phase.recovery"),
+                    _ => phase.clone(),
+                };
+                if active_cb.get_untracked().as_deref() == Some(frame_id.as_str()) {
+                    trajectory_live_cb.update(|cells| {
+                        if let Some(last) = cells.last_mut().filter(|cell| cell.kind == "phase") {
+                            last.summary = summary.clone();
+                            last.ts = Some(now_ms() as i64);
+                        } else {
+                            cells.push(TrajectoryCellDto {
+                                kind: "phase".to_string(),
+                                summary,
+                                ts: Some(now_ms() as i64),
+                                ..Default::default()
+                            });
+                        }
+                    });
+                }
+            }
             AgentEvent::ToolCall {
                 frame_id,
                 name,

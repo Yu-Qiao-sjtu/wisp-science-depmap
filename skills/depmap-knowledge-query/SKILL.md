@@ -9,46 +9,42 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
 
 ## Routing
 
-1. When the requested deliverable matches a registered Workflow, call
-   `start_workflow` before querying evidence, loading Run history, inspecting
-   files, or writing a report. Put only the user's supplied gene, cancer scope,
-   language, and requested deliverable in its context; do not preload remembered
-   statistics. If launch is blocked, report the exact blocker and stop. Never
-   reconstruct the registered Workflow manually or create an ersatz report.
-2. When the request asks what can be studied for one gene in one cancer lineage
-   and no registered Workflow applies,
-   call native `depmap_evidence` first. It verifies the fixed local/remote
-   provider boundary and assembles a bounded dynamic view of the relevant
-   precomputed modules. Read
-   [references/evidence-contract.md](references/evidence-contract.md) before
-   manually reconstructing such a view. For provider inspection or a narrower
-   question, call native `depmap_query` with `mode=status` first. Otherwise
-   run `scripts/resolve_depmap_workspace.R --project-root .` and use its resolved
-   roots. Do not assume that the active project is the knowledge directory or
-   that the developer's build-time drive exists. Read
-   [references/workspace-contract.md](references/workspace-contract.md) when a
-   root is missing, overlaps a read-only source, or computation may be needed.
-   When the request names only a cancer lineage and asks what data are
-   available, use
-   `depmap_lineage_catalog` (or `depmap_query` with `mode=lineage_catalog` on
-   the native fallback). When it asks for top, strongest, selective, essential,
-   or dependency genes, use `depmap_query` with `mode=lineage_dependency`;
-   this is a bounded view of the existing lineage-vs-rest test, not a new
-   computation. For a direction/topic request, follow the catalog with
-   `depmap_lineage_direction_discovery` (or native `depmap_query` with
-   `mode=lineage_directions`); select only its returned topic candidates. This
-   is one bounded query, not a sequence of `lineage_dependency` or guessed-gene
-   probes. Never choose an anchor gene from model memory and present it as
-   the user's scope.
-   Resolve an extracted natural-language cancer term with
-   `depmap_resolve_lineage` before the first lineage-scoped evidence call.
-   Continue automatically only when it returns `RESOLVED`, using its
-   `selected_lineage`. For `AMBIGUOUS`, `PROPOSED`, `UNRESOLVED`, or
-   `INVALID_CANDIDATES`, do not query lineage evidence: present the bounded
-   candidate labels and obtain user confirmation. The model may propose
-   candidates for an unknown phrase, but vocabulary validity does not establish
-   semantic equivalence.
-3. Classify the request as a precomputed query or a coverage gap. The catalog
+1. Call native `depmap_agent_route` once for each new request. The machine-readable
+   [Agent capability registry](references/agent-capability-registry.json) is the
+   authoritative mapping from extracted intent/entities to execution level,
+   bounded query, required arguments, metric, and allowed/forbidden claims.
+   Execute `recommended_query` exactly when present; do not substitute a nearby
+   mode or reconstruct the mapping from this prose or model memory.
+2. Resolve model-extracted mentions through `depmap_resolve_entity`, backed by
+   the [Scientific Entity Registry](references/scientific-entity-registry.json).
+   Cancer, gene, drug, pathway, phenotype, molecular-focus, mechanism, source,
+   and output mentions use one result contract. Continue automatically only for
+   `RESOLVED`; `NORMALIZED_UNVERIFIED` is query-safe spelling, not proof that an
+   entity exists. For `AMBIGUOUS` or `INVALID_CANDIDATES`, obtain user
+   confirmation. `NOT_FOUND` is an entity-coverage state, never negative
+   biology. The legacy `depmap_resolve_lineage` tool remains compatible, but new
+   Agent plans use the generic resolver.
+3. Follow the route's `allowed_next_tools` boundary. For a gene-plus-lineage
+   request, `depmap_evidence` assembles a bounded dynamic view. For a surgical
+   request, `depmap_query` exposes only modes declared in the registry. Every
+   successful query returns a `capability_contract`; interpret only its
+   `allowed_claims` and honor its `forbidden_claims`. Read
+   [references/evidence-contract.md](references/evidence-contract.md) for the
+   assembled view and [references/schema.md](references/schema.md) for provider
+   field definitions.
+   For a multi-dimensional topic-design request, preserve the route's arrays
+   for `phenotypes`, `molecular_focus`, `mechanisms`, `evidence_sources`, and
+   `requested_outputs`, plus `execution_policy` and `unresolved_concepts`.
+   Execute the returned `topic_plan` query exactly. Do not compress those slots
+   back into legacy `evidence_focus` or drop a phenotype merely because it is
+   not precomputed.
+   For a set-valued focus such as transcription factors, call
+   `depmap_describe_capabilities` before evidence retrieval. Treat
+   `dorothea_tf_abc` as an entity set that can occupy compatible source, target,
+   feature, event, or regulator roles across modules. Do not reduce the request
+   to the DoRothEA enrichment collection alone. Capability matches are plans,
+   not result hits.
+4. Classify the request as a precomputed query or a coverage gap. The catalog
    contains aggregate and matrix results, not every possible subgroup,
    covariate-adjusted test, model-level detail, clinical annotation, or
    literature claim.
@@ -63,26 +59,21 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
    paths, or a filesystem scan to bypass the provider. A module's presence is
    not proof that a proposed subgroup, contrast, mechanism, or drug combination
    has already been analyzed.
-4. Use the native `depmap_evidence` tool for gene-plus-lineage inventory,
-   topic ideation, and research-direction questions. Use `depmap_query` for
-   catalog, lineage dependency ranking, cancer direction discovery, pair, top-hit, lineage-event,
-   lineage-network, lineage-CNV, lineage-PRISM, enrichment, pathway, drug,
-   TCGA expression-survival, or core-gene retrieval. Use
-   `scripts/query_depmap_kb.R` only
-   as a CLI fallback when the native tool is unavailable.
-   Read [references/schema.md](references/schema.md) before the first
-   mode-specific call when the tool UI does not expose its schema. Send one
-   complete call with every required field; do not probe the contract by
-   intentionally sending incomplete calls. A `lineage_drug` call requires
-   `omic`, `lineage`, and at least one of `drug` or `target`.
+5. Runtime validation enforces the registry's required fields plus bounded
+   provider vocabularies. Send one complete call; do not probe the contract by
+   intentionally sending incomplete calls. Use `scripts/query_depmap_kb.R`
+   only as a CLI fallback when the native tool is unavailable.
    If a tool receives empty arguments or returns `invalid_query`, do not repeat
    the identical call. Correct it once using the visible flat schema, then
    report a block if the corrected call still cannot be serialized.
-5. Interpret returned JSON with the event definition, sample count, effect
+6. Interpret returned JSON with the event definition, sample count, effect
    direction, P/FDR family, and source path intact.
-6. On a coverage gap, state exactly what is absent. Load
+7. On a coverage gap, state exactly what is absent. Load
    `depmap-coding-agent` only after the request has explicitly transitioned to
    a new analysis; never silently fall back to raw matrices.
+8. Use `start_workflow` only when the user explicitly requests a named Workflow
+   or the route returns a durable L4 task. Preserve approval boundaries, and do
+   not manually reconstruct a failed approved Workflow.
 
 ## Grounded answer contract
 
@@ -153,6 +144,10 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
   family-specific rankings. Its cross-family count is unweighted retrieval
   convergence, not a combined P value or universal biological score. Candidates
   remain hypotheses until identifier/QC, literature, and experimental review.
+- For `topic_plan`, propose only the analysis templates explicitly returned in
+  `new_computation_from_available_inputs`. Do not add a high/low contrast,
+  subtype analysis, network expansion, or another attractive study design that
+  the current result did not return.
 - Do not attach a drug, clinical actionability claim, or named treatment to a
   gene unless a current drug result or separately cited literature evidence
   supports that relationship.

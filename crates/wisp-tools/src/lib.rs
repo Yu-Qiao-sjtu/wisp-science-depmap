@@ -21,8 +21,8 @@ pub mod tool;
 pub mod write;
 
 pub use env::{
-    Approval, ConfirmDecision, ImageData, McpAppServer, ToolControl, ToolEnv, ToolEvent,
-    ToolResourceLease, ToolResult,
+    Approval, ConfirmDecision, ImageData, McpAppServer, ToolCallRequirement, ToolControl, ToolEnv,
+    ToolEvent, ToolResourceLease, ToolResult,
 };
 pub use tool::Tool;
 
@@ -154,6 +154,22 @@ impl Registry {
 
     pub fn add(&mut self, tool: Box<dyn Tool>) {
         self.tools.push(tool);
+    }
+
+    /// Replace the first tool with the same public name, or append the tool
+    /// when no such registration exists. Specialist hosts use this to tighten
+    /// a built-in boundary (for example final-answer validation) without
+    /// exposing duplicate schemas or relying on registration order.
+    pub fn replace(&mut self, tool: Box<dyn Tool>) {
+        if let Some(existing) = self
+            .tools
+            .iter_mut()
+            .find(|existing| existing.name() == tool.name())
+        {
+            *existing = tool;
+        } else {
+            self.tools.push(tool);
+        }
     }
 
     /// Keep only tools named by a host-resolved capability grant.
@@ -560,6 +576,20 @@ mod approval_tests {
         async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
             self.0.store(true, Ordering::SeqCst);
             ToolResult::ok("ran")
+        }
+    }
+
+    struct ReplacementSpy;
+    #[async_trait::async_trait]
+    impl Tool for ReplacementSpy {
+        fn name(&self) -> &str {
+            "spy"
+        }
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new("spy", "replacement", serde_json::json!({"type":"object"}))
+        }
+        async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+            ToolResult::ok("replacement ran")
         }
     }
 
@@ -1096,6 +1126,24 @@ mod approval_tests {
         assert!(origins
             .iter()
             .all(|origin| *origin == ToolSchemaOrigin::BuiltIn));
+    }
+
+    #[tokio::test]
+    async fn replace_swaps_one_named_tool_without_duplicate_schema() {
+        static ORIGINAL: AtomicBool = AtomicBool::new(false);
+        let mut registry = Registry { tools: vec![] };
+        registry.add(Box::new(SpyTool(&ORIGINAL)));
+        registry.replace(Box::new(ReplacementSpy));
+        let env = EventEnv {
+            root: PathBuf::from("."),
+            events: Mutex::new(vec![]),
+        };
+
+        assert_eq!(registry.names(), vec!["spy"]);
+        assert_eq!(registry.schemas()[0].function.description, "replacement");
+        let result = registry.run("spy", &Value::Null, &env).await;
+        assert_eq!(result.content, "replacement ran");
+        assert!(!ORIGINAL.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -322,6 +322,13 @@ impl Agent {
         self.tools.add(tool);
     }
 
+    /// Replace a built-in tool with a specialist-enforced implementation.
+    /// The replacement keeps the same public tool name and therefore does not
+    /// widen the model's action space.
+    pub fn replace_tool(&mut self, tool: Box<dyn wisp_tools::Tool>) {
+        self.tools.replace(tool);
+    }
+
     pub fn save(&self) {
         self.ctx.save(&self.session_path);
     }

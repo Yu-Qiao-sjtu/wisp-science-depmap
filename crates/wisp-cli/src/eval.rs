@@ -236,6 +236,13 @@ struct FixtureTool {
     result: String,
     #[serde(default)]
     error: bool,
+    /// Optional host control metadata used by harness conformance cases. This
+    /// mirrors native route tools without teaching the scripted provider a
+    /// prompt-only substitute for kernel enforcement.
+    #[serde(default)]
+    next_tool_allowlist: Vec<String>,
+    #[serde(default)]
+    next_tool_requirements: BTreeMap<String, Value>,
 }
 
 fn default_fixture_description() -> String {
@@ -288,6 +295,18 @@ struct EvalExpectation {
     error_contains: Vec<String>,
     #[serde(default)]
     completion_contains: Vec<String>,
+    /// Every inner group is satisfied when at least one equivalent fragment
+    /// appears. Use this for wording variants such as "没有完成" / "尚未开展".
+    #[serde(default)]
+    completion_contains_any: Vec<Vec<String>>,
+    /// Output-shape markers required by a product contract. Missing these is
+    /// reported separately from a wrong scientific claim.
+    #[serde(default)]
+    contract_completion_contains: Vec<String>,
+    /// Contract markers with accepted wording variants. These remain contract
+    /// failures rather than being misreported as scientific-content errors.
+    #[serde(default)]
+    contract_completion_contains_any: Vec<Vec<String>>,
     #[serde(default)]
     completion_not_contains: Vec<String>,
     #[serde(default)]
@@ -339,6 +358,9 @@ impl Default for EvalExpectation {
             outcome: default_outcome(),
             error_contains: Vec::new(),
             completion_contains: Vec::new(),
+            completion_contains_any: Vec::new(),
+            contract_completion_contains: Vec::new(),
+            contract_completion_contains_any: Vec::new(),
             completion_not_contains: Vec::new(),
             expected_files: BTreeMap::new(),
             file_contains: BTreeMap::new(),
@@ -478,6 +500,10 @@ impl EvalOutput {
 }
 
 impl Output for EvalOutput {
+    fn phase(&self, phase: &str) {
+        self.push("phase", None, None, None, Some(json!({"phase": phase})));
+    }
+
     fn assistant_text(&self, delta: &str) {
         self.push(
             "assistant_delta",
@@ -631,6 +657,7 @@ impl Output for EvalOutput {
     fn on_message(&self, message: &Message) {
         match message.role {
             Role::Assistant => {
+                let visible_content = message.content.as_text();
                 for call in &message.tool_calls {
                     let arguments = call.args_value();
                     self.captured
@@ -650,7 +677,19 @@ impl Output for EvalOutput {
                         Some(json!({"arguments": arguments})),
                     );
                 }
-                if !message.content.as_text().is_empty() {
+                if !visible_content.is_empty() {
+                    // A normal assistant response with no tool calls is a
+                    // successful Agent-loop terminal state. Evaluations must
+                    // capture it just like attempt_completion; otherwise a
+                    // provider that correctly returns its final answer as
+                    // text is reported as unfinished even though the product
+                    // has already delivered the answer to the user.
+                    if message.tool_calls.is_empty() {
+                        self.captured
+                            .lock()
+                            .expect("eval capture mutex poisoned")
+                            .completion = Some(visible_content.to_string());
+                    }
                     self.push(
                         "assistant_message",
                         None,
@@ -695,6 +734,8 @@ struct ScenarioResult {
     repetition: usize,
     passed: bool,
     failures: Vec<String>,
+    #[serde(default)]
+    failure_classes: FailureClasses,
     duration_ms: u64,
     rounds: usize,
     tool_calls: Vec<ToolCallRecord>,
@@ -713,6 +754,42 @@ struct ScenarioResult {
     trajectory_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failed_workspace: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct FailureClasses {
+    execution: Vec<String>,
+    contract: Vec<String>,
+    content: Vec<String>,
+}
+
+fn classify_failures(failures: &[String]) -> FailureClasses {
+    let mut classes = FailureClasses::default();
+    for failure in failures {
+        let target = if failure.starts_with("agent returned an unexpected error")
+            || failure.starts_with("agent succeeded but an error was expected")
+            || failure.contains(" timed out")
+            || failure.starts_with("tool errors exceeded")
+        {
+            &mut classes.execution
+        } else if failure.starts_with("completion contract")
+            || failure.starts_with("required tool")
+            || failure.starts_with("forbidden tool")
+            || failure.starts_with("tool '")
+            || failure.starts_with("tool calls exceeded")
+            || failure.starts_with("rounds exceeded")
+            || failure.starts_with("expected compaction")
+            || failure.starts_with("expected compaction strategies")
+            || failure.starts_with("expected ") && failure.contains("approval request")
+            || failure.starts_with("required tool order")
+        {
+            &mut classes.contract
+        } else {
+            &mut classes.content
+        };
+        target.push(failure.clone());
+    }
+    classes
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -952,11 +1029,18 @@ impl Tool for FixtureNativeTool {
         if let Err(error) = wisp_mcp::validate_tool_arguments(&self.fixture.schema, args) {
             return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
         }
-        if self.fixture.error {
+        let mut result = if self.fixture.error {
             ToolResult::fail(&self.fixture.result)
         } else {
             ToolResult::ok(&self.fixture.result)
+        };
+        if !self.fixture.next_tool_allowlist.is_empty() {
+            result = result.restrict_next_tools(self.fixture.next_tool_allowlist.clone());
         }
+        for (tool_name, arguments) in &self.fixture.next_tool_requirements {
+            result = result.require_next_tool_call(tool_name, arguments.clone());
+        }
+        result
     }
 }
 
@@ -1373,6 +1457,7 @@ async fn run_case(
     };
 
     let passed = failures.is_empty();
+    let failure_classes = classify_failures(&failures);
     eprintln!(
         "  {} ({} ms, {} rounds, {} tool calls)",
         if passed { "pass" } else { "FAIL" },
@@ -1388,6 +1473,7 @@ async fn run_case(
         repetition,
         passed,
         failures,
+        failure_classes,
         duration_ms,
         rounds: captured.rounds,
         tool_calls: captured.tool_calls,
@@ -1665,6 +1751,43 @@ fn verify_case(
             failures.push(format!("completion did not contain '{fragment}'"));
         }
     }
+    for alternatives in &case.expect.completion_contains_any {
+        if alternatives.is_empty()
+            || !captured.completion.as_deref().is_some_and(|completion| {
+                alternatives
+                    .iter()
+                    .any(|fragment| contains_folded(completion, fragment))
+            })
+        {
+            failures.push(format!(
+                "completion did not contain any of {:?}",
+                alternatives
+            ));
+        }
+    }
+    for fragment in &case.expect.contract_completion_contains {
+        if !captured
+            .completion
+            .as_deref()
+            .is_some_and(|completion| contains_folded(completion, fragment))
+        {
+            failures.push(format!("completion contract did not contain '{fragment}'"));
+        }
+    }
+    for alternatives in &case.expect.contract_completion_contains_any {
+        if alternatives.is_empty()
+            || !captured.completion.as_deref().is_some_and(|completion| {
+                alternatives
+                    .iter()
+                    .any(|fragment| contains_folded(completion, fragment))
+            })
+        {
+            failures.push(format!(
+                "completion contract did not contain any of {:?}",
+                alternatives
+            ));
+        }
+    }
     for fragment in &case.expect.completion_not_contains {
         if captured
             .completion
@@ -1878,10 +2001,16 @@ fn verify_case(
 }
 
 fn contains_folded(haystack: &str, needle: &str) -> bool {
-    haystack
-        .to_ascii_lowercase()
-        .replace('\\', "/")
-        .contains(&needle.to_ascii_lowercase().replace('\\', "/"))
+    fn normalize(value: &str) -> String {
+        value
+            .to_ascii_lowercase()
+            .replace('\\', "/")
+            .replace(['−', '–', '—'], "-")
+            .chars()
+            .filter(|character| !character.is_whitespace() && !matches!(character, '*' | '`'))
+            .collect()
+    }
+    normalize(haystack).contains(&normalize(needle))
 }
 
 fn apply_limits(
@@ -2297,6 +2426,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_assistant_answer_is_captured_as_completion() {
+        let output = EvalOutput::new(&EvalApproval::default(), false).unwrap();
+        output.on_message(&Message::assistant("final answer"));
+        assert_eq!(
+            output.snapshot().completion.as_deref(),
+            Some("final answer")
+        );
+    }
+
+    #[test]
     fn built_in_suite_is_valid_and_covers_p0_p1_domains() {
         let suite: EvalSuite = serde_yaml::from_str(BUILTIN_SUITE).unwrap();
         validate_suite(&suite, EvalMode::Offline).unwrap();
@@ -2362,7 +2501,7 @@ mod tests {
         let suite: EvalSuite = serde_yaml::from_str(DEPMAP_AGENT_SUITE).unwrap();
         validate_suite(&suite, EvalMode::Offline).unwrap();
         validate_suite(&suite, EvalMode::Live).unwrap();
-        assert_eq!(suite.cases.len(), 16);
+        assert_eq!(suite.cases.len(), 17);
         assert!(suite
             .cases
             .iter()
@@ -2872,4 +3011,22 @@ mod tests {
         )
         .is_empty());
     }
+}
+#[test]
+fn eval_failures_are_split_into_execution_contract_and_content() {
+    let classes = classify_failures(&[
+        "agent returned an unexpected error: scenario timed out after 30000 ms".into(),
+        "tool 'depmap_query' never had /limit = 20".into(),
+        "completion did not contain '覆盖缺口'".into(),
+    ]);
+    assert_eq!(classes.execution.len(), 1);
+    assert_eq!(classes.contract.len(), 1);
+    assert_eq!(classes.content.len(), 1);
+}
+
+#[test]
+fn folded_matching_accepts_scientific_formatting_variants() {
+    assert!(contains_folded("r = −0.721", "r=-0.721"));
+    assert!(contains_folded("**n = 25**", "n=25"));
+    assert!(contains_folded("`grouping: null`", "grouping: null"));
 }

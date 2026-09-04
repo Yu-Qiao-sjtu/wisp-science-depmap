@@ -15,6 +15,17 @@ use std::pin::Pin;
 pub type OutputFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait Output: Send + Sync {
+    /// When true, free-form assistant text is only a draft: the agent loop
+    /// must not publish or persist it as the final answer. The turn may finish
+    /// only through a completion tool (normally `attempt_completion`). This is
+    /// a host-owned output contract used by specialists with a validation gate.
+    fn requires_completion_tool(&self) -> bool {
+        false
+    }
+    /// Coarse, user-safe phase marker. Unlike `reasoning`, this never carries
+    /// hidden chain-of-thought and can be shown while a model has not emitted
+    /// visible answer text yet.
+    fn phase(&self, _phase: &str) {}
     fn assistant_text(&self, _delta: &str) {}
     fn reasoning(&self, _delta: &str) {}
     fn tool_call(&self, _name: &str, _preview: &str) {}
@@ -323,7 +334,9 @@ impl<'a> StreamSinkAdapter<'a> {
 }
 impl<'a> wisp_llm::StreamSink for StreamSinkAdapter<'a> {
     fn on_text(&mut self, delta: &str) {
-        self.out.assistant_text(delta);
+        if !self.out.requires_completion_tool() {
+            self.out.assistant_text(delta);
+        }
     }
     fn on_reasoning(&mut self, delta: &str) {
         self.out.reasoning(delta);

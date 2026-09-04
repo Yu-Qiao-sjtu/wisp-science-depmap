@@ -475,6 +475,8 @@ async fn run_runtime(
                         ),
                         image: None,
                         control: wisp_tools::ToolControl::Continue,
+                        next_tool_allowlist: None,
+                        next_tool_requirements: None,
                     };
                 }
                 Some(RuntimeEvent::Finished(Err(error))) => {

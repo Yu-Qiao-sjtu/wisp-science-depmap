@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "release": "26Q1",
+  "purpose": "Scientific and routing annotations for completed knowledge assets. Physical presence, computation completion, query exposure, and claim support are separate fields.",
+  "entity_sets": [
+    {
+      "id": "all_crispr_genes",
+      "entity_type": "gene",
+      "typical_count": 18531,
+      "roles": ["source_gene", "target_gene"],
+      "description": "Genes represented in the CRISPR Gene Effect matrix."
+    },
+    {
+      "id": "all_expression_genes",
+      "entity_type": "gene",
+      "typical_count": 19215,
+      "roles": ["source_gene", "target_gene"],
+      "description": "Protein-coding genes represented in the expression matrix."
+    },
+    {
+      "id": "dorothea_tf_abc",
+      "entity_type": "gene_set",
+      "typical_count": 270,
+      "roles": ["source_gene", "target_gene", "regulator"],
+      "description": "DoRothEA confidence A-C transcription-factor set. It is an entity-set selector and may be expanded across compatible gene roles; it is not restricted to the enrichment module.",
+      "resolver": {
+        "kind": "enrichment_term_members",
+        "module": "lineage_gene_enrichment",
+        "collection": "DOROTHEA_TF_ABC",
+        "member_column": "term",
+        "strip_suffix": "_TARGETS"
+      }
+    },
+    {
+      "id": "hallmark_gene_sets",
+      "entity_type": "pathway_collection",
+      "typical_count": 50,
+      "roles": ["pathway"]
+    },
+    {
+      "id": "reactome_2023_2_gene_sets",
+      "entity_type": "pathway_collection",
+      "typical_count": 1692,
+      "roles": ["pathway"]
+    },
+    {
+      "id": "prism_compounds",
+      "entity_type": "drug",
+      "typical_count": 1482,
+      "roles": ["drug"]
+    }
+  ],
+  "storage_modules": [
+    {"id":"effect_correlation","path":"depmap-26q1-full/effect_correlation","capabilities":["pan_cancer_codependency"]},
+    {"id":"expression_correlation","path":"depmap-26q1-full/expression_correlation","capabilities":["pan_cancer_expression_correlation"]},
+    {"id":"expression_dependency","path":"depmap-26q1-full/expression_dependency","capabilities":["pan_cancer_expression_dependency"]},
+    {"id":"damaging_mutation_dependency","path":"depmap-26q1-full/damaging_mutation_dependency","capabilities":["pan_cancer_mutation_dependency"]},
+    {"id":"custom_missense_mutation_dependency","path":"depmap-26q1-full/custom_missense_mutation_dependency","capabilities":["pan_cancer_mutation_dependency"]},
+    {"id":"hotspot_mutation_dependency","path":"depmap-26q1-full/hotspot_mutation_dependency","capabilities":["pan_cancer_mutation_dependency"]},
+    {"id":"cnv_amplification_dependency","path":"depmap-26q1-full/cnv_amplification_dependency","capabilities":["pan_cancer_cnv_dependency"]},
+    {"id":"lineage_damaging_mutation_dependency","path":"depmap-26q1-full/lineage_damaging_mutation_dependency","capabilities":["lineage_mutation_dependency"]},
+    {"id":"lineage_custom_missense_mutation_dependency","path":"depmap-26q1-full/lineage_custom_missense_mutation_dependency","capabilities":["lineage_mutation_dependency"]},
+    {"id":"lineage_hotspot_mutation_dependency","path":"depmap-26q1-full/lineage_hotspot_mutation_dependency","capabilities":["lineage_mutation_dependency"]},
+    {"id":"lineage_cnv_amplification_dependency","path":"depmap-26q1-full/lineage_cnv_amplification_dependency","capabilities":["lineage_cnv_dependency"]},
+    {"id":"lineage_sparse_networks","path":"depmap-26q1-full/lineage_sparse_networks","capabilities":["lineage_codependency","lineage_expression_correlation","lineage_expression_dependency"]},
+    {"id":"lineage_gene_enrichment","path":"depmap-26q1-full/lineage_gene_enrichment","capabilities":["lineage_pathway_tf_enrichment"]},
+    {"id":"prism_auc_effect_correlation","path":"depmap-26q1-full/prism_auc_effect_correlation","capabilities":["pan_cancer_prism_association"]},
+    {"id":"prism_auc_expression_correlation","path":"depmap-26q1-full/prism_auc_expression_correlation","capabilities":["pan_cancer_prism_association"]},
+    {"id":"prism_auc_cnv_correlation","path":"depmap-26q1-full/prism_auc_cnv_correlation","capabilities":["pan_cancer_prism_association"]},
+    {"id":"lineage_prism_associations","path":"depmap-26q1-full/lineage_prism_associations","capabilities":["lineage_prism_association"]},
+    {"id":"progeny_dependency","path":"depmap-26q1-full/progeny_dependency","capabilities":["progeny_dependency"]},
+    {"id":"cross_platform_validation","path":"depmap-26q1-full/cross_platform_validation","capabilities":["cross_platform_validation"]},
+    {"id":"fixed_paper_cases","path":"depmap-26q1-full/fixed_paper_cases","capabilities":["fixed_paper_cases"]},
+    {"id":"wgcna_dependency","path":"depmap-26q1-full/wgcna_dependency","capabilities":["pan_cancer_wgcna"],"scope_note":"Existing pan-cancer module only; lineage WGCNA was explicitly paused and is not implied."},
+    {"id":"subtype_dependency","path":"depmap-26q1-full/subtype_dependency","capabilities":["subtype_dependency"]},
+    {"id":"coamplification_dependency","path":"depmap-26q1-full/coamplification_dependency","capabilities":["coamplification_dependency"]},
+    {"id":"true_love_gene","path":"depmap-26q1-full/true_love_gene","capabilities":["true_love_gene"]},
+    {"id":"observational_synthetic_lethal_candidates","path":"depmap-26q1-full/observational_synthetic_lethal_candidates","capabilities":["observational_synthetic_lethal"]},
+    {"id":"three_d","path":"depmap-26q1-3d","capabilities":["three_d_dependency"]},
+    {"id":"tcga_expression_survival","path":"depmap-26q1-tcga","capabilities":["tcga_expression_survival"]}
+  ],
+  "capabilities": [
+    {
+      "id": "pan_cancer_codependency",
+      "question_tags": ["gene_relationship", "dependency_network", "transcription_factor", "candidate_discovery"],
+      "scope": ["pan_cancer"],
+      "inputs": {"source_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr"],
+      "method": "Pearson correlation with pairwise complete observations",
+      "query": {"mode":"pair_or_top","module":"effect_correlation"},
+      "allowed_claims": ["continuous CRISPR co-dependency association"],
+      "forbidden_claims": ["causality", "validated synthetic lethality"]
+    },
+    {
+      "id": "pan_cancer_expression_correlation",
+      "question_tags": ["gene_relationship", "expression", "transcription_factor", "candidate_discovery"],
+      "scope": ["pan_cancer"],
+      "inputs": {"source_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr"],
+      "method": "Pearson correlation with pairwise complete observations",
+      "query": {"mode":"pair_or_top","module":"expression_correlation"},
+      "allowed_claims": ["continuous expression association"],
+      "forbidden_claims": ["direct transcriptional regulation", "causality"]
+    },
+    {
+      "id": "pan_cancer_expression_dependency",
+      "question_tags": ["expression", "dependency", "transcription_factor", "candidate_discovery"],
+      "scope": ["pan_cancer"],
+      "inputs": {"source_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr"],
+      "method": "Pearson correlation between expression and CRISPR Gene Effect",
+      "direction": "negative means higher expression associates with stronger dependency",
+      "query": {"mode":"pair_or_top","module":"expression_dependency"},
+      "allowed_claims": ["continuous expression-dependency association"],
+      "forbidden_claims": ["high-versus-low subgroup", "causality"]
+    },
+    {
+      "id": "pan_cancer_mutation_dependency",
+      "question_tags": ["mutation", "dependency", "synthetic_lethality", "transcription_factor"],
+      "scope": ["pan_cancer"],
+      "inputs": {"event_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"event_type":{"values":["damaging","custom_missense","hotspot"]}},
+      "outputs": ["mean_difference", "welch_t", "p_value", "fdr", "event_n", "control_n"],
+      "method": "Welch mutation-versus-control dependency contrast; BH FDR within event gene across targets",
+      "direction": "negative mean difference means event models are more dependent",
+      "query": {"mode":"pair_or_top","modules":["damaging_mutation_dependency","custom_missense_mutation_dependency","hotspot_mutation_dependency"]},
+      "allowed_claims": ["observational mutation-context dependency"],
+      "forbidden_claims": ["pathogenicity", "causal synthetic lethality"]
+    },
+    {
+      "id": "pan_cancer_cnv_dependency",
+      "question_tags": ["copy_number", "amplification", "dependency", "synthetic_lethality", "transcription_factor"],
+      "scope": ["pan_cancer"],
+      "inputs": {"event_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["mean_difference", "welch_t", "p_value", "fdr", "amplified_n", "control_n"],
+      "method": "Welch amplified-versus-control dependency contrast; BH FDR within amplified gene across targets",
+      "direction": "negative mean difference means amplified models are more dependent",
+      "query": {"mode":"pair_or_top","module":"cnv_amplification_dependency"},
+      "allowed_claims": ["observational amplification-context dependency"],
+      "forbidden_claims": ["copy-number correlation", "causal synthetic lethality"]
+    },
+    {
+      "id": "lineage_codependency",
+      "question_tags": ["cancer", "gene_relationship", "dependency_network", "transcription_factor", "candidate_discovery"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"source_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr", "reciprocal_retention"],
+      "method": "Lineage-scoped Pearson Gene Effect correlation",
+      "query": {"mode":"lineage_network","family":"effect_correlation"},
+      "allowed_claims": ["lineage-scoped continuous co-dependency association"],
+      "forbidden_claims": ["causality", "clinical histology equivalence"]
+    },
+    {
+      "id": "lineage_expression_correlation",
+      "question_tags": ["cancer", "expression", "gene_relationship", "transcription_factor", "candidate_discovery"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"source_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr", "reciprocal_retention"],
+      "method": "Lineage-scoped Pearson expression correlation",
+      "query": {"mode":"lineage_network","family":"expression_correlation"},
+      "allowed_claims": ["lineage-scoped continuous expression association"],
+      "forbidden_claims": ["direct regulation", "causality"]
+    },
+    {
+      "id": "lineage_expression_dependency",
+      "question_tags": ["cancer", "expression", "dependency", "transcription_factor", "candidate_discovery"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"source_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr", "reciprocal_retention"],
+      "method": "Lineage-scoped Pearson expression-to-Gene-Effect correlation",
+      "direction": "negative means higher expression associates with stronger dependency",
+      "query": {"mode":"lineage_network","family":"expression_dependency"},
+      "allowed_claims": ["lineage-scoped continuous expression-dependency association"],
+      "forbidden_claims": ["TF-high subgroup", "causality"]
+    },
+    {
+      "id": "lineage_mutation_dependency",
+      "question_tags": ["cancer", "mutation", "dependency", "synthetic_lethality", "transcription_factor"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"event_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"event_type":{"values":["damaging","custom_missense","hotspot"]}},
+      "outputs": ["mean_difference", "p_value", "fdr", "event_n", "control_n"],
+      "method": "Lineage-scoped event-versus-control dependency contrast with manifest-declared eligibility",
+      "query": {"mode":"lineage"},
+      "allowed_claims": ["eligible lineage event-context dependency contrast"],
+      "forbidden_claims": ["biological null from ineligibility", "causal synthetic lethality"]
+    },
+    {
+      "id": "lineage_cnv_dependency",
+      "question_tags": ["cancer", "copy_number", "amplification", "dependency", "synthetic_lethality", "transcription_factor"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"event_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["mean_difference", "p_value", "fdr", "amplified_n", "control_n"],
+      "method": "Lineage-scoped amplified-versus-control dependency contrast",
+      "query": {"mode":"lineage_cnv"},
+      "allowed_claims": ["eligible lineage amplification-context dependency"],
+      "forbidden_claims": ["correlation", "causal synthetic lethality"]
+    },
+    {
+      "id": "lineage_pathway_tf_enrichment",
+      "question_tags": ["cancer", "pathway", "transcription_factor", "regulator", "candidate_discovery"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"source_gene":{"entity_sets":["all_expression_genes","dorothea_tf_abc"]},"collection":{"entity_sets":["hallmark_gene_sets","reactome_2023_2_gene_sets","dorothea_tf_abc"]}},
+      "outputs": ["enrichment_z", "p_value", "fdr", "term"],
+      "method": "Rank-sum enrichment over expression-to-dependency rankings; signed DoRothEA A-C TF enrichment",
+      "query": {"mode":"enrichment"},
+      "allowed_claims": ["continuous gene-set or regulator enrichment association"],
+      "forbidden_claims": ["TF-high subgroup", "direct regulation", "causality"]
+    },
+    {
+      "id": "pan_cancer_prism_association",
+      "question_tags": ["drug_response", "dependency", "expression", "copy_number", "transcription_factor"],
+      "scope": ["pan_cancer"],
+      "inputs": {"drug":{"entity_sets":["prism_compounds"]},"feature_gene":{"entity_sets":["all_crispr_genes","all_expression_genes","dorothea_tf_abc"]},"omic":{"values":["effect","expression","cnv"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr"],
+      "method": "Pearson association with PRISM AUC; BH FDR across features per drug",
+      "query": {"mode":"drug"},
+      "allowed_claims": ["preclinical cell-line drug-AUC association"],
+      "forbidden_claims": ["clinical efficacy", "combination effect"]
+    },
+    {
+      "id": "lineage_prism_association",
+      "question_tags": ["cancer", "drug_response", "dependency", "expression", "copy_number", "transcription_factor"],
+      "scope": ["lineage"],
+      "inputs": {"lineage":{"entity_type":"cancer_lineage"},"drug":{"entity_sets":["prism_compounds"]},"feature_gene":{"entity_sets":["all_crispr_genes","all_expression_genes","dorothea_tf_abc"]},"omic":{"values":["effect","expression","cnv"]}},
+      "outputs": ["pearson_correlation", "pair_n", "p_value", "fdr"],
+      "method": "Lineage-scoped Pearson association with PRISM AUC",
+      "query": {"mode":"lineage_drug"},
+      "allowed_claims": ["lineage-scoped preclinical drug-AUC association"],
+      "forbidden_claims": ["clinical efficacy", "combination effect"]
+    },
+    {
+      "id": "progeny_dependency",
+      "question_tags": ["pathway", "dependency", "transcription_factor", "candidate_discovery"],
+      "scope": ["pan_cancer"],
+      "inputs": {"pathway":{"values_count":14},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "p_value", "fdr"],
+      "method": "PROGENy scaled pathway scores correlated with Gene Effect; BH FDR per pathway",
+      "query": {"mode":"pathway"},
+      "allowed_claims": ["pathway-activity dependency association"],
+      "forbidden_claims": ["causal pathway control"]
+    },
+    {
+      "id": "subtype_dependency",
+      "question_tags": ["cancer", "molecular_subtype", "dependency", "transcription_factor"],
+      "scope": ["lineage", "frozen_subtype_contrast"],
+      "inputs": {"contrast_id":{"entity_type":"registered_contrast"},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["effect_size", "moderated_t", "p_value", "fdr", "group_n", "control_n"],
+      "method": "Robust limma empirical-Bayes contrast within parent lineage; BH FDR within contrast",
+      "query": {"mode":"subtype"},
+      "allowed_claims": ["registered subtype-specific dependency contrast"],
+      "forbidden_claims": ["free-text subtype inference", "causality"]
+    },
+    {
+      "id": "coamplification_dependency",
+      "question_tags": ["copy_number", "coamplification", "dependency", "transcription_factor"],
+      "scope": ["observed_constrained_pairs", "pan_cancer", "lineage_adjusted"],
+      "inputs": {"source_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"partner_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["mean_difference", "lineage_adjusted_effect", "p_value", "fdr", "group_counts"],
+      "method": "Constrained observed pair screen with Welch and lineage-adjusted limma layers",
+      "query": {"mode":"coamplification"},
+      "allowed_claims": ["observed constrained coamplification-context dependency"],
+      "forbidden_claims": ["arbitrary exhaustive pair coverage", "causality"]
+    },
+    {
+      "id": "true_love_gene",
+      "question_tags": ["gene_relationship", "dependency_network", "true_love", "transcription_factor"],
+      "scope": ["pan_cancer", "mutual_rank_1"],
+      "inputs": {"gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"partner_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["negative_correlation", "directional_fdr", "bootstrap_stability"],
+      "method": "Mutual rank-1 negative Gene Effect correlation with directional FDR and stability filter",
+      "query": {"mode":"true_love"},
+      "allowed_claims": ["hypothesis-generating stable reciprocal anti-codependency pair"],
+      "forbidden_claims": ["direct regulation", "causality", "validated synthetic lethality"]
+    },
+    {
+      "id": "observational_synthetic_lethal",
+      "question_tags": ["mutation", "copy_number", "dependency", "synthetic_lethality", "transcription_factor"],
+      "scope": ["pan_cancer", "retained_event_contrasts"],
+      "inputs": {"event_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["evidence_family_count", "best_fdr", "strongest_mean_difference", "event_n", "control_n"],
+      "method": "Aggregation of retained mutation/CNV event-to-dependency contrasts without combining p values",
+      "query": {"mode":"synthetic_lethal"},
+      "allowed_claims": ["observational synthetic-lethal candidate"],
+      "forbidden_claims": ["validated or causal synthetic lethality"]
+    },
+    {
+      "id": "three_d_dependency",
+      "question_tags": ["three_d", "dependency", "gene_relationship", "multi_omics", "transcription_factor"],
+      "scope": ["catalog_validated_3d_cohort"],
+      "inputs": {"family":{"values":["dependency_profiles","differential_dependency","codependency","true_love_gene","omics_dependency","lineage_dependency_enrichment"]},"gene":{"entity_sets":["all_crispr_genes","all_expression_genes","dorothea_tf_abc"]}},
+      "outputs": ["family_specific_statistics", "cohort", "contrast", "omic"],
+      "method": "Family- and cohort-specific methods declared by terminal 3D manifests",
+      "query": {"mode":"three_d"},
+      "allowed_claims": ["catalog-validated 3D cohort association"],
+      "forbidden_claims": ["cross-cohort equivalence", "causality"]
+    },
+    {
+      "id": "tcga_expression_survival",
+      "question_tags": ["cancer", "patient_expression", "survival", "clinical_translation", "transcription_factor"],
+      "scope": ["tcga_project", "primary_tumor"],
+      "inputs": {"gene":{"entity_sets":["all_crispr_genes","all_expression_genes","dorothea_tf_abc"]},"project":{"entity_type":"tcga_project"},"endpoint":{"values":["OS","DSS","DFI","PFI"]}},
+      "outputs": ["expression_n", "events", "signed_cox_score_z", "p_value", "fdr"],
+      "method": "Univariate Breslow Cox score test at beta zero; BH FDR within project and endpoint",
+      "query": {"mode":"tcga_expression_survival"},
+      "allowed_claims": ["patient-cohort expression-survival association"],
+      "forbidden_claims": ["hazard ratio", "sample-level TCGA-DepMap join", "causality"]
+    },
+    {
+      "id": "cross_platform_validation",
+      "question_tags": ["cross_platform", "validation", "dependency", "transcription_factor"],
+      "scope": ["pan_cancer", "fixed_platform_pairs"],
+      "inputs": {"gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["pearson_correlation", "spearman_correlation", "fdr"],
+      "method": "Manifest-declared Pearson, Spearman, and BH FDR comparisons",
+      "query": null,
+      "allowed_claims": ["stored cross-platform concordance when a validated reader returns it"],
+      "forbidden_claims": ["currently queryable through MCP", "platform equivalence"]
+    },
+    {
+      "id": "pan_cancer_wgcna",
+      "question_tags": ["expression_network", "dependency", "wgcna", "transcription_factor"],
+      "scope": ["pan_cancer_only"],
+      "inputs": {"module":{"entity_type":"stored_wgcna_module"},"target_gene":{"entity_sets":["all_crispr_genes","dorothea_tf_abc"]}},
+      "outputs": ["module_eigengene_dependency_association"],
+      "method": "Stored WGCNA module analysis declared by its manifest",
+      "query": null,
+      "allowed_claims": ["stored pan-cancer WGCNA result when a validated reader returns it"],
+      "forbidden_claims": ["lineage WGCNA completion", "currently queryable through MCP"]
+    },
+    {
+      "id": "fixed_paper_cases",
+      "question_tags": ["reproduction", "fixed_case"],
+      "scope": ["named_cases_only"],
+      "inputs": {"case_id":{"entity_type":"registered_case"}},
+      "outputs": ["case_specific_results"],
+      "method": "Case-specific methods declared in the stored manifest",
+      "query": null,
+      "allowed_claims": ["stored fixed-case result when a validated reader returns it"],
+      "forbidden_claims": ["general all-gene coverage", "currently queryable through MCP"]
+    }
+  ],
+  "excluded_storage_patterns": [
+    {
+      "pattern": "depmap-26q1-full/*.previous_*",
+      "reason": "Recoverable superseded build; never advertise as an independent scientific capability."
+    }
+  ]
+}

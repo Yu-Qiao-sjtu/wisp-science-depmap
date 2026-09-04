@@ -89,6 +89,13 @@ Desktop stores API keys in the OS keyring and model profiles in
 variable and are injected only into newly launched local Python and bundled MCP
 processes — never copied to SSH/WSL hosts.
 
+On Windows, debug desktop builds use the same Credential Manager entries as
+release builds. This allows `tauri dev` to reuse an installed model profile
+without placing a real API key in `.env`, source files, command history, or a
+plaintext development-secrets file. Other debug targets retain their isolated
+development backend so macOS signing changes and headless CI do not require a
+real keyring.
+
 Wisp reads `AGENTS.md` from the project root when a new session starts.
 Instructions in **Project Settings → Agent Context** live in `.wisp/WISP.md`
 and take precedence when both exist.

@@ -5412,6 +5412,22 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
                 }, 12_000);
               });
             }
+            if (String(arg("message") ?? "").includes("PHASESTREAM")) {
+              return await new Promise<string>((resolve) => {
+                setTimeout(() => {
+                  emit("agent", { kind: "User", frame_id: fid, text: msg });
+                  emit("agent", { kind: "Phase", frame_id: fid, phase: "model_reasoning" });
+                }, 30);
+                setTimeout(() => {
+                  emit("agent", { kind: "Phase", frame_id: fid, phase: "final_synthesis" });
+                }, 1_000);
+                setTimeout(() => {
+                  emit("agent", { kind: "Text", frame_id: fid, delta: "Bounded synthesis finished." });
+                  emit("agent", { kind: "Done", frame_id: fid });
+                  resolve(fid);
+                }, 3_000);
+              });
+            }
             if (String(arg("message") ?? "").includes("RAUTOREFRESH")) {
               // An agent `r` cell lazily revives the dead local R runtime and
               // finishes; the open memory environment must follow without a

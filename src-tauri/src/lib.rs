@@ -38,6 +38,8 @@ mod delegation_resources;
 mod delegation_runtime;
 mod delegation_tool;
 mod depmap_agent;
+mod depmap_capabilities;
+mod depmap_entities;
 mod desktop_lifecycle;
 mod device_bridge;
 mod device_hub;
@@ -155,6 +157,10 @@ enum AgentEvent {
     Reasoning {
         frame_id: String,
         delta: String,
+    },
+    Phase {
+        frame_id: String,
+        phase: String,
     },
     ToolCall {
         frame_id: String,
@@ -1524,6 +1530,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                     });
                 }
             }
+            AgentEvent::Phase { .. } => {}
             AgentEvent::ToolCall { name, preview, .. } => items.push(UiItem {
                 role: "tool".into(),
                 text: String::new(),
@@ -2790,6 +2797,9 @@ struct TauriOutput {
     /// IM turns force Ask on mutating tools and skip Full Permission
     /// auto-approval so an unattended Feishu/WeChat message cannot write/shell.
     force_ask_mutations: bool,
+    /// Specialist contract: suppress ordinary assistant prose and require the
+    /// host's replacement `attempt_completion` tool to publish the answer.
+    requires_completion_tool: bool,
 }
 
 impl TauriOutput {
@@ -2950,6 +2960,16 @@ fn provenance_ui_file_changes(rec: &wisp_core::ProvenanceRecord) -> &[String] {
 }
 
 impl Output for TauriOutput {
+    fn requires_completion_tool(&self) -> bool {
+        self.requires_completion_tool
+    }
+
+    fn phase(&self, phase: &str) {
+        self.emit(AgentEvent::Phase {
+            frame_id: self.frame_id.clone(),
+            phase: phase.into(),
+        });
+    }
     fn assistant_text(&self, delta: &str) {
         self.emit(AgentEvent::Text {
             frame_id: self.frame_id.clone(),

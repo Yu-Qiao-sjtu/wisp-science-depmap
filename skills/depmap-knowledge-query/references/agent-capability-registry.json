@@ -1,0 +1,286 @@
+{
+  "schema_version": 2,
+  "release": "26Q1",
+  "purpose": "Bridge model-extracted research intent and entities to bounded DepMap/TCGA query capabilities and claim-safe interpretation contracts.",
+  "concepts": {
+    "phenotypes": [
+      {"id":"tumor_cell_stemness","aliases":["肿瘤细胞干性","癌细胞干性","肿瘤起始细胞","cancer stemness","tumor cell stemness","tumor-initiating cell"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"],"proposed_analysis":"continuous_phenotype_regulator_dependency","question_tags":["tumor_cell_stemness","stemness_proxy"],"proxy_evidence":[{"proxy_id":"curated_stemness_pathway_context","capability_id":"lineage_pathway_tf_enrichment","source_module":"lineage_gene_enrichment","compatible_molecular_focus":["transcription_factor"],"predicate":"candidate_association_with","terms":["REACTOME_TRANSCRIPTIONAL_REGULATION_OF_PLURIPOTENT_STEM_CELLS","REACTOME_SIGNALING_BY_WNT_IN_CANCER","HALLMARK_NOTCH_SIGNALING","HALLMARK_HEDGEHOG_SIGNALING","HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION","HALLMARK_TGF_BETA_SIGNALING","REACTOME_SIGNALING_BY_HIPPO","REACTOME_YAP1_AND_WWTR1_TAZ_STIMULATED_GENE_EXPRESSION","HALLMARK_MYC_TARGETS_V1","HALLMARK_MYC_TARGETS_V2"],"query_adapter":{"kind":"lineage_enrichment_relation","subject_entity_set":"dorothea_tf_abc","subject_column":"source_gene","term_column":"term","value_column":"enrichment_z","columns":["source_gene","collection","term","enrichment_z","p_value","fdr","gene_set_collection","lineage"],"filters":[{"column":"fdr","operator":"<=","value":0.05},{"column":"collection","operator":"=","value":"PATHWAY"}]},"claim_level":"DECLARED_PROXY","interpretation":"A transcription-factor gene whose lineage-specific expression-to-dependency signature is enriched for a declared stemness-associated pathway is a stemness-related TF candidate, not a direct stemness-score association or causal regulator."}]},
+      {"id":"drug_resistance","aliases":["耐药","药物抵抗","drug resistance"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect","prism_auc"],"proposed_analysis":"continuous_or_declared_contrast_drug_response"},
+      {"id":"metastasis","aliases":["转移","侵袭转移","metastasis"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect","metmap"],"proposed_analysis":"phenotype_association_with_declared_metastasis_input"},
+      {"id":"proliferation","aliases":["增殖","proliferation"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"],"proposed_analysis":"continuous_phenotype_dependency"},
+      {"id":"apoptosis","aliases":["凋亡","apoptosis"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"],"proposed_analysis":"continuous_phenotype_dependency"},
+      {"id":"immune_evasion","aliases":["免疫逃逸","免疫逃避","immune evasion"],"precomputed_status":"NOT_COMPUTED","available_inputs":["expression","gene_effect"],"proposed_analysis":"continuous_phenotype_dependency"}
+    ],
+    "molecular_focus": [
+      {"id":"transcription_factor","aliases":["转录因子","转录因子方向","TF","transcription factor","transcription factors"],"direction_focus":"transcription_factor","question_tags":["transcription_factor"],"entity_sets":["dorothea_tf_abc"]},
+      {"id":"pathway","aliases":["通路","pathway"],"direction_focus":"pathway","question_tags":["pathway"],"entity_sets":["hallmark_gene_sets","reactome_2023_2_gene_sets"]},
+      {"id":"dependency_network","aliases":["依赖网络","共依赖","dependency network","codependency"],"direction_focus":"network","question_tags":["dependency_network","gene_relationship"],"entity_sets":[]},
+      {"id":"copy_number","aliases":["拷贝数","CNV","扩增","copy number"],"direction_focus":"cnv","question_tags":["copy_number","amplification"],"entity_sets":[]},
+      {"id":"drug_response","aliases":["药敏","药物反应","drug response"],"direction_focus":"drug","question_tags":["drug_response"],"entity_sets":["prism_compounds"]},
+      {"id":"gene_dependency","aliases":["基因依赖","CRISPR依赖","gene dependency"],"direction_focus":"all","question_tags":["dependency"],"entity_sets":["all_crispr_genes"]}
+    ],
+    "mechanisms": [
+      {"id":"synthetic_lethality","aliases":["合成致死","synthetic lethality"],"relation_predicate":"candidate_synthetic_lethal_with"},
+      {"id":"codependency","aliases":["共依赖","codependency"],"relation_predicate":"codependent_with"},
+      {"id":"coamplification","aliases":["共扩增","co-amplification"],"relation_predicate":"coamplified_with"},
+      {"id":"transcriptional_regulation","aliases":["转录调控","transcriptional regulation"],"relation_predicate":"candidate_regulator_of"}
+    ],
+    "evidence_sources": [
+      {"id":"depmap","aliases":["DepMap","DepMap 26Q1"]},
+      {"id":"tcga","aliases":["TCGA"]},
+      {"id":"prism","aliases":["PRISM","药敏"]},
+      {"id":"literature","aliases":["文献","literature"]}
+    ],
+    "requested_outputs": [
+      {"id":"candidate_topics","aliases":["课题","研究方向","candidate topics"]},
+      {"id":"feasibility","aliases":["可行性","feasibility"]},
+      {"id":"innovation","aliases":["创新性","novelty","innovation"]},
+      {"id":"validation_plan","aliases":["验证方案","validation plan"]},
+      {"id":"report","aliases":["报告","report"]}
+    ],
+    "execution_policies": [
+      {"id":"precomputed_only","description":"Read existing validated outputs only."},
+      {"id":"allow_new_analysis","description":"May propose new analysis, but durable execution still requires approval."}
+    ]
+  },
+  "routes": [
+    {
+      "id": "provider_status",
+      "intent": "provider_status",
+      "execution_level": "L1_DIRECT",
+      "strategy": "Check only the configured provider health.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"status"},"single_call":true}
+    },
+    {
+      "id": "lineage_resolution",
+      "intent": "lineage_resolution",
+      "required_all": ["cancer"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Resolve the supplied cancer term against the maintained canonical lineage vocabulary without reading scientific results.",
+      "allowed_next_tools": ["depmap_resolve_entity"],
+      "recommended_query": {"tool":"depmap_resolve_entity","arguments":{"entity_type":"cancer","term":"${cancer}"},"single_call":true}
+    },
+    {
+      "id": "cancer_inventory",
+      "intent": "cancer_inventory",
+      "required_all": ["canonical_lineage"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read the bounded precomputed catalog for the resolved cancer lineage.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"lineage_catalog","lineage":"${canonical_lineage}"},"single_call":true}
+    },
+    {
+      "id": "cancer_dependency_ranking",
+      "intent": "cancer_dependency_ranking",
+      "required_all": ["canonical_lineage"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read the bounded precomputed lineage dependency ranking; this is an existing lineage-versus-rest test, not a new analysis.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"lineage_dependency","lineage":"${canonical_lineage}","ranking":"selective","limit":20},"single_call":true}
+    },
+    {
+      "id": "cancer_direction_discovery",
+      "intent": "cancer_direction_discovery",
+      "required_all": ["canonical_lineage"],
+      "execution_level": "L2_INVESTIGATE",
+      "strategy": "Preserve disease, phenotype, molecular, mechanism, source, output, and execution-policy slots in one bounded topic plan; distinguish direct evidence from composable evidence, new computation, and unsupported scope.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"topic_plan","lineage":"${canonical_lineage}","phenotypes":"${?phenotypes}","molecular_focus":"${?molecular_focus}","mechanisms":"${?mechanisms}","evidence_sources":"${?evidence_sources}","requested_outputs":"${?requested_outputs}","execution_policy":"${?execution_policy}","unresolved_concepts":"${?unresolved_concepts}","limit":20},"single_call":true}
+    },
+    {
+      "id": "gene_evidence_in_lineage",
+      "intent": "gene_evidence",
+      "when": {"present":["cancer"]},
+      "required_all": ["gene","canonical_lineage"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read one bounded gene-by-lineage evidence bundle.",
+      "allowed_next_tools": ["depmap_evidence"],
+      "recommended_query": {"tool":"depmap_evidence","arguments":{"gene":"${gene}","lineage":"${canonical_lineage}","limit":3},"single_call":true}
+    },
+    {
+      "id": "gene_evidence_pan_cancer",
+      "intent": "gene_evidence",
+      "when": {"absent":["cancer"]},
+      "required_all": ["gene"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read the bounded release-wide core summary for the supplied gene; do not invent a cancer lineage.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"core","gene":"${gene}"},"single_call":true}
+    },
+    {
+      "id": "gene_pair_evidence",
+      "intent": "gene_pair_evidence",
+      "required_all": ["source_gene","target_gene"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Choose one capability-supported pair family and issue one surgical query over precomputed results.",
+      "allowed_next_tools": ["depmap_query"],
+      "candidate_capabilities": ["query:pair","query:lineage_network"]
+    },
+    {
+      "id": "drug_gene_evidence",
+      "intent": "drug_gene_evidence",
+      "required_all": ["drug"],
+      "required_any": [{"fields":["target_gene","gene"],"missing_label":"target_gene_or_gene"}],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Choose the requested omic family and issue one surgical drug-to-gene query over precomputed results.",
+      "allowed_next_tools": ["depmap_query"],
+      "candidate_capabilities": ["query:drug","query:lineage_drug"]
+    },
+    {
+      "id": "subtype_evidence",
+      "intent": "subtype_evidence",
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read only catalog-validated frozen subtype contrasts; never infer a free-text subtype definition.",
+      "allowed_next_tools": ["depmap_subtype_evidence"],
+      "recommended_query": {"tool":"depmap_subtype_evidence","arguments":{"gene":"${?gene}","lineage":"${?canonical_lineage}","contrast_id":"${?contrast_id}","limit":20},"single_call":true}
+    },
+    {
+      "id": "coamplification_evidence",
+      "intent": "coamplification_evidence",
+      "required_all": ["source_gene"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read only observed constrained source-partner coamplification pairs and their retained dependency targets.",
+      "allowed_next_tools": ["depmap_coamplification_evidence"],
+      "recommended_query": {"tool":"depmap_coamplification_evidence","arguments":{"source":"${source_gene}","partner":"${?partner_gene}","target":"${?target_gene}","layer":"${?layer}","limit":20},"single_call":true}
+    },
+    {
+      "id": "true_love_evidence",
+      "intent": "true_love_evidence",
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read the completed mutual-rank-1 negative codependency screen as a hypothesis-generating class.",
+      "allowed_next_tools": ["depmap_true_love_evidence"],
+      "recommended_query": {"tool":"depmap_true_love_evidence","arguments":{"gene":"${?gene}","partner":"${?partner_gene}","limit":20},"single_call":true}
+    },
+    {
+      "id": "synthetic_lethal_evidence",
+      "intent": "synthetic_lethal_evidence",
+      "required_any": [{"fields":["source_gene","target_gene"],"missing_label":"source_gene_or_target_gene"}],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read retained observational mutation/CNV event-to-dependency candidates; never upgrade the screen label to causal proof.",
+      "allowed_next_tools": ["depmap_synthetic_lethal_evidence"],
+      "recommended_query": {"tool":"depmap_synthetic_lethal_evidence","arguments":{"source":"${?source_gene}","target":"${?target_gene}","event":"${?event}","limit":20},"single_call":true}
+    },
+    {
+      "id": "three_d_evidence",
+      "intent": "three_d_evidence",
+      "required_all": ["family"],
+      "execution_level": "L1_DIRECT",
+      "strategy": "Read one catalog-validated completed 3D analysis family with only supplied selectors.",
+      "allowed_next_tools": ["depmap_3d_evidence"],
+      "recommended_query": {"tool":"depmap_3d_evidence","arguments":{"family":"${family}","gene":"${?gene}","source":"${?source_gene}","target":"${?target_gene}","cohort":"${?cohort}","contrast":"${?contrast}","omic":"${?omic}","limit":20},"single_call":true}
+    },
+    {
+      "id": "result_interpretation",
+      "intent": "result_interpretation",
+      "execution_level": "L1_DIRECT",
+      "strategy": "Interpret only current or recovered persisted evidence fields.",
+      "allowed_next_tools": ["depmap_evidence_history"]
+    },
+    {
+      "id": "evidence_comparison",
+      "intent": "evidence_comparison",
+      "execution_level": "L2_INVESTIGATE",
+      "strategy": "Assemble a small bounded set of direct evidence queries and compare only returned results.",
+      "allowed_next_tools": ["depmap_query","depmap_evidence"],
+      "candidate_capabilities": ["tool:depmap_evidence","query:pair","query:lineage_network","query:lineage_cnv","query:lineage_drug","query:enrichment","query:tcga_expression_survival"]
+    },
+    {
+      "id": "topic_exploration_cancer_focus",
+      "intent": "topic_exploration",
+      "when": {"present":["canonical_lineage"],"absent":["gene"]},
+      "required_all": ["canonical_lineage"],
+      "execution_level": "L2_INVESTIGATE",
+      "strategy": "Compile the complete multi-slot research request into one bounded topic plan without dropping phenotype or mechanism constraints.",
+      "allowed_next_tools": ["depmap_query"],
+      "recommended_query": {"tool":"depmap_query","arguments":{"mode":"topic_plan","lineage":"${canonical_lineage}","phenotypes":"${?phenotypes}","molecular_focus":"${?molecular_focus}","mechanisms":"${?mechanisms}","evidence_sources":"${?evidence_sources}","requested_outputs":"${?requested_outputs}","execution_policy":"${?execution_policy}","unresolved_concepts":"${?unresolved_concepts}","limit":20},"single_call":true}
+    },
+    {
+      "id": "topic_exploration",
+      "intent": "topic_exploration",
+      "execution_level": "L2_INVESTIGATE",
+      "strategy": "Assemble bounded direct evidence and rank only data-supported research directions.",
+      "allowed_next_tools": ["depmap_query","depmap_evidence"],
+      "candidate_capabilities": ["tool:depmap_evidence","query:lineage_directions"]
+    },
+    {
+      "id": "study_support_mapping",
+      "intent": "study_support_mapping",
+      "required_all": ["canonical_lineage"],
+      "execution_level": "L2_INVESTIGATE",
+      "strategy": "Map every proposed claim to direct precomputed evidence, new computation from available inputs, a coverage gap, or literature-only support.",
+      "allowed_next_tools": ["depmap_query","depmap_evidence"],
+      "recommended_query": {
+        "tool":"depmap_query",
+        "arguments":{"mode":"lineage_catalog","lineage":"${canonical_lineage}"},
+        "single_call":true,
+        "output_contract": {
+          "required_buckets":["direct_precomputed_evidence","new_computation_from_available_inputs","missing_data_or_coverage","literature_only_or_unverified_claims"],
+          "forbidden_shortcuts":["shell","run_in_context","filesystem_inventory"]
+        }
+      }
+    },
+    {
+      "id": "literature_validation",
+      "intent": "literature_validation",
+      "execution_level": "L3_DELEGATE",
+      "strategy": "Keep data evidence fixed and run a bounded independently traceable literature check.",
+      "allowed_next_tools": ["delegate_tasks"]
+    },
+    {
+      "id": "new_analysis",
+      "intent": "new_analysis",
+      "execution_level": "L4_DURABLE",
+      "requires_approval": true,
+      "strategy": "Create a persisted Run or registered Workflow only after explicit user approval.",
+      "allowed_next_tools": ["start_workflow","run_in_context"]
+    },
+    {
+      "id": "report_generation",
+      "intent": "report_generation",
+      "execution_level": "L4_DURABLE",
+      "requires_approval": true,
+      "strategy": "Create a persisted report Workflow only after explicit user approval and bind it to validated evidence.",
+      "allowed_next_tools": ["start_workflow","run_in_context"]
+    }
+  ],
+  "query_capabilities": [
+    {"id":"provider_status","mode":"status","required_arguments":[],"scope":"provider","metric":"provider_health","allowed_claims":["configured provider readiness"],"forbidden_claims":["scientific result"]},
+    {"id":"catalog","mode":"catalog","required_arguments":[],"scope":"release","metric":"module_availability","allowed_claims":["installed query coverage"],"forbidden_claims":["analysis completion inferred only from file presence"]},
+    {"id":"lineage_catalog","mode":"lineage_catalog","required_arguments":["lineage"],"scope":"lineage","metric":"module_availability","allowed_claims":["lineage-scoped query coverage"],"forbidden_claims":["subgroup, contrast, mechanism, or drug-combination completion not returned by the provider"]},
+    {"id":"lineage_dependency","mode":"lineage_dependency","required_arguments":["lineage"],"default_limit":20,"scope":"lineage_vs_rest","metric":"effect_mean_difference","allowed_claims":["precomputed lineage-selective or descriptive mean dependency ranking"],"forbidden_claims":["logFC","causality","clinical selectivity"]},
+    {"id":"lineage_directions","mode":"lineage_directions","required_arguments":["lineage"],"default_limit":20,"scope":"lineage","metric":"family_specific_shortlists","allowed_claims":["hypothesis-generating candidates returned by the provider","focus-specific non-retention under the declared collection filter"],"forbidden_claims":["invented anchor genes","proof of novelty","proof of causality","treating transcription-factor non-retention as proof that no TF biology exists"]},
+    {"id":"topic_plan","mode":"topic_plan","required_arguments":["lineage"],"default_limit":20,"scope":"multi_slot_lineage_topic","metric":"typed_coverage_and_evidence_plan","allowed_claims":["slot-preserving coverage status","direct precomputed evidence returned by nested bounded queries","new-computation proposal from declared available inputs"],"forbidden_claims":["dropping a supplied phenotype or mechanism","treating NOT_COMPUTED as a biological null","presenting proposed analysis as completed evidence","invented candidate genes","proof of novelty"]},
+    {"id":"gene_core","mode":"core","required_arguments":["gene"],"scope":"release","metric":"gene_summary","allowed_claims":["release-wide gene summary"],"forbidden_claims":["lineage-specific interpretation without lineage evidence"]},
+    {"id":"pair","mode":"pair","required_arguments":["module","source","target"],"scope":"module","metric":"module_declared_metric","allowed_claims":["the exact returned pair statistic"],"forbidden_claims":["renaming mean difference as correlation","causality"]},
+    {"id":"top","mode":"top","required_arguments":["module","source"],"default_limit":20,"scope":"module","metric":"module_declared_metric","allowed_claims":["bounded retained ranking"],"forbidden_claims":["complete null result from sparse non-retention"]},
+    {"id":"lineage_event","mode":"lineage","required_arguments":["event","lineage","source","target"],"scope":"lineage","metric":"mean_difference","allowed_claims":["event-stratified dependency contrast"],"forbidden_claims":["correlation","causality"]},
+    {"id":"pathway_dependency","mode":"pathway","required_arguments":["pathway","target"],"scope":"release","metric":"pathway_dependency_association","allowed_claims":["returned pathway-dependency association"],"forbidden_claims":["causal pathway control"]},
+    {"id":"drug_association","mode":"drug","required_arguments":["omic","drug","target"],"scope":"release","metric":"drug_auc_association","allowed_claims":["returned drug-AUC association"],"forbidden_claims":["clinical efficacy","drug combination effect"]},
+    {"id":"lineage_network","mode":"lineage_network","required_arguments":["family","lineage","source"],"default_limit":20,"scope":"lineage","metric":"family_declared_correlation","allowed_claims":["continuous retained correlation"],"forbidden_claims":["high-low subgroup","synthetic lethality","causality"]},
+    {"id":"lineage_cnv","mode":"lineage_cnv","required_arguments":["lineage","source"],"default_limit":20,"scope":"lineage","metric":"mean_difference","allowed_claims":["amplified-versus-control dependency contrast when eligible"],"forbidden_claims":["correlation","biological null from ineligibility"]},
+    {"id":"lineage_drug","mode":"lineage_drug","required_arguments":["omic","lineage"],"required_any":[["drug","target"]],"default_limit":20,"scope":"lineage","metric":"drug_auc_association","allowed_claims":["returned lineage drug association"],"forbidden_claims":["clinical efficacy","unreturned combination therapy"]},
+    {"id":"enrichment","mode":"enrichment","required_arguments":["lineage","source"],"default_limit":20,"scope":"lineage","metric":"enrichment_z","allowed_claims":["continuous gene-set enrichment association"],"forbidden_claims":["discrete high-low subgroup","causal pathway activation"]},
+    {"id":"tcga_expression_survival","mode":"tcga_expression_survival","required_arguments":["gene"],"default_limit":20,"scope":"tcga_project","metric":"signed_univariate_cox_score_association","allowed_claims":["endpoint-specific tumour expression-survival association"],"forbidden_claims":["hazard ratio when only score z is returned","multivariable effect","DepMap cell-line and TCGA patient sample join","causality"]}
+  ],
+  "tool_capabilities": [
+    {"id":"lineage_term_resolution","tool":"depmap_resolve_lineage","required_arguments":["term"],"scope":"canonical_lineage_vocabulary","metric":"resolution_state","allowed_claims":["exact maintained alias resolution","bounded candidate set for ambiguous terms"],"forbidden_claims":["semantic equivalence from a merely valid candidate","scientific result"]},
+    {"id":"scientific_entity_resolution","tool":"depmap_resolve_entity","required_arguments":["entity_type","term"],"scope":"scientific_entity_registry_and_installed_catalogs","metric":"entity_resolution_state","allowed_claims":["registry-backed canonical identity","installed-catalog membership","explicit ambiguity or unresolved state"],"forbidden_claims":["scientific result","biological absence from NOT_FOUND","treating NORMALIZED_UNVERIFIED as a verified entity"]},
+    {"id":"gene_lineage_evidence_bundle","tool":"depmap_evidence","required_arguments":["gene","lineage"],"scope":"gene_by_lineage","metric":"multi_family_bounded_evidence","allowed_claims":["facts explicitly returned by each bounded section"],"forbidden_claims":["cross-family combined significance","causality","clinical actionability without separate evidence"]},
+    {"id":"frozen_subtype_evidence","tool":"depmap_subtype_evidence","required_arguments":[],"scope":"frozen_subtype_contrasts","metric":"frozen_subtype_dependency_contrast","allowed_claims":["eligible stored contrast inventory","returned complete per-gene contrast rows","retained selective hits"],"forbidden_claims":["arbitrary free-text subtype","unreturned subgroup threshold","causality"]},
+    {"id":"constrained_coamplification_evidence","tool":"depmap_coamplification_evidence","required_arguments":["source"],"scope":"observed_constrained_pairs","metric":"coamplification_dependency_difference","allowed_claims":["returned observed source-partner and retained target result"],"forbidden_claims":["exhaustive arbitrary gene-pair testing","biological null from sparse non-retention","causality"]},
+    {"id":"true_love_screen_evidence","tool":"depmap_true_love_evidence","required_arguments":[],"scope":"mutual_rank_1_screen","metric":"reciprocal_negative_codependency","allowed_claims":["returned reciprocal screen classification"],"forbidden_claims":["romantic-name semantics","causal synthetic lethality","mechanistic validation"]},
+    {"id":"observational_synthetic_lethal_evidence","tool":"depmap_synthetic_lethal_evidence","required_arguments":[],"scope":"retained_event_to_dependency_candidates","metric":"event_stratified_dependency_contrast","allowed_claims":["returned observational candidate under the named event definition"],"forbidden_claims":["experimentally proven synthetic lethality","causality","clinical actionability"]},
+    {"id":"three_d_screen_evidence","tool":"depmap_3d_evidence","required_arguments":["family"],"scope":"catalog_validated_3d_family","metric":"family_declared_3d_metric","allowed_claims":["returned result under its frozen cohort and contrast"],"forbidden_claims":["2D-to-3D causal transfer","unreturned cohort or contrast","clinical effect"]}
+  ],
+  "entity_resolvers": {
+    "canonical_lineage": {"tool":"depmap_resolve_entity","arguments":{"entity_type":"cancer","term":"${cancer}"},"single_call":true}
+  },
+  "result_states": {
+    "FOUND":"A retained result exists under the provider's declared method.",
+    "NOT_RETAINED":"Absent from the sparse retained output; not proof of no association.",
+    "INELIGIBLE":"Cohort or event thresholds were not met; not a biological negative.",
+    "NOT_COMPUTED":"The exact requested analysis was not precomputed.",
+    "MODULE_UNAVAILABLE":"The configured provider does not expose the requested module."
+  }
+}
