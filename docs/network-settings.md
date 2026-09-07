@@ -1,11 +1,13 @@
 # Network settings
 
-Open **Settings → Network** to configure networking independently of model
-profiles. An existing Model API proxy is preserved automatically.
+Open **Settings → General → Network** to configure networking independently of model
+profiles. Network is a section in General, below Local environment; it no longer
+has a separate sidebar tab. An existing Model API proxy is preserved automatically.
 
 ![Network settings](assets/network-settings/network-zh.png)
 
-Each proxy has its own mode, address, Clear and Save controls:
+Each proxy has its own mode, Clear and Save controls. The address field appears
+only for **Custom proxy**; **System** and **Direct** do not show an address field.
 
 | Scope | Applies to | Takes effect |
 | --- | --- | --- |
@@ -36,7 +38,7 @@ configuration. Local MCP servers must support proxy environment variables.
 Select **Configure** under Package mirror to enter a Conda channel URL, Python
 package index URL (usually ending in `/simple`), and an optional CA bundle path.
 Leave a field blank to remove that preference. Save applies the three fields
-together; Cancel discards their edits. Escape immediately returns to Network;
+together; Cancel discards their edits. Escape immediately returns to the Network section in General;
 another Escape closes Settings.
 
 These values are installation guidance. Wisp refreshes the system prompt at the
@@ -60,7 +62,7 @@ record; the old `proxy_url` value is read only when that record is absent.
 
 ## Manual smoke checks
 
-1. Start with an existing model proxy; confirm it appears in Network and is no
+1. Start with an existing model proxy; confirm it appears in General → Network and is no
    longer editable in Models. Save the MCP proxy and confirm the model value stays.
 2. Configure a local HTTP proxy. Use a new local shell/Run and a newly started
    Python interpreter to inspect the proxy variables and make a request against
