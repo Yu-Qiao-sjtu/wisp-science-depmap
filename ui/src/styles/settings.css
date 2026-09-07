@@ -25,9 +25,9 @@ body:has(.settings-page) .projects-screen { display: none; }
 
 .settings-pane-list.model-settings-pane { overflow-y: auto; }
 .settings-pane-list.model-settings-pane > .settings-list { flex: none; min-height: auto; overflow: visible; }
-.settings-content:has(.network-settings) > .settings-head { display: none; }
-.network-settings { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-.network-pane { overflow-y: auto; }
+.network-settings { min-width: 0; margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--border); }
+.network-heading { margin-bottom: 24px; }
+.network-heading h3 { margin: 0; font-size: 17px; font-weight: 600; }
 .network-section { margin-bottom: 32px; }
 .network-section h3 { margin: 0 0 10px; font-size: 17px; font-weight: 600; }
 .network-description { color: var(--text-muted); font-size: 14px; line-height: 1.6; margin: 0 0 22px; max-width: 850px; }
@@ -35,9 +35,11 @@ body:has(.settings-page) .projects-screen { display: none; }
 .network-proxy-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .network-proxy-heading label { color: var(--text); font-size: 14px; }
 .network-mode-status { color: var(--text-muted); font-size: 12px; }
-.network-proxy-controls { display: flex; gap: 10px; align-items: center; }
-.network-proxy-controls input { flex: 1; min-width: 0; }
+.network-proxy-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.network-proxy-controls input { grid-column: 2; min-width: 0; }
 .network-proxy-controls select { max-width: 180px; }
+.network-proxy-controls .network-clear { grid-column: 3; }
+.network-proxy-controls > button:last-child { grid-column: 4; }
 .network-proxy-controls input:disabled { opacity: .55; }
 .network-proxy-controls button, .network-mirror-summary > button {
   padding: 9px 16px; background: var(--bg-input); color: var(--text);
