@@ -9208,6 +9208,8 @@ test("one DeepSeek Base URL can save Responses and Anthropic protocol models", a
 test("onboarding key setup lands on flash after adding pro", async ({ page }) => {
   await page.goto("/?mockOnboarding=1");
   await expect(page.locator(".onboard-overlay")).toBeVisible();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
   await page.getByLabel("API key (stored in OS keyring)").fill("sk-onboard");
   await page.getByRole("button", { name: "Next" }).click();
   // Order matters: save_model activates each new profile, so flash must land
@@ -14915,15 +14917,17 @@ test("optional environment detection does not block first-run model setup", asyn
   await page.goto("/?mockOnboarding=1");
   const onboard = page.locator(".onboard-overlay");
   await expect(onboard).toBeVisible();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await expect(onboard.getByTestId("local-environment")).toHaveCount(0);
+  await onboard.getByRole("button", { name: "Set up later" }).click();
   const environment = onboard.getByTestId("local-environment");
   await expect(environment).toContainText("local-env-setup");
   await expect(environment.locator("dd")).toHaveCount(7);
   await expect(environment.locator("dd").first()).toContainText("Not found");
-  await expect(onboard.getByRole("button", { name: "Set up later" })).toBeEnabled();
+  await expect(onboard.getByRole("button", { name: "Get started" })).toBeEnabled();
   const viewport = page.viewportSize()!;
-  await expectInsideViewport(onboard.getByRole("button", { name: "Set up later" }), viewport.width, viewport.height);
-  await onboard.getByRole("button", { name: "Set up later" }).click();
-  await onboard.getByRole("button", { name: "Next" }).click();
+  await expectInsideViewport(onboard.getByRole("button", { name: "Get started" }), viewport.width, viewport.height);
   await onboard.getByRole("button", { name: "Get started" }).click();
   await expect(onboard).toBeHidden();
   expect(await lastInvokeArgs(page, "send_message")).toBeNull();
@@ -14967,9 +14971,9 @@ for (const platform of ["Linux x86_64", "MacIntel"]) {
       await palette.getByText("Quick setup", { exact: true }).click();
       const setup = page.locator(".onboard-overlay");
       await expect(setup).toBeVisible();
-      await expect(setup.getByRole("heading", { name: "Set up your model" })).toBeVisible();
-      await expect(setup.getByLabel("API key (stored in OS keyring)")).toHaveValue("");
-      await expect(setup.getByTestId("local-environment")).toContainText("/mock/bin/Rscript");
+      await expect(setup.getByRole("heading", { name: "Welcome to wisp-science" })).toBeVisible();
+      await expect(setup.getByLabel("API key (stored in OS keyring)")).toHaveCount(0);
+      await expect(setup.getByTestId("local-environment")).toHaveCount(0);
       // Immediate Escape closes the topmost setup page, preserving Settings.
       await page.keyboard.press("Escape");
       await expect(setup).toBeHidden();
@@ -14982,3 +14986,95 @@ for (const platform of ["Linux x86_64", "MacIntel"]) {
       .filter((call: any) => call.cmd === "detect_local_environment").length)).toBe(2);
   });
 }
+
+for (const locale of ["en", "zh"]) {
+  test(`onboarding has four separate pages without overflowing the modal (${locale})`, async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 620 });
+    await page.addInitScript(() => {
+      (window as any).__mockLocalEnvironment = { paths: {
+        python_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\science.wisp-science\\wisp-science\\python\\.venv\\Scripts\\python.exe",
+        rscript_executable: "C:\\Program Files\\R-4.6.1\\bin\\x64\\Rscript.exe",
+        uv_executable: "C:\\Users\\Researcher\\AppData\\Local\\Microsoft\\WinGet\\Links\\uv.exe",
+        node_executable: "C:\\Program Files\\nodejs\\node.exe",
+        npm_executable: "C:\\Program Files\\nodejs\\npm.cmd",
+        sci_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\npm\\sci.cmd",
+        pixi_executable: "C:\\Users\\Researcher\\.pixi\\bin\\pixi.exe",
+      }, warning: null };
+    });
+    await page.goto(`/?mockOnboarding=1&mockLocale=${locale}`);
+    const modal = page.locator(".onboard");
+    const titles = locale === "zh"
+      ? ["欢迎使用 wisp-science", "wisp-science 能做什么", "配置模型", "本地环境（可选）"]
+      : ["Welcome to wisp-science", "What wisp-science can do", "Set up your model", "Local environment (optional)"];
+    const next = locale === "zh" ? "下一步" : "Next";
+    for (let step = 0; step < 4; step++) {
+      await expect(modal.getByRole("heading", { name: titles[step], exact: true })).toBeVisible();
+      await expect(modal.locator(".onboard-dot")).toHaveCount(4);
+      await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+      await expect(modal.locator('input[type="password"]')).toHaveCount(step === 2 ? 1 : 0);
+      await expect(modal.getByTestId("local-environment")).toHaveCount(step === 3 ? 1 : 0);
+      await expectInsideViewport(modal, 700, 620);
+      expect(await modal.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+      expect(await modal.locator(".onboard-content").evaluate((el) => ({
+        fits: el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight,
+        scrollbar: getComputedStyle(el).scrollbarWidth,
+      }))).toEqual({ fits: true, scrollbar: "none" });
+      await page.screenshot({ path: test.info().outputPath(`onboarding-${locale}-${step}.png`), animations: "disabled" });
+      if (step < 3) await modal.getByRole("button", { name: step === 2 ? (locale === "zh" ? "稍后配置" : "Set up later") : next, exact: true }).click();
+    }
+    // Even at high zoom / short window height, navigation stays outside the
+    // scrollable content and long paths never force horizontal scrolling.
+    await page.setViewportSize({ width: 460, height: 360 });
+    const content = modal.locator(".onboard-content");
+    await expectInsideViewport(modal.locator(".row"), 460, 360);
+    expect(await content.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await content.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(modal.getByRole("button", { name: locale === "zh" ? "编辑路径" : "Edit paths", exact: true })).toBeInViewport();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[2], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[1], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[0], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+    expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+  });
+}
+
+test("local environment manual paths save, survive reopening, and preserve failed edits", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  const env = modal.getByTestId("local-environment");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(7);
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("/mock/bin/python3");
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("C:\\Custom Python\\python.exe");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toBeFocused();
+  await env.getByRole("textbox", { name: "npm", exact: true }).fill("C:\\Program Files\\nodejs\\npm.cmd");
+  await env.getByRole("textbox", { name: "uv", exact: true }).fill("");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = true; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("alert")).toContainText("file not found");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("C:\\Custom Python\\python.exe");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = false; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(0);
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await expect.poll(() => lastInvokeArgs(page, "save_local_environment_paths")).toMatchObject({ paths: {
+    python_executable: "C:\\Custom Python\\python.exe", npm_executable: "C:\\Program Files\\nodejs\\npm.cmd", uv_executable: "",
+  } });
+  await env.getByRole("button", { name: "Check paths again" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await modal.getByRole("button", { name: "Back", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("/discard/python");
+  await env.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+});

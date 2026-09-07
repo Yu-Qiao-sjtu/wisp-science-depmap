@@ -25,7 +25,11 @@
 .ctx-item-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-submenu-chevron { flex: none; color: var(--text-faint); font-size: 17px; line-height: 1; }
 .ctx-submenu-menu { z-index: 122; }
-.onboard { max-width: 440px; text-align: center; }
+.onboard-overlay .onboard { max-width: 520px; max-height: calc(100dvh - 40px); overflow: hidden; text-align: center; }
+.onboard-content { min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; display: flex; flex-direction: column; gap: 14px; }
+.onboard-content::-webkit-scrollbar { display: none; }
+.onboard-content > * { flex-shrink: 0; }
+.onboard-dots, .onboard > .row { flex-shrink: 0; }
 .onboard h2 { text-align: center; }
 .onboard .hint { text-align: center; font-size: 13.5px; line-height: 1.55; }
 .onboard-dots { display: flex; justify-content: center; gap: 8px; }
@@ -48,11 +52,12 @@
 .environment-paths > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
 .environment-paths dt { font-weight: 600; }
 .environment-paths dd { margin: 0; overflow-wrap: anywhere; }
-.onboard-overlay .onboard { max-height: calc(100vh - 48px); overflow-y: auto; }
 
 .local-environment button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elev); color: var(--text); font: inherit; cursor: pointer; }
 .local-environment button:disabled { opacity: .6; cursor: default; }
-.onboard-overlay .onboard { max-width: 520px; }
 .onboard .local-environment { text-align: left; }
 .onboard .local-environment .hint { text-align: left; font-size: 12px; }
-.onboard > .row { position: sticky; bottom: -24px; z-index: 1; margin: 0 -24px -24px; padding: 12px 24px 24px; background: var(--bg-elev); }
+.onboard .local-environment { border: 0; padding: 0; margin: 0; }
+.environment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.environment-paths input { width: 100%; min-width: 0; padding: 6px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: inherit; }
+.environment-paths:has(input) > div { align-items: center; }
