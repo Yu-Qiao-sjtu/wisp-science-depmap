@@ -3110,3 +3110,20 @@ body { font-size: var(--ui-font-size, 14px); }
   .conn-tool-row { gap: 8px; }
   .conn-detail-title h2 { font-size: 20px; }
 }
+
+/* Service entry points keep credential inputs on their own subpage. */
+.credential-service-list { display: flex; flex: none; flex-direction: column; margin: 16px 0 30px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.credential-service-entry { display: flex; flex: none; align-items: center; gap: 18px; width: 100%; padding: 20px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.credential-service-entry:last-child { border-bottom: 0; }
+.credential-service-entry:hover { background: var(--bg-elev); }
+.credential-service-entry:focus-visible { outline: 2px solid var(--clay); outline-offset: -3px; }
+.credential-service-main { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 6px; }
+.credential-service-main strong { font-size: 15px; font-weight: 600; }
+.credential-service-main > span { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.credential-service-status { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.credential-service-entry > svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-faint); }
+@media (max-width: 700px) {
+  .credential-service-entry { padding: 16px 12px; gap: 10px; flex-wrap: wrap; }
+  .credential-service-main { flex-basis: calc(100% - 30px); }
+  .credential-service-status { margin-right: auto; }
+}

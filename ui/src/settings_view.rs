@@ -1321,6 +1321,26 @@ pub(super) fn SettingsView(
     let oauth_authorizing = create_rw_signal(false);
     let conn_testing = create_rw_signal(false);
     let conn_test_seq = create_rw_signal(0u64);
+    let credential_page = create_rw_signal(None::<&'static str>);
+    let credential_saving = create_rw_signal(false);
+    let close_settings_subpage = Callback::new(move |()| {
+        if credential_saving.get_untracked() { return; }
+        if credential_page.get_untracked().is_some() {
+            credential_page.set(None);
+            cred_inputs.update(|inputs| inputs.retain(|id, _|
+                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+            cred_msg.set(None);
+        } else {
+            close_settings_subpage.call(());
+        }
+    });
+    create_effect(move |_| {
+        if !show_settings.get() || settings_section.get() != "credentials" {
+            credential_page.set(None);
+            cred_inputs.update(|inputs| inputs.retain(|id, _|
+                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+        }
+    });
     let custom_cred_name = create_rw_signal(String::new());
     let custom_cred_env = create_rw_signal(String::new());
     let custom_cred_value = create_rw_signal(String::new());
@@ -1380,7 +1400,8 @@ pub(super) fn SettingsView(
         }
         // Breadcrumb subpages (memory file, model/ACP/specialist/conn/channel
         // editors): one Escape returns to the section list, not the app.
-        let has_subpage = memory_selected.get_untracked().is_some()
+        let has_subpage = credential_page.get_untracked().is_some()
+            || memory_selected.get_untracked().is_some()
             || model_form.get_untracked().is_some()
             || acp_form.get_untracked().is_some()
             || specialist_form.get_untracked().is_some()
@@ -1693,7 +1714,11 @@ pub(super) fn SettingsView(
                         specialist_form.get().as_ref(),
                         acp_form.get().as_ref(),
                         channels_open.get().as_deref(),
-                    );
+                    ).or_else(|| {
+                        (sec == "credentials").then(|| credential_page.get()).flatten()
+                            .and_then(|id| CRED_GROUPS.iter().find(|group| group.id == id))
+                            .map(|group| t(loc, group.name_key).to_string())
+                    });
                     view! {
                         <div class="settings-head">
                             <div class="settings-head-main">
@@ -5718,9 +5743,33 @@ pub(super) fn SettingsView(
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "credentials").then(|| view! {
-                    <div class="settings-pane">
+                    <div class="settings-pane credentials-pane">
                         <p class="settings-note">{move || t(locale.get(), "cred.desc")}</p>
-                        {CRED_GROUPS.iter().map(|g| {
+                        {move || credential_page.get().is_none().then(|| view! {
+                            <div class="credential-service-list" data-testid="credential-service-list">
+                                {CRED_GROUPS.iter().map(|group| view! {
+                                    <button type="button" class="credential-service-entry"
+                                        data-credential-service=group.id
+                                        on:click=move |_| {
+                                            cred_msg.set(None);
+                                            credential_page.set(Some(group.id));
+                                        }>
+                                        <span class="credential-service-main">
+                                            <strong>{move || t(locale.get(), group.name_key)}</strong>
+                                            <span>{move || t(locale.get(), group.about_key)}</span>
+                                        </span>
+                                        <span class="credential-service-status">{move || {
+                                            let configured = group.fields.iter().filter(|field|
+                                                cred_status.get().get(field.id).copied().unwrap_or(false)).count();
+                                            if configured == 0 { t(locale.get(), "cred.not_stored").to_string() }
+                                            else { format!("{} {}/{}", t(locale.get(), "cred.stored"), configured, group.fields.len()) }
+                                        }}</span>
+                                        {compose_icon("chevron-right")}
+                                    </button>
+                                }).collect_view()}
+                            </div>
+                        })}
+                        {move || CRED_GROUPS.iter().filter(|group| Some(group.id) == credential_page.get()).map(|g| {
                             let tooltip_id = format!("cred-help-{}", g.id);
                             let described_by = tooltip_id.clone();
                             view! {
@@ -5754,7 +5803,7 @@ pub(super) fn SettingsView(
                                     let id = f.id;
                                     let stored = move || cred_status.get().get(id).copied().unwrap_or(false);
                                     view! {
-                                        <label class="span-2">
+                                        <label class="span-2" for=format!("credential-field-{id}")>
                                             <span class="cred-field-head">
                                                 <span>{move || format!("{} — {}", t(locale.get(), f.label_key),
                                                     if stored() { t(locale.get(), "cred.stored") } else { t(locale.get(), "cred.not_stored") })}</span>
@@ -5774,7 +5823,7 @@ pub(super) fn SettingsView(
                                                     }>{move || t(locale.get(), "cred.clear")}</button>
                                                 })}
                                             </span>
-                                            <input type=if f.secret { "password" } else { "text" }
+                                            <input id=format!("credential-field-{id}") type=if f.secret { "password" } else { "text" }
                                                 placeholder=move || if stored() { t(locale.get(), "settings.stored_key").to_string() } else { String::new() }
                                                 prop:value=move || cred_inputs.get().get(id).cloned().unwrap_or_default()
                                                 on:input=move |ev| { let v = event_target_input(&ev).value(); cred_inputs.update(|m| { m.insert(id.into(), v); }); } />
@@ -5798,6 +5847,7 @@ pub(super) fn SettingsView(
                                 </span>
                             </div>
                         }}).collect_view()}
+                        {move || credential_page.get().is_none().then(|| view! {
                         <div class="conn-group-label">{move || t(locale.get(), "cred.custom.name")}</div>
                         <p class="settings-note">{move || t(locale.get(), "cred.custom.hint")}</p>
                         <For
@@ -5955,16 +6005,26 @@ pub(super) fn SettingsView(
                                     }}</button>
                             </div>
                         </div>
+                        })}
                         {move || cred_msg.get().map(|(ok, text)| view! {
                             <div class="settings-status" class:ok=move || ok class:fail=move || !ok>{text}</div>
                         })}
                         <div class="row settings-footer">
-                            <button type="button" class="primary" on:click=move |_| {
-                                // Save every field that was edited (non-empty input); blank inputs
-                                // leave a stored key untouched (placeholder communicates this).
+                            {move || credential_page.get().is_some().then(|| view! {
+                                <button type="button" disabled=move || credential_saving.get()
+                                    on:click=move |_| close_settings_subpage.call(())>{move || t(locale.get(), "settings.cancel")}</button>
+                            })}
+                            <button type="button" class="primary" disabled=move || credential_saving.get()
+                                on:click=move |_| {
+                                let selected = credential_page.get_untracked();
                                 let edits: Vec<(String, String)> = cred_inputs.get().into_iter()
-                                    .filter(|(_, v)| !v.trim().is_empty()).collect();
+                                    .filter(|(id, value)| !value.trim().is_empty() && match selected {
+                                        Some(selected) => CRED_GROUPS.iter().find(|group| group.id == selected)
+                                            .is_some_and(|group| group.fields.iter().any(|field| field.id == id)),
+                                        None => custom_credentials.get_untracked().iter().any(|credential| credential.id == *id),
+                                    }).collect();
                                 if edits.is_empty() { return; }
+                                credential_saving.set(true);
                                 spawn_local(async move {
                                     let mut ok_all = true;
                                     for (id, value) in edits {
@@ -5976,13 +6036,18 @@ pub(super) fn SettingsView(
                                         }
                                     }
                                     if ok_all {
-                                        cred_inputs.set(std::collections::HashMap::new());
+                                        cred_inputs.update(|inputs| inputs.retain(|id, _| match selected {
+                                            Some(selected) => !CRED_GROUPS.iter().find(|group| group.id == selected)
+                                                .is_some_and(|group| group.fields.iter().any(|field| field.id == id)),
+                                            None => !custom_credentials.get_untracked().iter().any(|credential| credential.id == *id),
+                                        }));
                                         cred_msg.set(Some((true, t(locale.get(), "cred.saved").into())));
                                     }
                                     let v = invoke("credential_status", JsValue::UNDEFINED).await;
                                     if let Ok(pairs) = serde_wasm_bindgen::from_value::<Vec<(String, bool)>>(v) {
                                         cred_status.set(pairs.into_iter().collect());
                                     }
+                                    credential_saving.set(false);
                                 });
                             }>{move || t(locale.get(), "settings.save")}</button>
                         </div>
