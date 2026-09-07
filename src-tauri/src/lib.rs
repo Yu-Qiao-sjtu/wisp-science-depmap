@@ -7261,6 +7261,8 @@ pub fn run() {
             turn_undo::preview_turn_undo,
             turn_undo::undo_turn,
             skill_commands::list_skills,
+            skill_commands::list_skill_files,
+            skill_commands::read_skill_file,
             skill_commands::reload_skills,
             skill_commands::set_skill_tags,
             skill_commands::set_skills_enabled,

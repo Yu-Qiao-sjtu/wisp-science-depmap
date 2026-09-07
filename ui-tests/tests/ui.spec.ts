@@ -9829,6 +9829,77 @@ test("capability counts open skills, connections, and editable project memory", 
   });
 });
 
+test("skill detail browses markdown and scripts and persists tags without leaving the file", async ({ page }, testInfo) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "compute", exact: true }).click();
+  await page.locator('[data-skill-name="remote-compute-ssh"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  await expect(page.locator(".settings-crumb-current")).toHaveText("remote-compute-ssh");
+  await expect(detail.getByTestId("skill-file-preview").getByRole("heading", { name: "Skill instructions" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("skill-detail.png"), fullPage: true });
+  await expect.poll(() => lastInvokeArgs(page, "list_skill_files")).toEqual({ name: "remote-compute-ssh" });
+  await expect.poll(() => page.evaluate(() => (window as any).__skillPreviewUnsafe ?? false)).toBe(false);
+  await detail.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(detail.getByTestId("skill-file-source")).toContainText("name: remote-compute-ssh");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("print('analysis ready')");
+  await detail.getByRole("textbox", { name: "Edit tags" }).fill("compute, reviewed");
+  await detail.getByRole("textbox", { name: "Edit tags" }).press("Tab");
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_tags")).toEqual({ name: "remote-compute-ssh", tags: ["compute", "reviewed"] });
+  await expect(picker).toHaveValue("scripts/nested/analyze.py");
+  await detail.locator("label.toggle").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_enabled")).toEqual({ name: "remote-compute-ssh", enabled: false });
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.locator(".settings-crumb-link").click();
+  const row = page.locator('[data-skill-name="remote-compute-ssh"]');
+  await expect(row.locator('.skill-tag')).toHaveText(["compute", "reviewed"]);
+  await expect(row.getByRole("checkbox")).not.toBeChecked();
+  await expect(page.locator('[data-skill-name="literature-review"]')).toHaveCount(0);
+  await row.locator('.skill-row-open').click();
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "All", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("skill-catalog.png"), fullPage: true });
+});
+
+test("skill detail shows file errors and ignores stale file responses", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await expect(detail.getByTestId("skill-file-preview")).toBeVisible();
+  await picker.selectOption("assets/image.png");
+  await expect(detail.getByRole("alert")).toContainText("Binary files cannot be previewed");
+  await expect(detail.getByTestId("skill-file-preview")).toBeHidden();
+  await picker.selectOption("scripts/slow.py");
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.waitForTimeout(500);
+  await expect(detail.getByTestId("skill-file-source")).not.toContainText("old slow response");
+  await picker.selectOption("references/guide.md");
+  await expect(detail.getByTestId("skill-file-preview")).toContainText("Reference guide");
+  await detail.getByRole("link", { name: "Paper reference" }).click();
+  await expect(page.getByTestId("external-link-confirm")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("external-link-confirm")).toBeHidden();
+  await expect(detail).toBeVisible();
+  await expect(picker).toHaveValue("references/guide.md");
+});
+
+test("skill detail reports unavailable packages and can return immediately", async ({ page }) => {
+  await enterApp(page, "/?mockSkillFilesError=1");
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  await expect(page.getByTestId("skill-detail").getByRole("alert")).toContainText("Skill package is unavailable");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("skill-detail")).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+});
+
 test("skill manager filters by tag and batch disables visible skills", async ({ page }) => {
   await enterApp(page);
   await page.getByRole("button", { name: "Add to message" }).click();
@@ -9838,7 +9909,7 @@ test("skill manager filters by tag and batch disables visible skills", async ({ 
   await expect(page.locator(".settings-search")).toHaveAttribute("inputmode", "search");
   await expect(page.locator(".settings-search")).toHaveAttribute("autocomplete", "off");
   await expect(page.locator(".settings-filter")).toContainText(/visible.*enabled/);
-  await expect(page.locator(".skill-tags-editor").first()).not.toHaveAttribute("open", "");
+  await expect(page.locator(".skill-tags-input")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Disabled", exact: true }).click();
   await expect(page.getByText("No skills match the current filters.")).toBeVisible();
@@ -9871,7 +9942,7 @@ test("skill manager reloads manually copied skills and shows their scope", async
 
   const fresh = page.locator('[data-skill-name="fresh-project-skill"]');
   await expect.poll(() => lastInvokeArgs(page, "reload_skills")).toEqual({});
-  await expect(fresh).toContainText("Newly copied project skill");
+  await expect(fresh).toContainText("fresh-project-skill");
   await expect(fresh).toContainText("Project");
   await expect(fresh.locator('input[type="checkbox"]')).toBeChecked();
   await expect(fresh.getByRole("button", { name: "Delete skill" })).toHaveCount(0);
@@ -9896,9 +9967,14 @@ test("skill manager updates and deletes user-added skills", async ({ page }) => 
   await expect(page.getByText("Skill added or updated.")).toBeVisible();
 
   const skill = page.locator('[data-skill-name="paper-narrative"]');
-  await expect(skill.getByRole("button", { name: "Delete skill" })).toBeVisible();
-  await skill.getByRole("button", { name: "Delete skill" }).click();
+  await skill.locator(".skill-row-open").click();
+  const detail = page.getByTestId("skill-detail");
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   const confirm = page.getByTestId("skill-remove-confirm");
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   await expect(confirm).toContainText(
     "Delete paper-narrative? Its installed files will be removed. This cannot be undone.",
   );

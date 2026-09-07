@@ -3873,6 +3873,19 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
                 dir: "/plugins/motif/skills/hypothesis-review",
               })),
             ];
+          case "list_skill_files":
+            if (query.get("mockSkillFilesError") === "1") throw new Error("Skill package is unavailable");
+            return ["SKILL.md", "scripts/nested/analyze.py", "references/guide.md", "assets/image.png", "scripts/slow.py"];
+          case "read_skill_file": {
+            const path = String(arg("path") ?? "SKILL.md");
+            if (path.endsWith(".png")) throw new Error("Binary files cannot be previewed as text.");
+            if (path.endsWith("slow.py")) await new Promise((resolve) => setTimeout(resolve, 400));
+            const content = path === "SKILL.md"
+              ? "---\nname: " + String(arg("name")) + "\ndescription: Example skill\n---\n# Skill instructions\n\nRead the accompanying scripts.\n\n<script>window.__skillPreviewUnsafe = true</script>"
+              : path.endsWith(".md") ? "# Reference guide\n\nSupporting methods.\n\n[Paper reference](https://example.com/paper)"
+              : path.endsWith("slow.py") ? "print('old slow response')" : "# Example analysis\nprint('analysis ready')";
+            return { path, content };
+          }
           case "reload_skills": {
             if (query.get("mockSkillReload") === "1" && !skills.some((skill) => skill.name === "fresh-project-skill")) {
               skills.push({

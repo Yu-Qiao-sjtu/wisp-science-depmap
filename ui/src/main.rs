@@ -20,6 +20,7 @@ mod runtime_views;
 mod session_modals;
 mod settings_view;
 mod sidebar;
+mod skill_detail;
 mod text;
 mod trajectory;
 mod window_titlebar;
@@ -16141,6 +16142,7 @@ fn App() -> impl IntoView {
             }
         })}
         <SettingsView
+            external_link_confirm=external_link_confirm
             state=SettingsViewState {
                 locale, theme_mode, light_palette, dark_palette, ui_font_size, code_font_size, ui_font_family, code_font_family, selection_popup_enabled, send_with_modifier, custom_css, update_check_enabled, show_settings, settings_section, open_conn_key, channels_open, connectors, model_form, model_catalog_limits,
                 conn_form, memory_selected, specialist_form, settings, bootstrap, settings_message,

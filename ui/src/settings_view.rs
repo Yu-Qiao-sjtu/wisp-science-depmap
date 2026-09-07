@@ -1061,6 +1061,7 @@ fn ConnSecretRows(
 #[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
+    external_link_confirm: RwSignal<Option<String>>,
     open_project: Callback<String>,
     go_settings_section: Callback<String>,
     close_settings_subpage: Callback<()>,
@@ -1342,6 +1343,22 @@ pub(super) fn SettingsView(
     let quick_action_form = create_rw_signal(None::<QuickAction>);
     let quick_action_busy = create_rw_signal(false);
     let quick_action_error = create_rw_signal(None::<String>);
+    // Skill details share the section breadcrumb and Escape navigation.
+    let selected_skill = create_rw_signal(None::<String>);
+    create_effect(move |_| {
+        if !show_settings.get()
+            || settings_section.get() != "skills"
+            || selected_skill
+                .get()
+                .is_some_and(|name| !skills_list.get().iter().any(|s| s.name == name))
+        {
+            selected_skill.set(None);
+        }
+    });
+    let close_settings_subpage = Callback::new(move |_| {
+        selected_skill.set(None);
+        close_settings_subpage.call(());
+    });
     // Specialist skill whitelist picker: search query + filtered results, so a
     // large skill library never renders as an unbounded checkbox list.
     let specialist_skill_query = create_rw_signal(String::new());
@@ -1366,6 +1383,11 @@ pub(super) fn SettingsView(
         if !show_settings.get_untracked() {
             return false;
         }
+        if delete_confirm.get_untracked().is_some()
+            || external_link_confirm.get_untracked().is_some()
+        {
+            return false;
+        }
         if joining.get_untracked() {
             joining.set(false);
             return true;
@@ -1386,7 +1408,8 @@ pub(super) fn SettingsView(
         }
         // Breadcrumb subpages (memory file, model/ACP/specialist/conn/channel
         // editors): one Escape returns to the section list, not the app.
-        let has_subpage = memory_selected.get_untracked().is_some()
+        let has_subpage = selected_skill.get_untracked().is_some()
+            || memory_selected.get_untracked().is_some()
             || model_form.get_untracked().is_some()
             || acp_form.get_untracked().is_some()
             || specialist_form.get_untracked().is_some()
@@ -1699,7 +1722,7 @@ pub(super) fn SettingsView(
                         specialist_form.get().as_ref(),
                         acp_form.get().as_ref(),
                         channels_open.get().as_deref(),
-                    );
+                    ).or_else(|| selected_skill.get());
                     view! {
                         <div class="settings-head">
                             <div class="settings-head-main">
@@ -5538,7 +5561,7 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "skills").then(|| view! {
+                {move || (settings_section.get() == "skills" && selected_skill.get().is_none()).then(|| view! {
                     <div class="settings-pane settings-pane-list">
                         <div class="settings-toolbar">
                             <span class="settings-filter">{move || {
@@ -5645,69 +5668,31 @@ pub(super) fn SettingsView(
                             } key=|s| format!("{}:{}:{}", s.name, s.enabled, join_tags(&s.tags)) let:s>
                                 {
                                     let name_toggle = s.name.clone();
-                                    let name_remove = s.name.clone();
-                                    let name_tags = s.name.clone();
+                                    let name_open = s.name.clone();
                                     let enabled = s.enabled;
-                                    let builtin = s.builtin;
                                     let managed = s.managed;
-                                    let managed_by = s.managed_by.clone();
-                                    let scope = s.scope.clone();
-                                    let scope_label = t(locale.get(), &format!("skills.scope.{scope}"));
-                                    let source_path = s.dir.clone();
-                                    let tags_text = join_tags(&s.tags);
-                                    let tags_input_text = tags_text.clone();
-                                    let tags_cb = save_skill_tags.clone();
+                                    let scope_label = t(locale.get(), &format!("skills.scope.{}", s.scope));
                                     view! {
-                                        <div class="settings-list-row" data-skill-name=s.name.clone()>
-                                            <div class="settings-list-main">
-                                                <span class="settings-list-title">
-                                                    {s.name.clone()}
-                                                    <span class="skill-scope-badge" title=source_path>{scope_label}</span>
-                                                </span>
-                                                {(!s.description.is_empty() && s.description != ">").then(|| {
-                                                    let desc = s.description.clone();
-                                                    view! { <span class="settings-list-sub">{desc}</span> }
-                                                })}
-                                                {(!managed).then(|| view! {
-                                                    <details class="skill-tags-editor">
-                                                        <summary>
-                                                            <span>{move || t(locale.get(), "skills.edit_tags")}</span>
-                                                            <span class="skill-tags-summary">{tags_text}</span>
-                                                        </summary>
-                                                        <input class="skill-tags-input"
-                                                            prop:value=tags_input_text
-                                                            prop:placeholder=move || t(locale.get(), "skills.tags_placeholder")
-                                                            on:change=move |ev| tags_cb.call((name_tags.clone(), event_target_value(&ev))) />
-                                                    </details>
-                                                })}
-                                            </div>
+                                        <div class="settings-list-row skill-catalog-row" data-skill-name=s.name.clone()>
+                                            <button type="button" class="skill-row-open" on:click=move |_| selected_skill.set(Some(name_open.clone()))>
+                                                <span class="skill-row-name">{s.name.clone()}</span>
+                                                <span class="skill-scope-badge" title=s.dir>{scope_label}</span>
+                                                <span class="skill-row-tags">{s.tags.into_iter().map(|tag| view! { <span class="skill-tag">{tag}</span> }).collect_view()}</span>
+                                                {compose_icon("chevron-right")}
+                                            </button>
                                             <div class="settings-list-actions">
-                                                {(scope == "global" && !builtin).then(|| { let n = name_remove.clone(); view! {
-                                                    <button class="settings-skill-remove" type="button"
-                                                        title=move || t(locale.get(), "skills.remove")
-                                                        on:click=move |_| delete_confirm.set(Some(DeleteConfirm::Skill {
-                                                            name: n.clone(),
-                                                            label: n.clone(),
-                                                        }))>
-                                                        {move || t(locale.get(), "skills.remove")}
-                                                    </button>
-                                                }})}
                                                 {if managed {
-                                                    let provider = managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
-                                                    view! {
-                                                        <span class="skill-managed-badge">
-                                                            {tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}
-                                                        </span>
-                                                    }.into_view()
+                                                    let provider = s.managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
+                                                    view! { <span class="skill-managed-badge">{tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}</span> }.into_view()
                                                 } else {
                                                     view! {
                                                         <label class="toggle">
-                                                            <input type="checkbox" prop:checked=enabled on:change=move |ev| {
+                                                            <input type="checkbox" aria-label=s.name prop:checked=enabled on:change=move |ev| {
                                                                 let n = name_toggle.clone();
                                                                 let on = event_target_checked(&ev);
                                                                 spawn_local(async move {
                                                                     let arg = to_value(&serde_json::json!({ "name": n, "enabled": on })).unwrap();
-                                                                    let _ = invoke_checked("set_skill_enabled", arg).await;
+                                                                    if let Err(error) = invoke_checked("set_skill_enabled", arg).await { skills_msg.set(Some((false, js_error_text(error)))); }
                                                                     refresh_skills.call(());
                                                                 });
                                                             } />
@@ -5723,6 +5708,13 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
+                {move || (settings_section.get() == "skills").then(|| selected_skill.get().map(|name| view! {
+                    <crate::skill_detail::SkillDetail name=name skills=skills_list locale=locale
+                        refresh=refresh_skills save_tags=save_skill_tags delete_confirm=delete_confirm />
+                    {move || skills_msg.get().map(|(ok, text)| view! {
+                        <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
+                    })}
+                }))}
                 {move || (settings_section.get() == "credentials").then(|| view! {
                     <div class="settings-pane">
                         <p class="settings-note">{move || t(locale.get(), "cred.desc")}</p>
