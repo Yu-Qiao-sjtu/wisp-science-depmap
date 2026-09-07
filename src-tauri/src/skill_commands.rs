@@ -52,6 +52,46 @@ pub(super) async fn list_skills(
 }
 
 #[tauri::command]
+pub(super) async fn list_skill_files(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    name: String,
+) -> Result<Vec<String>, String> {
+    let ap = state.require_active(window.label())?;
+    let (catalog, _) = project_skill_catalog(&state.store, &ap).await;
+    let root = catalog
+        .get(&name)
+        .ok_or("Skill not found in this project.")?
+        .dir
+        .clone();
+    tokio::task::spawn_blocking(move || wisp_skills::files::list_skill_files(&root))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(super) async fn read_skill_file(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    name: String,
+    path: String,
+) -> Result<wisp_dto::SkillFileContent, String> {
+    let ap = state.require_active(window.label())?;
+    let (catalog, _) = project_skill_catalog(&state.store, &ap).await;
+    let root = catalog
+        .get(&name)
+        .ok_or("Skill not found in this project.")?
+        .dir
+        .clone();
+    tokio::task::spawn_blocking(move || {
+        let content = wisp_skills::files::read_skill_file(&root, &path)?;
+        Ok(wisp_dto::SkillFileContent { path, content })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub(super) async fn reload_skills(
     state: State<'_, AppState>,
     window: tauri::WebviewWindow,

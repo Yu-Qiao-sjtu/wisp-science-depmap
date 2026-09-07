@@ -2920,6 +2920,12 @@ pub struct SkillRow {
     pub dir: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillFileContent {
+    pub path: String,
+    pub content: String,
+}
+
 #[derive(Clone, serde::Deserialize, PartialEq)]
 pub struct PluginRow {
     pub id: String,

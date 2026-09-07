@@ -20,6 +20,7 @@ mod runtime_views;
 mod session_modals;
 mod settings_view;
 mod sidebar;
+mod skill_detail;
 mod text;
 mod trajectory;
 mod window_titlebar;
@@ -1282,7 +1283,8 @@ fn App() -> impl IntoView {
             return;
         };
         if acp_session_modes.with_untracked(|all| all.contains_key(&session_id))
-            && acp_session_configs.with_untracked(|all| all.contains_key(&session_id)) {
+            && acp_session_configs.with_untracked(|all| all.contains_key(&session_id))
+        {
             return;
         }
         spawn_local(async move {
@@ -1290,16 +1292,19 @@ fn App() -> impl IntoView {
             let Ok(value) = invoke_checked("get_acp_session_state", args).await else {
                 return;
             };
-            let Ok(Some(state)) =
-                serde_wasm_bindgen::from_value::<Option<AcpSessionState>>(value)
+            let Ok(Some(state)) = serde_wasm_bindgen::from_value::<Option<AcpSessionState>>(value)
             else {
                 return;
             };
             if let Some(modes) = state.modes {
-                acp_session_modes.update(|all| { all.entry(session_id.clone()).or_insert(modes); });
+                acp_session_modes.update(|all| {
+                    all.entry(session_id.clone()).or_insert(modes);
+                });
             }
             if let Some(options) = state.config_options {
-                acp_session_configs.update(|all| { all.entry(session_id).or_insert(options); });
+                acp_session_configs.update(|all| {
+                    all.entry(session_id).or_insert(options);
+                });
             }
         });
     });
@@ -7602,7 +7607,10 @@ fn App() -> impl IntoView {
     }
     refresh_execution_contexts(execution_contexts);
     create_effect(move |_| {
-        if bootstrap.get().is_some_and(|status| status.local_environment.is_some()) {
+        if bootstrap
+            .get()
+            .is_some_and(|status| status.local_environment.is_some())
+        {
             refresh_execution_contexts(execution_contexts);
         }
     });
@@ -9728,8 +9736,11 @@ fn App() -> impl IntoView {
                 onboard_step.set(0);
                 show_onboarding.set(true);
                 spawn_local(async move {
-                    if let Ok(value) = invoke_checked("detect_local_environment", JsValue::UNDEFINED).await {
-                        if let Ok(status) = serde_wasm_bindgen::from_value::<BootstrapStatus>(value) {
+                    if let Ok(value) =
+                        invoke_checked("detect_local_environment", JsValue::UNDEFINED).await
+                    {
+                        if let Ok(status) = serde_wasm_bindgen::from_value::<BootstrapStatus>(value)
+                        {
                             bootstrap.set(Some(status));
                         }
                     }
@@ -16131,6 +16142,7 @@ fn App() -> impl IntoView {
             }
         })}
         <SettingsView
+            external_link_confirm=external_link_confirm
             state=SettingsViewState {
                 locale, theme_mode, light_palette, dark_palette, ui_font_size, code_font_size, ui_font_family, code_font_family, selection_popup_enabled, send_with_modifier, custom_css, update_check_enabled, show_settings, settings_section, open_conn_key, channels_open, connectors, model_form, model_catalog_limits,
                 conn_form, memory_selected, specialist_form, settings, bootstrap, settings_message,

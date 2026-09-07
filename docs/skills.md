@@ -46,6 +46,31 @@ Tags declared in `SKILL.md` appear automatically. Tags edited in Settings are a
 user override and are also applied to Agent `search_skills` queries after the
 next idle-Agent rebuild.
 
+The Skills page has two levels. The catalog lists each Skill's name, scope,
+tags, and enable switch; search, tag filters, bulk enable/disable, reload, and
+import stay in the catalog. Select a row to open **Skills → Skill name**.
+The detail page shows the description and source directory, lets you edit tags,
+and offers deletion for user-installed global Skills. Plugin enablement and
+removal remain managed by the parent plugin; personal tags can be edited in
+the Skill detail page.
+
+In **Files**, select `SKILL.md`, a nested script, or another package resource.
+Markdown opens as a rendered preview; **Source** includes the original YAML
+frontmatter. Scripts and other UTF-8 text files open as read-only source and
+are never executed. Package HTML is escaped and remote images are not loaded.
+Hidden entries and symbolic links are omitted from the file list. Preview is
+limited to 1 MiB per text file; binary/non-UTF-8 files show an explanation.
+The browser supports up to 2,000 files and 32 directory levels, and reads are
+restricted to the selected package. Disabled Skills remain browsable.
+Use the breadcrumb/back button or Escape to return to the filtered catalog.
+If a delete confirmation is open, the first Escape closes only that dialog.
+
+Catalog and detail views (screenshots use test data):
+
+![Skills catalog with tags and enable switches](assets/skills/catalog.png)
+
+![Skill detail with package files and Markdown preview](assets/skills/detail.png)
+
 `search_skills` normalizes case and common separators before matching names,
 descriptions, and tags. Continuous CJK queries also contribute bounded 2–4
 character terms, so ordinary Chinese task descriptions do not have to contain
