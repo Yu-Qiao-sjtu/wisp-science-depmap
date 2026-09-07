@@ -1523,8 +1523,11 @@ pub(crate) fn render_item(
             view! {
                 <div class="finding err">
                     <div class="finding-head">
+                        <div class="finding-summary">
                         <span class="finding-tag">{move || format!("● {}", t(locale.get(), "chat.error"))}</span>
                         <span class="finding-title">{msg}</span>
+                        </div>
+                        <div class="finding-actions">
                         {can_resume.then(|| view! {
                             <button type="button" class="tool-btn"
                                 disabled=move || busy.get()
@@ -1537,6 +1540,7 @@ pub(crate) fn render_item(
                             on:click=move |_| copy_text(copy.clone())>
                             {move || t(locale.get(), "msg.copy")}
                         </button>
+                        </div>
                     </div>
                     {move || i18n::api_error_hint(locale.get(), &hint_src).map(|hint| view! {
                         <div class="finding-body">{hint}</div>

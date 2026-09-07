@@ -26,6 +26,8 @@
 .ctx-submenu-chevron { flex: none; color: var(--text-faint); font-size: 17px; line-height: 1; }
 .ctx-submenu-menu { z-index: 122; }
 .onboard-overlay .onboard { max-width: 520px; max-height: calc(100dvh - 40px); overflow: hidden; text-align: center; }
+/* The dialog receives programmatic focus for Enter; controls keep their focus rings. */
+.onboard-overlay .onboard:focus { outline: none; }
 .onboard-content { min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; display: flex; flex-direction: column; gap: 14px; }
 .onboard-content::-webkit-scrollbar { display: none; }
 .onboard-content > * { flex-shrink: 0; }
