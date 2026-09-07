@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/logo.svg" alt="Wisp Science logo" width="128" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
+  <img src="docs/assets/wordmark-light.svg" alt="Wisp Science" width="360" />
+</picture>
 
 # Wisp Science
 
@@ -93,6 +97,8 @@ Build from source, CLI, and architecture: [development](docs/development.md).
 ## Community
 
 Thanks to everyone who filed issues, sent PRs, and used Wisp on real projects.
+Special thanks to [SpicyChicken6](https://github.com/xuzhougeng/wisp-science/discussions/1154)
+for the molecular wordmark and three-wisp desktop icon designs.
 
 <p>
   <a href="https://github.com/Yu-Qiao-sjtu"><img src="https://avatars.githubusercontent.com/u/88706761?v=4&amp;s=96" width="64" height="64" alt="@Yu-Qiao-sjtu" title="@Yu-Qiao-sjtu"></a>

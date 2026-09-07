@@ -68,6 +68,23 @@ Native macOS rendering may add system material and lighting to the design.
 The in-app and website logos are separate assets. Do not generate desktop
 icons from `ui/logo.svg`.
 
+The full molecular wordmark also comes from **SpicyChicken6** in the same
+[Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154)
+and editable SVG bundle. Thank you for both the wordmark and the desktop
+icon designs. `docs/assets/wordmark-light.svg` and `wordmark-dark.svg` retain
+the original paths and colors, with only the unused canvas trimmed. Both
+are transparent and all lettering is outlined, so they need no font files.
+
+The README files select these assets using a theme-aware `<picture>`.
+The website hero uses the light wordmark on its existing light background.
+Trunk copies the same SVGs into the app bundle for the projects home and
+empty chat welcome area. **Wisp Settings → Appearance → System / Light /
+Dark** selects the in-app variant on every platform; System follows OS
+appearance. This setting is separate from the native macOS desktop icon
+appearance described above. When editing a wordmark, check both app surfaces
+in all three theme modes, including an app theme opposite to the OS theme,
+and check that the projects toolbar still fits a narrow window.
+
 For a manual smoke check, build/install on each target OS and inspect the
 Dock/Finder (macOS), taskbar/shortcut (Windows), or launcher (Linux). Check
 that the three wisps remain legible at small sizes, corners are transparent,

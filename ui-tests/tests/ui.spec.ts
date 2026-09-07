@@ -12540,7 +12540,7 @@ test("projects landing stays centered on wide windows", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".projects-head")).toBeVisible();
   await expect(page.locator(".projects-brand-mark")).toBeVisible();
-  await expect(page.locator(".projects-title")).toHaveText("Wisp Science");
+  await expect(page.getByRole("heading", { name: "Wisp Science", exact: true })).toBeVisible();
   await expect.poll(async () => page.locator(".projects-head").evaluate((el) => {
     const rect = el.getBoundingClientRect();
     return Math.round(rect.width);
@@ -12555,7 +12555,7 @@ test("empty session shows the branded chat empty state", async ({ page }) => {
   await expect(empty.locator(".empty-logo")).toBeVisible();
   await expect.poll(() => empty.locator(".empty-logo").evaluate((el) =>
     Math.round(el.getBoundingClientRect().width)
-  )).toBe(32);
+  )).toBe(208);
   await expect(empty.locator("h1")).not.toBeEmpty();
   await expect(empty.locator("h1")).toHaveCSS("font-family", /Source Serif/);
 });

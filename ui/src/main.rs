@@ -11455,7 +11455,7 @@ fn App() -> impl IntoView {
                     })}
                     {move || items.with(|l| l.is_empty()).then(|| view! {
                         <div class="empty">
-                            <span class="empty-logo"></span>
+                            <span class="empty-logo brand-wordmark" role="img" aria-label="Wisp Science"></span>
                             <h1>{move || empty_title(locale.get(), empty_title_idx.get())}</h1>
                             <p>{move || empty_subtitle(locale.get(), empty_subtitle_idx.get())}</p>
                         </div>

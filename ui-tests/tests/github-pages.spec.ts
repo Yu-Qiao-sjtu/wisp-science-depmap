@@ -83,3 +83,46 @@ test("Pages i18n dictionaries cover every data-i18n key and stay in sync", () =>
     expect(missing, page).toEqual([]);
   }
 });
+
+for (const readme of ["README.md", "README_zh.md"]) {
+  test(`${readme} wordmark selects a readable asset for each color scheme`, async ({ page }) => {
+    await page.route("https://wordmark.test/**", (route) => route.fulfill({
+      contentType: "image/svg+xml",
+      body: readRepositoryFile(new URL(route.request().url()).pathname.slice(1)),
+    }));
+    const picture = readRepositoryFile(readme).match(/<picture>[\s\S]*?<\/picture>/)?.[0];
+    expect(picture).toBeTruthy();
+    await page.setContent(`<base href="https://wordmark.test/">${picture}`);
+    const logo = page.getByRole("img", { name: "Wisp Science", exact: true });
+    for (const mode of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: mode });
+      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.currentSrc))
+        .toContain(`wordmark-${mode}.svg`);
+      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+    }
+  });
+}
+
+test("website hero wordmark fits desktop and mobile on its light canvas", async ({ page }) => {
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== "https://wordmark.test") return route.abort();
+    const file = resolve(repositoryRoot, "docs", url.pathname.slice(1) || "index.html");
+    return existsSync(file) ? route.fulfill({ path: file }) : route.abort();
+  });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("https://wordmark.test/");
+  const logo = page.locator(".hero-wordmark");
+  await expect(logo).toHaveAttribute("src", "assets/wordmark-light.svg");
+  await expect(logo).toHaveAccessibleName("Wisp Science");
+  await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(logo).toBeVisible();
+    const box = (await logo.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    expect(box.width / box.height).toBeCloseTo(520 / 344, 2);
+    await expect(page.locator(".hero-actions .btn-primary")).toBeInViewport();
+  }
+});
