@@ -17,6 +17,7 @@ use super::{
     UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
 };
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 
@@ -2876,4 +2877,146 @@ fn native_connector_inventory_matches_dispatch_without_python_resources() {
     let servers = super::list_mcp_servers(std::path::Path::new("nonexistent-wisp-project"));
     assert!(servers.contains(&"mcp_pubmed".to_string()));
     assert_eq!(servers.len(), super::bio_domains().len());
+}
+
+#[test]
+fn plugin_mcp_passthrough_allowlist_keeps_user_dirs_and_excludes_github_tokens() {
+    for key in [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        assert!(
+            super::PLUGIN_MCP_ENV_PASSTHROUGH.contains(&key),
+            "{key} must stay on the plugin MCP allowlist"
+        );
+    }
+    for key in ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"] {
+        assert!(
+            !super::PLUGIN_MCP_ENV_PASSTHROUGH.contains(&key),
+            "{key} must not be copied into plugin MCP children"
+        );
+    }
+}
+
+#[test]
+fn plugin_mcp_passthrough_copies_user_dirs_without_github_tokens() {
+    let env = super::plugin_mcp_passthrough_env_from(|key| match key {
+        "USERPROFILE" => Some(OsString::from(r"C:\Users\wisp-plugin-test")),
+        "APPDATA" => Some(OsString::from(r"C:\Users\wisp-plugin-test\AppData\Roaming")),
+        "LOCALAPPDATA" => Some(OsString::from(r"C:\Users\wisp-plugin-test\AppData\Local")),
+        "HOMEDRIVE" => Some(OsString::from("C:")),
+        "HOMEPATH" => Some(OsString::from(r"\Users\wisp-plugin-test")),
+        "HOME" => Some(OsString::from("/home/wisp-plugin-test")),
+        "XDG_CONFIG_HOME" => Some(OsString::from("/home/wisp-plugin-test/.config")),
+        "GH_TOKEN" | "GITHUB_TOKEN" => Some(OsString::from("should-not-leak")),
+        _ => None,
+    });
+    let map = env
+        .into_iter()
+        .map(|(key, value)| (key.into_string().unwrap(), value.into_string().unwrap()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(map["USERPROFILE"], r"C:\Users\wisp-plugin-test");
+    assert_eq!(map["APPDATA"], r"C:\Users\wisp-plugin-test\AppData\Roaming");
+    assert_eq!(
+        map["LOCALAPPDATA"],
+        r"C:\Users\wisp-plugin-test\AppData\Local"
+    );
+    assert_eq!(map["HOME"], "/home/wisp-plugin-test");
+    assert_eq!(map["XDG_CONFIG_HOME"], "/home/wisp-plugin-test/.config");
+    assert!(!map.contains_key("GH_TOKEN"));
+    assert!(!map.contains_key("GITHUB_TOKEN"));
+    assert!(!map.values().any(|value| value.contains("should-not-leak")));
+}
+
+#[test]
+fn plugin_mcp_subprocess_sees_user_dirs_but_not_github_tokens() {
+    let pairs = super::plugin_mcp_passthrough_env_from(|key| match key {
+        "USERPROFILE" => Some(OsString::from(r"C:\Users\wisp-plugin-test")),
+        "APPDATA" => Some(OsString::from(r"C:\Users\wisp-plugin-test\AppData\Roaming")),
+        "LOCALAPPDATA" => Some(OsString::from(r"C:\Users\wisp-plugin-test\AppData\Local")),
+        "HOME" => Some(OsString::from("/home/wisp-plugin-test")),
+        "XDG_CONFIG_HOME" => Some(OsString::from("/home/wisp-plugin-test/.config")),
+        "GH_TOKEN" | "GITHUB_TOKEN" => Some(OsString::from("should-not-leak")),
+        "PATH" | "SYSTEMROOT" | "SYSTEMDRIVE" | "PATHEXT" | "COMSPEC" | "TEMP" | "TMP"
+        | "TMPDIR" | "LANG" | "LC_ALL" => std::env::var_os(key),
+        _ => None,
+    });
+
+    let mut command = std::process::Command::new("unused");
+    command.env("GH_TOKEN", "should-not-leak");
+    command.env("GITHUB_TOKEN", "should-not-leak");
+    command.env_clear();
+    command.envs(pairs.iter().cloned());
+    let assigned = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        assigned.get("APPDATA").and_then(Option::as_deref),
+        Some(r"C:\Users\wisp-plugin-test\AppData\Roaming")
+    );
+    assert_eq!(
+        assigned.get("USERPROFILE").and_then(Option::as_deref),
+        Some(r"C:\Users\wisp-plugin-test")
+    );
+    assert!(!assigned.contains_key("GH_TOKEN"));
+    assert!(!assigned.contains_key("GITHUB_TOKEN"));
+
+    let dump = dump_child_env(&pairs);
+    assert!(
+        dump.lines().any(|line| line
+            .eq_ignore_ascii_case(r"APPDATA=C:\Users\wisp-plugin-test\AppData\Roaming")
+            || line == r"APPDATA=C:\Users\wisp-plugin-test\AppData\Roaming"),
+        "child missing APPDATA: {dump}"
+    );
+    assert!(
+        dump.lines().any(|line| line
+            .eq_ignore_ascii_case(r"USERPROFILE=C:\Users\wisp-plugin-test")
+            || line == r"USERPROFILE=C:\Users\wisp-plugin-test"),
+        "child missing USERPROFILE: {dump}"
+    );
+    assert!(
+        !dump.contains("should-not-leak"),
+        "child leaked a GitHub token: {dump}"
+    );
+    assert!(
+        !dump
+            .lines()
+            .any(|line| line.to_ascii_uppercase().starts_with("GH_TOKEN=")
+                || line.to_ascii_uppercase().starts_with("GITHUB_TOKEN=")),
+        "child inherited a GitHub token variable: {dump}"
+    );
+}
+
+fn dump_child_env(pairs: &[(OsString, OsString)]) -> String {
+    let mut command = if cfg!(windows) {
+        let comspec = std::env::var_os("COMSPEC")
+            .unwrap_or_else(|| OsString::from(r"C:\Windows\System32\cmd.exe"));
+        let mut command = std::process::Command::new(comspec);
+        command.args(["/C", "set"]);
+        command
+    } else {
+        std::process::Command::new("/usr/bin/env")
+    };
+    command.env_clear();
+    command.envs(pairs.iter().cloned());
+    let output = command.output().expect("spawn plugin MCP env dump");
+    assert!(
+        output.status.success(),
+        "env dump failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }

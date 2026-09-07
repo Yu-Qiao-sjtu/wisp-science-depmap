@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
@@ -4947,6 +4948,53 @@ async fn wire_runtimes_and_mcp(
     finish_custom_mcp_wiring(result, registry, store, project_id, connector_allow).await
 }
 
+/// Host environment keys copied into a plugin MCP child after `env_clear()`.
+/// Keep this a non-secret allowlist: runtime plumbing plus user-config
+/// directories. Do not add `GH_TOKEN`, `GITHUB_TOKEN`, or other secrets.
+const PLUGIN_MCP_ENV_PASSTHROUGH: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "PATHEXT",
+    "COMSPEC",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+];
+
+fn plugin_mcp_passthrough_env_from<F>(mut lookup: F) -> Vec<(OsString, OsString)>
+where
+    F: FnMut(&str) -> Option<OsString>,
+{
+    PLUGIN_MCP_ENV_PASSTHROUGH
+        .iter()
+        .filter_map(|&key| lookup(key).map(|value| (OsString::from(key), value)))
+        .collect()
+}
+
+fn plugin_mcp_passthrough_env() -> Vec<(OsString, OsString)> {
+    plugin_mcp_passthrough_env_from(|key| std::env::var_os(key))
+}
+
 async fn connect_plugin_mcp(
     launch: &plugins::PluginMcpLaunch,
 ) -> anyhow::Result<wisp_mcp::McpClient> {
@@ -4955,34 +5003,10 @@ async fn connect_plugin_mcp(
         .args(&launch.args)
         .current_dir(&launch.cwd)
         .env_clear();
-    // Preserve only the small platform environment needed by common runtimes.
-    // Package-declared variables are added below; no shell is involved.
-    const PASSTHROUGH: &[&str] = &[
-        "PATH",
-        "HOME",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "LANG",
-        "LC_ALL",
-        "SYSTEMROOT",
-        "SYSTEMDRIVE",
-        "PATHEXT",
-        "COMSPEC",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-    ];
-    for key in PASSTHROUGH {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
+    // Preserve only the small platform environment needed by common runtimes
+    // and user-config directories. Package-declared variables are added below;
+    // no shell is involved, and host token variables are not copied.
+    command.envs(plugin_mcp_passthrough_env());
     command
         .envs(&launch.env)
         .env("WISP_PLUGIN_ROOT", &launch.install_root)
