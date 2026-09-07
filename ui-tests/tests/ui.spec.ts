@@ -736,7 +736,7 @@ test("Memory settings show the active project name", async ({ page }) => {
   await expect(page.getByTestId("memory-project-select")).toHaveAttribute("data-project-id", "default");
   await expect(page.getByTestId("memory-project-select")).toContainText("wisp-science");
   await expect(project).toContainText("(1)");
-  await expect(page.locator(".conn-group-label", { hasText: "Project memory" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project memory", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Clear all" })).toHaveClass("memory-clear-btn");
   await expect(page.locator(".memory-toggle-label")).toHaveText("Memory");
   await expect(
@@ -8830,6 +8830,7 @@ test("custom CSS hides the bold-at-start lead bar", async ({ page }) => {
   expect(await barWidth()).toBe("3px");
 
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
   await page.getByTestId("appearance-custom-css")
     .fill(":root { --md-lead-bar-width: 0; --md-lead-bar-pad: 0; }");
   await page.getByRole("button", { name: "Back to app" }).click();
@@ -8840,6 +8841,7 @@ test("custom CSS hides the bold-at-start lead bar", async ({ page }) => {
 test("appearance custom CSS can be pasted, imported, and cleared", async ({ page }, testInfo) => {
   await enterApp(page);
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
 
   const card = page.getByTestId("appearance-custom-css-card");
   await expect(card).toHaveClass(/appearance-config-card/);
@@ -8874,6 +8876,7 @@ test("appearance custom CSS can be pasted, imported, and cleared", async ({ page
 test("custom CSS sanitizes remote url and import", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
   await page.getByTestId("appearance-custom-css").fill([
     ":root { --clay: #111111; }",
     '@import url("https://evil.example/x.css");',
@@ -13302,7 +13305,9 @@ test("session settings configure truncated-output auto-continue", async ({ page 
   await openSettingsSection(page, "Session");
   const toggle = page.getByTestId("auto-continue-enabled");
   await expect(toggle).not.toBeChecked();
+  await expect(page.getByTestId("auto-continue-limit")).toBeDisabled();
   await toggle.locator("..").click();
+  await expect(page.getByTestId("auto-continue-limit")).toBeEnabled();
   await page.getByTestId("auto-continue-limit").fill("4");
   await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
@@ -13322,6 +13327,44 @@ test("session settings enable follow-up question suggestions by default", async 
     settings: { follow_up_questions: false },
   });
 });
+
+for (const locale of ["en", "zh"]) {
+  test(`general settings cards align and fit in ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.getByRole("button", { name: locale === "zh" ? "设置" : "Settings", exact: true }).click();
+    await page.locator(".settings-nav").getByRole("button", { name: locale === "zh" ? "常规" : "General", exact: true }).click();
+    const pane = page.getByTestId("general-settings-pane");
+    const groups = pane.locator(".general-group");
+    const first = await groups.nth(0).boundingBox();
+    const second = await groups.nth(1).boundingBox();
+    expect(Math.abs(first!.y - second!.y)).toBeLessThan(2);
+    expect(second!.x).toBeGreaterThan(first!.x + first!.width);
+    const language = await page.getByTestId("settings-language").boundingBox();
+    expect(language!.width).toBeLessThan(200);
+    await expect(pane.locator(".general-preferences-footer")).toContainText(locale === "zh" ? "分别保存" : "saved separately");
+    await page.screenshot({ animations: "disabled", path: testInfo.outputPath(`general-${locale}-desktop.png`) });
+    await page.setViewportSize({ width: 820, height: 740 });
+    const narrowFirst = await groups.nth(0).boundingBox();
+    const narrowSecond = await groups.nth(1).boundingBox();
+    expect(narrowSecond!.y).toBeGreaterThanOrEqual(narrowFirst!.y + narrowFirst!.height);
+    const environment = page.getByTestId("local-environment");
+    await environment.getByRole("button", { name: locale === "zh" ? "编辑路径" : "Edit paths", exact: true }).click();
+    const python = environment.getByRole("textbox", { name: "Python", exact: true });
+    await python.fill("C:/Users/Researcher/" + "long-environment-directory/".repeat(12) + "python.exe");
+    await python.scrollIntoViewIfNeeded();
+    await expectInsideViewport(python, 820, 740);
+    for (const scope of ["model", "mcp", "command"]) {
+      await page.getByTestId(`proxy-mode-${scope}`).selectOption("custom");
+      const save = page.getByTestId(`save-proxy-${scope}`);
+      await save.evaluate(el => el.scrollIntoView({ block: "center" }));
+      await expectInsideViewport(save, 820, 740);
+      await expectInsideViewport(page.getByTestId(`proxy-address-${scope}`), 820, 740);
+    }
+    expect(await pane.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ animations: "disabled", path: testInfo.outputPath(`general-${locale}-narrow.png`) });
+  });
+}
 
 test("general settings group workspace prefs, local environment, and network", async ({ page }) => {
   await page.goto("/");
