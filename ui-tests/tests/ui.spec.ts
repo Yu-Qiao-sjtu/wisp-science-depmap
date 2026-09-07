@@ -1910,6 +1910,59 @@ test("post-start API errors keep the user bubble when an Error event lands first
   await expect(page.getByRole("button", { name: /Resume|继续执行/ })).toBeVisible();
 });
 
+for (const locale of ["zh", "en"]) {
+  test(`long API errors wrap without squeezing the badge or actions (${locale})`, async ({ page }) => {
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.locator(".proj-card-main").first().click();
+    await composer(page).fill("show a network error");
+    await composer(page).press("Enter");
+    await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+    const send = await lastInvokeArgs(page, "send_message");
+    const message = "http: error decoding response body: request or response body error: error reading a body from connection: peer closed connection without sending TLS close_notify: "
+      + "https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof-" + "connection".repeat(30);
+    await emitTauriEvent(page, "agent", { kind: "Error", frame_id: send.sessionId, message });
+    const card = page.locator(".finding.err");
+    await expect(card.locator(".finding-title")).toHaveText(message);
+    await expect(card.getByRole("button", { name: locale === "zh" ? "继续执行" : "Resume", exact: true })).toBeVisible();
+    await expect(card.getByRole("button", { name: locale === "zh" ? "复制" : "Copy", exact: true })).toBeVisible();
+    for (const width of [1440, 820, 360]) {
+      await page.setViewportSize({ width: Math.max(width, 820), height: 1200 });
+      // Also constrain the card itself: narrow panes need the same wrapping
+      // behavior even when the desktop window remains wide.
+      await card.evaluate((el, width) => { el.style.maxWidth = width === 360 ? "360px" : ""; }, width);
+      await card.scrollIntoViewIfNeeded();
+      const layout = await card.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const controls = Array.from(el.querySelectorAll(".finding-tag, button"));
+        const buttonCenters = Array.from(el.querySelectorAll("button"), button => {
+          const rect = button.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        return {
+          overflow: el.scrollWidth > el.clientWidth,
+          controls: controls.map(control => {
+            const rect = control.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(control);
+            return {
+              lines: range.getClientRects().length,
+              inside: rect.left >= bounds.left && rect.right <= bounds.right,
+            };
+          }),
+          buttonsOnSameRow: Math.max(...buttonCenters) - Math.min(...buttonCenters) < 1,
+          actionsBelowSummary: el.querySelector(".finding-actions")!.getBoundingClientRect().top
+            >= el.querySelector(".finding-summary")!.getBoundingClientRect().bottom,
+        };
+      });
+      expect(layout.overflow).toBe(false);
+      expect(layout.controls).toEqual(Array(3).fill({ lines: 1, inside: true }));
+      expect(layout.buttonsOnSameRow).toBe(true);
+      if (width === 360) expect(layout.actionsBelowSummary).toBe(true);
+      await card.screenshot({ path: test.info().outputPath(`error-card-${locale}-${width}.png`) });
+    }
+  });
+}
+
 test("truncated output auto-continue is shown as progress", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("AUTOCONTINUE long task");
@@ -9211,7 +9264,7 @@ test("onboarding key setup lands on flash after adding pro", async ({ page }) =>
   await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
   await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
   await page.getByLabel("API key (stored in OS keyring)").fill("sk-onboard");
-  await page.getByRole("button", { name: "Next" }).click();
+  await page.keyboard.press("Enter");
   // Order matters: save_model activates each new profile, so flash must land
   // last for the user to start on the cheaper default.
   await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
@@ -15271,6 +15324,86 @@ for (const platform of ["Linux x86_64", "MacIntel"]) {
       .filter((call: any) => call.cmd === "detect_local_environment").length)).toBe(2);
   });
 }
+
+test("onboarding Enter advances once, respects composition and controls, and finishes", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await expect(modal).toBeFocused();
+  await page.keyboard.down("Enter");
+  await expect(modal.locator(".onboard-dot.active")).toHaveCount(1);
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await page.keyboard.down("Enter"); // Auto-repeat must not skip another page.
+  await page.keyboard.up("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await modal.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+  await modal.dispatchEvent("compositionend", { bubbles: true });
+  await modal.dispatchEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true });
+  await page.keyboard.press("Shift+Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  // Native keyboard activation of Back still returns exactly one page.
+  await modal.getByRole("button", { name: "Back", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Welcome to wisp-science");
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await modal.locator(".row > .primary").focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Set up your model");
+  await modal.locator('input[type="password"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Local environment (optional)");
+  expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+  await modal.getByRole("button", { name: "Edit paths" }).focus();
+  await page.keyboard.press("Enter");
+  const python = modal.getByRole("textbox", { name: "Python", exact: true });
+  await python.fill("C:\\Custom Python\\python.exe");
+  await page.keyboard.press("Enter");
+  await expect(python).toHaveValue("C:\\Custom Python\\python.exe");
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.focus();
+  await page.keyboard.press("Enter");
+  await expect(modal).toBeHidden();
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+  await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
+    .filter((call: any) => call.cmd === "dismiss_onboarding").length)).toBe(1);
+});
+
+test("onboarding keeps its backdrop and dialog mounted when navigating", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await expect(modal).toBeVisible();
+  const shell = await page.evaluateHandle(() => ({
+    backdrop: document.querySelector(".onboard-overlay"),
+    dialog: document.querySelector(".onboard"),
+    next: document.querySelector(".onboard > .row > .primary"),
+  }));
+  // Let the initial opening animation finish before watching for restarts.
+  await modal.evaluate(async el => {
+    await Promise.all(el.parentElement!.getAnimations({ subtree: true }).map(a => a.finished));
+    (window as any).__onboardAnimationStarts = [];
+    el.parentElement!.addEventListener("animationstart", event => {
+      (window as any).__onboardAnimationStarts.push((event as AnimationEvent).animationName);
+    });
+  });
+  let previousStep = 0;
+  for (const step of [1, 2, 3, 2, 1, 0]) {
+    if (step < previousStep) {
+      await page.keyboard.press("Escape");
+    } else {
+      await modal.locator(".row > .primary").click();
+    }
+    await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+    expect(await shell.evaluate(saved => saved.backdrop === document.querySelector(".onboard-overlay")
+      && saved.dialog === document.querySelector(".onboard")
+      && saved.next === document.querySelector(".onboard > .row > .primary"))).toBe(true);
+    previousStep = step;
+  }
+  expect(await page.evaluate(() => (window as any).__onboardAnimationStarts)).toEqual([]);
+  await shell.dispose();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+});
 
 for (const locale of ["en", "zh"]) {
   test(`onboarding has four separate pages without overflowing the modal (${locale})`, async ({ page }) => {

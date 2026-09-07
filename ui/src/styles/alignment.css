@@ -218,12 +218,15 @@ details.step > summary .step-count { flex: 0 0 auto; font-size: 11.5px; color: v
 
 /* --- Chat: reviewer finding card (Warn / Info / Error) --- */
 .finding { align-self: stretch; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg-elev); box-shadow: var(--shadow-sm); }
-.finding-head { display: flex; align-items: center; gap: 9px; padding: 11px 13px 9px; }
+.finding-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 9px; padding: 11px 13px 9px; }
+.finding-summary { display: flex; align-items: flex-start; gap: 9px; flex: 1 1 20rem; min-width: 0; }
+.finding-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.finding-actions .tool-btn, .finding-tag { flex-shrink: 0; white-space: nowrap; }
 .finding-avatar { font-size: 12px; color: var(--text-faint); font-weight: 600; }
 .finding-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: var(--radius-xs); display: inline-flex; align-items: center; gap: 5px; }
 .finding.warn .finding-tag { color: var(--warn); background: var(--warn-soft); }
 .finding.info .finding-tag { color: var(--info); background: var(--info-soft); }
 .finding.err .finding-tag { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
-.finding-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1 1 auto; min-width: 0; }
-.finding-body { padding: 0 13px 12px; font-size: 12.5px; color: var(--text-muted); line-height: 1.58; }
+.finding-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.finding-body { padding: 0 13px 12px; font-size: 12.5px; color: var(--text-muted); line-height: 1.58; overflow-wrap: anywhere; }
 .finding-note { padding: 8px 13px; font-size: 11.5px; color: var(--text-faint); border-top: 1px solid var(--border); background: var(--bg-sunken); font-style: italic; }
