@@ -128,7 +128,7 @@ independent of biological retrieval. Python requirements now live in
 
 Startup, session initialization, and CLI startup never create Python virtualenvs
 or install dependencies. The desktop checks executable paths in the background
-and shows the results during first-run model setup, Settings → Models, and
+and shows the results during first-run model setup, Settings → General → Local environment, and
 Capabilities. Missing Python/R/uv/Node tools are optional setup suggestions,
 not startup errors. Found paths are persisted on the Local execution context;
 existing interpreter overrides survive detection and database reopen. The

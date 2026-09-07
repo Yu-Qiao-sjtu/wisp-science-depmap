@@ -117,7 +117,7 @@ pub(crate) fn NetworkSettingsView(settings: RwSignal<Settings>) -> impl IntoView
     });
     view! {
         <div class="network-settings">
-            <div class="settings-head">
+            <div class="network-heading">
                 <div class="settings-head-main">
                     {move || if mirror_open.get() {
                         view! {
@@ -130,11 +130,11 @@ pub(crate) fn NetworkSettingsView(settings: RwSignal<Settings>) -> impl IntoView
                             </div>
                         }.into_view()
                     } else {
-                        view! { <h2>{move || t(locale.get(), "settings.nav.network")}</h2> }.into_view()
+                        view! { <h3>{move || t(locale.get(), "settings.nav.network")}</h3> }.into_view()
                     }}
                 </div>
             </div>
-            <div class="settings-pane network-pane">
+            <div class="network-pane">
                 {move || error.get().map(|message| view! { <div class="settings-status fail" role="alert">{message}</div> })}
                 {move || status.get().then(|| view! { <div class="settings-status ok" role="status">{move || t(locale.get(), "network.saved")}</div> })}
                 <Show when=move || loaded.get() fallback=move || view! { <p class="settings-field-hint">{t(locale.get(), "network.loading")}</p> }>
@@ -203,15 +203,17 @@ pub(crate) fn NetworkSettingsView(settings: RwSignal<Settings>) -> impl IntoView
                                                     <option value="direct" prop:selected=move || mode() == "direct">{move || t(locale.get(), "network.direct")}</option>
                                                     <option value="custom" prop:selected=move || mode() == "custom">{move || t(locale.get(), "network.custom")}</option>
                                                 </select>
+                                                <Show when=move || mode() == "custom">
                                                 <input aria-label=move || format!("{} — {}", t(locale.get(), label), t(locale.get(), "network.address"))
                                                     data-testid=format!("proxy-address-{scope}") placeholder="http://127.0.0.1:7890"
-                                                    disabled=move || busy.get() || mode() != "custom"
+                                                    disabled=move || busy.get()
                                                     prop:value=move || { let value = proxy_value(&draft.get(), scope); if value == "none" { String::new() } else { value } }
                                                     on:input=move |ev| {
                                                         status.set(false);
                                                         custom.update(|items| { if !items.iter().any(|s| s == scope) { items.push(scope.into()); } });
                                                         draft.update(|s| set_proxy(s, scope, event_target_input(&ev).value()));
                                                     } />
+                                                </Show>
                                                 <button type="button" class="network-clear" disabled=move || busy.get()
                                                     on:click=move |_| { custom.update(|items| items.retain(|s| s != scope)); draft.update(|s| set_proxy(s, scope, String::new())); status.set(false); }>{move || t(locale.get(), "network.clear")}</button>
                                                 <button type="button" data-testid=format!("save-proxy-{scope}") disabled=move || busy.get() on:click=move |_| save.call(scope)>{move || t(locale.get(), "settings.save")}</button>

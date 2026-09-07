@@ -13323,20 +13323,28 @@ test("session settings enable follow-up question suggestions by default", async 
   });
 });
 
-test("general settings keep workspace prefs without agent loop or proxy controls", async ({ page }) => {
+test("general settings group workspace prefs, local environment, and network", async ({ page }) => {
   await page.goto("/");
   await openSettingsSection(page, "General");
+  await expect(page.locator(".settings-content > .settings-head h2")).toHaveText("General");
   await expect(page.getByTestId("settings-language")).toBeVisible();
   await expect(page.getByTestId("resume-last-session-enabled")).toBeAttached();
   await expect(page.getByTestId("max-iter")).toHaveCount(0);
   await expect(page.getByTestId("proxy-url")).toHaveCount(0);
+  await expect(page.getByTestId("local-environment")).toBeVisible();
+  await expect(page.getByTestId("network-proxy-model")).toBeVisible();
+  await expect(page.locator(".settings-nav").getByRole("button", { name: "Network", exact: true })).toHaveCount(0);
+  await page.locator(".settings-nav").getByRole("button", { name: "Models", exact: true }).click();
+  await expect(page.getByTestId("local-environment")).toHaveCount(0);
+  await expect(page.locator(".network-settings")).toHaveCount(0);
+  await expect(page.getByTestId("models-category-http")).toBeVisible();
 });
 
 test("network saves each proxy independently and preserves the legacy model proxy", async ({ page }) => {
   await page.goto("/?mockLegacyProxy=http://127.0.0.1:7890");
   await openSettingsSection(page, "Models");
   await expect(page.getByTestId("proxy-url")).toHaveCount(0);
-  await page.getByTestId("settings-nav-network").click();
+  await page.locator(".settings-nav").getByRole("button", { name: "General", exact: true }).click();
   await expect(page.getByTestId("proxy-address-model")).toHaveValue("http://127.0.0.1:7890");
   await page.getByTestId("proxy-address-model").fill("");
   await expect(page.getByTestId("proxy-mode-model")).toHaveValue("custom");
@@ -13363,7 +13371,7 @@ test("network saves each proxy independently and preserves the legacy model prox
   await page.getByRole("button", { name: "General", exact: true }).click();
   await page.locator(".settings-footer").getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.locator(".settings-page")).toHaveCount(0);
-  await openSettingsSection(page, "Network");
+  await openSettingsSection(page, "General");
   await expect(page.getByTestId("proxy-mode-model")).toHaveValue("system");
   await expect(page.getByTestId("proxy-mode-mcp")).toHaveValue("direct");
   await expect(page.getByTestId("proxy-address-command")).toHaveValue("http://127.0.0.1:8080");
@@ -13371,7 +13379,7 @@ test("network saves each proxy independently and preserves the legacy model prox
 
 test("network package mirror saves guidance and Escape closes only its subpage", async ({ page }) => {
   await page.goto("/");
-  await openSettingsSection(page, "Network");
+  await openSettingsSection(page, "General");
   await page.getByTestId("configure-package-mirrors").click();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("package-mirrors")).toHaveCount(0);
@@ -13390,7 +13398,7 @@ test("network package mirror saves guidance and Escape closes only its subpage",
   await page.getByTestId("configure-package-mirrors").click();
   await expect(page.getByTestId("pip-index")).toHaveValue("https://mirror.example.com/simple");
   await page.getByTestId("pip-index").fill("https://unsaved.example.com/simple");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByTestId("package-mirrors").getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByTestId("configure-package-mirrors").click();
   await expect(page.getByTestId("pip-index")).toHaveValue("https://mirror.example.com/simple");
   await page.getByTestId("conda-mirror").fill("");
@@ -13408,8 +13416,10 @@ test("network Chinese pages fit desktop and narrow windows", async ({ page }, te
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/?mockLocale=zh&mockLegacyProxy=http://127.0.0.1:7890");
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByTestId("settings-nav-network").click();
-  await expect(page.locator(".network-settings h2")).toHaveText("网络");
+  await page.locator(".settings-nav").getByRole("button", { name: "常规", exact: true }).click();
+  await expect(page.locator(".settings-content > .settings-head h2")).toHaveText("常规");
+  await expect(page.locator(".network-heading h3")).toHaveText("网络");
+  await page.locator(".network-settings").scrollIntoViewIfNeeded();
   await expect(page.getByTestId("save-proxy-model")).toBeVisible();
   await page.screenshot({ animations: "disabled", path: testInfo.outputPath("network-zh.png") });
   await page.getByTestId("configure-package-mirrors").click();
@@ -13418,15 +13428,52 @@ test("network Chinese pages fit desktop and narrow windows", async ({ page }, te
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 820, height: 740 });
   for (const scope of ["model", "mcp", "command"]) {
-    await expectInsideViewport(page.getByTestId(`proxy-address-${scope}`), 820, 740);
+    await page.getByTestId(`network-proxy-${scope}`).scrollIntoViewIfNeeded();
+    if (scope === "model") {
+      await expectInsideViewport(page.getByTestId(`proxy-address-${scope}`), 820, 740);
+    } else {
+      await expect(page.getByTestId(`proxy-address-${scope}`)).toHaveCount(0);
+    }
     await expectInsideViewport(page.getByTestId(`save-proxy-${scope}`), 820, 740);
   }
   await page.screenshot({ animations: "disabled", path: testInfo.outputPath("network-narrow.png") });
 });
 
+test("network address fields appear only for custom proxies in every scope", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "General");
+  for (const scope of ["model", "mcp", "command"]) {
+    const mode = page.getByTestId(`proxy-mode-${scope}`);
+    const address = page.getByTestId(`proxy-address-${scope}`);
+    await expect(mode).toHaveValue("system");
+    await expect(address).toHaveCount(0);
+    await mode.selectOption("direct");
+    await expect(address).toHaveCount(0);
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "none" },
+    });
+    await mode.selectOption("custom");
+    await expect(address).toBeVisible();
+    await expect(address).toBeEnabled();
+    await address.fill("http://localhost:8080");
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "http://localhost:8080" },
+    });
+    await expect(address).toHaveValue("http://localhost:8080");
+    await mode.selectOption("system");
+    await expect(address).toHaveCount(0);
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "" },
+    });
+  }
+});
+
 test("network shows validation errors without discarding the draft", async ({ page }) => {
   await page.goto("/");
-  await openSettingsSection(page, "Network");
+  await openSettingsSection(page, "General");
   await page.getByTestId("proxy-mode-mcp").selectOption("custom");
   await page.getByTestId("save-proxy-mcp").click();
   await expect(page.getByRole("alert")).toContainText("Enter a proxy address");
@@ -15224,9 +15271,9 @@ test("optional environment detection does not block first-run model setup", asyn
   expect(await lastInvokeArgs(page, "send_message")).toBeNull();
 });
 
-test("model settings show discovered paths and can recheck without installing", async ({ page }) => {
+test("general settings show discovered paths and can recheck without installing", async ({ page }) => {
   await enterApp(page);
-  await openSettingsSection(page, "Models");
+  await openSettingsSection(page, "General");
   const environment = page.getByTestId("local-environment");
   await expect(environment).toContainText("/mock/bin/python3");
   await expect(environment).toContainText("/mock/bin/Rscript");

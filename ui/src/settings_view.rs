@@ -1093,12 +1093,14 @@ fn ProjectApprovalSettings(
             busy.try_set(false);
         });
     });
-    let button = move |mode: &'static str, label: &'static str| view! {
-        <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
-            class:active=move || scope.get() == mode
-            aria-pressed=move || (scope.get() == mode).to_string()
-            disabled=move || busy.get() || connectors.with(Option::is_none)
-            on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+    let button = move |mode: &'static str, label: &'static str| {
+        view! {
+            <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
+                class:active=move || scope.get() == mode
+                aria-pressed=move || (scope.get() == mode).to_string()
+                disabled=move || busy.get() || connectors.with(Option::is_none)
+                on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+        }
     };
     view! {
         <section class="project-approval-settings" data-testid="project-approval-settings"
@@ -1410,11 +1412,18 @@ pub(super) fn SettingsView(
     let credential_page = create_rw_signal(None::<&'static str>);
     let credential_saving = create_rw_signal(false);
     let close_settings_subpage = Callback::new(move |()| {
-        if credential_saving.get_untracked() { return; }
+        if credential_saving.get_untracked() {
+            return;
+        }
         if credential_page.get_untracked().is_some() {
             credential_page.set(None);
-            cred_inputs.update(|inputs| inputs.retain(|id, _|
-                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
             cred_msg.set(None);
         } else {
             close_settings_subpage.call(());
@@ -1423,8 +1432,13 @@ pub(super) fn SettingsView(
     create_effect(move |_| {
         if !show_settings.get() || settings_section.get() != "credentials" {
             credential_page.set(None);
-            cred_inputs.update(|inputs| inputs.retain(|id, _|
-                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
         }
     });
     let custom_cred_name = create_rw_signal(String::new());
@@ -1790,10 +1804,6 @@ pub(super) fn SettingsView(
                         data-testid="settings-nav-browser"
                         on:click=move |_| go_settings_section.call("browser".into())>
                         {move || t(locale.get(), "settings.nav.browser")}</button>
-                    <button class:active=move || settings_section.get()=="network"
-                        data-testid="settings-nav-network"
-                        on:click=move |_| go_settings_section.call("network".into())>
-                        {move || t(locale.get(), "settings.nav.network")}</button>
                     <button class:active=move || settings_section.get()=="connections"
                         on:click=move |_| go_settings_section.call("connections".into())>
                         {move || t(locale.get(), "settings.nav.connections")}</button>
@@ -1851,9 +1861,6 @@ pub(super) fn SettingsView(
                         </div>
                     }
                 }}
-                {move || (settings_section.get() == "network").then(|| view! {
-                    <crate::network_settings::NetworkSettingsView settings=settings />
-                })}
                 {move || (settings_section.get() == "general").then(|| view! {
                     <div class="settings-pane">
                         <div class="settings-form-grid">
@@ -1961,6 +1968,8 @@ pub(super) fn SettingsView(
                             <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
                                 <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                         </div>
+                        <crate::overlays::LocalEnvironmentPanel locale=locale bootstrap=bootstrap />
+                        <crate::network_settings::NetworkSettingsView settings=settings />
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "session").then(|| view! {
@@ -3776,7 +3785,6 @@ pub(super) fn SettingsView(
                     } else {
                         view! {
                         <div class="settings-pane settings-pane-list model-settings-pane">
-                            <crate::overlays::LocalEnvironmentPanel locale=locale bootstrap=bootstrap />
                             <div class="settings-toolbar settings-toolbar-end model-category-toolbar">
                                 <div class="settings-category-tabs" role="tablist" aria-label="Model categories">
                                     <button type="button" role="tab" class="settings-category-tab"
