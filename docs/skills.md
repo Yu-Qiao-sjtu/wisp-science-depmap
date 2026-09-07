@@ -83,3 +83,31 @@ The **Capabilities** summary uses the same current enabled Skill inventory and
 splits it into bundled and project-added counts. Project-added includes project,
 global, extra-path, and project-enabled plugin Skills. MCP counts are split into
 bundled packages and enabled custom/plugin services available to the project.
+
+## Scripts and interactive analysis
+
+The built-in execution guidance and analysis skills describe the available
+execution methods without assigning task categories to a default method.
+`shell` runs short commands in fresh processes; `run_in_context` manages
+standalone background, long-running, or remote work. The `python`/`r` runtimes
+retain interpreter state across calls. The Agent chooses according to the
+user's workflow, state reuse, script requirements, and task lifecycle, using
+the selected environment with either method.
+
+Persistent `python`/`r` tools are appropriate when interactive analysis is
+requested or retaining loaded data, models, or expensive intermediates benefits
+successive steps. Saved analysis scripts can consume existing objects through
+`script_path` with `required_objects`. Moving such work into a Run starts a
+fresh process and loses access to those objects, regardless of its duration.
+Resumed conversations refresh the built-in execution guidance when their Agent
+is constructed, preserving project rules and specialist instructions.
+
+Python `script_path` execution temporarily sets `__file__` to the source path
+resolved against the runtime working directory and restores the previous
+binding afterward. `sys.exit()` and `sys.exit(0)` complete the script without
+failing the cell or stopping the worker; other exit values remain errors.
+Variables remain in the conversation's runtime. This is not full command-line
+emulation: it does not configure script arguments or import paths. On SSH, the
+source path is logical: only source content is sent, and sibling files are not
+deployed. Use standalone execution for scripts requiring normal CLI behavior
+instead of adding REPL compatibility branches to the script.

@@ -135,8 +135,8 @@ pub struct RTool {
     session_id: String,
 }
 
-const PYTHON_TOOL_DESCRIPTION: &str = "Execute inline Python code or a project-local .py script in the same persistent REPL. Variables, imports, and loaded data persist per conversation and execution context; parallel conversations never share interpreter state. Prefer script_path for reproducible analysis source that depends on already-loaded large objects; use required_objects to fail instead of silently starting an empty replacement runtime. Return values of expressions are printed. Local and WSL REPLs start in the project root; SSH REPLs use the execution context workdir and receive the script content. Use this for analysis, data loading, plotting, and computation when required packages already exist. Do not use this as a package installer; if dependencies are missing, set up a project-local pixi environment or use local-env-setup first.";
-const R_TOOL_DESCRIPTION: &str = "Execute inline R code or a project-local .R script in the same persistent REPL. Variables, libraries, and loaded data persist per conversation and execution context; parallel conversations never share interpreter state. Prefer script_path for reproducible analysis source that depends on already-loaded large objects; use required_objects to fail instead of silently starting an empty replacement runtime. The final visible value is printed. Local and WSL REPLs start in the project root; SSH REPLs use the execution context workdir and receive the script content. Write plots explicitly with png(), pdf(), ggsave(), or another file device. Rscript and the jsonlite package must already exist in that context; this tool does not install packages.";
+const PYTHON_TOOL_DESCRIPTION: &str = "Execute inline Python code or a project-local .py script in the same persistent REPL. Variables, imports, and loaded data persist per conversation and execution context; parallel conversations never share interpreter state. This supports interactive work and reuse of in-memory state. For scripts requiring a fresh process, shell or run_in_context can be used when available. Choose according to state reuse, script requirements, and task lifecycle. Prefer script_path for reproducible analysis source that depends on already-loaded large objects; use required_objects to fail instead of silently starting an empty replacement runtime. Return values of expressions are printed. Local and WSL REPLs start in the project root; SSH REPLs use the execution context workdir and receive the script content. Use this for stateful analysis when required packages already exist. Do not use this as a package installer; if dependencies are missing, set up a project-local pixi environment or use local-env-setup first.";
+const R_TOOL_DESCRIPTION: &str = "Execute inline R code or a project-local .R script in the same persistent REPL. Variables, libraries, and loaded data persist per conversation and execution context; parallel conversations never share interpreter state. This supports interactive work and reuse of in-memory state. For scripts requiring a fresh process, shell or run_in_context can be used when available. Choose according to state reuse, script requirements, and task lifecycle. Prefer script_path for reproducible analysis source that depends on already-loaded large objects; use required_objects to fail instead of silently starting an empty replacement runtime. The final visible value is printed. Local and WSL REPLs start in the project root; SSH REPLs use the execution context workdir and receive the script content. Write plots explicitly with png(), pdf(), ggsave(), or another file device. Rscript and the jsonlite package must already exist in that context; this tool does not install packages.";
 
 impl ReplTool {
     pub fn new(manager: RuntimeManager, project_id: impl Into<String>) -> Self {
@@ -679,6 +679,19 @@ mod tests {
             assert!(description.contains("SSH REPLs use the execution context workdir"));
             assert!(description.contains("script_path"));
             assert!(description.contains("required_objects"));
+        }
+    }
+
+    #[test]
+    fn language_tools_distinguish_standalone_scripts_from_stateful_analysis() {
+        for description in [PYTHON_TOOL_DESCRIPTION, R_TOOL_DESCRIPTION] {
+            assert!(description.contains("reuse of in-memory state"));
+            assert!(description.contains("scripts requiring a fresh process"));
+            assert!(description.contains("state reuse, script requirements, and task lifecycle"));
+            assert!(!description.contains("default to"));
+            assert!(!description.contains("CSV/JSON"));
+            assert!(!description.contains("report/HTML"));
+            assert!(description.contains("already-loaded large objects"));
         }
     }
 

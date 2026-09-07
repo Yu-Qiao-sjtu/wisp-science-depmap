@@ -88,15 +88,16 @@ never reduce the promised samples or scientific objective without the user's exp
 
     fn tool_guidance() -> String {
         "## Tool Selection\n\n\
-Use the dedicated tool when one exists (read/write/edit/search/grep/attempt_completion). Reach for **shell** only when no dedicated tool fits — it runs PowerShell on Windows and POSIX `sh` on macOS/Linux, with a 60s timeout.\n\
-Long-running compute uses **run_in_context** and **monitor_run** when those tools are available. Do not wait with shell `sleep`/`Start-Sleep`, `ps` polling, `nohup`, or background `&`.\n\
+Use dedicated tools for file operations (read/write/edit/search/grep) and **attempt_completion** for delivery. For short standalone scripts and commands, use **shell** — it runs PowerShell on Windows and POSIX `sh` on macOS/Linux, with a 60s timeout.\n\
+Long-running standalone commands use **run_in_context** and **monitor_run** when those tools are available. Duration alone is not a reason to move analysis that depends on existing in-memory objects into a fresh process. Do not wait with shell `sleep`/`Start-Sleep`, `ps` polling, `nohup`, or background `&`.\n\
 When the user asks what a configured Workflow is, what it does, or how it works, call **explain_workflow** when available and explain the returned task graph. Inspection is not execution: do not call **delegate_tasks** unless the user asks to run the Workflow.\n\
 When the user asks to change app appearance or preferences (font size, theme, language, compaction, notifications) or to inspect disk storage for this project, call **configure**. Do not send them to Settings for those allowlisted keys. Secrets, API keys, model profiles, workspace directory, and proxy stay in Settings. List or update specialists with **configure** get specialists and **save_specialist** (pass `id` to edit).\n\
 Use **edit** (not write) for small in-place changes; read the target first so `old` matches the current file exactly, and ensure `old` is unique or pass `all=true`.\n\
 When a user turn contains a `Selected excerpt from workspace file` path and asks for a change, modify that file directly with the file tools and verify the saved result. Do not merely reply with a replacement code block.\n\
 Use **view_image** for screenshots, UI mockups, error screens, and diagrams. The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, but call `view_image` directly when the path is computed.\n\
 Write shell commands for the OS in the Environment section. Do not use Unix one-liners such as `mkdir -p`, `awk`, `head`, or nested Bash quoting on Windows; use PowerShell equivalents, Python, or a small script file. For SSH, avoid long nested-quote one-liners; run one simple command or send a script over stdin.\n\
-Use **python** or **r** (when available) for persistent exploratory analysis in the data's execution context — variables and loaded data persist across cells. Reproducible `.py`/`.R` files can execute in that same process through `script_path`; when a script depends on an already-loaded large object, pass `required_objects` and do not switch to `python file.py`, `Rscript`, shell, or `run_in_context`. Keep the heavyweight loader separate from analysis scripts, and reserve fresh-process Runs for state-independent batch work. Put multi-line inline code in one valid cell, and prefer a language runtime over shell `awk` for tabular analysis. R plots must be written explicitly with `png()`, `pdf()`, `ggsave()`, or another file device.\n\
+**python** and **r** (when available) provide persistent runtimes in the data's execution context: variables, imports, and loaded objects persist across calls. They support inline code and saved `.py`/`.R` files through `script_path`. **shell** and **run_in_context** execute commands in fresh processes. Choose the execution method based on the user's workflow, the value of retaining in-memory state, the script's execution requirements, and the task lifecycle. Use the selected environment's interpreter or project environment (for example `pixi run`) for either method.\n\
+Keep reproducible source in project files regardless of process lifetime. When a script depends on an already-loaded object, pass `required_objects` with `script_path` and do not switch to `python file.py`, `Rscript`, shell, or `run_in_context` without deliberately arranging how that state will be reconstructed. Separate expensive loading from analysis that consumes the loaded objects. Put multi-line inline code in one valid cell. R plots must be written explicitly with `png()`, `pdf()`, `ggsave()`, or another file device.\n\
 When a browser tool reports the extension is not connected, do not answer live, latest, current, or URL-specific questions from memory. Tell the user this turn has no live web retrieval, ask them to open Chrome/Chromium so the extension can connect, and wait.\n\
 Keep intermediate tool narration sparse. The UI already shows tool and Run cards. Do not announce that a Run was submitted, say that you are waiting or monitoring, or preface a `monitor_run` call; call the tool directly. Send an intermediate update only for a material result, a changed plan, a failure that needs explanation, or required user action.\n\
 Always finish with **attempt_completion** to present the final result.\n".into()
@@ -104,8 +105,8 @@ Always finish with **attempt_completion** to present the final result.\n".into()
 
     fn environment_guidance() -> String {
         "## Python, R, And Local Environments\n\n\
-Use the existing **python** tool for ordinary analysis; its variables and loaded data persist across cells. **A missing package is a setup step, not a dead end.** If an import fails or a needed tool is absent, install it (see below) and continue — do not re-probe the same missing module in a loop, and do not silently downgrade to a lower-quality fallback (e.g. a worse PDF/text extractor) that yields garbled output. Install once, confirm the import, then proceed. Do not hunt for random system Python installs with repeated `where`/`Get-Command` probes, and do not install into an arbitrary global Python.\n\
-Use the existing **r** tool when R is the appropriate analysis environment. It requires an existing `Rscript` and `jsonlite`; do not silently install R or packages. Interpreter paths belong to the selected execution context's persisted settings. When the user supplies or asks to change a Python/R path, use `set_runtime_interpreter` with the matching `context_id` if that tool is available; never try to change the Wisp host process environment from a shell tool.\n\
+Use the selected environment for both standalone scripts and interactive analysis; choose process lifetime using Tool Selection above. **A missing package is a setup step, not a dead end.** If an import fails or a needed tool is absent, install it (see below) and continue — do not re-probe the same missing module in a loop, and do not silently downgrade to a lower-quality fallback (e.g. a worse PDF/text extractor) that yields garbled output. Install once, confirm the import, then proceed. Do not hunt for random system Python installs with repeated `where`/`Get-Command` probes, and do not install into an arbitrary global Python.\n\
+The persistent **r** tool requires an existing `Rscript` and `jsonlite`; standalone R scripts require only their own dependencies. Do not silently install R or packages. Interpreter paths belong to the selected execution context's persisted settings. When the user supplies or asks to change a Python/R path, use `set_runtime_interpreter` with the matching `context_id` if that tool is available; never try to change the Wisp host process environment from a shell tool.\n\
 When packages or a project-specific scientific stack are needed, call `use_skill` for `local-env-setup` first. For local bioinformatics/scientific package work, prefer a project-local **pixi** environment: `pixi init`, `pixi add ...`, then `pixi run python ...` from the project directory.\n\
 Before any `pip`, `uv`, `npm`, or `pixi add` download, consider the user's network. If mainland-China or corporate-mirror access is likely or requested, configure PyPI/uv and pixi conda/PyPI mirrors first; otherwise use defaults.\n".into()
     }
@@ -136,6 +137,40 @@ If a named workflow is disabled or unavailable, follow the same principles direc
 - Then call `use_skill` with the exact returned name before proceeding.\n\
 - If the user already attached a selected skill's guidance to the turn, follow that content without loading it again.\n"
         )
+    }
+
+    /// Refresh execution guidance in resumed conversations without rebuilding
+    /// project rules, environment snapshots, or specialist/delegation sections.
+    pub fn refresh_execution_guidance(&self, prompt: &mut String) {
+        for (header, replacement) in [
+            ("## Tool Selection", Self::tool_guidance()),
+            (
+                "## Python, R, And Local Environments",
+                Self::environment_guidance(),
+            ),
+        ] {
+            // A similarly named heading inside user/project instructions is
+            // not a host-owned section, including in older/custom prompts.
+            let boundary = [
+                "\n\n## Project Instructions (AGENTS.md)",
+                "\n\n## User Rules",
+                "\n\n## Environment",
+            ]
+            .iter()
+            .filter_map(|marker| prompt.find(marker))
+            .min()
+            .unwrap_or(prompt.len());
+            let marker = format!("\n\n{header}\n");
+            let Some(start) = prompt[..boundary].find(&marker).map(|offset| offset + 2) else {
+                continue;
+            };
+            let search_from = start + header.len();
+            let end = prompt[search_from..]
+                .find("\n\n## ")
+                .map(|offset| search_from + offset)
+                .unwrap_or(prompt.len());
+            prompt.replace_range(start..end, replacement.trim_end());
+        }
     }
 
     /// Replace only the skills section in a persisted system prompt. Other
@@ -482,7 +517,46 @@ mod tests {
             out.contains("do not switch to `python file.py`, `Rscript`"),
             "{out}"
         );
-        assert!(out.contains("reserve fresh-process Runs for state-independent batch work"));
+        assert!(out.contains("how that state will be reconstructed"));
+    }
+
+    #[test]
+    fn prompt_describes_execution_capabilities_without_routing_by_task_category() {
+        let skills = SkillIndex::default();
+        let out = SystemPrompt::new(std::path::Path::new("/tmp"), &skills, None).assemble();
+        assert!(out.contains("provide persistent runtimes"));
+        assert!(out.contains("execute commands in fresh processes"));
+        assert!(out.contains("selected environment's interpreter"));
+        assert!(out.contains("the script's execution requirements"));
+        assert!(out.contains("Duration alone is not a reason"));
+        assert!(!out.contains("Default to standalone scripts"));
+        assert!(!out.contains("CSV/JSON"));
+        assert!(!out.contains("report/HTML"));
+        assert!(!out.contains("Use the existing **python** tool for ordinary analysis"));
+        assert!(!out.contains("Reach for **shell** only when no dedicated tool fits"));
+    }
+
+    #[test]
+    fn resumed_execution_guidance_refresh_preserves_other_sections() {
+        let skills = SkillIndex::default();
+        let system = SystemPrompt::new(std::path::Path::new("/tmp"), &skills, None);
+        let mut old = "Intro\n\n## Tool Selection\n\nOld runtime preference.\n\n## Python, R, And Local Environments\n\nOld environment rule.\n\n## Scientific Deliverables\n\nKeep deliverables.\n\n## Project Instructions (AGENTS.md)\n\nUser text.\n\n## Tool Selection\n\nProject-owned heading.\n\n## User Rules\n\nUser rules.\n\n## Environment\n\nWindows custom snapshot.\n\n## Specialist\n\nKeep specialist.\n\n## Delegation\n\nKeep grants.".to_string();
+        let suffix = old[old.find("\n\n## Scientific Deliverables").unwrap()..].to_string();
+        system.refresh_execution_guidance(&mut old);
+        assert!(old.starts_with("Intro\n\n## Tool Selection"));
+        assert!(old.contains("provide persistent runtimes"));
+        assert!(!old.contains("Old runtime preference"));
+        assert!(!old.contains("Old environment rule"));
+        assert!(old.ends_with(&suffix));
+        let refreshed = old.clone();
+        system.refresh_execution_guidance(&mut old);
+        assert_eq!(old, refreshed, "refresh must be idempotent");
+
+        let mut custom =
+            "Intro\n\n## User Rules\n\n## Tool Selection\n\nLeave this alone.".to_string();
+        let original = custom.clone();
+        system.refresh_execution_guidance(&mut custom);
+        assert_eq!(custom, original);
     }
 
     #[test]
