@@ -1093,12 +1093,14 @@ fn ProjectApprovalSettings(
             busy.try_set(false);
         });
     });
-    let button = move |mode: &'static str, label: &'static str| view! {
-        <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
-            class:active=move || scope.get() == mode
-            aria-pressed=move || (scope.get() == mode).to_string()
-            disabled=move || busy.get() || connectors.with(Option::is_none)
-            on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+    let button = move |mode: &'static str, label: &'static str| {
+        view! {
+            <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
+                class:active=move || scope.get() == mode
+                aria-pressed=move || (scope.get() == mode).to_string()
+                disabled=move || busy.get() || connectors.with(Option::is_none)
+                on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+        }
     };
     view! {
         <section class="project-approval-settings" data-testid="project-approval-settings"
@@ -1410,11 +1412,18 @@ pub(super) fn SettingsView(
     let credential_page = create_rw_signal(None::<&'static str>);
     let credential_saving = create_rw_signal(false);
     let close_settings_subpage = Callback::new(move |()| {
-        if credential_saving.get_untracked() { return; }
+        if credential_saving.get_untracked() {
+            return;
+        }
         if credential_page.get_untracked().is_some() {
             credential_page.set(None);
-            cred_inputs.update(|inputs| inputs.retain(|id, _|
-                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
             cred_msg.set(None);
         } else {
             close_settings_subpage.call(());
@@ -1423,8 +1432,13 @@ pub(super) fn SettingsView(
     create_effect(move |_| {
         if !show_settings.get() || settings_section.get() != "credentials" {
             credential_page.set(None);
-            cred_inputs.update(|inputs| inputs.retain(|id, _|
-                !CRED_GROUPS.iter().any(|group| group.fields.iter().any(|field| field.id == id))));
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
         }
     });
     let custom_cred_name = create_rw_signal(String::new());
