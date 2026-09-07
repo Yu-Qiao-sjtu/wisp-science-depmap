@@ -1862,9 +1862,13 @@ pub(super) fn SettingsView(
                     }
                 }}
                 {move || (settings_section.get() == "general").then(|| view! {
-                    <div class="settings-pane">
-                        <div class="settings-form-grid">
-                        <label class="span-2">{move || t(locale.get(), "settings.language")}
+                    <div class="settings-pane general-settings-pane" data-testid="general-settings-pane">
+                        <section class="general-preferences" data-testid="general-preferences">
+                        <div class="general-preference-groups">
+                        <section class="general-group" aria-labelledby="general-workspace-heading">
+                        <h3 id="general-workspace-heading">{move || t(locale.get(), "settings.general.workspace")}</h3>
+                        <div class="general-fields">
+                        <label class="general-field general-field-inline"><span>{move || t(locale.get(), "settings.language")}</span>
                             <select data-testid="settings-language"
                                 on:change=move|ev| {
                                     let code = dom_value(&ev);
@@ -1882,26 +1886,26 @@ pub(super) fn SettingsView(
                                 <option value="zh" prop:selected=move || locale.get() == Locale::Zh>{move || t(locale.get(), "settings.language.zh")}</option>
                             </select>
                         </label>
-                        <label class="span-2">{move || t(locale.get(), "settings.workspace_dir")}
+                        <label class="general-field">{move || t(locale.get(), "settings.workspace_dir")}
                             <input class="settings-path-input" on:input=move|ev| settings.update(|s| {
                                     s.workspace_dir = event_target_input(&ev).value();
                                 })
                                 prop:value={move || settings.get().workspace_dir}
                                 placeholder=move || bootstrap.get().map(|b| b.workspace).unwrap_or_default() />
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.resume_last_session")}</strong>
+                                <strong id="general-resume-last-session-label">{move || t(locale.get(), "settings.resume_last_session")}</strong>
                                 <span>{move || t(locale.get(), "settings.resume_last_session_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="resume-last-session-enabled"
+                                <input type="checkbox" data-testid="resume-last-session-enabled" aria-labelledby="general-resume-last-session-label"
                                     prop:checked=move || settings.get().resume_last_session
                                     on:change=move |ev| settings.update(|current| current.resume_last_session = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <label class="span-2">{move || t(locale.get(), "settings.send_shortcut")}
+                        <label class="general-field general-field-inline"><span>{move || t(locale.get(), "settings.send_shortcut")}</span>
                             <select data-testid="send-shortcut"
                                 prop:value=move || if send_with_modifier.get() { "modifier_enter" } else { "enter" }
                                 on:change=move |ev| send_with_modifier.set(dom_value(&ev) == "modifier_enter")>
@@ -1913,37 +1917,42 @@ pub(super) fn SettingsView(
                                 )}</option>
                             </select>
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.notifications")}</strong>
-                                <span>{move || t(locale.get(), "settings.notifications_hint")}</span>
-                            </div>
-                            <label class="toggle">
-                                <input type="checkbox" data-testid="notifications-enabled"
-                                    prop:checked=move || settings.get().notifications_enabled
-                                    on:change=move |ev| settings.update(|current| current.notifications_enabled = event_target_checked(&ev)) />
-                                <span class="toggle-track" aria-hidden="true"></span>
-                            </label>
-                        </div>
-                        <div class="span-2 appearance-config-row">
-                            <div>
-                                <strong>{move || t(locale.get(), "settings.selection_popup")}</strong>
+                                <strong id="general-selection-popup-label">{move || t(locale.get(), "settings.selection_popup")}</strong>
                                 <span>{move || t(locale.get(), "settings.selection_popup_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="selection-popup-enabled"
+                                <input type="checkbox" data-testid="selection-popup-enabled" aria-labelledby="general-selection-popup-label"
                                     prop:checked=move || selection_popup_enabled.get()
                                     on:change=move |ev| selection_popup_enabled.set(event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <div class="span-2 appearance-config-row">
+                        </div>
+                        </section>
+                        <section class="general-group" aria-labelledby="general-notifications-heading">
+                        <h3 id="general-notifications-heading">{move || t(locale.get(), "settings.general.notifications")}</h3>
+                        <div class="general-fields">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.update_check")}</strong>
+                                <strong id="general-notifications-label">{move || t(locale.get(), "settings.notifications")}</strong>
+                                <span>{move || t(locale.get(), "settings.notifications_hint")}</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="notifications-enabled" aria-labelledby="general-notifications-label"
+                                    prop:checked=move || settings.get().notifications_enabled
+                                    on:change=move |ev| settings.update(|current| current.notifications_enabled = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                        <div class="appearance-config-row">
+                            <div>
+                                <strong id="general-update-check-label">{move || t(locale.get(), "settings.update_check")}</strong>
                                 <span>{move || t(locale.get(), "settings.update_check_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="update-check-enabled"
+                                <input type="checkbox" data-testid="update-check-enabled" aria-labelledby="general-update-check-label"
                                     prop:checked=move || update_check_enabled.get()
                                     on:change=move |ev| {
                                         let on = event_target_checked(&ev);
@@ -1957,25 +1966,33 @@ pub(super) fn SettingsView(
                             </label>
                         </div>
                         </div>
+                        <div class="row general-update-actions">
+                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
+                                <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
+                        </div>
+                        </section>
+                        </div>
                         {move || settings_message.get().map(|(ok, text)| view! {
                             <div class="settings-status"
                                 class:ok=move || ok
                                 class:fail=move || !ok>{text}</div>
                         })}
-                        <div class="row settings-footer">
-                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
-                                <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
+                        <div class="row settings-footer general-preferences-footer">
+                            <span class="settings-field-hint">{move || t(locale.get(), "settings.general.save_hint")}</span>
                             <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
                                 <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                         </div>
+                        </section>
                         <crate::overlays::LocalEnvironmentPanel locale=locale bootstrap=bootstrap />
                         <crate::network_settings::NetworkSettingsView settings=settings />
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "session").then(|| view! {
-                    <div class="settings-pane" data-testid="session-settings-pane">
-                        <div class="settings-form-grid">
-                        <label class="span-2">{move || t(locale.get(), "settings.max_iter")}
+                    <div class="settings-pane session-settings-pane" data-testid="session-settings-pane">
+                        <section class="settings-card session-preferences">
+                        <h3>{move || t(locale.get(), "settings.session.limits")}</h3>
+                        <div class="session-fields">
+                        <label class="session-number-field"><span>{move || t(locale.get(), "settings.max_iter")}</span>
                             <input data-testid="max-iter" type="number" min="0" step="1"
                                 on:input=move |ev| settings.update(|s| {
                                     if let Ok(value) = event_target_input(&ev).value().parse() {
@@ -1985,32 +2002,20 @@ pub(super) fn SettingsView(
                                 prop:value=move || settings.get().max_iter.to_string() />
                             <span class="settings-field-hint">{move || t(locale.get(), "settings.max_iter_hint")}</span>
                         </label>
-                        <div class="span-2 appearance-config-row">
-                            <div>
-                                <strong>{move || t(locale.get(), "settings.auto_compact")}</strong>
-                                <span>{move || t(locale.get(), "settings.auto_compact_hint")}</span>
-                            </div>
-                            <label class="toggle">
-                                <input type="checkbox" data-testid="auto-compact-enabled"
-                                    prop:checked=move || settings.get().auto_compact
-                                    on:change=move |ev| settings.update(|current| current.auto_compact = event_target_checked(&ev)) />
-                                <span class="toggle-track" aria-hidden="true"></span>
-                            </label>
-                        </div>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "settings.auto_continue")}</strong>
                                 <span>{move || t(locale.get(), "settings.auto_continue_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="auto-continue-enabled"
+                                <input type="checkbox" data-testid="auto-continue-enabled" aria-label=move || t(locale.get(), "settings.auto_continue")
                                     prop:checked=move || settings.get().auto_continue
                                     on:change=move |ev| settings.update(|current| current.auto_continue = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <label class="span-2">{move || t(locale.get(), "settings.auto_continue_limit")}
-                            <input data-testid="auto-continue-limit" type="number" min="1" step="1"
+                        <label class="session-number-field session-dependent-field"><span>{move || t(locale.get(), "settings.auto_continue_limit")}</span>
+                            <input data-testid="auto-continue-limit" type="number" disabled=move || !settings.get().auto_continue min="1" step="1"
                                 on:input=move |ev| settings.update(|current| {
                                     if let Ok(value) = event_target_input(&ev).value().parse() {
                                         current.auto_continue_limit = value;
@@ -2019,13 +2024,31 @@ pub(super) fn SettingsView(
                                 prop:value=move || settings.get().auto_continue_limit.to_string() />
                             <span class="settings-field-hint">{move || t(locale.get(), "settings.auto_continue_limit_hint")}</span>
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        </div>
+                        <h3>{move || t(locale.get(), "settings.session.context")}</h3>
+                        <div class="session-fields">
+                        <div class="appearance-config-row">
+                            <div>
+                                <strong>{move || t(locale.get(), "settings.auto_compact")}</strong>
+                                <span>{move || t(locale.get(), "settings.auto_compact_hint")}</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="auto-compact-enabled" aria-label=move || t(locale.get(), "settings.auto_compact")
+                                    prop:checked=move || settings.get().auto_compact
+                                    on:change=move |ev| settings.update(|current| current.auto_compact = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                        </div>
+                        <h3>{move || t(locale.get(), "settings.session.followup")}</h3>
+                        <div class="session-fields">
+                        <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "settings.follow_up_questions")}</strong>
                                 <span>{move || t(locale.get(), "settings.follow_up_questions_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="follow-up-questions-enabled"
+                                <input type="checkbox" data-testid="follow-up-questions-enabled" aria-label=move || t(locale.get(), "settings.follow_up_questions")
                                     prop:checked=move || settings.get().follow_up_questions
                                     on:change=move |ev| settings.update(|current| current.follow_up_questions = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
@@ -2041,6 +2064,7 @@ pub(super) fn SettingsView(
                             <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
                             <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                         </div>
+                        </section>
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "environments").then(|| view! {
@@ -2814,7 +2838,9 @@ pub(super) fn SettingsView(
                 })}
                 {move || (settings_section.get() == "appearance").then(|| view! {
                     <div class="settings-pane settings-appearance-pane">
-                        <section class="appearance-theme-section">
+                        <div class="appearance-layout">
+                        <div class="appearance-controls">
+                        <section class="settings-card appearance-theme-section">
                             <h3>{move || t(locale.get(), "appearance.theme")}</h3>
                             <div class="theme-mode-grid" role="radiogroup"
                                 aria-label=move || t(locale.get(), "appearance.theme")>
@@ -2842,22 +2868,6 @@ pub(super) fn SettingsView(
                                 }).collect_view()}
                             </div>
                         </section>
-                        <div class="appearance-diff-preview" aria-hidden="true">
-                            <div class="appearance-diff-column is-removed">
-                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
-                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar\""</span>","</code></div>
-                                <div><b>"3"</b><code>"  accent: "<span>"\"#2563eb\""</span>","</code></div>
-                                <div><b>"4"</b><code>"  contrast: "<strong>"42"</strong>","</code></div>
-                                <div><b>"5"</b><code>"};"</code></div>
-                            </div>
-                            <div class="appearance-diff-column is-added">
-                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
-                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar-elevated\""</span>","</code></div>
-                                <div><b>"3"</b><code>"  accent: "<span>"\"#0ea5e9\""</span>","</code></div>
-                                <div><b>"4"</b><code>"  contrast: "<strong>"68"</strong>","</code></div>
-                                <div><b>"5"</b><code>"};"</code></div>
-                            </div>
-                        </div>
                         {move || {
                             let dark = theme_mode.get() == "dark";
                             let palette = if dark { dark_palette.get() } else { light_palette.get() };
@@ -2898,10 +2908,14 @@ pub(super) fn SettingsView(
                                         <strong>{t(locale.get(), "appearance.foreground")}</strong>
                                         <output class="appearance-color-value" style=format!("--appearance-color:{foreground};--appearance-ink:{foreground_ink}")><i></i>{foreground}</output>
                                     </div>
+                                </section>
+                            }
+                        }}
+                        <section class="settings-card appearance-font-card"><h3>{move || t(locale.get(), "appearance.fonts")}</h3>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.ui_font_size")}</strong>
-                                            <span>{t(locale.get(), "appearance.ui_font_size_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.ui_font_size")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.ui_font_size_hint")}</span>
                                         </div>
                                         <label class="font-size-control">
                                             <input type="range" min="0" max="30" step="1"
@@ -2913,8 +2927,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.ui_font_family")}</strong>
-                                            <span>{t(locale.get(), "appearance.ui_font_family_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.ui_font_family")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.ui_font_family_hint")}</span>
                                         </div>
                                         <input type="text" class="appearance-font-input" data-testid="appearance-ui-font"
                                             aria-label=t(locale.get(), "appearance.ui_font_family")
@@ -2924,8 +2938,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.code_font_size")}</strong>
-                                            <span>{t(locale.get(), "appearance.code_font_size_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.code_font_size")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.code_font_size_hint")}</span>
                                         </div>
                                         <label class="font-size-control">
                                             <input type="range" min="0" max="30" step="1"
@@ -2937,8 +2951,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.code_font_family")}</strong>
-                                            <span>{t(locale.get(), "appearance.code_font_family_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.code_font_family")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.code_font_family_hint")}</span>
                                         </div>
                                             <input type="text" class="appearance-font-input" data-testid="appearance-code-font"
                                             aria-label=t(locale.get(), "appearance.code_font_family")
@@ -2946,10 +2960,39 @@ pub(super) fn SettingsView(
                                             prop:value=move || code_font_family.get()
                                             on:input=move |ev| code_font_family.set(event_target_value(&ev)) />
                                     </div>
-                                </section>
-                            }
-                        }}
-                        <section class="appearance-config-card appearance-custom-css-card" data-testid="appearance-custom-css-card">
+                        </section>
+                        </div>
+                        <section class="settings-card appearance-live-preview" data-testid="appearance-live-preview">
+                            <h3>{move || t(locale.get(), "appearance.live_preview")}</h3>
+                            <p class="settings-field-hint">{move || t(locale.get(), "appearance.instant")}</p>
+                            <div class="appearance-chat-preview">
+                                <div class="appearance-preview-user">{move || t(locale.get(), "appearance.preview_question")}</div>
+                                <div class="appearance-preview-answer"><strong>{move || t(locale.get(), "appearance.preview_heading")}</strong>
+                                    <p>{move || t(locale.get(), "appearance.preview_answer")}</p>
+                                    <code>"summary(data)"</code>
+                                </div>
+                            </div>
+                            <h4>{move || t(locale.get(), "appearance.preview_diff")}</h4>
+                        <div class="appearance-diff-preview" aria-hidden="true">
+                            <div class="appearance-diff-column is-removed">
+                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
+                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar\""</span>","</code></div>
+                                <div><b>"3"</b><code>"  accent: "<span>"\"#2563eb\""</span>","</code></div>
+                                <div><b>"4"</b><code>"  contrast: "<strong>"42"</strong>","</code></div>
+                                <div><b>"5"</b><code>"};"</code></div>
+                            </div>
+                            <div class="appearance-diff-column is-added">
+                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
+                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar-elevated\""</span>","</code></div>
+                                <div><b>"3"</b><code>"  accent: "<span>"\"#0ea5e9\""</span>","</code></div>
+                                <div><b>"4"</b><code>"  contrast: "<strong>"68"</strong>","</code></div>
+                                <div><b>"5"</b><code>"};"</code></div>
+                            </div>
+                        </div>
+                        </section>
+                        </div>
+                        <details class="appearance-config-card appearance-custom-css-card" data-testid="appearance-custom-css-card">
+                            <summary data-testid="appearance-custom-css-summary">{move || t(locale.get(), "appearance.custom_css")}<span class="settings-field-hint">"CSS"</span></summary>
                             <div class="appearance-custom-css-head">
                                 <div class="appearance-config-row">
                                     <strong>{move || t(locale.get(), "appearance.custom_css")}</strong>
@@ -2985,7 +3028,7 @@ pub(super) fn SettingsView(
                                 prop:value=move || custom_css.get()
                                 on:input=move |ev| custom_css.set(event_target_value(&ev))>
                             </textarea>
-                        </section>
+                        </details>
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "models").then(|| {
@@ -4682,7 +4725,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                        <div class="settings-pane settings-pane-list">
+                        <div class="settings-pane settings-pane-list natural-list-pane">
                             <div class="settings-toolbar settings-toolbar-end">
                                 <span class="settings-filter">{move || {
                                     let n = specialists.get().len();
@@ -4846,7 +4889,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                        <div class="settings-pane settings-pane-list">
+                        <div class="settings-pane settings-pane-list memory-settings-pane">
                             <div class="settings-toolbar settings-toolbar-end">
                                 <div class="memory-project" data-testid="memory-project">
                                     <div class="memory-project-picker">
@@ -4994,29 +5037,6 @@ pub(super) fn SettingsView(
                                             } />
                                         <span class="toggle-track" aria-hidden="true"></span>
                                     </label>
-                                    <button type="button" class="memory-clear-btn" on:click=move |_| {
-                                        let project_id = memory_view
-                                            .get_untracked()
-                                            .map(|view| view.project_id)
-                                            .unwrap_or_default();
-                                        spawn_local(async move {
-                                            let arg = to_value(&serde_json::json!({
-                                                "projectId": project_id,
-                                            }))
-                                            .unwrap();
-                                            let v = invoke("clear_memory", arg).await;
-                                            if let Ok(files) = serde_wasm_bindgen::from_value::<Vec<MemoryFile>>(v) {
-                                                memory_view.update(|o| if let Some(o)=o { o.files = files; });
-                                                reset_memory_browse();
-                                            }
-                                        });
-                                    }>{move || t(locale.get(), "memory.clear_all")}</button>
-                                    <button type="button" class="settings-add-btn" data-testid="memory-add-note"
-                                        on:click=move |_| {
-                                            if let Some(today) = memory_view.get().map(|v| v.today_file) {
-                                                load_memory_file.call(today);
-                                            }
-                                        }>{move || t(locale.get(), "memory.add")}</button>
                                 </div>
                             </div>
                             {move || memory_msg.get().map(|(ok, text)| view! {
@@ -5048,7 +5068,16 @@ pub(super) fn SettingsView(
                                 </div>
                                 })
                             }}
-                            <div class="conn-group-label">{move || t(locale.get(), "memory.scope_hint")}</div>
+                            <div class="memory-collections">
+                            <section class="settings-card memory-project-card" data-testid="memory-project-card">
+                            <div class="settings-card-heading"><h3>{move || t(locale.get(), "memory.scope_hint")}</h3>
+                                    <button type="button" class="settings-add-btn" data-testid="memory-add-note"
+                                        on:click=move |_| {
+                                            if let Some(today) = memory_view.get().map(|v| v.today_file) {
+                                                load_memory_file.call(today);
+                                            }
+                                        }>{move || t(locale.get(), "memory.add")}</button>
+                            </div>
                             <div class="settings-list" data-testid="memory-notes">
                                 <For each=move || memory_view.get().map(|v| v.files).unwrap_or_default()
                                     key=|f| f.name.clone() let:f>
@@ -5079,6 +5108,27 @@ pub(super) fn SettingsView(
                                     })
                                 }}
                             </div>
+                            <div class="memory-project-footer">
+                                    <button type="button" class="memory-clear-btn" on:click=move |_| {
+                                        let project_id = memory_view
+                                            .get_untracked()
+                                            .map(|view| view.project_id)
+                                            .unwrap_or_default();
+                                        spawn_local(async move {
+                                            let arg = to_value(&serde_json::json!({
+                                                "projectId": project_id,
+                                            }))
+                                            .unwrap();
+                                            let v = invoke("clear_memory", arg).await;
+                                            if let Ok(files) = serde_wasm_bindgen::from_value::<Vec<MemoryFile>>(v) {
+                                                memory_view.update(|o| if let Some(o)=o { o.files = files; });
+                                                reset_memory_browse();
+                                            }
+                                        });
+                                    }>{move || t(locale.get(), "memory.clear_all")}</button>
+                            </div>
+                            </section>
+                            <section class="settings-card memory-global-card" data-testid="memory-global-card">
                             <div class="cred-group-heading memory-global-heading">
                                 <span class="conn-group-label">{move || t(locale.get(), "memory.global_scope")}</span>
                                 <button type="button" class="settings-add-btn memory-global-add-btn"
@@ -5249,6 +5299,8 @@ pub(super) fn SettingsView(
                                         </div>
                                     })
                                 }}
+                            </div>
+                            </section>
                             </div>
                         </div>
                         }.into_view()
@@ -5519,6 +5571,7 @@ pub(super) fn SettingsView(
                 }.into_view())}
                 {move || (settings_section.get() == "browser").then(|| view! {
                     <div class="settings-pane settings-pane-list browser-filter-pane" data-testid="browser-url-filters">
+                        <section class="settings-card browser-behavior-card">
                         <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "browser.auto_launch")}</strong>
@@ -5543,10 +5596,13 @@ pub(super) fn SettingsView(
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
+                        </section>
                         <p class="settings-note">{move || t(locale.get(), "browser.filters.hint")}</p>
                         {move || browser_filters_msg.get().map(|(ok, text)| view! {
                             <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                         })}
+                        <div class="browser-filter-collections">
+                        <section class="settings-card browser-filter-card">
                         <div class="cred-group-heading">
                             <span class="conn-group-label">{move || t(locale.get(), "browser.filters.block")}</span>
                         </div>
@@ -5609,6 +5665,8 @@ pub(super) fn SettingsView(
                                 <div class="settings-list-empty">{t(locale.get(), "browser.filters.block_empty")}</div>
                             })}
                         </div>
+                        </section>
+                        <section class="settings-card browser-filter-card">
                         <div class="cred-group-heading">
                             <span class="conn-group-label">{move || t(locale.get(), "browser.filters.prefer")}</span>
                         </div>
@@ -5670,6 +5728,8 @@ pub(super) fn SettingsView(
                             {move || browser_filters.get().prefer.is_empty().then(|| view! {
                                 <div class="settings-list-empty">{t(locale.get(), "browser.filters.prefer_empty")}</div>
                             })}
+                        </div>
+                        </section>
                         </div>
                     </div>
                 }.into_view())}
@@ -6138,10 +6198,11 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "channels" && channels_open.get().is_none()).then(|| view! {
-                    <div class="settings-pane">
-                        <div class="settings-form-grid">
-                            <div class="span-2 settings-sync-block">
+                {move || (settings_section.get() == "channels").then(|| view! {
+                    <div class="settings-pane remote-settings-pane" data-testid="remote-settings-pane">
+                        <div class="remote-settings-grid" class:remote-settings-detail=move || channels_open.get().is_some()>
+                        {move || channels_open.get().is_none().then(|| view! {
+                            <section class="settings-card settings-sync-block" data-testid="project-sync-card">
                                 <h3>{move || t(locale.get(), "settings.sync.title")}</h3>
                                 <p class="settings-field-hint">{move || t(locale.get(), "settings.sync.hint")}</p>
                                 <label>{move || t(locale.get(), "settings.sync.backend")}
@@ -6188,6 +6249,10 @@ pub(super) fn SettingsView(
                                         </label>
                                     }.into_view()
                                 }}
+                        <div class="row settings-footer">
+                            <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
+                            <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
+                        </div>
                                 <p class="settings-field-hint">
                                     {move || t(locale.get(), "settings.sync.join_hint")}
                                 </p>
@@ -6196,7 +6261,7 @@ pub(super) fn SettingsView(
                                         {compose_icon("doc")}
                                         <span>{move || t(locale.get(), "projects.sync.guide")}</span>
                                     </button>
-                                    <button type="button" class="primary"
+                                    <button type="button" class="secondary"
                                         on:click=move |_| {
                                             join_error.set(None);
                                             joining.set(true);
@@ -6205,16 +6270,11 @@ pub(super) fn SettingsView(
                                         <span>{move || t(locale.get(), "projects.sync.join")}</span>
                                     </button>
                                 </div>
-                            </div>
-                        </div>
-                        <div class="row settings-footer">
-                            <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
-                            <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
+                            </section>
+                        })}
+                        <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
                         </div>
                     </div>
-                }.into_view())}
-                {move || (settings_section.get() == "channels").then(|| view! {
-                    <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
                 }.into_view())}
                 {move || (settings_section.get() == "permissions").then(|| view! {
                     <div class="settings-pane settings-pane-list permissions-pane">

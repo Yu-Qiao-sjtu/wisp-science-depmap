@@ -4,6 +4,12 @@ Open **Settings → General → Network** to configure networking independently 
 profiles. Network is a section in General, below Local environment; it no longer
 has a separate sidebar tab. An existing Model API proxy is preserved automatically.
 
+General groups workspace and interaction preferences alongside notifications and updates
+(two columns on wide windows, one on narrow windows). Their Save/Cancel actions stay
+inside the preference card; the version and manual update check sit with update settings.
+Local environment paths and Network each have their own card and save controls.
+Long environment paths wrap, and proxy controls adapt to the available width.
+
 ![Network settings](assets/network-settings/network-zh.png)
 
 Each proxy has its own mode, Clear and Save controls. The address field appears
@@ -73,3 +79,8 @@ record; the old `proxy_url` value is read only when that record is absent.
    longer includes the mirror instruction.
 5. Open Package mirror and press Escape without focusing its form: only the
    subpage closes. Repeat in Chinese and at a narrow window width.
+6. In General, check both preference columns at a wide window size, then narrow
+   the window and confirm the groups stack. Edit a long local Python path and
+   select Custom proxy in each scope; inputs and save actions should stay within
+   the pane. Confirm the preference Save action and per-scope network saves still
+   apply independently. Repeat with English and Chinese labels.

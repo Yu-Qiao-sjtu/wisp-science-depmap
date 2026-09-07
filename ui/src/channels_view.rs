@@ -1005,17 +1005,10 @@ pub(super) fn ChannelsPane(
         }.into_view(),
         Some(_) => view! { <div></div> }.into_view(),
         None => view! {
-            <div class="settings-pane settings-pane-list">
+            <div class="settings-card channels-overview" data-testid="channels-overview">
+                <h3>{move || t(locale.get(), "channels.messages_devices")}</h3>
                 <p class="settings-note">{move || t(locale.get(), "channels.desc")}</p>
-                <p class="settings-note" data-testid="channel-routing-help">
-                    {move || t(locale.get(), "channels.routing.desc")}
-                    <span class="channels-command-list" aria-label="IM slash commands">
-                        <code>"/status"</code>
-                        <code>"/project"</code>
-                        <code>"/session"</code>
-                        <code>"/new"</code>
-                    </span>
-                </p>
+
                 {msg_view}
                 <div class="settings-list">
                     <div class="settings-list-row settings-list-row-link" data-testid="feishu-channel-row"
@@ -1112,6 +1105,15 @@ pub(super) fn ChannelsPane(
                         </div>
                     </div>
                 </div>
+                <p class="settings-note" data-testid="channel-routing-help">
+                    {move || t(locale.get(), "channels.routing.desc")}
+                    <span class="channels-command-list" aria-label="IM slash commands">
+                        <code>"/status"</code>
+                        <code>"/project"</code>
+                        <code>"/session"</code>
+                        <code>"/new"</code>
+                    </span>
+                </p>
             </div>
         }.into_view(),
     }
