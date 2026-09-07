@@ -1282,7 +1282,8 @@ fn App() -> impl IntoView {
             return;
         };
         if acp_session_modes.with_untracked(|all| all.contains_key(&session_id))
-            && acp_session_configs.with_untracked(|all| all.contains_key(&session_id)) {
+            && acp_session_configs.with_untracked(|all| all.contains_key(&session_id))
+        {
             return;
         }
         spawn_local(async move {
@@ -1290,16 +1291,19 @@ fn App() -> impl IntoView {
             let Ok(value) = invoke_checked("get_acp_session_state", args).await else {
                 return;
             };
-            let Ok(Some(state)) =
-                serde_wasm_bindgen::from_value::<Option<AcpSessionState>>(value)
+            let Ok(Some(state)) = serde_wasm_bindgen::from_value::<Option<AcpSessionState>>(value)
             else {
                 return;
             };
             if let Some(modes) = state.modes {
-                acp_session_modes.update(|all| { all.entry(session_id.clone()).or_insert(modes); });
+                acp_session_modes.update(|all| {
+                    all.entry(session_id.clone()).or_insert(modes);
+                });
             }
             if let Some(options) = state.config_options {
-                acp_session_configs.update(|all| { all.entry(session_id).or_insert(options); });
+                acp_session_configs.update(|all| {
+                    all.entry(session_id).or_insert(options);
+                });
             }
         });
     });
@@ -7602,7 +7606,10 @@ fn App() -> impl IntoView {
     }
     refresh_execution_contexts(execution_contexts);
     create_effect(move |_| {
-        if bootstrap.get().is_some_and(|status| status.local_environment.is_some()) {
+        if bootstrap
+            .get()
+            .is_some_and(|status| status.local_environment.is_some())
+        {
             refresh_execution_contexts(execution_contexts);
         }
     });
@@ -9728,8 +9735,11 @@ fn App() -> impl IntoView {
                 onboard_step.set(0);
                 show_onboarding.set(true);
                 spawn_local(async move {
-                    if let Ok(value) = invoke_checked("detect_local_environment", JsValue::UNDEFINED).await {
-                        if let Ok(status) = serde_wasm_bindgen::from_value::<BootstrapStatus>(value) {
+                    if let Ok(value) =
+                        invoke_checked("detect_local_environment", JsValue::UNDEFINED).await
+                    {
+                        if let Ok(status) = serde_wasm_bindgen::from_value::<BootstrapStatus>(value)
+                        {
                             bootstrap.set(Some(status));
                         }
                     }

@@ -26,7 +26,11 @@ use wasm_bindgen::JsValue;
 fn connector_parameter_type(schema: &serde_json::Value) -> String {
     match schema.get("type") {
         Some(serde_json::Value::String(kind)) => kind.clone(),
-        Some(serde_json::Value::Array(kinds)) => kinds.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" | "),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "),
         _ => String::new(),
     }
 }
@@ -35,7 +39,9 @@ fn connector_parameter_type(schema: &serde_json::Value) -> String {
 fn ConnectorToolDocumentation(locale: RwSignal<Locale>, tool: ConnectorTool) -> impl IntoView {
     let description = if tool.description.trim().is_empty() {
         t(locale.get(), "conn.description_missing").to_string()
-    } else { tool.description };
+    } else {
+        tool.description
+    };
     view! {
         <div class="conn-tool-documentation" data-testid="connector-tool-documentation">
             <p class="conn-tool-description">{description}</p>
