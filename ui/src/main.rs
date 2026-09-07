@@ -5271,7 +5271,10 @@ fn App() -> impl IntoView {
             "plugins" => refresh_plugins(),
             "connections" => refresh_conns(),
             "credentials" => refresh_credentials(),
-            "permissions" => refresh_approval_grants(),
+            "permissions" => {
+                refresh_conns();
+                refresh_approval_grants();
+            }
             _ => {}
         }
     };

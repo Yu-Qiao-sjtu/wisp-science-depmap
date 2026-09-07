@@ -1053,6 +1053,85 @@ fn ConnSecretRows(
 }
 
 #[component]
+fn ProjectApprovalSettings(
+    locale: RwSignal<Locale>,
+    connectors: RwSignal<Option<ConnectorsView>>,
+) -> impl IntoView {
+    let busy = create_rw_signal(false);
+    let error = create_rw_signal(None::<String>);
+    let scope = create_memo(move |_| {
+        connectors.with(|view| {
+            view.as_ref()
+                .map(|view| view.scope.clone())
+                .unwrap_or_else(|| "ask".into())
+        })
+    });
+    let save = Callback::new(move |mode: &'static str| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({ "scope": mode })).unwrap();
+            match invoke_checked("set_approval_scope", args).await {
+                Ok(_) => connectors.update(|view| {
+                    if let Some(view) = view {
+                        view.scope = mode.into();
+                    }
+                }),
+                Err(err) => {
+                    error.try_set(Some(js_error_text(err)));
+                }
+            }
+            busy.try_set(false);
+        });
+    });
+    let button = move |mode: &'static str, label: &'static str| view! {
+        <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
+            class:active=move || scope.get() == mode
+            aria-pressed=move || (scope.get() == mode).to_string()
+            disabled=move || busy.get() || connectors.with(Option::is_none)
+            on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+    };
+    view! {
+        <section class="project-approval-settings" data-testid="project-approval-settings"
+            aria-label=move || t(locale.get(), "permissions.mode")>
+            <div class="project-approval-row">
+                <div class="project-approval-heading">
+                    <span class="settings-list-title">{move || t(locale.get(), "permissions.mode")}</span>
+                    <span class="settings-list-sub">{move || t(locale.get(), "permissions.mode.project")}</span>
+                </div>
+                <div class="approval-seg" role="group" aria-label=move || t(locale.get(), "permissions.mode")>
+                    {button("ask", "permissions.mode.ask")}
+                    {button("auto", "permissions.mode.auto")}
+                </div>
+            </div>
+            <p class="project-approval-description" data-testid="approval-mode-description" class:full=move || scope.get() == "full">
+                <strong>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full",
+                    "auto" => "permissions.mode.auto",
+                    _ => "permissions.mode.ask",
+                })}</strong>
+                <span>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full.desc",
+                    "auto" => "permissions.mode.auto.desc",
+                    _ => "permissions.mode.ask.desc",
+                })}</span>
+            </p>
+            <details class="project-approval-advanced" data-testid="approval-mode-advanced">
+                <summary>{move || t(locale.get(), "permissions.mode.advanced")}</summary>
+                <div class="project-approval-row">
+                    <p>{move || t(locale.get(), "permissions.mode.full.desc")}</p>
+                    <div class="approval-seg">{button("full", "permissions.mode.full")}</div>
+                </div>
+            </details>
+            {move || error.get().map(|message| view! { <p class="err" role="alert">{message}</p> })}
+        </section>
+    }
+}
+
+#[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
     open_project: Callback<String>,
@@ -6067,7 +6146,7 @@ pub(super) fn SettingsView(
                     <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
                 }.into_view())}
                 {move || (settings_section.get() == "permissions").then(|| view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list permissions-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 format!("{} ({})", t(locale.get(), "settings.nav.permissions"), approval_grants.get().len())
@@ -6081,6 +6160,7 @@ pub(super) fn SettingsView(
                                     });
                                 }>{move || t(locale.get(), "permissions.revoke_all")}</button>
                         </div>
+                        <ProjectApprovalSettings locale=locale connectors=connectors />
                         <p class="settings-note">{move || t(locale.get(), "permissions.note")}</p>
                         {move || approval_grants.get().is_empty().then(|| view! {
                             <div class="settings-status">{move || t(locale.get(), "permissions.empty")}</div>
@@ -6530,7 +6610,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list connections-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 let nb = connectors.get().map(|v| v.connectors.iter().filter(|c| c.kind == "bundled").count()).unwrap_or(0);
@@ -6543,41 +6623,6 @@ pub(super) fn SettingsView(
                             }>{move || t(locale.get(), "conn.add")}</button>
                         </div>
                         <p class="settings-note">{move || t(locale.get(), "settings.applies_new_session")}</p>
-                        <div class="settings-list">
-                            <div class="settings-list-row">
-                                <div class="settings-list-main">
-                                    <span class="settings-list-title">{move || t(locale.get(), "conn.scope")}</span>
-                                    <span class="settings-list-sub">{move || {
-                                        let cur = connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into());
-                                        t(locale.get(), match cur.as_str() {
-                                            "full" => "conn.scope.full.desc",
-                                            "auto" => "conn.scope.auto.desc",
-                                            _ => "conn.scope.ask.desc",
-                                        })
-                                    }}</span>
-                                </div>
-                                <div class="approval-seg">
-                                    {["ask", "auto", "full"].into_iter().map(|val| {
-                                        let label_key = match val {
-                                            "full" => "conn.scope.full",
-                                            "auto" => "conn.scope.auto",
-                                            _ => "conn.scope.ask",
-                                        };
-                                        let active = move || connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into()) == val;
-                                        view! {
-                                            <button type="button" class=format!("approval-btn scope-seg scope-{val}") class:active=active
-                                                on:click=move |_| {
-                                                    spawn_local(async move {
-                                                        let arg = to_value(&serde_json::json!({ "scope": val })).unwrap();
-                                                        let _ = invoke_checked("set_approval_scope", arg).await;
-                                                        refresh_conns.call(());
-                                                    });
-                                                }>{move || t(locale.get(), label_key)}</button>
-                                        }
-                                    }).collect_view()}
-                                </div>
-                            </div>
-                        </div>
                         <div class="conn-group-label">{move || t(locale.get(), "conn.featured")}</div>
                         <div class="settings-list">
                             <For each=move || connectors.get().map(|v| v.connectors.into_iter().filter(|c| c.kind == "bundled").collect::<Vec<_>>()).unwrap_or_default() key=|c| c.key.clone() let:c>

@@ -10470,6 +10470,107 @@ test("settings permissions lists and revokes remembered approvals", async ({ pag
   await expect(page.getByText("No remembered approvals.")).toBeVisible();
 });
 
+test("project approval modes live in Permissions and persist independently of grants", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Connections");
+  await expect(page.getByTestId("project-approval-settings")).toHaveCount(0);
+  const featured = page.locator(".conn-group-label").first();
+  const note = page.locator(".connections-pane > .settings-note");
+  const gap = (await featured.boundingBox())!.y - ((await note.boundingBox())!.y + (await note.boundingBox())!.height);
+  expect(gap).toBeLessThan(40);
+  await expect(page.locator(".connections-pane > .settings-list").first()).toHaveJSProperty("scrollHeight",
+    await page.locator(".connections-pane > .settings-list").first().evaluate(el => el.clientHeight));
+
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  const rules = mode.getByRole("button", { name: "Per-tool rules", exact: true });
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await expect(mode).toContainText("Current project · applies from the next tool call");
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("approval-mode-description")).toContainText("Dangerous commands still require confirmation.");
+  await page.getByRole("button", { name: "Revoke all" }).click();
+  await expect(page.getByText("No remembered approvals.")).toBeVisible();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await rules.click();
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => page.evaluate(() => (window as any).__skillInvokeLog
+    .filter((entry: any) => entry.cmd === "set_approval_scope")
+    .map((entry: any) => entry.args instanceof Map ? entry.args.get("scope") : entry.args.scope))).toEqual(["auto", "ask"]);
+});
+
+test("full bypass is an advanced choice and stays visible when collapsed or reopened", async ({ page }) => {
+  await enterApp(page, "/?mockApprovalScope=full");
+  await openSettingsSection(page, "Permissions");
+  const mode = page.getByTestId("project-approval-settings");
+  const advanced = page.getByTestId("approval-mode-advanced");
+  const description = page.getByTestId("approval-mode-description");
+  await expect(advanced).not.toHaveAttribute("open", "");
+  await expect(description).toContainText("Full bypass");
+  await expect(description).toContainText("including confirmation for dangerous commands");
+  await mode.getByRole("button", { name: "Per-tool rules", exact: true }).click();
+  await expect(description).toContainText("Per-tool rules");
+  await advanced.locator("summary").click();
+  await mode.getByRole("button", { name: "Full bypass", exact: true }).click();
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await advanced.locator("summary").click();
+  await expect(description).toContainText("Full bypass");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(description).toContainText("Full bypass");
+  await mode.getByRole("button", { name: "Auto-approve", exact: true }).click();
+  await expect(description).toContainText("Auto-approve");
+});
+
+test("approval mode save failures keep the previous selection and allow retry", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Permissions");
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = "Could not save project approval mode"; });
+  const mode = page.getByTestId("project-approval-settings");
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await auto.click();
+  await expect(mode.getByRole("alert")).toContainText("Could not save project approval mode");
+  await expect(mode.getByRole("button", { name: "Per-tool rules", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(auto).toBeEnabled();
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = null; });
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("alert")).toHaveCount(0);
+});
+
+test("Chinese approval settings fit desktop and narrow windows", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/?mockLocale=zh");
+  await page.locator(".proj-card-main").first().click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByText("审批范围", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".settings-list-row-link", { hasText: "BioMart" })).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("connections-zh.png") });
+  await page.locator(".settings-nav").getByRole("button", { name: "权限", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  await expect(mode).toContainText("工具审批模式");
+  await expect(mode).toContainText("当前项目 · 从下一次工具调用起生效");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-zh.png") });
+  await page.setViewportSize({ width: 820, height: 740 });
+  await expectInsideViewport(mode, 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "按工具规则", exact: true }), 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "自动批准", exact: true }), 820, 740);
+  await page.getByTestId("approval-mode-advanced").locator("summary").click();
+  const full = mode.getByRole("button", { name: "完全放行", exact: true });
+  await expectInsideViewport(full, 820, 740);
+  await full.click();
+  await expect(page.getByTestId("approval-mode-description")).toContainText("完全放行");
+  await expect(full).toHaveCSS("color", "rgb(255, 255, 255)");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-narrow-zh.png") });
+});
+
 test("browser URL filters persist block and prefer hosts", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Browser");

@@ -1167,6 +1167,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
       },
     },
   ];
+  let mockApprovalScope = query.get("mockApprovalScope") ?? "ask";
   let mockBioMartEnabled = true;
   let mockBioMartSkip = false;
   const mockBioMartApprovals: Record<string, string> = {};
@@ -3941,7 +3942,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             return { connections: mockMcpConnections };
           case "list_connectors":
             return {
-              scope: "ask",
+              scope: mockApprovalScope,
               connectors: [
                 {
                   key: "biomart",
@@ -4016,7 +4017,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
           }
           case "add_mcp_connection":
           case "update_mcp_connection":
+            return null;
           case "set_approval_scope":
+            if ((window as any).__mockApprovalScopeError) {
+              throw new Error((window as any).__mockApprovalScopeError);
+            }
+            mockApprovalScope = String(arg("scope"));
             return null;
           case "set_connector_enabled":
             mockBioMartEnabled = Boolean(arg("enabled"));

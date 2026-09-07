@@ -391,7 +391,7 @@ body:has(.settings-page) .projects-screen { display: none; }
 .approval-btn.approval-ask.active { background: var(--warn); }
 .approval-btn.approval-deny.active { background: var(--err); }
 .approval-btn:disabled { cursor: default; }
-/* Global approval-scope selector: text labels instead of glyphs, risk-graded. */
+/* Project approval mode selector. */
 .approval-btn.scope-seg { width: auto; padding: 6px 14px; }
 .approval-btn.scope-ask.active { background: var(--ok); }
 .approval-btn.scope-auto.active { background: var(--warn); }
@@ -3110,3 +3110,29 @@ body { font-size: var(--ui-font-size, 14px); }
   .conn-tool-row { gap: 8px; }
   .conn-detail-title h2 { font-size: 20px; }
 }
+
+/* Content-sized groups share one pane scrollbar instead of splitting its height. */
+.settings-pane-list.connections-pane,
+.settings-pane-list.permissions-pane { overflow-y: auto; }
+.settings-pane-list.connections-pane > .settings-list,
+.settings-pane-list.permissions-pane > .settings-list {
+  flex: none;
+  min-height: auto;
+  overflow: visible;
+}
+.project-approval-settings {
+  flex: none;
+  padding: 14px 0;
+  border-block: 1px solid var(--border);
+}
+.project-approval-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.project-approval-heading { display: grid; gap: 4px; }
+.project-approval-settings .approval-seg { flex-shrink: 0; flex-wrap: wrap; }
+.project-approval-settings .approval-btn { min-height: 36px; }
+.project-approval-settings .approval-btn.active { color: #fff; }
+.project-approval-description { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 10px 0; color: var(--text-muted); font-size: 13px; }
+.project-approval-description.full { color: var(--err); }
+.project-approval-advanced { font-size: 13px; color: var(--text-muted); }
+.project-approval-advanced summary { cursor: pointer; width: fit-content; padding: 4px 0; }
+.project-approval-advanced .project-approval-row { margin-top: 8px; }
+.project-approval-advanced p { flex: 1 1 240px; margin: 0; }
