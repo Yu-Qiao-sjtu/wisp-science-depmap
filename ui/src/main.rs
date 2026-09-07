@@ -6749,7 +6749,7 @@ fn App() -> impl IntoView {
     });
     let dismiss_onboard = move |_| dismiss_onboarding.call(());
 
-    // Onboarding step 0: save the entered key as DeepSeek models (flash as
+    // Onboarding model step: save the entered key as DeepSeek models (flash as
     // the default, pro for heavier work), reusing the same `save_model`
     // command as Settings. Blank key = skip.
     // ponytail: onboarding is DeepSeek-only; other providers go through Settings › Models.

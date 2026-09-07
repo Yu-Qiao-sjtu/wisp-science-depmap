@@ -2584,6 +2584,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             return `proj-${arg("id")}`;
           case "open_new_window":
             return "home-mock";
+          case "save_local_environment_paths": {
+            if ((window as any).__failSaveLocalEnvironment) throw new Error("python_executable: file not found");
+            const raw = arg("paths");
+            const paths = raw instanceof Map ? Object.fromEntries(raw) : raw;
+            (window as any).__mockLocalEnvironment = {
+              paths: Object.fromEntries(Object.entries(paths).filter(([, value]) => String(value).trim()).map(([key, value]) => [key, String(value).trim()])),
+              warning: null,
+            };
+          }
           case "detect_local_environment":
           case "get_bootstrap_status":
             return {

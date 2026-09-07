@@ -7389,6 +7389,7 @@ pub fn run() {
             app_commands::dismiss_onboarding,
             app_commands::get_bootstrap_status,
             app_commands::detect_local_environment,
+            app_commands::save_local_environment_paths,
             app_updates::check_for_updates,
             app_updates::download_update,
             app_updates::install_update,

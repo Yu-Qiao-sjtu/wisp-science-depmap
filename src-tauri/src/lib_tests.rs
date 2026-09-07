@@ -2008,6 +2008,37 @@ fn specialist_section_marker_detects_prior_append() {
 }
 
 #[test]
+fn manual_environment_paths_validate_files_without_executing_them() {
+    let root =
+        std::env::temp_dir().join(format!("wisp-manual-validation-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let executable = root.join("custom python.exe");
+    std::fs::write(&executable, b"not an executable; must never be run").unwrap();
+    let paths = [
+        (
+            "python_executable".into(),
+            format!(" {} ", executable.display()),
+        ),
+        ("npm_executable".into(), String::new()),
+    ]
+    .into();
+    assert!(crate::app_commands::validate_local_environment_paths(&paths).is_ok());
+    for invalid in [&root, &root.join("missing.exe")] {
+        let paths = [(
+            "python_executable".into(),
+            invalid.to_string_lossy().into_owned(),
+        )]
+        .into();
+        assert!(
+            crate::app_commands::validate_local_environment_paths(&paths)
+                .unwrap_err()
+                .contains("file not found")
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn missing_optional_environment_does_not_fail_startup() {
     let root = std::env::temp_dir().join(format!("wisp-no-python-{}", uuid::Uuid::new_v4()));
     let mut status = crate::app_commands::initial_bootstrap(&root, 3);
