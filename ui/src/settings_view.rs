@@ -26,7 +26,11 @@ use wasm_bindgen::JsValue;
 fn connector_parameter_type(schema: &serde_json::Value) -> String {
     match schema.get("type") {
         Some(serde_json::Value::String(kind)) => kind.clone(),
-        Some(serde_json::Value::Array(kinds)) => kinds.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" | "),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "),
         _ => String::new(),
     }
 }
@@ -35,7 +39,9 @@ fn connector_parameter_type(schema: &serde_json::Value) -> String {
 fn ConnectorToolDocumentation(locale: RwSignal<Locale>, tool: ConnectorTool) -> impl IntoView {
     let description = if tool.description.trim().is_empty() {
         t(locale.get(), "conn.description_missing").to_string()
-    } else { tool.description };
+    } else {
+        tool.description
+    };
     view! {
         <div class="conn-tool-documentation" data-testid="connector-tool-documentation">
             <p class="conn-tool-description">{description}</p>
@@ -1053,8 +1059,88 @@ fn ConnSecretRows(
 }
 
 #[component]
+fn ProjectApprovalSettings(
+    locale: RwSignal<Locale>,
+    connectors: RwSignal<Option<ConnectorsView>>,
+) -> impl IntoView {
+    let busy = create_rw_signal(false);
+    let error = create_rw_signal(None::<String>);
+    let scope = create_memo(move |_| {
+        connectors.with(|view| {
+            view.as_ref()
+                .map(|view| view.scope.clone())
+                .unwrap_or_else(|| "ask".into())
+        })
+    });
+    let save = Callback::new(move |mode: &'static str| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({ "scope": mode })).unwrap();
+            match invoke_checked("set_approval_scope", args).await {
+                Ok(_) => connectors.update(|view| {
+                    if let Some(view) = view {
+                        view.scope = mode.into();
+                    }
+                }),
+                Err(err) => {
+                    error.try_set(Some(js_error_text(err)));
+                }
+            }
+            busy.try_set(false);
+        });
+    });
+    let button = move |mode: &'static str, label: &'static str| view! {
+        <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
+            class:active=move || scope.get() == mode
+            aria-pressed=move || (scope.get() == mode).to_string()
+            disabled=move || busy.get() || connectors.with(Option::is_none)
+            on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+    };
+    view! {
+        <section class="project-approval-settings" data-testid="project-approval-settings"
+            aria-label=move || t(locale.get(), "permissions.mode")>
+            <div class="project-approval-row">
+                <div class="project-approval-heading">
+                    <span class="settings-list-title">{move || t(locale.get(), "permissions.mode")}</span>
+                    <span class="settings-list-sub">{move || t(locale.get(), "permissions.mode.project")}</span>
+                </div>
+                <div class="approval-seg" role="group" aria-label=move || t(locale.get(), "permissions.mode")>
+                    {button("ask", "permissions.mode.ask")}
+                    {button("auto", "permissions.mode.auto")}
+                </div>
+            </div>
+            <p class="project-approval-description" data-testid="approval-mode-description" class:full=move || scope.get() == "full">
+                <strong>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full",
+                    "auto" => "permissions.mode.auto",
+                    _ => "permissions.mode.ask",
+                })}</strong>
+                <span>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full.desc",
+                    "auto" => "permissions.mode.auto.desc",
+                    _ => "permissions.mode.ask.desc",
+                })}</span>
+            </p>
+            <details class="project-approval-advanced" data-testid="approval-mode-advanced">
+                <summary>{move || t(locale.get(), "permissions.mode.advanced")}</summary>
+                <div class="project-approval-row">
+                    <p>{move || t(locale.get(), "permissions.mode.full.desc")}</p>
+                    <div class="approval-seg">{button("full", "permissions.mode.full")}</div>
+                </div>
+            </details>
+            {move || error.get().map(|message| view! { <p class="err" role="alert">{message}</p> })}
+        </section>
+    }
+}
+
+#[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
+    external_link_confirm: RwSignal<Option<String>>,
     open_project: Callback<String>,
     go_settings_section: Callback<String>,
     close_settings_subpage: Callback<()>,
@@ -1356,6 +1442,22 @@ pub(super) fn SettingsView(
     let quick_action_form = create_rw_signal(None::<QuickAction>);
     let quick_action_busy = create_rw_signal(false);
     let quick_action_error = create_rw_signal(None::<String>);
+    // Skill details share the section breadcrumb and Escape navigation.
+    let selected_skill = create_rw_signal(None::<String>);
+    create_effect(move |_| {
+        if !show_settings.get()
+            || settings_section.get() != "skills"
+            || selected_skill
+                .get()
+                .is_some_and(|name| !skills_list.get().iter().any(|s| s.name == name))
+        {
+            selected_skill.set(None);
+        }
+    });
+    let close_settings_subpage = Callback::new(move |_| {
+        selected_skill.set(None);
+        close_settings_subpage.call(());
+    });
     // Specialist skill whitelist picker: search query + filtered results, so a
     // large skill library never renders as an unbounded checkbox list.
     let specialist_skill_query = create_rw_signal(String::new());
@@ -1380,6 +1482,11 @@ pub(super) fn SettingsView(
         if !show_settings.get_untracked() {
             return false;
         }
+        if delete_confirm.get_untracked().is_some()
+            || external_link_confirm.get_untracked().is_some()
+        {
+            return false;
+        }
         if joining.get_untracked() {
             joining.set(false);
             return true;
@@ -1401,6 +1508,7 @@ pub(super) fn SettingsView(
         // Breadcrumb subpages (memory file, model/ACP/specialist/conn/channel
         // editors): one Escape returns to the section list, not the app.
         let has_subpage = credential_page.get_untracked().is_some()
+            || selected_skill.get_untracked().is_some()
             || memory_selected.get_untracked().is_some()
             || model_form.get_untracked().is_some()
             || acp_form.get_untracked().is_some()
@@ -1718,7 +1826,7 @@ pub(super) fn SettingsView(
                         (sec == "credentials").then(|| credential_page.get()).flatten()
                             .and_then(|id| CRED_GROUPS.iter().find(|group| group.id == id))
                             .map(|group| t(loc, group.name_key).to_string())
-                    });
+                    }).or_else(|| selected_skill.get());
                     view! {
                         <div class="settings-head">
                             <div class="settings-head-main">
@@ -5557,7 +5665,7 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "skills").then(|| view! {
+                {move || (settings_section.get() == "skills" && selected_skill.get().is_none()).then(|| view! {
                     <div class="settings-pane settings-pane-list">
                         <div class="settings-toolbar">
                             <span class="settings-filter">{move || {
@@ -5664,69 +5772,31 @@ pub(super) fn SettingsView(
                             } key=|s| format!("{}:{}:{}", s.name, s.enabled, join_tags(&s.tags)) let:s>
                                 {
                                     let name_toggle = s.name.clone();
-                                    let name_remove = s.name.clone();
-                                    let name_tags = s.name.clone();
+                                    let name_open = s.name.clone();
                                     let enabled = s.enabled;
-                                    let builtin = s.builtin;
                                     let managed = s.managed;
-                                    let managed_by = s.managed_by.clone();
-                                    let scope = s.scope.clone();
-                                    let scope_label = t(locale.get(), &format!("skills.scope.{scope}"));
-                                    let source_path = s.dir.clone();
-                                    let tags_text = join_tags(&s.tags);
-                                    let tags_input_text = tags_text.clone();
-                                    let tags_cb = save_skill_tags.clone();
+                                    let scope_label = t(locale.get(), &format!("skills.scope.{}", s.scope));
                                     view! {
-                                        <div class="settings-list-row" data-skill-name=s.name.clone()>
-                                            <div class="settings-list-main">
-                                                <span class="settings-list-title">
-                                                    {s.name.clone()}
-                                                    <span class="skill-scope-badge" title=source_path>{scope_label}</span>
-                                                </span>
-                                                {(!s.description.is_empty() && s.description != ">").then(|| {
-                                                    let desc = s.description.clone();
-                                                    view! { <span class="settings-list-sub">{desc}</span> }
-                                                })}
-                                                {(!managed).then(|| view! {
-                                                    <details class="skill-tags-editor">
-                                                        <summary>
-                                                            <span>{move || t(locale.get(), "skills.edit_tags")}</span>
-                                                            <span class="skill-tags-summary">{tags_text}</span>
-                                                        </summary>
-                                                        <input class="skill-tags-input"
-                                                            prop:value=tags_input_text
-                                                            prop:placeholder=move || t(locale.get(), "skills.tags_placeholder")
-                                                            on:change=move |ev| tags_cb.call((name_tags.clone(), event_target_value(&ev))) />
-                                                    </details>
-                                                })}
-                                            </div>
+                                        <div class="settings-list-row skill-catalog-row" data-skill-name=s.name.clone()>
+                                            <button type="button" class="skill-row-open" on:click=move |_| selected_skill.set(Some(name_open.clone()))>
+                                                <span class="skill-row-name">{s.name.clone()}</span>
+                                                <span class="skill-scope-badge" title=s.dir>{scope_label}</span>
+                                                <span class="skill-row-tags">{s.tags.into_iter().map(|tag| view! { <span class="skill-tag">{tag}</span> }).collect_view()}</span>
+                                                {compose_icon("chevron-right")}
+                                            </button>
                                             <div class="settings-list-actions">
-                                                {(scope == "global" && !builtin).then(|| { let n = name_remove.clone(); view! {
-                                                    <button class="settings-skill-remove" type="button"
-                                                        title=move || t(locale.get(), "skills.remove")
-                                                        on:click=move |_| delete_confirm.set(Some(DeleteConfirm::Skill {
-                                                            name: n.clone(),
-                                                            label: n.clone(),
-                                                        }))>
-                                                        {move || t(locale.get(), "skills.remove")}
-                                                    </button>
-                                                }})}
                                                 {if managed {
-                                                    let provider = managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
-                                                    view! {
-                                                        <span class="skill-managed-badge">
-                                                            {tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}
-                                                        </span>
-                                                    }.into_view()
+                                                    let provider = s.managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
+                                                    view! { <span class="skill-managed-badge">{tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}</span> }.into_view()
                                                 } else {
                                                     view! {
                                                         <label class="toggle">
-                                                            <input type="checkbox" prop:checked=enabled on:change=move |ev| {
+                                                            <input type="checkbox" aria-label=s.name prop:checked=enabled on:change=move |ev| {
                                                                 let n = name_toggle.clone();
                                                                 let on = event_target_checked(&ev);
                                                                 spawn_local(async move {
                                                                     let arg = to_value(&serde_json::json!({ "name": n, "enabled": on })).unwrap();
-                                                                    let _ = invoke_checked("set_skill_enabled", arg).await;
+                                                                    if let Err(error) = invoke_checked("set_skill_enabled", arg).await { skills_msg.set(Some((false, js_error_text(error)))); }
                                                                     refresh_skills.call(());
                                                                 });
                                                             } />
@@ -5742,6 +5812,13 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
+                {move || (settings_section.get() == "skills").then(|| selected_skill.get().map(|name| view! {
+                    <crate::skill_detail::SkillDetail name=name skills=skills_list locale=locale
+                        refresh=refresh_skills save_tags=save_skill_tags delete_confirm=delete_confirm />
+                    {move || skills_msg.get().map(|(ok, text)| view! {
+                        <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
+                    })}
+                }))}
                 {move || (settings_section.get() == "credentials").then(|| view! {
                     <div class="settings-pane credentials-pane">
                         <p class="settings-note">{move || t(locale.get(), "cred.desc")}</p>
@@ -6132,7 +6209,7 @@ pub(super) fn SettingsView(
                     <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
                 }.into_view())}
                 {move || (settings_section.get() == "permissions").then(|| view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list permissions-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 format!("{} ({})", t(locale.get(), "settings.nav.permissions"), approval_grants.get().len())
@@ -6146,6 +6223,7 @@ pub(super) fn SettingsView(
                                     });
                                 }>{move || t(locale.get(), "permissions.revoke_all")}</button>
                         </div>
+                        <ProjectApprovalSettings locale=locale connectors=connectors />
                         <p class="settings-note">{move || t(locale.get(), "permissions.note")}</p>
                         {move || approval_grants.get().is_empty().then(|| view! {
                             <div class="settings-status">{move || t(locale.get(), "permissions.empty")}</div>
@@ -6595,7 +6673,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list connections-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 let nb = connectors.get().map(|v| v.connectors.iter().filter(|c| c.kind == "bundled").count()).unwrap_or(0);
@@ -6608,41 +6686,6 @@ pub(super) fn SettingsView(
                             }>{move || t(locale.get(), "conn.add")}</button>
                         </div>
                         <p class="settings-note">{move || t(locale.get(), "settings.applies_new_session")}</p>
-                        <div class="settings-list">
-                            <div class="settings-list-row">
-                                <div class="settings-list-main">
-                                    <span class="settings-list-title">{move || t(locale.get(), "conn.scope")}</span>
-                                    <span class="settings-list-sub">{move || {
-                                        let cur = connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into());
-                                        t(locale.get(), match cur.as_str() {
-                                            "full" => "conn.scope.full.desc",
-                                            "auto" => "conn.scope.auto.desc",
-                                            _ => "conn.scope.ask.desc",
-                                        })
-                                    }}</span>
-                                </div>
-                                <div class="approval-seg">
-                                    {["ask", "auto", "full"].into_iter().map(|val| {
-                                        let label_key = match val {
-                                            "full" => "conn.scope.full",
-                                            "auto" => "conn.scope.auto",
-                                            _ => "conn.scope.ask",
-                                        };
-                                        let active = move || connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into()) == val;
-                                        view! {
-                                            <button type="button" class=format!("approval-btn scope-seg scope-{val}") class:active=active
-                                                on:click=move |_| {
-                                                    spawn_local(async move {
-                                                        let arg = to_value(&serde_json::json!({ "scope": val })).unwrap();
-                                                        let _ = invoke_checked("set_approval_scope", arg).await;
-                                                        refresh_conns.call(());
-                                                    });
-                                                }>{move || t(locale.get(), label_key)}</button>
-                                        }
-                                    }).collect_view()}
-                                </div>
-                            </div>
-                        </div>
                         <div class="conn-group-label">{move || t(locale.get(), "conn.featured")}</div>
                         <div class="settings-list">
                             <For each=move || connectors.get().map(|v| v.connectors.into_iter().filter(|c| c.kind == "bundled").collect::<Vec<_>>()).unwrap_or_default() key=|c| c.key.clone() let:c>

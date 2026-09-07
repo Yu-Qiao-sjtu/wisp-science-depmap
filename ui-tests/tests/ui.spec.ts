@@ -9208,6 +9208,8 @@ test("one DeepSeek Base URL can save Responses and Anthropic protocol models", a
 test("onboarding key setup lands on flash after adding pro", async ({ page }) => {
   await page.goto("/?mockOnboarding=1");
   await expect(page.locator(".onboard-overlay")).toBeVisible();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
   await page.getByLabel("API key (stored in OS keyring)").fill("sk-onboard");
   await page.getByRole("button", { name: "Next" }).click();
   // Order matters: save_model activates each new profile, so flash must land
@@ -9890,6 +9892,77 @@ test("capability counts open skills, connections, and editable project memory", 
   });
 });
 
+test("skill detail browses markdown and scripts and persists tags without leaving the file", async ({ page }, testInfo) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "compute", exact: true }).click();
+  await page.locator('[data-skill-name="remote-compute-ssh"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  await expect(page.locator(".settings-crumb-current")).toHaveText("remote-compute-ssh");
+  await expect(detail.getByTestId("skill-file-preview").getByRole("heading", { name: "Skill instructions" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("skill-detail.png"), fullPage: true });
+  await expect.poll(() => lastInvokeArgs(page, "list_skill_files")).toEqual({ name: "remote-compute-ssh" });
+  await expect.poll(() => page.evaluate(() => (window as any).__skillPreviewUnsafe ?? false)).toBe(false);
+  await detail.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(detail.getByTestId("skill-file-source")).toContainText("name: remote-compute-ssh");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("print('analysis ready')");
+  await detail.getByRole("textbox", { name: "Edit tags" }).fill("compute, reviewed");
+  await detail.getByRole("textbox", { name: "Edit tags" }).press("Tab");
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_tags")).toEqual({ name: "remote-compute-ssh", tags: ["compute", "reviewed"] });
+  await expect(picker).toHaveValue("scripts/nested/analyze.py");
+  await detail.locator("label.toggle").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_enabled")).toEqual({ name: "remote-compute-ssh", enabled: false });
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.locator(".settings-crumb-link").click();
+  const row = page.locator('[data-skill-name="remote-compute-ssh"]');
+  await expect(row.locator('.skill-tag')).toHaveText(["compute", "reviewed"]);
+  await expect(row.getByRole("checkbox")).not.toBeChecked();
+  await expect(page.locator('[data-skill-name="literature-review"]')).toHaveCount(0);
+  await row.locator('.skill-row-open').click();
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "All", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("skill-catalog.png"), fullPage: true });
+});
+
+test("skill detail shows file errors and ignores stale file responses", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await expect(detail.getByTestId("skill-file-preview")).toBeVisible();
+  await picker.selectOption("assets/image.png");
+  await expect(detail.getByRole("alert")).toContainText("Binary files cannot be previewed");
+  await expect(detail.getByTestId("skill-file-preview")).toBeHidden();
+  await picker.selectOption("scripts/slow.py");
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.waitForTimeout(500);
+  await expect(detail.getByTestId("skill-file-source")).not.toContainText("old slow response");
+  await picker.selectOption("references/guide.md");
+  await expect(detail.getByTestId("skill-file-preview")).toContainText("Reference guide");
+  await detail.getByRole("link", { name: "Paper reference" }).click();
+  await expect(page.getByTestId("external-link-confirm")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("external-link-confirm")).toBeHidden();
+  await expect(detail).toBeVisible();
+  await expect(picker).toHaveValue("references/guide.md");
+});
+
+test("skill detail reports unavailable packages and can return immediately", async ({ page }) => {
+  await enterApp(page, "/?mockSkillFilesError=1");
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  await expect(page.getByTestId("skill-detail").getByRole("alert")).toContainText("Skill package is unavailable");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("skill-detail")).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+});
+
 test("skill manager filters by tag and batch disables visible skills", async ({ page }) => {
   await enterApp(page);
   await page.getByRole("button", { name: "Add to message" }).click();
@@ -9899,7 +9972,7 @@ test("skill manager filters by tag and batch disables visible skills", async ({ 
   await expect(page.locator(".settings-search")).toHaveAttribute("inputmode", "search");
   await expect(page.locator(".settings-search")).toHaveAttribute("autocomplete", "off");
   await expect(page.locator(".settings-filter")).toContainText(/visible.*enabled/);
-  await expect(page.locator(".skill-tags-editor").first()).not.toHaveAttribute("open", "");
+  await expect(page.locator(".skill-tags-input")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Disabled", exact: true }).click();
   await expect(page.getByText("No skills match the current filters.")).toBeVisible();
@@ -9932,7 +10005,7 @@ test("skill manager reloads manually copied skills and shows their scope", async
 
   const fresh = page.locator('[data-skill-name="fresh-project-skill"]');
   await expect.poll(() => lastInvokeArgs(page, "reload_skills")).toEqual({});
-  await expect(fresh).toContainText("Newly copied project skill");
+  await expect(fresh).toContainText("fresh-project-skill");
   await expect(fresh).toContainText("Project");
   await expect(fresh.locator('input[type="checkbox"]')).toBeChecked();
   await expect(fresh.getByRole("button", { name: "Delete skill" })).toHaveCount(0);
@@ -9957,9 +10030,14 @@ test("skill manager updates and deletes user-added skills", async ({ page }) => 
   await expect(page.getByText("Skill added or updated.")).toBeVisible();
 
   const skill = page.locator('[data-skill-name="paper-narrative"]');
-  await expect(skill.getByRole("button", { name: "Delete skill" })).toBeVisible();
-  await skill.getByRole("button", { name: "Delete skill" }).click();
+  await skill.locator(".skill-row-open").click();
+  const detail = page.getByTestId("skill-detail");
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   const confirm = page.getByTestId("skill-remove-confirm");
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   await expect(confirm).toContainText(
     "Delete paper-narrative? Its installed files will be removed. This cannot be undone.",
   );
@@ -10529,6 +10607,107 @@ test("settings permissions lists and revokes remembered approvals", async ({ pag
   await expect(page.getByText("Global")).toBeVisible();
   await page.getByRole("button", { name: "Revoke all" }).click();
   await expect(page.getByText("No remembered approvals.")).toBeVisible();
+});
+
+test("project approval modes live in Permissions and persist independently of grants", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Connections");
+  await expect(page.getByTestId("project-approval-settings")).toHaveCount(0);
+  const featured = page.locator(".conn-group-label").first();
+  const note = page.locator(".connections-pane > .settings-note");
+  const gap = (await featured.boundingBox())!.y - ((await note.boundingBox())!.y + (await note.boundingBox())!.height);
+  expect(gap).toBeLessThan(40);
+  await expect(page.locator(".connections-pane > .settings-list").first()).toHaveJSProperty("scrollHeight",
+    await page.locator(".connections-pane > .settings-list").first().evaluate(el => el.clientHeight));
+
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  const rules = mode.getByRole("button", { name: "Per-tool rules", exact: true });
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await expect(mode).toContainText("Current project · applies from the next tool call");
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("approval-mode-description")).toContainText("Dangerous commands still require confirmation.");
+  await page.getByRole("button", { name: "Revoke all" }).click();
+  await expect(page.getByText("No remembered approvals.")).toBeVisible();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await rules.click();
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => page.evaluate(() => (window as any).__skillInvokeLog
+    .filter((entry: any) => entry.cmd === "set_approval_scope")
+    .map((entry: any) => entry.args instanceof Map ? entry.args.get("scope") : entry.args.scope))).toEqual(["auto", "ask"]);
+});
+
+test("full bypass is an advanced choice and stays visible when collapsed or reopened", async ({ page }) => {
+  await enterApp(page, "/?mockApprovalScope=full");
+  await openSettingsSection(page, "Permissions");
+  const mode = page.getByTestId("project-approval-settings");
+  const advanced = page.getByTestId("approval-mode-advanced");
+  const description = page.getByTestId("approval-mode-description");
+  await expect(advanced).not.toHaveAttribute("open", "");
+  await expect(description).toContainText("Full bypass");
+  await expect(description).toContainText("including confirmation for dangerous commands");
+  await mode.getByRole("button", { name: "Per-tool rules", exact: true }).click();
+  await expect(description).toContainText("Per-tool rules");
+  await advanced.locator("summary").click();
+  await mode.getByRole("button", { name: "Full bypass", exact: true }).click();
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await advanced.locator("summary").click();
+  await expect(description).toContainText("Full bypass");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(description).toContainText("Full bypass");
+  await mode.getByRole("button", { name: "Auto-approve", exact: true }).click();
+  await expect(description).toContainText("Auto-approve");
+});
+
+test("approval mode save failures keep the previous selection and allow retry", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Permissions");
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = "Could not save project approval mode"; });
+  const mode = page.getByTestId("project-approval-settings");
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await auto.click();
+  await expect(mode.getByRole("alert")).toContainText("Could not save project approval mode");
+  await expect(mode.getByRole("button", { name: "Per-tool rules", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(auto).toBeEnabled();
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = null; });
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("alert")).toHaveCount(0);
+});
+
+test("Chinese approval settings fit desktop and narrow windows", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/?mockLocale=zh");
+  await page.locator(".proj-card-main").first().click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByText("审批范围", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".settings-list-row-link", { hasText: "BioMart" })).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("connections-zh.png") });
+  await page.locator(".settings-nav").getByRole("button", { name: "权限", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  await expect(mode).toContainText("工具审批模式");
+  await expect(mode).toContainText("当前项目 · 从下一次工具调用起生效");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-zh.png") });
+  await page.setViewportSize({ width: 820, height: 740 });
+  await expectInsideViewport(mode, 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "按工具规则", exact: true }), 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "自动批准", exact: true }), 820, 740);
+  await page.getByTestId("approval-mode-advanced").locator("summary").click();
+  const full = mode.getByRole("button", { name: "完全放行", exact: true });
+  await expectInsideViewport(full, 820, 740);
+  await full.click();
+  await expect(page.getByTestId("approval-mode-description")).toContainText("完全放行");
+  await expect(full).toHaveCSS("color", "rgb(255, 255, 255)");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-narrow-zh.png") });
 });
 
 test("browser URL filters persist block and prefer hosts", async ({ page }) => {
@@ -14976,15 +15155,17 @@ test("optional environment detection does not block first-run model setup", asyn
   await page.goto("/?mockOnboarding=1");
   const onboard = page.locator(".onboard-overlay");
   await expect(onboard).toBeVisible();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await expect(onboard.getByTestId("local-environment")).toHaveCount(0);
+  await onboard.getByRole("button", { name: "Set up later" }).click();
   const environment = onboard.getByTestId("local-environment");
   await expect(environment).toContainText("local-env-setup");
   await expect(environment.locator("dd")).toHaveCount(7);
   await expect(environment.locator("dd").first()).toContainText("Not found");
-  await expect(onboard.getByRole("button", { name: "Set up later" })).toBeEnabled();
+  await expect(onboard.getByRole("button", { name: "Get started" })).toBeEnabled();
   const viewport = page.viewportSize()!;
-  await expectInsideViewport(onboard.getByRole("button", { name: "Set up later" }), viewport.width, viewport.height);
-  await onboard.getByRole("button", { name: "Set up later" }).click();
-  await onboard.getByRole("button", { name: "Next" }).click();
+  await expectInsideViewport(onboard.getByRole("button", { name: "Get started" }), viewport.width, viewport.height);
   await onboard.getByRole("button", { name: "Get started" }).click();
   await expect(onboard).toBeHidden();
   expect(await lastInvokeArgs(page, "send_message")).toBeNull();
@@ -15028,9 +15209,9 @@ for (const platform of ["Linux x86_64", "MacIntel"]) {
       await palette.getByText("Quick setup", { exact: true }).click();
       const setup = page.locator(".onboard-overlay");
       await expect(setup).toBeVisible();
-      await expect(setup.getByRole("heading", { name: "Set up your model" })).toBeVisible();
-      await expect(setup.getByLabel("API key (stored in OS keyring)")).toHaveValue("");
-      await expect(setup.getByTestId("local-environment")).toContainText("/mock/bin/Rscript");
+      await expect(setup.getByRole("heading", { name: "Welcome to wisp-science" })).toBeVisible();
+      await expect(setup.getByLabel("API key (stored in OS keyring)")).toHaveCount(0);
+      await expect(setup.getByTestId("local-environment")).toHaveCount(0);
       // Immediate Escape closes the topmost setup page, preserving Settings.
       await page.keyboard.press("Escape");
       await expect(setup).toBeHidden();
@@ -15043,3 +15224,95 @@ for (const platform of ["Linux x86_64", "MacIntel"]) {
       .filter((call: any) => call.cmd === "detect_local_environment").length)).toBe(2);
   });
 }
+
+for (const locale of ["en", "zh"]) {
+  test(`onboarding has four separate pages without overflowing the modal (${locale})`, async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 620 });
+    await page.addInitScript(() => {
+      (window as any).__mockLocalEnvironment = { paths: {
+        python_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\science.wisp-science\\wisp-science\\python\\.venv\\Scripts\\python.exe",
+        rscript_executable: "C:\\Program Files\\R-4.6.1\\bin\\x64\\Rscript.exe",
+        uv_executable: "C:\\Users\\Researcher\\AppData\\Local\\Microsoft\\WinGet\\Links\\uv.exe",
+        node_executable: "C:\\Program Files\\nodejs\\node.exe",
+        npm_executable: "C:\\Program Files\\nodejs\\npm.cmd",
+        sci_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\npm\\sci.cmd",
+        pixi_executable: "C:\\Users\\Researcher\\.pixi\\bin\\pixi.exe",
+      }, warning: null };
+    });
+    await page.goto(`/?mockOnboarding=1&mockLocale=${locale}`);
+    const modal = page.locator(".onboard");
+    const titles = locale === "zh"
+      ? ["欢迎使用 wisp-science", "wisp-science 能做什么", "配置模型", "本地环境（可选）"]
+      : ["Welcome to wisp-science", "What wisp-science can do", "Set up your model", "Local environment (optional)"];
+    const next = locale === "zh" ? "下一步" : "Next";
+    for (let step = 0; step < 4; step++) {
+      await expect(modal.getByRole("heading", { name: titles[step], exact: true })).toBeVisible();
+      await expect(modal.locator(".onboard-dot")).toHaveCount(4);
+      await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+      await expect(modal.locator('input[type="password"]')).toHaveCount(step === 2 ? 1 : 0);
+      await expect(modal.getByTestId("local-environment")).toHaveCount(step === 3 ? 1 : 0);
+      await expectInsideViewport(modal, 700, 620);
+      expect(await modal.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+      expect(await modal.locator(".onboard-content").evaluate((el) => ({
+        fits: el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight,
+        scrollbar: getComputedStyle(el).scrollbarWidth,
+      }))).toEqual({ fits: true, scrollbar: "none" });
+      await page.screenshot({ path: test.info().outputPath(`onboarding-${locale}-${step}.png`), animations: "disabled" });
+      if (step < 3) await modal.getByRole("button", { name: step === 2 ? (locale === "zh" ? "稍后配置" : "Set up later") : next, exact: true }).click();
+    }
+    // Even at high zoom / short window height, navigation stays outside the
+    // scrollable content and long paths never force horizontal scrolling.
+    await page.setViewportSize({ width: 460, height: 360 });
+    const content = modal.locator(".onboard-content");
+    await expectInsideViewport(modal.locator(".row"), 460, 360);
+    expect(await content.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await content.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(modal.getByRole("button", { name: locale === "zh" ? "编辑路径" : "Edit paths", exact: true })).toBeInViewport();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[2], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[1], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[0], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+    expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+  });
+}
+
+test("local environment manual paths save, survive reopening, and preserve failed edits", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  const env = modal.getByTestId("local-environment");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(7);
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("/mock/bin/python3");
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("C:\\Custom Python\\python.exe");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toBeFocused();
+  await env.getByRole("textbox", { name: "npm", exact: true }).fill("C:\\Program Files\\nodejs\\npm.cmd");
+  await env.getByRole("textbox", { name: "uv", exact: true }).fill("");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = true; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("alert")).toContainText("file not found");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("C:\\Custom Python\\python.exe");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = false; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(0);
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await expect.poll(() => lastInvokeArgs(page, "save_local_environment_paths")).toMatchObject({ paths: {
+    python_executable: "C:\\Custom Python\\python.exe", npm_executable: "C:\\Program Files\\nodejs\\npm.cmd", uv_executable: "",
+  } });
+  await env.getByRole("button", { name: "Check paths again" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await modal.getByRole("button", { name: "Back", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("/discard/python");
+  await env.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+});

@@ -1167,6 +1167,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
       },
     },
   ];
+  let mockApprovalScope = query.get("mockApprovalScope") ?? "ask";
   let mockBioMartEnabled = true;
   let mockBioMartSkip = false;
   const mockBioMartApprovals: Record<string, string> = {};
@@ -2584,6 +2585,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             return `proj-${arg("id")}`;
           case "open_new_window":
             return "home-mock";
+          case "save_local_environment_paths": {
+            if ((window as any).__failSaveLocalEnvironment) throw new Error("python_executable: file not found");
+            const raw = arg("paths");
+            const paths = raw instanceof Map ? Object.fromEntries(raw) : raw;
+            (window as any).__mockLocalEnvironment = {
+              paths: Object.fromEntries(Object.entries(paths).filter(([, value]) => String(value).trim()).map(([key, value]) => [key, String(value).trim()])),
+              warning: null,
+            };
+          }
           case "detect_local_environment":
           case "get_bootstrap_status":
             return {
@@ -3873,6 +3883,19 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
                 dir: "/plugins/motif/skills/hypothesis-review",
               })),
             ];
+          case "list_skill_files":
+            if (query.get("mockSkillFilesError") === "1") throw new Error("Skill package is unavailable");
+            return ["SKILL.md", "scripts/nested/analyze.py", "references/guide.md", "assets/image.png", "scripts/slow.py"];
+          case "read_skill_file": {
+            const path = String(arg("path") ?? "SKILL.md");
+            if (path.endsWith(".png")) throw new Error("Binary files cannot be previewed as text.");
+            if (path.endsWith("slow.py")) await new Promise((resolve) => setTimeout(resolve, 400));
+            const content = path === "SKILL.md"
+              ? "---\nname: " + String(arg("name")) + "\ndescription: Example skill\n---\n# Skill instructions\n\nRead the accompanying scripts.\n\n<script>window.__skillPreviewUnsafe = true</script>"
+              : path.endsWith(".md") ? "# Reference guide\n\nSupporting methods.\n\n[Paper reference](https://example.com/paper)"
+              : path.endsWith("slow.py") ? "print('old slow response')" : "# Example analysis\nprint('analysis ready')";
+            return { path, content };
+          }
           case "reload_skills": {
             if (query.get("mockSkillReload") === "1" && !skills.some((skill) => skill.name === "fresh-project-skill")) {
               skills.push({
@@ -3941,7 +3964,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             return { connections: mockMcpConnections };
           case "list_connectors":
             return {
-              scope: "ask",
+              scope: mockApprovalScope,
               connectors: [
                 {
                   key: "biomart",
@@ -4016,7 +4039,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
           }
           case "add_mcp_connection":
           case "update_mcp_connection":
+            return null;
           case "set_approval_scope":
+            if ((window as any).__mockApprovalScopeError) {
+              throw new Error((window as any).__mockApprovalScopeError);
+            }
+            mockApprovalScope = String(arg("scope"));
             return null;
           case "set_connector_enabled":
             mockBioMartEnabled = Boolean(arg("enabled"));

@@ -623,6 +623,33 @@ pub(super) async fn detect_local_environment(app: tauri::AppHandle) -> Bootstrap
     detect_environment(&app).await
 }
 
+#[tauri::command]
+pub(super) async fn save_local_environment_paths(
+    app: tauri::AppHandle,
+    paths: std::collections::BTreeMap<String, String>,
+) -> Result<BootstrapStatus, String> {
+    validate_local_environment_paths(&paths)?;
+    app.state::<AppState>()
+        .store
+        .save_local_environment_paths(&paths)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(detect_environment(&app).await)
+}
+
+pub(super) fn validate_local_environment_paths(
+    paths: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    // Validate filesystem references only; never run user-supplied executables.
+    for (key, value) in paths {
+        let path = value.trim();
+        if !path.is_empty() && !std::path::Path::new(path).is_file() {
+            return Err(format!("{key}: file not found: {path}"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn start_environment_detection(app: &tauri::AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {

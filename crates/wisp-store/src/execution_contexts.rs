@@ -62,6 +62,63 @@ impl Store {
         Ok(())
     }
 
+    /// Apply explicit edits atomically without changing unrelated Local settings.
+    /// Empty values remove overrides so subsequent detection can fill them again.
+    pub async fn save_local_environment_paths(
+        &self,
+        paths: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        for (key, value) in paths {
+            anyhow::ensure!(
+                matches!(
+                    key.as_str(),
+                    "python_executable"
+                        | "rscript_executable"
+                        | "uv_executable"
+                        | "node_executable"
+                        | "npm_executable"
+                        | "sci_executable"
+                        | "pixi_executable"
+                ),
+                "Unknown local tool path: {key}"
+            );
+            anyhow::ensure!(
+                !value.chars().any(char::is_control),
+                "Invalid local tool path: {key}"
+            );
+        }
+        let mut tx = self.begin_write().await?;
+        let raw: String =
+            sqlx::query_scalar("SELECT config_json FROM execution_contexts WHERE id='local'")
+                .fetch_one(&mut *tx)
+                .await?;
+        let mut config: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw)?;
+        for (key, value) in paths {
+            match key.as_str() {
+                "python_executable" => {
+                    config.remove("python_path");
+                }
+                "rscript_executable" => {
+                    config.remove("rscript_path");
+                }
+                _ => {}
+            }
+            let value = value.trim();
+            if value.is_empty() {
+                config.remove(key);
+            } else {
+                config.insert(key.clone(), value.into());
+            }
+        }
+        sqlx::query("UPDATE execution_contexts SET config_json=?,updated_at=? WHERE id='local'")
+            .bind(serde_json::to_string(&config)?)
+            .bind(chrono::Utc::now().timestamp())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<()> {
         ctx.validate()?;
         sqlx::query(
@@ -222,6 +279,83 @@ impl Store {
 #[cfg(test)]
 mod local_detection_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn manual_paths_replace_overrides_atomically_and_survive_detection_and_reopen() {
+        let root = std::env::temp_dir().join(format!("wisp-manual-paths-{}", uuid::Uuid::new_v4()));
+        let db = root.join("store.db");
+        let store = Store::open(&db).await.unwrap();
+        let mut local = store.get_execution_context("local").await.unwrap().unwrap();
+        local.config_json = serde_json::json!({
+            "python_path": "/old/python", "rscript_path": "/old/Rscript",
+            "node_executable": "/keep/node", "unrelated": true,
+        })
+        .to_string();
+        local.capabilities_json = r#"{"cpu_count":8}"#.into();
+        store.upsert_execution_context(&local).await.unwrap();
+        let edits = [
+            (
+                "python_executable".into(),
+                r"  C:\Custom Python\python.exe  ".into(),
+            ),
+            ("rscript_executable".into(), "".into()),
+            ("uv_executable".into(), "/custom/uv".into()),
+            ("npm_executable".into(), r"C:\Node\npm.cmd".into()),
+            ("sci_executable".into(), "/custom/sci".into()),
+            ("pixi_executable".into(), "/custom/pixi".into()),
+        ]
+        .into();
+        store.save_local_environment_paths(&edits).await.unwrap();
+        let saved = store.get_execution_context("local").await.unwrap().unwrap();
+        for bad in ["unknown", "python_executable"] {
+            let invalid = [
+                ("node_executable".into(), "/should-not-save".into()),
+                (bad.into(), "invalid\npath".into()),
+            ]
+            .into();
+            assert!(store.save_local_environment_paths(&invalid).await.is_err());
+            assert_eq!(
+                store
+                    .get_execution_context("local")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .config_json,
+                saved.config_json
+            );
+        }
+        store
+            .save_detected_local_paths(
+                &[
+                    ("python_executable".into(), "/detected/python".into()),
+                    ("rscript_executable".into(), "/detected/Rscript".into()),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+        let reopened = Store::open(&db).await.unwrap();
+        let result = reopened
+            .get_execution_context("local")
+            .await
+            .unwrap()
+            .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&result.config_json).unwrap();
+        assert_eq!(config["python_executable"], r"C:\Custom Python\python.exe");
+        assert_eq!(config["rscript_executable"], "/detected/Rscript");
+        assert_eq!(config["node_executable"], "/keep/node");
+        assert_eq!(config["npm_executable"], r"C:\Node\npm.cmd");
+        assert_eq!(config["uv_executable"], "/custom/uv");
+        assert_eq!(config["sci_executable"], "/custom/sci");
+        assert_eq!(config["pixi_executable"], "/custom/pixi");
+        assert_eq!(config["unrelated"], true);
+        assert!(config.get("python_path").is_none());
+        assert!(config.get("rscript_path").is_none());
+        assert_eq!(result.capabilities_json, local.capabilities_json);
+        drop(reopened);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[tokio::test]
     async fn detected_paths_fill_blanks_preserve_manual_settings_and_survive_reopen() {
