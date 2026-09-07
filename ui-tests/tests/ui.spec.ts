@@ -9687,7 +9687,9 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator(".cred-help-trigger")).toHaveCount(4);
+  await expect(page.locator("[data-credential-service]")).toHaveCount(4);
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator(".cred-help-trigger")).toHaveCount(1);
   const openAlexHelp = page.getByRole("button", { name: "OpenAlex: About this credential" });
   const openAlexTooltip = page.locator("#cred-help-openalex");
   await expect(openAlexTooltip).not.toBeVisible();
@@ -9698,19 +9700,23 @@ test("credential services explain their behavior and open official setup links",
   await expect(openAlexTooltip).toContainText("When not configured");
   await expect(openAlexTooltip).toContainText("falls back to anonymous OpenAlex requests");
 
+  await page.locator(".settings-head-back").click();
+  await page.locator('[data-credential-service="ncbi"]').click();
   const ncbiHelp = page.getByRole("button", { name: "NCBI E-utilities (PubMed): About this credential" });
   await ncbiHelp.focus();
   await expect(page.locator("#cred-help-ncbi")).toBeVisible();
   await expect(page.locator("#cred-help-ncbi")).toContainText("3 requests/s limit");
 
   const links = [
-    ["Get OpenAlex API key", "https://openalex.org/settings/api"],
-    ["Open InfiniSynapse console", "https://app.infinisynapse.cn/tasks"],
-    ["Visit InfiniSynapse", "https://infinisynapse.cn"],
-    ["Get SCIMaster API key", "https://scimaster.bohrium.com/vibe-write/home"],
-    ["Open NCBI account", "https://www.ncbi.nlm.nih.gov/account/"],
+    ["openalex", "Get OpenAlex API key", "https://openalex.org/settings/api"],
+    ["infinisynapse", "Open InfiniSynapse console", "https://app.infinisynapse.cn/tasks"],
+    ["infinisynapse", "Visit InfiniSynapse", "https://infinisynapse.cn"],
+    ["scimaster", "Get SCIMaster API key", "https://scimaster.bohrium.com/vibe-write/home"],
+    ["ncbi", "Open NCBI account", "https://www.ncbi.nlm.nih.gov/account/"],
   ] as const;
-  for (const [label, url] of links) {
+  for (const [service, label, url] of links) {
+    await page.locator(".settings-head-back").click();
+    await page.locator(`[data-credential-service="${service}"]`).click();
     await page.getByRole("button", { name: label, exact: true }).click();
     await expect.poll(() => lastInvokeArgs(page, "open_external_url")).toMatchObject({ url });
   }
@@ -9724,6 +9730,7 @@ test("Chinese NCBI credential help gives the complete account navigation path", 
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "凭据", exact: true }).click();
 
+  await page.locator('[data-credential-service="ncbi"]').click();
   const help = page.getByRole("button", { name: /NCBI E-utilities.*了解该凭据/ });
   await help.focus();
   const tooltip = page.locator("#cred-help-ncbi");
@@ -9741,6 +9748,7 @@ test("Chinese NCBI credential help gives the complete account navigation path", 
 test("credentials settings include SCIMaster and save its key", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
+  await page.locator('[data-credential-service="scimaster"]').click();
   const field = page.locator("label", { hasText: "SCIMaster API key" });
   await expect(field).toContainText("Not configured");
   await field.locator("input").fill("sk-sci-123");
@@ -9751,6 +9759,59 @@ test("credentials settings include SCIMaster and save its key", async ({ page })
   });
   await expect(page.locator(".settings-status")).toHaveText("Saved. Applies to new sessions.");
   await expect(field).toContainText("Configured");
+});
+
+test("credential service subpages navigate, discard drafts, and update list status", async ({ page }) => {
+  test.setTimeout(60_000);
+  await enterApp(page);
+  await openSettingsSection(page, "Credentials");
+  const list = page.getByTestId("credential-service-list");
+  await expect(list.locator("button")).toHaveCount(4);
+  await expect(list.locator("input")).toHaveCount(0);
+  await expect.poll(async () => (await list.boundingBox())?.height ?? 0).toBeGreaterThan(250);
+  await page.screenshot({ path: test.info().outputPath("credential-services.png"), animations: "disabled" });
+
+  for (const service of ["openalex", "infinisynapse", "scimaster", "ncbi"]) {
+    await page.locator(`[data-credential-service="${service}"]`).click();
+    // Escape must work immediately, while focus is still outside the detail form.
+    await page.keyboard.press("Escape");
+    await expect(list).toBeVisible();
+    await expect(page.locator(".settings-page")).toBeVisible();
+  }
+
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator(".settings-crumb-current")).toHaveText("OpenAlex");
+  await expect(page.getByLabel("Service name")).toHaveCount(0);
+  await page.locator('.credentials-pane input[type="password"]').fill("discard-me");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator('[data-credential-service="ncbi"]').click();
+  await expect(page.locator(".credentials-pane input")).toHaveCount(2);
+  await page.screenshot({ path: test.info().outputPath("credential-ncbi.png"), animations: "disabled" });
+  const field = page.locator("label", { hasText: "NCBI API key" });
+  await field.locator("input").fill("ncbi-test-key");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_credential")).toMatchObject({ id: "ncbi_api_key", value: "ncbi-test-key" });
+  await expect(field).toContainText("Configured");
+  await expect(field.locator("input")).toHaveValue("");
+  await page.locator(".settings-crumb-link").click();
+  await expect(page.locator('[data-credential-service="ncbi"]')).toContainText("Configured 1/2");
+  await expect(page.locator('[data-credential-service="openalex"]')).toContainText("Not configured");
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator('.credentials-pane input[type="password"]')).toHaveValue("");
+  await page.locator(".settings-head-back").click();
+  await page.locator('[data-credential-service="ncbi"]').click();
+  await field.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(field).toContainText("Not configured");
+  await page.locator(".settings-head-back").click();
+  await expect(page.locator('[data-credential-service="ncbi"]')).toContainText("Not configured");
+
+  await page.locator('[data-credential-service="scimaster"]').click();
+  await page.locator('.credentials-pane input[type="password"]').fill("discard-on-navigation");
+  await page.locator(".settings-nav").getByRole("button", { name: "General", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "Credentials", exact: true }).click();
+  await expect(list).toBeVisible();
+  await page.locator('[data-credential-service="scimaster"]').click();
+  await expect(page.locator('.credentials-pane input[type="password"]')).toHaveValue("");
 });
 
 test("credentials settings add, replace, clear, and remove a custom credential", async ({ page }) => {
