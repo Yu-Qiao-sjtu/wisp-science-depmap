@@ -26,14 +26,55 @@ cargo tauri dev      # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri build    # installers under target/release/bundle
 ```
 
-Desktop icons come from two masters via `src-tauri/gen-icons.ps1`
-(`cargo tauri icon`). Both keep the DNA mark inset; do not regenerate from
-`ui/logo.svg`, which fills the canvas and looks oversized on every launcher.
+The desktop icon uses the three-wisp design by
+[SpicyChicken6 in Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154),
+with a teal mark (`#0D9488`) on an off-white tile (`#FAF9F6`). The original
+arc paths and optical centering are preserved from the
+[editable SVG bundle](https://raw.githubusercontent.com/SpicyChicken6/wisp-science/a1b35d00f2031890d835eefa6196cbb25fce058b/logo-proposal/wisp-science-logo-and-icon-assets.zip).
 
-- `src-tauri/icons/app-icon.svg` is full-bleed. macOS Dock/Launchpad apply a
-  squircle, so a baked badge would be double-masked and look small.
-- `src-tauri/icons/app-icon-rounded.svg` clips the same mark to rounded
-  corners. Windows taskbar and most Linux docks draw the bitmap as-is.
+Regenerate the checked-in assets with `pwsh -File src-tauri/gen-icons.ps1`
+(or `powershell -ExecutionPolicy Bypass -File src-tauri/gen-icons.ps1` on Windows).
+This uses `cargo tauri icon` and three 1024px SVG masters:
+
+- `src-tauri/icons/app-icon.svg`: full square for store/mobile assets and
+  `source.png`.
+- `src-tauri/icons/app-icon-rounded.svg`: rounded tile for Windows ICO and
+  desktop PNGs, including Linux launchers and the tray.
+- `src-tauri/icons/app-icon-macos.svg`: rounded tile with a 10% transparent
+  margin on each side for the bundled macOS ICNS. Legacy ICNS needs this
+  geometry baked into the bitmap; it is not a layered Icon Composer asset.
+
+macOS 26+ uses the native `Wisp.icon` Icon Composer document, with the same
+light palette and the author's dark palette (`#2DA898` on `#171614`, from
+`app-icon-dark.svg`). The system's icon appearance preference selects the
+variant in both Dock and Finder, including when the app is closed. This is
+independent of Wisp's in-app theme setting. Older macOS versions, Windows,
+and Linux use the light icon.
+
+To follow system appearance, choose **System Settings → Appearance → Icon &
+widget style → Dark → Auto**. **Default** keeps the light icon; **Dark →
+Always** keeps the dark icon. See [Apple's appearance settings guide](https://support.apple.com/guide/mac-help/change-appearance-settings-mchlp1225/mac).
+
+After editing either palette, run `python3 src-tauri/gen-icons-macos.py` on
+macOS with Xcode 26+ selected. It updates the transparent SVG layers, compiles
+`icons/Assets.car`, checks for both native appearances, and records source
+and output hashes in `icons/macos-icon-build.json`. Commit those outputs
+together. The compiled catalog is checked in so normal builds on other
+platforms or older Xcode hosts do not need Icon Composer. The macOS bundle
+places it at `Contents/Resources/Assets.car`; `Info.plist` selects `Wisp` via
+`CFBundleIconName`, while the existing `icon.icns` remains the legacy fallback.
+Native macOS rendering may add system material and lighting to the design.
+
+The in-app and website logos are separate assets. Do not generate desktop
+icons from `ui/logo.svg`.
+
+For a manual smoke check, build/install on each target OS and inspect the
+Dock/Finder (macOS), taskbar/shortcut (Windows), or launcher (Linux). Check
+that the three wisps remain legible at small sizes, corners are transparent,
+and the macOS tile has a comparable footprint to neighboring Dock icons.
+On macOS 26+, select light and dark system icon appearances and check both
+Dock and Finder, including with the app closed. `cargo tauri dev` is not a
+packaged application and does not exercise the native asset catalog.
 
 Universal macOS binary (Apple Silicon + Intel):
 

@@ -2650,45 +2650,137 @@ fn navigation_guard_allows_only_app_origins() {
 }
 
 #[test]
-fn desktop_app_icon_is_full_bleed_with_an_inset_mark() {
+fn desktop_app_icon_preserves_the_three_wisp_design_across_platforms() {
     let svg = include_str!("../icons/app-icon.svg");
     let rounded = include_str!("../icons/app-icon-rounded.svg");
+    let macos = include_str!("../icons/app-icon-macos.svg");
+    let dark = include_str!("../icons/app-icon-dark.svg");
     let script = include_str!("../gen-icons.ps1");
+    let symbol = |source: &str| {
+        source[source.find("<g ").unwrap()..source.find("</g>").unwrap()].to_string()
+    };
+    for variant in [rounded, macos, dark] {
+        assert_eq!(symbol(svg), symbol(variant), "preserve the original arcs");
+    }
+    assert_eq!(svg.matches("<path ").count(), 3);
     assert!(
-        !svg.contains("<clipPath"),
-        "macOS master must be full-bleed; Dock applies the squircle mask"
+        svg.contains("translate(60.93466123858796 64) scale(1.04)"),
+        "preserve the standalone symbol's optical centering and proportions"
     );
-    assert!(
-        svg.contains("scale(0.60)"),
-        "keep the DNA mark inset so Dock/Launchpad does not fill the tile"
-    );
-    assert!(
-        rounded.contains("<clipPath") && rounded.contains("rx=\"58\""),
-        "Windows/Linux launchers draw the bitmap as-is and need baked rounding"
-    );
-    assert!(
-        rounded.contains("scale(0.60)"),
-        "rounded launcher icon must keep the same inset mark"
-    );
-    assert!(
-        script
+    assert!(!svg.contains("rx="), "store/mobile master stays square");
+    assert!(rounded.contains("rx=\"26\""));
+    assert!(macos.contains("rx=\"26\"") && macos.contains("viewBox=\"-16 -16 160 160\""));
+    for source in [svg, rounded, macos] {
+        assert!(source.contains("#0D9488") && source.contains("#FAF9F6"));
+    }
+    assert!(dark.contains("#2DA898") && dark.contains("#171614"));
+    for master in ["app-icon.svg", "app-icon-rounded.svg", "app-icon-macos.svg"] {
+        assert!(script
             .lines()
-            .any(|line| line.contains("Resolve-Path") && line.contains("icons/app-icon.svg")),
-        "icon generation must use the desktop master, not the in-app logo"
+            .any(|line| line.contains("Resolve-Path") && line.contains(master)));
+    }
+    assert!(script.contains("(Join-Path $macOut \"icon.icns\") \"icons/icon.icns\""));
+}
+
+#[test]
+fn desktop_app_icon_packaged_bitmaps_have_the_new_mark_and_platform_margins() {
+    // Inspect the shipped images, so replacing only the SVG while leaving old
+    // DNA bitmaps in the installer cannot pass this regression check.
+    let check_badge = |png: &[u8], size: u32, macos: bool| {
+        let bitmap = image::load_from_memory(png).unwrap().to_rgba8();
+        assert_eq!(bitmap.dimensions(), (size, size));
+        let off_white = image::Rgba([250, 249, 246, 255]);
+        let teal = image::Rgba([13, 148, 136, 255]);
+        assert_eq!(bitmap.get_pixel(0, 0)[3], 0, "transparent corners");
+        assert_eq!(*bitmap.get_pixel(size / 2, size / 2), off_white);
+        assert_eq!(
+            *bitmap.get_pixel(if macos { size * 3 / 4 } else { size * 4 / 5 }, size / 2),
+            teal,
+            "the outer wisp must remain visible"
+        );
+        assert_eq!(
+            bitmap.get_pixel(size / 2, size / 20)[3],
+            if macos { 0 } else { 255 },
+            "only the macOS ICNS has a transparent outer margin"
+        );
+    };
+    for (png, size) in [
+        (include_bytes!("../icons/32x32.png").as_slice(), 32),
+        (include_bytes!("../icons/64x64.png").as_slice(), 64),
+        (include_bytes!("../icons/128x128.png").as_slice(), 128),
+        (include_bytes!("../icons/128x128@2x.png").as_slice(), 256),
+        (include_bytes!("../icons/icon.png").as_slice(), 512),
+    ] {
+        check_badge(png, size, false);
+    }
+
+    // The ICO's 256px entry is PNG encoded; inspect it without a new decoder
+    // dependency. Smaller entries use the ICO bitmap format.
+    let ico = include_bytes!("../icons/icon.ico");
+    assert_eq!(&ico[..4], &[0, 0, 1, 0]);
+    let count = u16::from_le_bytes(ico[4..6].try_into().unwrap()) as usize;
+    let entry = ico[6..6 + 16 * count]
+        .chunks_exact(16)
+        .find(|entry| entry[0] == 0 && entry[1] == 0)
+        .expect("ICO must contain a 256px layer");
+    let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+    let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+    check_badge(&ico[offset..offset + length], 256, false);
+
+    // ICNS chunks include PNG layers; check the largest Retina layer to catch
+    // accidentally packaging the full square or Windows variant on macOS.
+    let icns = include_bytes!("../icons/icon.icns");
+    assert_eq!(&icns[..4], b"icns");
+    let mut offset = 8;
+    let mut found_retina = false;
+    while offset < icns.len() {
+        let length = u32::from_be_bytes(icns[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        assert!(length >= 8 && offset + length <= icns.len());
+        if &icns[offset..offset + 4] == b"ic10" {
+            check_badge(&icns[offset + 8..offset + length], 1024, true);
+            found_retina = true;
+        }
+        offset += length;
+    }
+    assert!(found_retina, "ICNS must contain the 1024px Retina layer");
+}
+
+#[test]
+fn desktop_app_icon_native_catalog_matches_its_sources_and_bundle_config() {
+    use sha2::{Digest, Sha256};
+
+    // This portable check needs neither Xcode nor a live macOS desktop. The
+    // generation script verifies the compiled catalog with Apple's assetutil.
+    let provenance: serde_json::Value =
+        serde_json::from_str(include_str!("../icons/macos-icon-build.json")).unwrap();
+    for appearance in ["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"] {
+        assert!(provenance["appearances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == appearance));
+    }
+    for (path, expected) in provenance["sha256"].as_object().unwrap() {
+        let bytes = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        assert_eq!(
+            hex::encode(Sha256::digest(bytes)),
+            expected.as_str().unwrap(),
+            "{path} changed; regenerate with python3 src-tauri/gen-icons-macos.py"
+        );
+    }
+    let macos: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
+    assert_eq!(
+        macos["bundle"]["macOS"]["files"]["Resources/Assets.car"],
+        "icons/Assets.car"
     );
-    assert!(
-        script.lines().any(
-            |line| line.contains("Resolve-Path") && line.contains("icons/app-icon-rounded.svg")
-        ),
-        "Windows/Linux icons must come from the rounded master"
-    );
-    assert!(
-        !script.lines().any(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.starts_with('#') && line.contains("ui/logo.svg")
-        }),
-        "do not pass the in-app logo (canvas-filling badge) to cargo tauri icon"
-    );
+    assert!(include_str!("../Info.plist").contains("<string>Wisp</string>"));
+    let native: serde_json::Value =
+        serde_json::from_str(include_str!("../icons/Wisp.icon/icon.json")).unwrap();
+    let images = &native["groups"][0]["layers"][0]["image-name-specializations"];
+    assert_eq!(images[0]["value"], "wisp-light.svg");
+    assert_eq!(images[1]["appearance"], "dark");
+    assert_eq!(images[1]["value"], "wisp-dark.svg");
 }
 
 #[test]
