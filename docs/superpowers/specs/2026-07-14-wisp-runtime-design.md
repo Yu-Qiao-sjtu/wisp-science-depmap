@@ -546,7 +546,7 @@ The existing `python` tool remains backward-compatible and can also execute a
 saved project script without leaving the runtime:
 
 ```text
-python(code? | script_path?, required_objects?, expected_runtime_generation?, context_id?)
+python(code? | script_path?, required_objects?, context_id?)
 ```
 
 - Exactly one of `code` or `script_path` is required. The schema keeps both
@@ -566,18 +566,34 @@ python(code? | script_path?, required_objects?, expected_runtime_generation?, co
   non-empty, the tool never lazily starts an empty runtime, and it rejects a
   runtime started in another directory instead of falling back to a new one; the
   worker checks the bindings before evaluating any source.
-- `expected_runtime_generation` optionally rejects a restarted/replaced runtime.
+- `expected_runtime_generation` is no longer advertised in the Python/R model
+  tool schemas: filling this optional integer with a guessed `1` prevents the
+  first call from starting a runtime. Legacy callers may still pass it, and the
+  host API retains `RuntimeExecutionOptions.expected_generation`; both strictly
+  require an existing runtime of the specified generation. The host never
+  silently drops a supplied guard or substitutes the current generation.
+  Missing-runtime errors identify the failed fields and explain recovery.
+  Initialization code that needs no prior state should omit the generation
+  guard and omit `required_objects` (or pass `[]`). Code relying on previous
+  state must restore that state explicitly before retrying.
 
 The new R tool mirrors it:
 
 ```text
-r(code? | script_path?, required_objects?, expected_runtime_generation?, context_id?)
+r(code? | script_path?, required_objects?, context_id?)
 ```
 
 Its `script_path` must name a project-relative `.R` file. Script paths are source
 artifacts, not process-launch instructions: both languages execute the saved
 source inside their existing persistent namespace. Results from script execution
 include the project-relative path, SHA-256, runtime id, and generation.
+
+For example, a first call can use
+`{"code":"1 + 1","context_id":"local","required_objects":[],"script_path":""}`.
+Blank optional source strings count as absent. Adding
+`"expected_runtime_generation":1` asserts that generation 1 already exists;
+it is not a startup request. The CLI's `python repl wired` message only confirms
+tool registration, not that a Python process has started.
 
 Tool descriptions state that variables and loaded data persist per
 project/context/language, that package installation belongs to an explicitly chosen

@@ -447,9 +447,24 @@ impl RuntimeManager {
                 .get(key)
                 .cloned()
                 .ok_or_else(|| {
-                    anyhow!(
-                        "runtime is not started; load the required objects before executing this source"
-                    )
+                    let mut message = "runtime is not started; ".to_string();
+                    if let Some(expected) = options.expected_generation {
+                        message.push_str(&format!(
+                            "expected_runtime_generation={expected} requires an existing runtime of that generation; it does not start one. "
+                        ));
+                        if options.required_objects.is_empty() {
+                            message.push_str(
+                                "For initialization code that needs no prior runtime state, omit expected_runtime_generation on the first call. If prior state was expected, restore it explicitly before retrying."
+                            );
+                        }
+                    }
+                    if !options.required_objects.is_empty() {
+                        message.push_str(&format!(
+                            "required_objects={:?} requires existing bindings. Initialize and load these objects in a separate call without required_objects or expected_runtime_generation, then retry this source with verified preconditions.",
+                            options.required_objects
+                        ));
+                    }
+                    anyhow!(message)
                 })?;
             // The registry lookup bypasses `session`, so this branch is the only
             // place that still has to reject a runtime started elsewhere.
@@ -462,7 +477,7 @@ impl RuntimeManager {
         if let Some(expected) = options.expected_generation {
             if info.generation != expected {
                 return Err(anyhow!(
-                    "runtime generation changed: expected {expected}, current {}; reload or rebind the required objects explicitly",
+                    "runtime generation changed: expected_runtime_generation={expected}, current {}; verify and restore the runtime state before retrying; do not guess a replacement generation",
                     info.generation
                 ));
             }
@@ -1461,6 +1476,49 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("runtime is not started"));
         assert_eq!(launcher.launches.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn missing_runtime_errors_identify_each_precondition_without_launching() {
+        let launcher = FakeLauncher::default();
+        let manager = manager(&launcher);
+        let key = RuntimeKey::local_python("project-a");
+        let cwd = PathBuf::from("project-a");
+
+        for (expected_generation, required_objects) in [
+            (Some(1), vec![]),
+            (None, vec!["value".to_string()]),
+            (Some(1), vec!["value".to_string()]),
+        ] {
+            let error = manager
+                .execute_with_options(
+                    &key,
+                    &cwd,
+                    "set:9",
+                    RuntimeExecutionOptions {
+                        expected_generation,
+                        required_objects: required_objects.clone(),
+                        ..RuntimeExecutionOptions::default()
+                    },
+                )
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("runtime is not started"), "{error}");
+            assert_eq!(
+                error.contains("expected_runtime_generation=1"),
+                expected_generation.is_some(),
+                "{error}"
+            );
+            if required_objects.is_empty() {
+                assert!(error.contains("omit expected_runtime_generation on the first call"));
+                assert!(!error.contains("required_objects"));
+            } else {
+                assert!(error.contains("required_objects=[\"value\"]"), "{error}");
+                assert!(error.contains("separate call"), "{error}");
+            }
+            assert_eq!(launcher.launches.load(Ordering::SeqCst), 0);
+        }
     }
 
     /// The guarded path looks the session up straight out of the registry, which
