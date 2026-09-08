@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "module_id": "expression_correlation",
+  "analysis_label": "gene_gene_coexpression",
+  "display_name_zh": "表达基因—表达基因共表达分析",
+  "data_modality": "transcript_expression_log2_tpm_plus_1",
+  "relation_type": "coexpression",
+  "entity_roles": {"source": "expression_gene", "target": "expression_gene", "symmetric": true},
+  "metric": "pearson_correlation",
+  "scopes": ["global", "lineage"],
+  "cohort_policy": {"global": "all_default_expression_models", "global_sample_n": 1719, "lineage_min_n": 10},
+  "query_contract": {
+    "global_pair": {"mode": "pair", "module": "expression_correlation"},
+    "global_top": {"mode": "top", "module": "expression_correlation"},
+    "lineage": {"mode": "lineage_network", "family": "expression_correlation"}
+  },
+  "intent_terms_zh": ["表达相关", "表达量相关", "共表达", "基因表达一起升高", "基因表达一起降低"],
+  "intent_terms_en": ["coexpression", "expression correlation", "expression gene-gene correlation"],
+  "confusable_modules": ["effect_correlation", "expression_dependency"],
+  "interpretation": "两个基因在细胞系间的表达量是否协同变化；不等于敲除依赖相似，也不证明因果。"
+}

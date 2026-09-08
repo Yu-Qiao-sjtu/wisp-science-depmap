@@ -191,6 +191,34 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             semantics["damaging_mutation_dependency"], "mean_difference"
         )
 
+        correlation_semantics = {
+            item["query"]["module"]: item["metric_semantics"]
+            for item in items
+            if item["query"]["module"] in {
+                "effect_correlation", "expression_correlation", "expression_dependency"
+            }
+        }
+        self.assertEqual(
+            correlation_semantics["effect_correlation"]["analysis_label"],
+            "gene_gene_codependency",
+        )
+        self.assertEqual(
+            correlation_semantics["effect_correlation"]["data_modality"],
+            "crispr_gene_effect",
+        )
+        self.assertEqual(
+            correlation_semantics["expression_correlation"]["analysis_label"],
+            "gene_gene_coexpression",
+        )
+        self.assertEqual(
+            correlation_semantics["expression_correlation"]["data_modality"],
+            "transcript_expression_log2_tpm_plus_1",
+        )
+        self.assertEqual(
+            correlation_semantics["expression_dependency"]["relation_type"],
+            "predictive_association",
+        )
+
     async def test_subtype_tool_is_one_bounded_query_with_canonical_lineage(self):
         result = await self.service.subtype_evidence(
             gene="wrn", lineage="结肠癌", contrast_id="FEATURE__BOWEL__MSI", limit=7

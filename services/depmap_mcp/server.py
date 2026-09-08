@@ -89,19 +89,42 @@ def settings_from_env() -> Settings:
 def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
     mode = query["mode"]
     module = query.get("module") or query.get("family")
-    if mode in {"pair", "top"} and module in {
-        "effect_correlation",
-        "expression_correlation",
-        "expression_dependency",
-    }:
+    scope = "lineage" if mode == "lineage_network" else "global"
+    if module == "effect_correlation" and mode in {"pair", "top", "lineage_network"}:
         return {
             "metric": "correlation",
-            "interpretation": "signed precomputed correlation; sign is not causal",
+            "analysis_label": "gene_gene_codependency",
+            "data_modality": "crispr_gene_effect",
+            "relation_type": "codependency",
+            "scope": scope,
+            "cohort_policy": (
+                "lineage_models_meeting_manifest_min_n"
+                if scope == "lineage" else "all_available_gene_effect_models"
+            ),
+            "interpretation": "signed CRISPR Gene Effect profile correlation; positive supports similar dependency profiles, not causality or synthetic lethality",
         }
-    if mode == "lineage_network":
+    if module == "expression_correlation" and mode in {"pair", "top", "lineage_network"}:
         return {
             "metric": "correlation",
-            "interpretation": "signed within-lineage correlation; sign is not causal",
+            "analysis_label": "gene_gene_coexpression",
+            "data_modality": "transcript_expression_log2_tpm_plus_1",
+            "relation_type": "coexpression",
+            "scope": scope,
+            "cohort_policy": (
+                "lineage_models_meeting_manifest_min_n"
+                if scope == "lineage" else "all_default_expression_models"
+            ),
+            "interpretation": "signed gene-expression correlation; supports coexpression, not dependency, direct regulation, or causality",
+        }
+    if module == "expression_dependency" and mode in {"pair", "top", "lineage_network"}:
+        return {
+            "metric": "correlation",
+            "analysis_label": "expression_dependency_association",
+            "data_modality": "expression_vs_crispr_gene_effect",
+            "relation_type": "predictive_association",
+            "scope": scope,
+            "cohort_policy": "matched_expression_and_gene_effect_models",
+            "interpretation": "signed expression-to-CRISPR-dependency correlation; source is expression and target is Gene Effect, not a symmetric gene-gene relation",
         }
     if mode in {"lineage", "lineage_cnv"} or (
         mode in {"pair", "top"}
@@ -953,7 +976,9 @@ def build_mcp_server(
         title="DepMap exact gene-pair evidence",
         description=(
             "Retrieve precomputed global and optional lineage-specific evidence for an "
-            "exact directed source-target gene pair."
+            "exact source-target gene pair. Keeps expression coexpression, CRISPR Gene "
+            "Effect co-dependency, and expression-to-dependency evidence separately "
+            "labeled; use it when the user's measurement is unspecified."
         ),
         annotations=READ_ONLY,
         structured_output=True,
