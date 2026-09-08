@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "module_id": "expression_dependency",
+  "analysis_label": "expression_dependency_association",
+  "display_name_zh": "表达基因—CRISPR 基因依赖相关性分析",
+  "data_modality": "expression_vs_crispr_gene_effect",
+  "relation_type": "predictive_association",
+  "entity_roles": {
+    "source": "expression_gene",
+    "target": "gene_effect_gene",
+    "symmetric": false
+  },
+  "scopes": ["global", "lineage"],
+  "cohort_policy": {
+    "global": "matched_default_expression_and_gene_effect_models",
+    "global_sample_n": 1140,
+    "lineage": "matched_default_expression_gene_effect_and_model_lineage",
+    "lineage_min_n": 10
+  },
+  "metric": "pearson_correlation",
+  "query_contract": {
+    "global_pair": {"mode": "pair", "module": "expression_dependency"},
+    "global_top": {"mode": "top", "module": "expression_dependency"},
+    "lineage": {"mode": "lineage_network", "family": "expression_dependency"}
+  },
+  "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖"],
+  "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency"],
+  "sign_interpretation": {
+    "negative": "higher expression associates with stronger, more negative Gene Effect dependency",
+    "positive": "higher expression associates with weaker, less negative Gene Effect dependency"
+  },
+  "tm00_references": ["01", "04", "05"],
+  "confusable_modules": ["expression_correlation", "effect_correlation"],
+  "interpretation": "The source and target have different measurement roles. The result is a continuous association screen, not a causal interaction, high/low group comparison, drug response model, or synthetic-lethal test."
+}
