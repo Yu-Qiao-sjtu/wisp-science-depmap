@@ -1,6 +1,6 @@
 """Sidecar for the pdf-explore skill.
 
-Loaded once per session via the "Python Kernel Sidecar" exec line that
+Loaded once per session via the "Python Runtime Sidecar" exec line that
 `use_skill` appends; definitions then persist in the project's Python kernel.
 Top level is definition-only and every non-stdlib import sits inside a
 function body, so loading never fails on a missing package. Names carry a

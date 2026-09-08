@@ -86,6 +86,47 @@ bundled packages and enabled custom/plugin services available to the project.
 
 ## Scripts and interactive analysis
 
+### Special runtime scripts: `runtime.py` and `runtime.r`
+
+A skill may place `runtime.py` (Python), `runtime.r` (R), or both directly beside
+`SKILL.md`. These reserved root-level filenames identify **runtime scripts**:
+their code runs inside the selected persistent `python` or `r` interpreter,
+so helpers and in-memory state remain available to subsequent calls. They
+must not be launched as standalone `python runtime.py` / `Rscript runtime.r`
+commands or as separate Runs. Use the lowercase filenames shown here for
+portable packages, including on case-sensitive filesystems.
+
+`use_skill` and explicit skill selection detect each file independently and
+append the corresponding loading instructions. Discovery, file preview, and
+skill loading itself do not execute the files. The Agent follows the instructions
+before using the helpers: Python uses `exec(compile(...))` in the persistent
+namespace; R uses `source(..., local = TRUE, encoding = "UTF-8")` in the
+runtime's persistent evaluation environment. If the runtime cannot access the
+package path, such as on SSH or WSL, the Agent reads the local file and submits
+its contents through the corresponding runtime tool's `code` argument instead.
+Sibling resources are not automatically transferred.
+
+Load each sidecar once in the runtime where it is needed. A runtime restart,
+different conversation, or different execution context requires loading it
+again. Persistence here means interpreter memory, not recovery across process
+restarts; save durable results to project files or artifacts.
+
+Authors should keep top-level loading lightweight: define helpers and defer
+expensive data loading, computation, dependency checks, and other side effects
+until explicit helper calls. Prefix helper/global names to avoid collisions in
+the shared language namespace. Python sidecars execute in `__main__`, so an
+`if __name__ == "__main__"` block also runs during loading; use an explicitly
+called function for demos or self-checks. Python and R retain separate state;
+shipping both files does not share objects between languages.
+
+Ordinary files under `scripts/`, such as `scripts/main.py`, have no special
+loading behavior, even if named `scripts/runtime.py` or `scripts/runtime.r`.
+Document their invocation in `SKILL.md`. Use these for standalone tasks that
+do not need persistent state; a skill can include both ordinary scripts and
+runtime sidecars. No sidecar is required for a skill.
+
+### Bundled helpers and execution choices
+
 The bundled `public-data-access` skill includes optional geokit guidance for
 GEO SOFT/Series Matrix acquisition and R ExpressionSet workflows. Basic GEO
 discovery continues through the existing connectors. geokit and Biobase must
@@ -94,7 +135,7 @@ loading the skill does not install them or add an MCP server. The adapter
 guidance covers file selection, transfer limitations, multi-platform outputs,
 and provenance. See the [GEO adapter reference](../skills/public-data-access/references/geokit.md).
 The plan/manifest helper runs directly as `scripts/public_data_plan.py` with
-Python 3.10+; this skill no longer ships a `kernel.py` REPL wrapper. Resolve the
+Python 3.10+; this skill does not need a runtime wrapper. Resolve the
 helper from the skill directory and run it with the project as the working
 directory.
 

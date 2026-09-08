@@ -19,9 +19,9 @@ SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 def load_sidecar(name):
     namespace = {"__name__": "__main__"}
-    source = (SKILLS / name / "kernel.py").read_text(encoding="utf-8")
+    source = (SKILLS / name / "runtime.py").read_text(encoding="utf-8")
     # Match render_skill's compile filename and the worker's shared namespace.
-    exec(compile(source, "kernel.py", "exec"), namespace)
+    exec(compile(source, "runtime.py", "exec"), namespace)
     return namespace
 
 

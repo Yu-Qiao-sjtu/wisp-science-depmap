@@ -55,7 +55,7 @@ Clarify with the user only when the answer would change what you retrieve.
 
 Never write from recall. Recall chooses the framing and the search terms;
 retrieval supplies every citation. Start with `search_openalex` /
-`crossref_lookup` from this skill's `kernel.py`, a PubMed query, or any
+`crossref_lookup` from this skill's `runtime.py`, a PubMed query, or any
 literature connector advertised in the session (`search_skills` with
 `{"query":"literature PubMed Semantic Scholar bioRxiv ClinicalTrials"}` finds
 installed guidance; load matches with `use_skill`).
@@ -128,7 +128,7 @@ file and link it at the *end* of the reply. Process narration — "all DOIs
 verified", "no retraction flags", "report saved" — belongs nowhere: not as
 opener, footer, or subtitle. Verification lives in the tool trace.
 
-Before saving, run `style_pass(draft)` from `kernel.py` once on the full
+Before saving, run `style_pass(draft)` from `runtime.py` once on the full
 markdown, fix what it lists in one editing pass, and save. It is a lint, not
 a gate — do not loop on it. If `style_pass` is not defined in the kernel,
-read this skill's `kernel.py` and exec it first.
+read this skill's `runtime.py` and exec it first.
