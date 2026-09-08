@@ -3,8 +3,9 @@
   flex: 1 1 0; min-width: min(360px, 100%); display: flex; flex-direction: column;
   background: var(--bg-app);
   container-type: inline-size;
-  /* Scale with the center pane; cap keeps prose readable on ultra-wide layouts. */
-  --chat-col-max: min(100%, 920px);
+  /* Fill the available pane with a small gutter; only cap ultra-wide layouts.
+     Keep messages, runtime controls, and the composer on the same column. */
+  --chat-col-max: min(calc(100% - 32px), 1280px);
 }
 .center-tabs { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; flex: 1 1 auto; scrollbar-width: none; box-sizing: border-box; }
 .center-tabs::-webkit-scrollbar { display: none; }
