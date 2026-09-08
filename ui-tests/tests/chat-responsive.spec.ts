@@ -147,3 +147,59 @@ test("outline Escape closes only the card and keeps Inspector open", async ({ pa
   await expect(page.getByTestId("conversation-outline")).toHaveCount(0);
   await expect(page.locator(".rightpane")).toBeVisible();
 });
+
+for (const width of [960, 800, 640]) {
+  test(`shrinking to ${width}px closes Inspector layers before covered composer menus`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openConversation(page);
+    await page.getByRole("button", { name: "Toggle panel" }).click();
+    const panel = page.locator(".rightpane");
+    await page.getByRole("button", { name: "Agent options" }).click();
+    const agentMenu = page.getByRole("menu", { name: "Agent options" });
+    await agentMenu.getByRole("button", { name: /^Compute/ }).click();
+    const computeMenu = page.getByRole("menu", { name: "Compute" });
+    await expect(computeMenu).toBeVisible();
+
+    await page.setViewportSize({ width, height: 600 });
+    await expect(panel).toHaveCSS("position", "fixed");
+    await panel.getByRole("button", { name: "Add panel" }).click();
+    await page.keyboard.press("Escape");
+    await expect(panel.locator(".rp-tab-add-menu")).toHaveCount(0);
+    await expect(panel).toBeVisible();
+    await expect(computeMenu).toBeVisible();
+
+    // The drawer is now above the composer. One press closes just that layer,
+    // without moving focus between Escape presses.
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(agentMenu).toBeVisible();
+    await expect(computeMenu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(computeMenu).toHaveCount(0);
+    await expect(agentMenu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(agentMenu).toHaveCount(0);
+  });
+}
+
+test("outline Escape follows Inspector stacking when the window shrinks and grows", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openConversation(page);
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.getByTestId("conversation-outline-toggle").click();
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(page.locator(".rightpane")).toHaveCSS("position", "fixed");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rightpane")).toHaveCount(0);
+  await expect(page.getByTestId("conversation-outline")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("conversation-outline")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator(".rightpane")).not.toHaveCSS("position", "fixed");
+  await page.getByTestId("conversation-outline-toggle").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("conversation-outline")).toHaveCount(0);
+  await expect(page.locator(".rightpane")).toBeVisible();
+});
