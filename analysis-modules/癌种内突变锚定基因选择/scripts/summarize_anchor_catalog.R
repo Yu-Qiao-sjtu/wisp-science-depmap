@@ -8,6 +8,8 @@ summary <- x[, .(
   damaging_standard = sum(matrix == "Damaging" & pass_standard),
   damaging_strict = sum(matrix == "Damaging" & pass_strict),
   hotspot_standard = sum(matrix == "Hotspot" & pass_standard),
-  hotspot_strict = sum(matrix == "Hotspot" & pass_strict)
+  hotspot_strict = sum(matrix == "Hotspot" & pass_strict),
+  any_selected_standard = sum(matrix == "AnySelected" & pass_standard),
+  any_selected_strict = sum(matrix == "AnySelected" & pass_strict)
 ), by = lineage][order(-models, lineage)]
 print(summary, nrows = Inf)
