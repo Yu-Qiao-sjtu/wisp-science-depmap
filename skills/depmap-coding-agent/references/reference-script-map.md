@@ -13,7 +13,7 @@ review rather than defaults to copy.
 | `gene_correlation` | `02_gene_gene_correlation.R` | Pairwise expression correlation | `ccle_exprSet.rds` |
 | `co_dependency` | `03_co_dependency.R` | Genome-wide co-dependency ranking and matrix output | `depmap_geneEffect.rds` |
 | `predictive_biomarkers` | `04_predivtive_biomarkers.R` | Correlation and ML predictive biomarkers | Gene Effect RDS, expression RDS |
-| `gene_to_dependency` | `05_from_gene_to_dependency.R` | Gene-centered dependency, pathway, TF, and enrichment analyses | Gene Effect RDS, expression RDS |
+| `gene_to_dependency` | `05_from_gene_to_dependency.R` | Gene-centered dependency, pathway, TF, and enrichment analyses; its `pathway_enrichment` operation runs the reviewed on-demand GSEA executable | Gene Effect RDS and expression RDS; the GSEA operation uses the complete expression-dependency block matrix and Hallmark/Reactome or a versioned custom GMT |
 | `pathway_ml` | `05.1_ml_pathway.R` | Penalized regression and random-forest pathway models | PROGENy scores RDS, Gene Effect RDS |
 | `synthetic_lethal_screen` | `05.2_synthetic_lethal.R` | Observational synthetic-lethal candidate screening | Co-dependency matrix RDS |
 | `prism_drug_sensitivity` | `05.3_drug_sensitivity.R` | PRISM compound-response association | PROGENy scores RDS, PRISM AUC, compound metadata |
@@ -42,6 +42,10 @@ review rather than defaults to copy.
 - Cross-library robustness: `01`, `15`, optionally `18` for RNAi.
 - Synthetic-lethal hypothesis generation: `01`, `05.2`, relevant mutation/CNV
   script, then `18` when an orthogonal dataset is available.
+- “Which dependency genes follow ESR1 expression?”: query the precomputed
+  expression-dependency association row. “Which dependency pathways follow
+  ESR1 expression?” or an explicit GSEA request: select `gene_to_dependency`
+  with `operation=pathway_enrichment` and execute its reviewed entrypoint.
 
 Always inspect the selected source before reproducing it. The map describes
 intent, not a guarantee that every script is already parameterized for the

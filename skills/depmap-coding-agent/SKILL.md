@@ -112,6 +112,25 @@ is scientifically ambiguous, ask the user rather than silently selecting it.
 Copy the selected capability ID, dependency-plan path, and exact execution plan
 into the specification.
 
+For expression-to-dependency questions, distinguish the requested operation:
+
+- “which dependency genes/targets” selects the precomputed association query;
+- “which pathways”, “enrichment”, “GSEA”, or “biological processes” plus an
+  expression source gene selects the `gene_to_dependency` capability with its
+  `pathway_enrichment` operation;
+- do not trigger GSEA when the expression source gene is missing or when the
+  user only asks about one gene pair.
+
+The global enrichment capability executes its declared `executable_entrypoint`
+over one complete precomputed correlation row and reuses an exact-parameter
+cache. Its defaults are Hallmark, `negative_signed_t`, and an 80% pair-count
+threshold. Positive NES means higher source expression associates with
+stronger, more-negative Gene Effect dependency. When a lineage is requested,
+the existing `lineage_gene_enrichment` result is a rank-sum enrichment query,
+not GSEA. If the user explicitly requires lineage GSEA, generate the full
+lineage-specific dependency ranking first; never run GSEA on the sparse Top-100
+network alone.
+
 ### 3. Retrieve reference methods progressively
 
 Use `references/reference-script-map.md` to select the smallest relevant set of
@@ -150,6 +169,11 @@ The generated R script must:
   the reference scripts used;
 - write compact `result.json` and `qc.json` plus machine-readable tables;
 - render figures to files rather than returning plot data through stdout.
+
+When the selected capability declares an `executable_entrypoint`, use that
+reviewed script with the resolver-provided defaults and user overrides instead
+of regenerating its scientific calculation. Record the exact invocation in the
+run manifest and declare the cache result package as outputs.
 
 When the dependency plan reports `preprocessing_required`, generate a
 task-local preparation module under the run directory. It must implement the

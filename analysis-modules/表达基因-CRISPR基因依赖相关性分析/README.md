@@ -28,11 +28,14 @@
 | `scripts/18_verify_lineage_sparse_networks.R` | 癌种内结果数值复核脚本 |
 | `scripts/22_finalize_lineage_networks_server.R` | 服务器覆盖率与结构验收脚本 |
 | `scripts/query_expression_dependency_pair.R` | 从全局分块 RDS 查询一个“表达源—依赖靶”组合 |
+| `scripts/run_expression_dependency_gsea.R` | 按表达源基因读取一行完整相关性，执行预排序 GSEA 并缓存结果 |
 | `scripts/脚本来源.md` | 原脚本位置和快照 SHA-256 |
 | `data/输入数据清单.md` | 输入矩阵、对齐规则与校验值 |
 | `results/结果数据索引.md` | 全局及癌种内结果的路径、规模和字段 |
 | `results/ESR1查询测试记录.md` | 全局 RDS 的源/靶顺序与符号解释测试 |
+| `results/ESR1按需GSEA测试记录.md` | ESR1 Hallmark 实算、QC、显著通路与缓存命中验收 |
 | `分析方法与审查说明.md` | 计算公式、方向解释、覆盖范围与风险 |
+| `按需富集与意图触发说明.md` | 富集触发条件、默认参数、缓存键和结果契约 |
 | `module.intent.json` | agent 意图路由标签 |
 
 ## 完成状态
@@ -41,4 +44,4 @@
 - 癌种内表达—依赖网络：已完成 24 个合格谱系，约 2.219 GiB。
 - 两部分合计约 6.269 GiB，占 182.073 GiB 主知识库约 3.4%。
 
-这里的“已完成”指相关性批量计算和结果落盘完成。TM00 04 中的 LASSO/随机森林，以及 TM00 05 中的 GSEA、PROGENy 和 TF 活性分析，不属于这两个矩阵结果。
+这里的“已完成”指相关性批量计算和结果落盘完成。TM00 04 中的 LASSO/随机森林，以及 TM00 05 中的 GSEA、PROGENy 和 TF 活性分析，不属于这两个矩阵结果。GSEA 现在作为按需能力执行：用户提出一个表达源基因和富集意图时读取完整相关性行，生成并缓存独立的可审查结果包。

@@ -27,8 +27,12 @@ manifest <- jsonlite::read_json(manifest_path, simplifyVector = FALSE)
 project_root <- normalizePath(arg_value("--project-root", "."), winslash = "/", mustWork = TRUE)
 selected_capability <- arg_value("--capability")
 selected_script <- arg_value("--script")
+selected_operation <- arg_value("--operation")
 if (!is.null(selected_capability) && !is.null(selected_script)) {
   stop("Use only one of --capability or --script.")
+}
+if (!is.null(selected_operation) && is.null(selected_capability)) {
+  stop("--operation requires --capability.")
 }
 output_arg <- arg_value("--output", "analysis/depmap-agent/project-inspection.json")
 output_path <- if (grepl("^([A-Za-z]:|/)", output_arg)) output_arg else file.path(project_root, output_arg)
@@ -47,6 +51,9 @@ if (!is.null(selected_script)) {
 if (!is.null(selected_capability) && is.null(capabilities[[selected_capability]])) {
   stop(sprintf("Unknown capability '%s'.", selected_capability))
 }
+if (!is.null(selected_operation) && is.null(capabilities[[selected_capability]]$operations[[selected_operation]])) {
+  stop(sprintf("Unknown operation '%s' for capability '%s'.", selected_operation, selected_capability))
+}
 
 portable_path <- function(path) gsub("\\\\", "/", path)
 dataset_state <- function(dataset) {
@@ -63,7 +70,9 @@ dataset_state <- function(dataset) {
   )
 }
 
-resolve_capability <- function(capability) {
+resolve_capability <- function(capability, operation_id = NULL) {
+  operation_config <- if (is.null(operation_id)) list() else capability$operations[[operation_id]]
+  effective_inputs <- operation_config$inputs %||% capability$inputs
   required <- character()
   missing_derived <- character()
   missing_source <- character()
@@ -86,7 +95,7 @@ resolve_capability <- function(capability) {
     invisible(NULL)
   }
 
-  for (dataset_id in unlist(capability$inputs)) visit(dataset_id)
+  for (dataset_id in unlist(effective_inputs)) visit(dataset_id)
   required <- unique(required)
   missing_derived <- unique(missing_derived)
   missing_source <- unique(missing_source)
@@ -117,6 +126,8 @@ resolve_capability <- function(capability) {
     match(selected_producers, selected_producers)
   )]
   analysis_scripts <- unlist(capability$scripts)
+  executable_entrypoint <- operation_config$executable_entrypoint %||% capability$executable_entrypoint %||% NULL
+  execution_target <- if (is.null(executable_entrypoint)) analysis_scripts else executable_entrypoint
   states <- lapply(required, function(id) dataset_state(datasets[[id]]))
   raw_bytes <- sum(vapply(states, function(state) {
     if (state$kind %in% c("raw", "user_input") && isTRUE(state$exists)) state$bytes else 0
@@ -132,8 +143,14 @@ resolve_capability <- function(capability) {
     id = capability$id,
     title = capability$title,
     status = status,
+    operation_id = operation_id,
     reference_scripts = analysis_scripts,
-    execution_plan = unique(c(preparation_scripts, analysis_scripts)),
+    execution_plan = unique(c(preparation_scripts, execution_target)),
+    operation = operation_config$operation %||% capability$operation %||% NULL,
+    execution_mode = operation_config$execution_mode %||% capability$execution_mode %||% "generated_analysis",
+    executable_entrypoint = executable_entrypoint,
+    supported_scopes = unlist(operation_config$supported_scopes %||% capability$supported_scopes %||% list()),
+    defaults = operation_config$defaults %||% capability$defaults %||% list(),
     preparation_scripts = preparation_scripts,
     required_datasets = states,
     missing_derived = missing_derived,
@@ -158,7 +175,7 @@ release_line <- if (file.exists(readme_path)) {
 plans <- if (is.null(selected_capability)) {
   lapply(manifest$capabilities, resolve_capability)
 } else {
-  list(resolve_capability(capabilities[[selected_capability]]))
+  list(resolve_capability(capabilities[[selected_capability]], selected_operation))
 }
 
 all_source_ids <- unique(unlist(lapply(manifest$datasets, function(dataset) {
@@ -180,6 +197,7 @@ inspection <- list(
     unexpected = setdiff(available_scripts, expected_scripts)
   ),
   selected_capability = selected_capability,
+  selected_operation = selected_operation,
   capabilities = plans,
   source_inventory = source_states,
   context_policy = list(
