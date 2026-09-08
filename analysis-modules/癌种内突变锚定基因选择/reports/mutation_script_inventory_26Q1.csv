@@ -1,0 +1,9 @@
+script,layer,direction,mutation_definition,dependency_metric,scope,primary_output,status_note
+01_read_depmap.r,preprocessing,none,Damaging plus shared omics,GeneEffect and GeneDependency,global,RDS input objects,"Shared preparation; avoid expression-trimmed cellinfor as mutation cohort universe"
+06_mut_anchor_gene_selection_26Q1.R,anchor_selection,none,Damaging and Hotspot,GeneDependency coverage,global_and_lineage,anchor menus,"Superseded by complete module catalog and knowledge cards"
+07_mutant_dependency_26Q1.R,method_and_batch,bidirectional,Damaging,GeneDependency,global_with_lineage_visualization,"ARID1A_batch_target_screening.rds; HMGCR_batch_mutation_screening.rds","Welch test and BH FDR in Part 5"
+08_mutData_updata_26Q1.R,event_definition_audit,none_and_pair_demo,"Any released; custom nine consequence; Damaging; Hotspot",GeneDependency,global,mutData_custom_with_missense.rds,"Custom matrix is not pure missense and is not the formal default"
+09_batch_from_mut_to_target_26Q1.R,batch_screen,mutation_to_target,Damaging,GeneDependency,global_across_eligible_lineages,mut2target_results.rds,"Heuristic score; no P value or FDR"
+10_batch_from_mut_to_target_26Q1_add_celltype.R,batch_screen,mutation_to_target,Damaging,GeneDependency,lineage_columns,mut2target_results_celltype.rds,"Heuristic score; no P value or FDR"
+11_batch_from_gene_to_mut_26Q1_add_celltype.R,batch_screen,target_to_mutation,Damaging,GeneDependency,lineage_columns,target2mut_results_celltype.rds,"Fixed gene is a dependency target; heuristic score"
+14_DCAF5_SMARCB1_Nature.R,case_study,disease_context_to_target,Rhabdoid disease context and paper-provided group,GeneEffect,subtype_vs_others,ttest_Rhabdoid_v_all.rds,"Not a general mutation-matrix-defined Mut/WT analysis"

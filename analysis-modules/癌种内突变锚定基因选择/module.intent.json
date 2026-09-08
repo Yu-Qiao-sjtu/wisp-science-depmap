@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "module_id": "mutation_dependency",
+  "analysis_label": "mutation_dependency_association",
+  "display_name_zh": "突变事件—CRISPR基因依赖双向分析",
+  "data_modality": "somatic_mutation_event_vs_crispr_dependency",
+  "relation_type": "event_stratified_dependency_difference",
+  "entity_roles": {
+    "source": "mutation_event",
+    "target": "crispr_dependency_gene",
+    "symmetric": false
+  },
+  "event_definitions": ["AnySelected", "Damaging", "Hotspot", "ProteinChange"],
+  "scopes": ["global", "lineage"],
+  "query_contract": {
+    "mutation_to_target": {
+      "tool": "depmap_synthetic_lethal_evidence",
+      "required": ["source"],
+      "meaning": "fix one mutation event and rank retained dependency targets"
+    },
+    "target_to_mutation": {
+      "tool": "depmap_synthetic_lethal_evidence",
+      "required": ["target"],
+      "meaning": "fix one dependency target and rank retained mutation events"
+    },
+    "pair": {
+      "tool": "depmap_synthetic_lethal_evidence",
+      "required": ["source", "target"],
+      "meaning": "return retained evidence for one directed mutation-target pair"
+    },
+    "lineage_pair": {
+      "mode": "lineage",
+      "required": ["event", "lineage", "source", "target"]
+    }
+  },
+  "intent_terms_zh": [
+    "突变后依赖哪些基因", "固定突变基因找靶点", "突变到靶基因", "合成致死候选",
+    "哪些突变导致依赖", "固定靶基因找突变", "靶基因到突变", "预测性突变标志物",
+    "损伤性突变依赖", "热点突变依赖", "具体位点依赖", "癌种内突变依赖"
+  ],
+  "intent_terms_en": [
+    "mutation to dependency target", "mutation-stratified dependency", "target to mutation",
+    "mutation biomarker of dependency", "damaging mutation dependency", "hotspot mutation dependency"
+  ],
+  "ambiguity_rules": {
+    "hotspot_gene": "Distinguish a Hotspot mutation event from a user-selected dependency target gene.",
+    "mutation_without_event_definition": "Report available Damaging, Hotspot, and AnySelected counts before choosing a functional event.",
+    "direction_without_roles": "Identify which entity is the mutation event and which is the CRISPR dependency target."
+  },
+  "metric_rules": {
+    "CRISPRGeneDependency": "positive mutant-minus-control difference means mutant models are more dependent",
+    "CRISPRGeneEffect": "negative mutant-minus-control difference means mutant models are more dependent"
+  },
+  "interpretation": "The two directions are row and column queries of one directed mutation-event by dependency-target association matrix. Results are observational candidates, not causal or experimentally validated synthetic lethality.",
+  "tm00_references": ["01", "06", "07", "08", "09", "10", "11", "14"]
+}
