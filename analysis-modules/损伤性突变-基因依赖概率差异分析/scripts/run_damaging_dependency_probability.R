@@ -135,5 +135,3 @@ manifest<-c(qc,list(status="complete",release="26Q1",input_md5=hash,
  reference="07_mutant_dependency_26Q1.R",block_count=length(blocks)))
 write_json(manifest,file.path(out,"manifest.json"),auto_unbox=TRUE,pretty=TRUE)
 cat("COMPLETE\n")
-
-

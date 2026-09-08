@@ -1,0 +1,27 @@
+{
+  "common_sample_count": 1208,
+  "raw_mutation_rows": 3044,
+  "default_mutation_rows": 1968,
+  "model_rows": 2154,
+  "dependency_rows": 1208,
+  "mutation_missing": 0,
+  "dependency_missing": 887151,
+  "eligible_mutation_genes": 5590,
+  "target_genes": 18531,
+  "status": "complete",
+  "release": "26Q1",
+  "input_md5": {
+    "/home/data/gz0548/depmap-agent/data/source/OmicsSomaticMutationsMatrixDamaging.csv": "e3a8019fd4c52d7e4e9ca51fccdf3c31",
+    "/home/data/gz0548/depmap-agent/data/source/CRISPRGeneDependency.csv": "c77718247936dd31246cf6e0627e2b31",
+    "/home/data/gz0548/depmap-agent/data/source/Model.csv": "a15d75dffcc5219111ca39598948df9a"
+  },
+  "completed_at": "2026-09-09 03:47:50.368481",
+  "method": "Two-sided Welch t-test; per-pair Mut>=5 control>=10",
+  "mutation_definition": "Damaging >0 vs ==0; NA excluded; default model entry",
+  "dependency_metric": "CRISPRGeneDependency probability; positive Mut-control difference means more dependent",
+  "fdr_forward": "BH across targets within mutation source",
+  "fdr_reverse": "BH across eligible mutation sources within target",
+  "validation": "synthetic edge cases and full ARID1A/HMGCR pilot against R t.test passed",
+  "reference": "07_mutant_dependency_26Q1.R",
+  "block_count": 175
+}
