@@ -66,7 +66,8 @@ places it at `Contents/Resources/Assets.car`; `Info.plist` selects `Wisp` via
 Native macOS rendering may add system material and lighting to the design.
 
 The in-app and website logos are separate assets. Do not generate desktop
-icons from `ui/logo.svg`.
+icons from `ui/logo.svg`. The current mark is the three-wisp symbol; the
+previous helix is kept as `docs/assets/logo_v1.svg` and `ui/logo_v1.svg`.
 
 The full molecular wordmark also comes from **SpicyChicken6** in the same
 [Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154)
