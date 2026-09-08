@@ -1,0 +1,9 @@
+{
+  "status": "complete",
+  "dependency_models": 1208,
+  "retained_variant_rows": 467707,
+  "genes": 19784,
+  "models": 1208,
+  "consequence_groups": 16,
+  "note": "Counts use default model entries within the CRISPR Gene Dependency cohort. OmicsSomaticMutations.csv is already a filtered/rescued release table, not every raw genomic call."
+}

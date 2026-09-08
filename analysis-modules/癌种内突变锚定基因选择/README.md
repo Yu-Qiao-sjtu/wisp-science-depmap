@@ -14,6 +14,8 @@
 
 脚本：`scripts/run_anchor_gene_selection_26Q1.R`。先用 AnySelected 查看癌种突变全貌；正式锚定时，TSG 使用 Damaging，OG 使用 Hotspot。三种突变来源分别与 Model 和 Gene Dependency 取交集，不要求不同突变矩阵彼此取交集。
 
+变异类型、26Q1 实际数量、选择规则和用户意图映射见 `突变类型与选择指南.md`。`scripts/audit_mutation_types_26Q1.R` 从发布长表生成 `mutation_type_audit_v1/`，用于区分错义、移码、终止、剪接、框内 indel 等分子后果，并核对 LikelyLoF 与 Hotspot 的重叠；它只做概况审计，不替代正式的基因级 Mut/WT 矩阵。小型审计汇总同时保存在 `reports/mutation_type_overview_26Q1.csv`、`reports/damaging_hotspot_overlap_26Q1.csv` 和 `reports/mutation_type_audit_manifest_26Q1.json`。
+
 ## 知识卡片
 
 `scripts/build_anchor_gene_cards.R` 将统计菜单与 HGNC、OncoKB 派生角色和 26Q1 Common Essential 标记合并。卡片包含癌种、基因、突变口径、Mut/WT 数量、频率、基因名称和类型、角色匹配、选择等级、解释与警示。`anchor_gene_cards_all.csv/jsonl` 用于完整检索，`anchor_gene_cards_strict.csv` 用于正式分析候选，`anchor_gene_cards_priority.csv` 是角色匹配且达到严格样本门槛的优先卡片。卡片用于选择和解释，不代表突变已被证明造成依赖或构成合成致死。
