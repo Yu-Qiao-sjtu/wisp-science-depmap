@@ -11610,6 +11610,7 @@ test("conversation outline loads and jumps to an older user question", async ({ 
   );
   await expect(oldestOutline.locator(".conversation-outline-time")).not.toBeEmpty();
   await oldestOutline.click();
+  await expect(oldestOutline).toHaveAttribute("aria-current", "location");
 
   await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({
     id: "long-session",

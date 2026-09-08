@@ -85,3 +85,65 @@ test("conversation follows available pane width when Inspector opens and closes"
   await expectColumnsFit(page);
   await expect.poll(async () => Math.abs(await columnWidth(page) - originalWidth)).toBeLessThanOrEqual(1);
 });
+
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`outline navigation stays above messages and fits compact windows (${colorScheme})`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ colorScheme });
+    await page.setViewportSize({ width: 800, height: 600 });
+    await openConversation(page);
+    const toggle = page.getByTestId("conversation-outline-toggle");
+    const outline = page.getByTestId("conversation-outline");
+    const count = toggle.locator(".conversation-outline-count");
+    await expect(count).toBeVisible();
+    const questionCount = Number(await count.textContent());
+    expect(questionCount).toBeGreaterThan(1);
+    await expect(toggle).toHaveAttribute("title", `Show conversation outline · ${questionCount} questions`);
+    // The collapsed control must never cover user bubbles or their timestamps.
+    await expect.poll(async () => {
+      const button = (await toggle.boundingBox())!;
+      const chat = (await page.locator(".chat-stage").boundingBox())!;
+      return button.y + button.height <= chat.y;
+    }).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("outline-closed.png"), animations: "disabled" });
+
+    await toggle.click();
+    await expect(outline).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(outline.locator(".conversation-outline-item")).toHaveCount(questionCount);
+    await expect.poll(() => outline.locator(".conversation-outline-list").evaluate((el) =>
+      el.scrollHeight > el.clientHeight,
+    )).toBe(true);
+    await expect.poll(() => outline.evaluate((el) => {
+      const card = el.getBoundingClientRect();
+      const chat = el.closest(".chat-stage")!.getBoundingClientRect();
+      return card.height <= 480 && card.bottom <= chat.bottom && card.right <= chat.right;
+    })).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("outline-open.png"), animations: "disabled" });
+    // The toolbar control also closes the card without moving into the panel.
+    await toggle.click();
+    await expect(outline).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await page.setViewportSize({ width: 600, height: 600 });
+    await expect(count).toBeHidden();
+    await expect(toggle).toBeVisible();
+    const toolbar = (await page.locator(".topbar-actions").boundingBox())!;
+    expect(toolbar.x + toolbar.width).toBeLessThanOrEqual(600);
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(outline).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(outline).toHaveCount(0);
+  });
+}
+
+test("outline Escape closes only the card and keeps Inspector open", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openConversation(page);
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await expect(page.locator(".rightpane")).toBeVisible();
+  await page.getByTestId("conversation-outline-toggle").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("conversation-outline")).toHaveCount(0);
+  await expect(page.locator(".rightpane")).toBeVisible();
+});

@@ -10586,6 +10586,24 @@ fn App() -> impl IntoView {
                 }}
                 <div class="spacer"></div>
                 <div class="topbar-actions">
+                {move || {
+                    let count = conversation_outline.with(|rows| rows.len());
+                    (count > 0 && (!center_file_open.get() || center_split.get())).then(|| view! {
+                        <button type="button" class="icon-btn conversation-outline-toggle"
+                            class:active=move || conversation_outline_open.get()
+                            data-testid="conversation-outline-toggle"
+                            title=move || format!("{} · {}",
+                                t(locale.get(), "outline.show"),
+                                tf(locale.get(), "outline.questions_n", &[("n", &count.to_string())]))
+                            aria-label=move || t(locale.get(), "outline.show")
+                            aria-expanded=move || conversation_outline_open.get().to_string()
+                            aria-controls="conversation-outline-panel"
+                            on:click=move |_| conversation_outline_open.update(|open| *open = !*open)>
+                            {compose_icon("list")}
+                            <span class="conversation-outline-count" aria-hidden="true">{count}</span>
+                        </button>
+                    })
+                }}
                 <button type="button" class="icon-btn" data-testid="share-topbar"
                     title=move || {
                         if can_share.get() {
@@ -12087,6 +12105,7 @@ fn App() -> impl IntoView {
                                     type="button"
                                     class="conversation-outline-item"
                                     class:active=move || conversation_outline_selected.get() == Some(target)
+                                    aria-current=move || if conversation_outline_selected.get() == Some(target) { "location" } else { "false" }
                                     aria-label=aria_label
                                     title=title
                                     prop:disabled=move || {
@@ -12127,38 +12146,10 @@ fn App() -> impl IntoView {
                             }
                         })
                         .collect_view();
-                    let stride = (rows.len() + 27) / 28;
-                    let marks = rows
-                        .iter()
-                        .step_by(stride.max(1))
-                        .map(|entry| {
-                            let width = 45 + entry.text.chars().count().min(40);
-                            let target = entry.user_index;
-                            view! {
-                                <span
-                                    class="conversation-outline-mark"
-                                    class:active=move || conversation_outline_selected.get() == Some(target)
-                                    style=format!("width:{width}%")
-                                ></span>
-                            }
-                        })
-                        .collect_view();
                     view! {
-                        <button
-                            type="button"
-                            class="conversation-outline-toggle"
-                            class:is-hidden=move || conversation_outline_mounted.get()
-                            data-testid="conversation-outline-toggle"
-                            title=move || t(locale.get(), "outline.show")
-                            aria-label=move || t(locale.get(), "outline.show")
-                            aria-expanded=move || conversation_outline_open.get().to_string()
-                            aria-hidden=move || conversation_outline_mounted.get().to_string()
-                            on:click=move |_| conversation_outline_open.set(true)
-                        >
-                            <span class="conversation-outline-marks" aria-hidden="true">{marks}</span>
-                        </button>
                         {conversation_outline_mounted.get().then(|| view! {
                             <nav
+                                id="conversation-outline-panel"
                                 class="conversation-outline-panel"
                                 class:is-open=move || conversation_outline_open.get()
                                 data-testid="conversation-outline"
@@ -12167,6 +12158,7 @@ fn App() -> impl IntoView {
                                 prop:inert=move || !conversation_outline_open.get()
                             >
                                 <header>
+                                    <span class="conversation-outline-heading-icon" aria-hidden="true">{compose_icon("list")}</span>
                                     <div>
                                         <strong>{move || t(locale.get(), "outline.title")}</strong>
                                         <span>{move || tf(locale.get(), "outline.questions_n", &[("n", &count)])}</span>
