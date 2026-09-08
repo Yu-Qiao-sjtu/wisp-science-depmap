@@ -645,7 +645,10 @@ picker's displayed context and the context a run is sent to never disagree. When
 no context can host the language there is no binding or runtime inspector.
 
 The source pane is directly editable for `.R`/`.py` workspace files: a
-highlighted mirror sits under a transparent textarea, unsaved drafts are held
+highlighted mirror sits under a transparent textarea. The input, highlighted
+text, line numbers, and selection layer use the same code font, size, and line
+height from Appearance settings; the toolbar keeps the separate UI size.
+Unsaved drafts are held
 outside the component so an agent `FileChanged` remount cannot drop them, and
 Ctrl+S (or the Save chip) persists through the workspace-scoped `save_file`
 command — user-driven like `execute_runtime`, outside agent tool approval.

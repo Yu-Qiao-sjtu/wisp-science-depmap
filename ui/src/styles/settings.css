@@ -2959,10 +2959,10 @@ button.workflow-graph-port.output.active {
 }
 
 /* User-adjustable typography. Controls use the UI size; monospaced preview
-   surfaces use the independently configurable code size. */
+   surfaces (including the transparent source input) use the independent code size. */
 body { font-size: var(--ui-font-size, 14px); }
 :where(button, input, select, textarea) { font-size: var(--ui-font-size, 14px) !important; }
-:where(code, pre, .rp-code-body, .notebook-source) { font-size: var(--code-font-size, 12px) !important; }
+:where(code, pre, .rp-code-body, .rp-code-input, .notebook-source) { font-size: var(--code-font-size, 12px) !important; }
 
 .list { display: flex; flex-direction: column; gap: 4px; }
 
