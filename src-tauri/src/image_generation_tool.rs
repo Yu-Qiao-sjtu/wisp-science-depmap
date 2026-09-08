@@ -186,7 +186,9 @@ impl GenerateImageTool {
 
     fn client(&self) -> Result<reqwest::Client, String> {
         let mut builder = reqwest::Client::builder()
-            .user_agent("wisp-science")
+            .user_agent(wisp_llm::provider::effective_user_agent(
+                &self.options.user_agent,
+            ))
             .timeout(Duration::from_secs(300));
         match self.proxy.as_deref().map(str::trim) {
             None | Some("") => {}
@@ -688,12 +690,17 @@ mod tests {
             "gpt-image-2".into(),
             Some("none".into()),
         )
+        .with_options(crate::models::ImageGenerationOptions {
+            user_agent: "research-client/1.0".into(),
+            ..Default::default()
+        })
         .validate_model_access()
         .await
         .unwrap();
 
         let request = request.await.unwrap();
         assert!(request.starts_with("GET /v1/models/gpt-image-2 HTTP/1.1"));
+        assert!(request.contains("user-agent: research-client/1.0"));
         assert!(request
             .to_ascii_lowercase()
             .contains("authorization: bearer sk-test"));
@@ -816,6 +823,7 @@ mod tests {
             Some("none".into()),
         )
         .with_options(crate::models::ImageGenerationOptions {
+            user_agent: String::new(),
             size: String::new(),
             quality: "low".into(),
             aspect_ratio: "16:9".into(),
@@ -836,6 +844,7 @@ mod tests {
             Some("none".into()),
         )
         .with_options(crate::models::ImageGenerationOptions {
+            user_agent: String::new(),
             size: "1536x1024".into(),
             quality: "high".into(),
             aspect_ratio: String::new(),

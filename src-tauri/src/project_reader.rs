@@ -168,8 +168,16 @@ pub async fn read_references(
         inputs.push(SessionInput { info, messages });
     }
 
-    let (provider, api_url, model, api_key, profile_max_tokens, _reasoning_effort, service_tier) =
-        crate::specialists::specialist_llm(store, &reader).await;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        profile_max_tokens,
+        _reasoning_effort,
+        service_tier,
+        user_agent,
+    ) = crate::specialists::specialist_llm(store, &reader).await;
     let cfg = reader_provider_config(
         &provider,
         &api_url,
@@ -177,6 +185,7 @@ pub async fn read_references(
         &model,
         READER_OUTPUT_TOKENS,
         &service_tier,
+        &user_agent,
     )
     .map_err(|error| format!("Reader model is unavailable: {error}"))?;
     let llm: Arc<dyn Provider> = Arc::from(wisp_llm::build(cfg));
@@ -191,6 +200,7 @@ pub async fn read_references(
             &model,
             profile_max_tokens,
             &service_tier,
+            &user_agent,
         )
         .ok()
         .map(|cfg| Arc::from(wisp_llm::build(cfg)))
@@ -249,6 +259,7 @@ fn reader_provider_config(
     model: &str,
     max_tokens: u64,
     service_tier: &str,
+    user_agent: &str,
 ) -> Result<wisp_llm::ProviderConfig, String> {
     let mut cfg = crate::build_provider_config(
         provider,
@@ -258,6 +269,7 @@ fn reader_provider_config(
         max_tokens,
         "",
         service_tier,
+        user_agent,
     )?;
     cfg.thinking_enabled = Some(false);
     Ok(cfg)

@@ -150,6 +150,10 @@ impl AnthropicProvider {
             .client
             .post(self.endpoint())
             .headers(self.headers())
+            .header(
+                reqwest::header::USER_AGENT,
+                crate::provider::effective_user_agent(&self.cfg.user_agent),
+            )
             .json(&body)
             .send()
             .await?;
@@ -423,6 +427,10 @@ impl Provider for AnthropicProvider {
             .client
             .post(self.endpoint())
             .headers(self.headers())
+            .header(
+                reqwest::header::USER_AGENT,
+                crate::provider::effective_user_agent(&self.cfg.user_agent),
+            )
             .json(&body)
             .send()
             .await?;

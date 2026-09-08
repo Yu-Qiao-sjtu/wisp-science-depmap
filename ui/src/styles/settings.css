@@ -2562,6 +2562,8 @@ button.workflow-graph-port.output.active {
 .settings-list-use:focus-visible { opacity: 1; }
 .settings-list-use:hover { border-color: var(--clay); color: var(--clay); }
 .model-form { margin-top: 0; }
+.model-advanced-options summary { cursor: pointer; padding: 8px 0; color: var(--text-muted); }
+.model-advanced-options .settings-form-grid { margin-top: 8px; }
 
 .model-empty-hint {
   margin: 0;

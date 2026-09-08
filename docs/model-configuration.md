@@ -55,6 +55,18 @@ Choosing a level saves it as the profile's default — it applies to every
 conversation using that model and is not scoped to the current conversation.
 Choosing "default" clears the value so the provider decides.
 
+The add/edit model page includes collapsed **Advanced options** with an optional
+**User-Agent** field. Leave it blank to send `wisp-science`, or enter a client
+identifier such as `research-client/1.0` using printable ASCII characters.
+The value is saved per model and used for connection validation, chat and vision
+requests, auxiliary model calls, and image/video model requests. When adding
+several models under one API access, each receives the entered value; you can
+then edit them independently. Clearing the field restores the default.
+
+This changes only the User-Agent header. OpenCode Go also requires a stable
+`x-opencode-session` per conversation; this option alone does not resolve
+[issue #1165](https://github.com/xuzhougeng/wisp-science/issues/1165).
+
 OpenAI Chat Completions and Responses profiles also have a **Fast mode** toggle
 on the model form, next to reasoning effort. Off uses the provider default and
 omits the field; on sends top-level `service_tier: "priority"` on ordinary

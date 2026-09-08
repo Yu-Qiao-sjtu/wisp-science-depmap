@@ -770,6 +770,7 @@ pub(crate) fn profile_to_form(m: &ModelProfile) -> ModelForm {
         },
         reasoning_effort: m.reasoning_effort.clone(),
         service_tier: m.service_tier.clone(),
+        user_agent: m.user_agent.clone(),
         supports_vision: m.supports_vision,
         use_for_vision: m.use_for_vision,
         use_for_image_generation: m.use_for_image_generation,
@@ -952,6 +953,7 @@ pub(crate) fn model_form_to_settings(form: &ModelForm, has_api_key: bool) -> Set
     cfg.max_tokens = form.max_tokens;
     cfg.reasoning_effort = form.reasoning_effort.clone();
     cfg.service_tier = form.service_tier.clone();
+    cfg.user_agent = form.user_agent.clone();
     cfg.supports_vision = form.supports_vision;
     cfg
 }

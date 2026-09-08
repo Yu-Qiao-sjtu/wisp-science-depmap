@@ -2501,8 +2501,16 @@ impl AgentDelegator for NativeDelegator {
             String::new()
         };
         let prompt = delegation_task_prompt(&request, &host_evidence)?;
-        let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-            native_llm_config(&self.store, &request).await?;
+        let (
+            provider,
+            api_url,
+            model,
+            api_key,
+            max_tokens,
+            reasoning_effort,
+            service_tier,
+            user_agent,
+        ) = native_llm_config(&self.store, &request).await?;
         let cfg = build_provider_config(
             &provider,
             &api_url,
@@ -2516,6 +2524,7 @@ impl AgentDelegator for NativeDelegator {
                 .unwrap_or(max_tokens),
             &reasoning_effort,
             &service_tier,
+            &user_agent,
         )
         .map_err(anyhow::Error::msg)?;
         let llm = wisp_llm::build(cfg);
@@ -2791,7 +2800,7 @@ impl AgentDelegator for NativeDelegator {
 async fn native_llm_config(
     store: &Store,
     request: &AgentDelegationRequest,
-) -> anyhow::Result<(String, String, String, String, u64, String, String)> {
+) -> anyhow::Result<(String, String, String, String, u64, String, String, String)> {
     let profile_id = request
         .spec
         .model
@@ -2804,7 +2813,8 @@ async fn native_llm_config(
         .ok_or_else(|| anyhow::anyhow!("resolved model profile no longer exists"))?;
     if profile.active {
         let (provider, api_url, model, api_key) = load_settings(store).await;
-        let (max_tokens, reasoning_effort, service_tier) = models::active_llm_advanced(store).await;
+        let (max_tokens, reasoning_effort, service_tier, user_agent) =
+            models::active_llm_advanced(store).await;
         return Ok((
             provider,
             api_url,
@@ -2813,6 +2823,7 @@ async fn native_llm_config(
             max_tokens,
             reasoning_effort,
             service_tier,
+            user_agent,
         ));
     }
     models::profile_llm(store, profile_id)

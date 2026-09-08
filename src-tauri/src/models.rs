@@ -48,6 +48,8 @@ pub struct ModelProfile {
     /// `priority` = Fast. Ignored for unsupported providers.
     #[serde(default)]
     pub service_tier: String,
+    #[serde(default)]
+    pub user_agent: String,
     /// Capability marker: this API model can accept image input.
     #[serde(default)]
     pub supports_vision: bool,
@@ -88,6 +90,7 @@ pub struct ModelProfile {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ImageGenerationOptions {
+    pub user_agent: String,
     pub size: String,
     pub quality: String,
     pub aspect_ratio: String,
@@ -96,6 +99,7 @@ pub(crate) struct ImageGenerationOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VideoGenerationOptions {
+    pub user_agent: String,
     pub duration_secs: u32,
     pub aspect_ratio: String,
     pub resolution: String,
@@ -104,6 +108,7 @@ pub(crate) struct VideoGenerationOptions {
 impl Default for VideoGenerationOptions {
     fn default() -> Self {
         Self {
+            user_agent: String::new(),
             duration_secs: 5,
             aspect_ratio: "16:9".into(),
             resolution: "720p".into(),
@@ -682,6 +687,7 @@ async fn ensure(store: &wisp_store::Store) -> Vec<ModelProfile> {
         context_window: DEFAULT_CONTEXT_WINDOW,
         reasoning_effort,
         service_tier: String::new(),
+        user_agent: String::new(),
         supports_vision: false,
         use_for_vision: false,
         use_for_image_generation: false,
@@ -1029,10 +1035,10 @@ async fn image_generation_id(
 }
 
 /// The assigned vision profile's `(provider, api_url, model, api_key,
-/// max_tokens, reasoning_effort)`, if the user configured one.
+/// max_tokens, reasoning_effort, service_tier, user_agent)`, if configured.
 pub async fn vision_config(
     store: &wisp_store::Store,
-) -> Option<(String, String, String, String, u64, String, String)> {
+) -> Option<(String, String, String, String, u64, String, String, String)> {
     let profiles = ensure(store).await;
     let id = vision_id(store, &profiles).await?;
     let p = profiles.iter().find(|p| p.id == id)?.clone();
@@ -1045,6 +1051,7 @@ pub async fn vision_config(
         p.max_tokens,
         p.reasoning_effort,
         p.service_tier,
+        p.user_agent.clone(),
     ))
 }
 
@@ -1062,6 +1069,7 @@ pub async fn image_generation_config(
         p.model.clone(),
         key_for(&p.id),
         ImageGenerationOptions {
+            user_agent: p.user_agent.clone(),
             size: p.image_size.clone(),
             quality: p.image_quality.clone(),
             aspect_ratio: p.image_aspect_ratio.clone(),
@@ -1101,6 +1109,7 @@ pub async fn video_generation_config(
         p.model.clone(),
         key_for(&p.id),
         VideoGenerationOptions {
+            user_agent: p.user_agent.clone(),
             duration_secs: p.video_duration_secs.unwrap_or(defaults.duration_secs),
             aspect_ratio: p
                 .video_aspect_ratio
@@ -1153,7 +1162,7 @@ pub async fn active_label(store: &wisp_store::Store) -> String {
 
 /// Per-model advanced LLM options for the active profile, falling back to
 /// legacy global store keys when a profile has no values yet.
-pub async fn active_llm_advanced(store: &wisp_store::Store) -> (u64, String, String) {
+pub async fn active_llm_advanced(store: &wisp_store::Store) -> (u64, String, String, String) {
     let profiles = ensure(store).await;
     let id = active_id(store, &profiles).await;
     if let Some(p) = profiles.iter().find(|p| p.id == id) {
@@ -1176,7 +1185,12 @@ pub async fn active_llm_advanced(store: &wisp_store::Store) -> (u64, String, Str
                 .flatten()
                 .unwrap_or_default();
         }
-        return (max_tokens, reasoning_effort, p.service_tier.clone());
+        return (
+            max_tokens,
+            reasoning_effort,
+            p.service_tier.clone(),
+            p.user_agent.clone(),
+        );
     }
     let max_tokens = store
         .get_setting("max_tokens")
@@ -1191,7 +1205,7 @@ pub async fn active_llm_advanced(store: &wisp_store::Store) -> (u64, String, Str
         .ok()
         .flatten()
         .unwrap_or_default();
-    (max_tokens, reasoning_effort, String::new())
+    (max_tokens, reasoning_effort, String::new(), String::new())
 }
 
 fn effective_context_window(profile: &ModelProfile) -> u64 {
@@ -1240,11 +1254,11 @@ pub async fn profile_context_window(store: &wisp_store::Store, id: &str) -> Opti
 }
 
 /// Full LLM config for one profile id: (provider, api_url, model, api_key,
-/// max_tokens, reasoning_effort, service_tier). None when the id doesn't exist.
+/// max_tokens, reasoning_effort, service_tier, user_agent). None when absent.
 pub async fn profile_llm(
     store: &wisp_store::Store,
     id: &str,
-) -> Option<(String, String, String, String, u64, String, String)> {
+) -> Option<(String, String, String, String, u64, String, String, String)> {
     let profiles = ensure(store).await;
     let p = profiles.iter().find(|p| p.id == id)?;
     if !is_chat_model(p) {
@@ -1258,6 +1272,7 @@ pub async fn profile_llm(
         p.max_tokens,
         p.reasoning_effort.clone(),
         p.service_tier.clone(),
+        p.user_agent.clone(),
     ))
 }
 
@@ -1444,6 +1459,7 @@ pub async fn save_model(
     profile.api_url = profile.api_url.trim().trim_end_matches('/').to_string();
     profile.endpoint_suffix = normalize_endpoint_suffix(&profile.endpoint_suffix)?;
     profile.service_tier = normalize_service_tier(&profile.service_tier);
+    profile.user_agent = wisp_llm::provider::normalize_user_agent(&profile.user_agent)?;
     if assign_vision && !can_describe_images(&profile) {
         return Err("Image analysis requires an API model marked as vision-capable.".into());
     }
@@ -1747,6 +1763,7 @@ mod tests {
             context_window: DEFAULT_CONTEXT_WINDOW,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
@@ -2020,10 +2037,50 @@ mod tests {
             "use_for_image_generation dropped on deserialize"
         );
         assert_eq!(p.context_window, DEFAULT_CONTEXT_WINDOW);
+        assert!(p.user_agent.is_empty());
         assert!(
             p.service_tier.is_empty(),
             "missing service_tier should default empty"
         );
+    }
+
+    #[tokio::test]
+    async fn user_agent_persists_and_follows_the_selected_profile() {
+        let path =
+            std::env::temp_dir().join(format!("wisp_user_agent_{}.sqlite", uuid::Uuid::new_v4()));
+        let store = wisp_store::Store::open(&path).await.unwrap();
+        let mut custom = test_profile("custom", "custom", "model-1");
+        custom.user_agent = "research-client/1.0".into();
+        custom.supports_vision = true;
+        save_raw(
+            &store,
+            &[custom, test_profile("default", "default", "model-2")],
+        )
+        .await
+        .unwrap();
+        store.set_setting(ACTIVE_KEY, "custom").await.unwrap();
+        store.set_setting(VISION_KEY, "custom").await.unwrap();
+        assert_eq!(active_llm_advanced(&store).await.3, "research-client/1.0");
+        assert_eq!(
+            profile_llm(&store, "custom").await.unwrap().7,
+            "research-client/1.0"
+        );
+        assert_eq!(
+            vision_config(&store).await.unwrap().7,
+            "research-client/1.0"
+        );
+        assert_eq!(profile_llm(&store, "default").await.unwrap().7, "");
+        let mut profiles = ensure(&store).await;
+        profiles
+            .iter_mut()
+            .find(|p| p.id == "custom")
+            .unwrap()
+            .user_agent
+            .clear();
+        save_raw(&store, &profiles).await.unwrap();
+        assert_eq!(active_llm_advanced(&store).await.3, "");
+        drop(store);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

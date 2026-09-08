@@ -117,7 +117,9 @@ impl GenerateVideoTool {
 
     fn client(&self) -> Result<reqwest::Client, String> {
         let mut builder = reqwest::Client::builder()
-            .user_agent("wisp-science")
+            .user_agent(wisp_llm::provider::effective_user_agent(
+                &self.options.user_agent,
+            ))
             .timeout(Duration::from_secs(300));
         match self.proxy.as_deref().map(str::trim) {
             None | Some("") => {}
@@ -873,6 +875,7 @@ mod tests {
             Some("none".into()),
         )
         .with_options(crate::models::VideoGenerationOptions {
+            user_agent: String::new(),
             duration_secs: 10,
             aspect_ratio: "1:1".into(),
             resolution: "480p".into(),
@@ -903,12 +906,17 @@ mod tests {
             "grok-imagine-video".into(),
             Some("none".into()),
         )
+        .with_options(crate::models::VideoGenerationOptions {
+            user_agent: "research-client/1.0".into(),
+            ..Default::default()
+        })
         .validate_model_access()
         .await
         .unwrap();
 
         let requests = requests.await.unwrap();
         assert!(requests[0].starts_with("GET /v1/models/grok-imagine-video HTTP/1.1"));
+        assert!(requests[0].contains("user-agent: research-client/1.0"));
         assert!(requests[0]
             .to_ascii_lowercase()
             .contains("authorization: bearer sk-test"));

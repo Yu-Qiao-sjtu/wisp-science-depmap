@@ -393,12 +393,18 @@ pub(crate) struct ProviderCandidateGenerator {
 
 impl ProviderCandidateGenerator {
     pub(crate) async fn from_profile(store: &Store, profile_id: &str) -> Result<Self, String> {
-        let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-            crate::models::profile_llm(store, profile_id)
-                .await
-                .ok_or_else(|| {
-                    format!("Method-search model profile '{profile_id}' is unavailable")
-                })?;
+        let (
+            provider,
+            api_url,
+            model,
+            api_key,
+            max_tokens,
+            reasoning_effort,
+            service_tier,
+            user_agent,
+        ) = crate::models::profile_llm(store, profile_id)
+            .await
+            .ok_or_else(|| format!("Method-search model profile '{profile_id}' is unavailable"))?;
         let config = crate::build_provider_config(
             &provider,
             &api_url,
@@ -407,6 +413,7 @@ impl ProviderCandidateGenerator {
             max_tokens.min(8_192),
             &reasoning_effort,
             &service_tier,
+            &user_agent,
         )?;
         Ok(Self {
             provider: Arc::from(wisp_llm::build(config)),
