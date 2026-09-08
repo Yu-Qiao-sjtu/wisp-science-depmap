@@ -33,3 +33,12 @@ __pycache__/
 *.pyo
 .vscode
 .DS_Store
+
+# Analysis modules keep large data/results on the server. Commit only manifests,
+# documentation, scripts, and small JSON/Markdown audit records.
+/analysis-modules/*/data/*
+!/analysis-modules/*/data/*.md
+!/analysis-modules/*/data/*.json
+/analysis-modules/*/results/*
+!/analysis-modules/*/results/*.md
+!/analysis-modules/*/results/*.json
