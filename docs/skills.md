@@ -86,6 +86,18 @@ bundled packages and enabled custom/plugin services available to the project.
 
 ## Scripts and interactive analysis
 
+The bundled `public-data-access` skill includes optional geokit guidance for
+GEO SOFT/Series Matrix acquisition and R ExpressionSet workflows. Basic GEO
+discovery continues through the existing connectors. geokit and Biobase must
+be available in the selected execution context when their operations are used;
+loading the skill does not install them or add an MCP server. The adapter
+guidance covers file selection, transfer limitations, multi-platform outputs,
+and provenance. See the [GEO adapter reference](../skills/public-data-access/references/geokit.md).
+The plan/manifest helper runs directly as `scripts/public_data_plan.py` with
+Python 3.10+; this skill no longer ships a `kernel.py` REPL wrapper. Resolve the
+helper from the skill directory and run it with the project as the working
+directory.
+
 The built-in execution guidance and analysis skills describe the available
 execution methods without assigning task categories to a default method.
 `shell` runs short commands in fresh processes; `run_in_context` manages
