@@ -1161,6 +1161,7 @@ mod session_context_window_tests {
             context_window,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
@@ -1644,6 +1645,8 @@ pub struct Settings {
     #[serde(default)]
     pub service_tier: String,
     #[serde(default)]
+    pub user_agent: String,
+    #[serde(default)]
     pub proxy_url: String,
     #[serde(default)]
     pub supports_vision: bool,
@@ -1939,6 +1942,7 @@ impl Default for Settings {
             max_tokens: 8192,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
             proxy_url: String::new(),
             supports_vision: false,
             sync_backend: "relay".into(),
@@ -2757,6 +2761,8 @@ pub struct ModelProfile {
     #[serde(default)]
     pub service_tier: String,
     #[serde(default)]
+    pub user_agent: String,
+    #[serde(default)]
     pub supports_vision: bool,
     #[serde(default)]
     pub use_for_vision: bool,
@@ -3217,6 +3223,7 @@ mod image_generation_model_tests {
             context_window: 128_000,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
@@ -3270,6 +3277,7 @@ mod video_generation_model_tests {
             context_window: 128_000,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
@@ -3337,6 +3345,7 @@ pub struct ModelForm {
     pub context_window: u64,
     pub reasoning_effort: String,
     pub service_tier: String,
+    pub user_agent: String,
     pub supports_vision: bool,
     pub use_for_vision: bool,
     pub use_for_image_generation: bool,

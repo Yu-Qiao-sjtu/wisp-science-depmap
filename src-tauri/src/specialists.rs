@@ -272,14 +272,14 @@ pub async fn remove_specialist(
 pub async fn specialist_llm(
     store: &Store,
     spec: &Specialist,
-) -> (String, String, String, String, u64, String, String) {
+) -> (String, String, String, String, u64, String, String, String) {
     if !spec.model_id.trim().is_empty() {
         if let Some(cfg) = crate::models::profile_llm(store, &spec.model_id).await {
             return cfg;
         }
     }
     let (provider, api_url, model, api_key) = crate::load_settings(store).await;
-    let (max_tokens, reasoning_effort, service_tier) =
+    let (max_tokens, reasoning_effort, service_tier, user_agent) =
         crate::models::active_llm_advanced(store).await;
     (
         provider,
@@ -289,6 +289,7 @@ pub async fn specialist_llm(
         max_tokens,
         reasoning_effort,
         service_tier,
+        user_agent,
     )
 }
 
@@ -500,7 +501,8 @@ mod tests {
             review_backend: None,
             ..builtin_reviewer()
         };
-        let (provider, api_url, model, _key, _mt, _re, _st) = specialist_llm(&store, &spec).await;
+        let (provider, api_url, model, _key, _mt, _re, _st, _ua) =
+            specialist_llm(&store, &spec).await;
         assert!(!provider.is_empty());
         assert!(!api_url.is_empty());
         assert!(!model.is_empty());
@@ -534,7 +536,7 @@ mod tests {
         upsert(&store, r).await.unwrap();
         // Dangling binding falls back to the active chain — never errors.
         let spec = get(&store, "reviewer").await.unwrap();
-        let (_p, _u, model, _k, _mt, _re, _st) = specialist_llm(&store, &spec).await;
+        let (_p, _u, model, _k, _mt, _re, _st, _ua) = specialist_llm(&store, &spec).await;
         assert!(!model.is_empty());
         let _ = std::fs::remove_file(&tmp);
     }

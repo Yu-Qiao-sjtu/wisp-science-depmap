@@ -226,7 +226,7 @@ pub(super) async fn summarize_session_branch_merge(
         current_version.as_deref(),
         user_guidance.as_deref(),
     )?;
-    let (provider, api_url, model, api_key, _, reasoning_effort, service_tier) =
+    let (provider, api_url, model, api_key, _, reasoning_effort, service_tier, user_agent) =
         load_session_settings(&state.store, &id).await;
     let config = build_provider_config(
         &provider,
@@ -236,6 +236,7 @@ pub(super) async fn summarize_session_branch_merge(
         BRANCH_SUMMARY_OUTPUT_TOKENS,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
     )?;
     let completion = tokio::time::timeout(
         BRANCH_SUMMARY_TIMEOUT,

@@ -304,6 +304,8 @@ pub struct ProviderConfig {
     /// `"none"` = force a direct connection; otherwise a proxy URL
     /// (`http://`, `https://`, `socks5://`).
     pub proxy: Option<String>,
+    /// Per-profile User-Agent override. Empty uses the Wisp default.
+    pub user_agent: String,
 }
 
 /// Shared reqwest client for all providers, honoring `cfg.proxy`.
@@ -356,6 +358,23 @@ fn build_http_client(cfg: &ProviderConfig) -> reqwest::Client {
     })
 }
 
+/// Validate before trimming so pasted CR/LF cannot inject another header.
+pub fn normalize_user_agent(value: &str) -> std::result::Result<String, String> {
+    if value.bytes().any(|byte| !matches!(byte, 0x20..=0x7e)) {
+        return Err(
+            "User-Agent must contain only printable ASCII characters (no line breaks).".into(),
+        );
+    }
+    Ok(value.trim().to_string())
+}
+
+pub fn effective_user_agent(value: &str) -> &str {
+    match value.trim() {
+        "" => "wisp-science",
+        value => value,
+    }
+}
+
 impl ProviderConfig {
     pub fn openai(
         base_url: impl Into<String>,
@@ -373,6 +392,7 @@ impl ProviderConfig {
             thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
         }
     }
     pub fn openai_responses(
@@ -391,6 +411,7 @@ impl ProviderConfig {
             thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
         }
     }
     pub fn anthropic(
@@ -409,6 +430,7 @@ impl ProviderConfig {
             thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
         }
     }
 }
@@ -521,6 +543,112 @@ mod tests {
     use super::*;
 
     #[test]
+    fn user_agent_validation_rejects_header_injection() {
+        assert_eq!(
+            normalize_user_agent("  research-client/1.0  ").unwrap(),
+            "research-client/1.0"
+        );
+        assert_eq!(normalize_user_agent("   ").unwrap(), "");
+        for invalid in [
+            "client\r\nX-Key: value",
+            "client\n",
+            "\tclient",
+            "客户端",
+            "client\0",
+            "client\x7f",
+        ] {
+            assert!(
+                normalize_user_agent(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn user_agent_is_sent_for_each_protocol_and_request_mode() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut agents = Vec::new();
+            for _ in 0..18 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 4096];
+                loop {
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&chunk[..count]);
+                    let Some(end) = request.windows(4).position(|v| v == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&request[..end]);
+                    let length: usize = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .unwrap()
+                        .1
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    if request.len() < end + 4 + length {
+                        continue;
+                    }
+                    let values: Vec<_> = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+                        .map(|(_, value)| value.trim().to_string())
+                        .collect();
+                    assert_eq!(values.len(), 1);
+                    agents.push(values[0].clone());
+                    break;
+                }
+                // Deliberate rejection: exercise real request sending without
+                // depending on any model-specific completion payload.
+                socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            }
+            agents
+        });
+        for kind in [
+            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAiResponses,
+            ProviderKind::Anthropic,
+        ] {
+            for user_agent in ["", "research-client/1.0", ""] {
+                let mut cfg = ProviderConfig::openai(&base, "test-key", "test-model");
+                cfg.kind = kind.clone();
+                cfg.proxy = Some("none".into());
+                cfg.user_agent = user_agent.into();
+                let provider = build(cfg);
+                assert!(provider
+                    .complete(&[Message::user("test")], &[])
+                    .await
+                    .is_err());
+                assert!(provider
+                    .stream(&[Message::user("test")], &[], &mut NullSink)
+                    .await
+                    .is_err());
+            }
+        }
+        let actual = server.await.unwrap();
+        let expected: Vec<_> = (0..3)
+            .flat_map(|_| {
+                [
+                    "wisp-science",
+                    "wisp-science",
+                    "research-client/1.0",
+                    "research-client/1.0",
+                    "wisp-science",
+                    "wisp-science",
+                ]
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn utf8_stream_reassembles_char_split_across_chunks() {
         // "支气管" streamed with the byte boundaries falling *inside* each
         // 3-byte character — the exact case that the old per-chunk decode drops.
@@ -569,7 +697,9 @@ mod tests {
         let initialized = shared
             .get()
             .expect("default client initializes shared pool") as *const _;
-        let _second = http_client_from_pool(&cfg, &shared);
+        let mut custom = cfg.clone();
+        custom.user_agent = "research-client/1.0".into();
+        let _second = http_client_from_pool(&custom, &shared);
         let reused = shared.get().expect("shared pool remains initialized") as *const _;
 
         assert_eq!(initialized, reused);

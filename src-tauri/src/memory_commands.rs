@@ -200,8 +200,16 @@ async fn generate_turn_memory_candidate(
             if let Some(review::ReviewBackendConfig::HttpModel { profile_id }) = backend {
                 analyst.model_id = profile_id;
             }
-            let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-                specialists::specialist_llm(&state.store, &analyst).await;
+            let (
+                provider,
+                api_url,
+                model,
+                api_key,
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+            ) = specialists::specialist_llm(&state.store, &analyst).await;
             let cfg = build_provider_config(
                 &provider,
                 &api_url,
@@ -210,6 +218,7 @@ async fn generate_turn_memory_candidate(
                 max_tokens,
                 &reasoning_effort,
                 &service_tier,
+                &user_agent,
             )?;
             let llm = wisp_llm::build(cfg);
             let selected_profile = if analyst.model_id.trim().is_empty() {

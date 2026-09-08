@@ -21,6 +21,30 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 
+#[test]
+fn model_user_agent_is_validated_before_building_a_provider() {
+    let config = |value| {
+        super::build_provider_config(
+            "openai",
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            1024,
+            "",
+            "",
+            value,
+        )
+    };
+    assert_eq!(
+        config("  research-client/1.0  ").unwrap().user_agent,
+        "research-client/1.0"
+    );
+    assert_eq!(config("").unwrap().user_agent, "");
+    assert!(config("client\r\nX-Injected: value")
+        .unwrap_err()
+        .contains("User-Agent"));
+}
+
 #[tokio::test]
 async fn exploration_creation_shares_project_activity_but_serializes_round_initialization() {
     let locks = Arc::new(ProjectActivityLocks::default());

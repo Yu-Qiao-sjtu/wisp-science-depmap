@@ -23,6 +23,31 @@ use serde_wasm_bindgen::to_value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wasm_bindgen::JsValue;
 
+fn model_advanced_options(
+    locale: RwSignal<Locale>,
+    model_form: RwSignal<Option<ModelForm>>,
+) -> impl IntoView {
+    view! {
+        <details class="model-advanced-options" data-testid="model-advanced-options">
+            <summary>{move || t(locale.get(), "models.advanced_options")}</summary>
+            <div class="settings-form-grid">
+                <label class="span-2">"User-Agent"
+                    <input data-testid="model-user-agent"
+                        aria-describedby="model-user-agent-hint"
+                        placeholder="wisp-science"
+                        prop:value=move || model_form.get().map(|f| f.user_agent).unwrap_or_default()
+                        on:input=move |ev| model_form.update(|form| if let Some(form) = form {
+                            form.user_agent = event_target_input(&ev).value();
+                        }) />
+                </label>
+                <span id="model-user-agent-hint" class="hint span-2">
+                    {move || t(locale.get(), "models.user_agent_hint")}
+                </span>
+            </div>
+        </details>
+    }
+}
+
 fn connector_parameter_type(schema: &serde_json::Value) -> String {
     match schema.get("type") {
         Some(serde_json::Value::String(kind)) => kind.clone(),
@@ -3492,6 +3517,7 @@ pub(super) fn SettingsView(
                                             }
                                         }}
                                     </div>
+                                    {model_advanced_options(locale, model_form)}
                                     {move || model_form_msg.get().map(|(ok, text)| view! {
                                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                                     })}
@@ -3813,6 +3839,7 @@ pub(super) fn SettingsView(
                                             {move || t(locale.get(), "models.add_entry")}
                                         </button>
                                     </div>
+                                    {model_advanced_options(locale, model_form)}
                                     {move || model_form_msg.get().map(|(ok, text)| view! {
                                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                                     })}

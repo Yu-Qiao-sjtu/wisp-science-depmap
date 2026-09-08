@@ -2007,6 +2007,8 @@ struct Settings {
     /// OpenAI-compatible HTTP `service_tier`. Empty = omit; `priority` = Fast.
     #[serde(default)]
     service_tier: String,
+    #[serde(default)]
+    user_agent: String,
     /// LLM HTTP proxy. Empty = follow system/env proxy; `none` = force direct;
     /// otherwise a proxy URL (http://, https://, socks5://).
     #[serde(default)]
@@ -3820,7 +3822,7 @@ pub(crate) async fn load_settings(store: &Store) -> (String, String, String, Str
 async fn load_session_settings(
     store: &Store,
     frame_id: &str,
-) -> (String, String, String, String, u64, String, String) {
+) -> (String, String, String, String, u64, String, String, String) {
     let profile_id = models::session_profile_id(store, frame_id).await;
     let (
         provider,
@@ -3830,11 +3832,12 @@ async fn load_session_settings(
         max_tokens,
         profile_reasoning_effort,
         profile_service_tier,
+        user_agent,
     ) = match models::profile_llm(store, &profile_id).await {
         Some(config) => config,
         None => {
             let (provider, api_url, model, api_key) = load_settings(store).await;
-            let (max_tokens, reasoning_effort, service_tier) =
+            let (max_tokens, reasoning_effort, service_tier, user_agent) =
                 models::active_llm_advanced(store).await;
             (
                 provider,
@@ -3844,6 +3847,7 @@ async fn load_session_settings(
                 max_tokens,
                 reasoning_effort,
                 service_tier,
+                user_agent,
             )
         }
     };
@@ -3860,6 +3864,7 @@ async fn load_session_settings(
         max_tokens,
         reasoning_effort,
         service_tier,
+        user_agent,
     )
 }
 
@@ -4606,6 +4611,7 @@ fn build_provider_config(
     max_tokens: u64,
     reasoning_effort: &str,
     service_tier: &str,
+    user_agent: &str,
 ) -> Result<ProviderConfig, String> {
     let provider = normalized_provider(provider);
     let api_url = api_url.trim();
@@ -4633,6 +4639,7 @@ fn build_provider_config(
         service_tier,
         &provider,
     );
+    cfg.user_agent = wisp_llm::provider::normalize_user_agent(user_agent)?;
     cfg.proxy = llm_proxy();
     Ok(cfg)
 }
@@ -4664,7 +4671,7 @@ fn add_configured_video_generation_tool(
 }
 
 async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
+    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
         models::vision_config(store).await?;
     match build_provider_config(
         &provider,
@@ -4674,6 +4681,7 @@ async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
     ) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -5573,8 +5581,16 @@ async fn generate_review_with_backend(
             if let Some(review::ReviewBackendConfig::HttpModel { profile_id }) = backend {
                 reviewer.model_id = profile_id;
             }
-            let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-                specialists::specialist_llm(&state.store, &reviewer).await;
+            let (
+                provider,
+                api_url,
+                model,
+                api_key,
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+            ) = specialists::specialist_llm(&state.store, &reviewer).await;
             let cfg = build_provider_config(
                 &provider,
                 &api_url,
@@ -5583,6 +5599,7 @@ async fn generate_review_with_backend(
                 max_tokens,
                 &reasoning_effort,
                 &service_tier,
+                &user_agent,
             )?;
             let llm = wisp_llm::build(cfg);
             let reviewer_model = llm.model().to_string();
@@ -6101,7 +6118,7 @@ async fn generate_follow_up_questions(
         .await
         .map_err(|error| error.to_string())?;
     let specialist = specialists::session_specialist(&state.store, &session_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
+    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
         match specialist {
             Some(ref specialist) if !specialist.model_id.trim().is_empty() => {
                 specialists::specialist_llm(&state.store, specialist).await
@@ -6116,6 +6133,7 @@ async fn generate_follow_up_questions(
         max_tokens.min(512),
         &reasoning_effort,
         &service_tier,
+        &user_agent,
     )?);
     let completion = llm
         .complete(
@@ -6240,7 +6258,7 @@ async fn side_chat(
 
 async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::Provider>, String> {
     let (provider, api_url, model, api_key) = load_settings(&state.store).await;
-    let (max_tokens, reasoning_effort, service_tier) =
+    let (max_tokens, reasoning_effort, service_tier, user_agent) =
         models::active_llm_advanced(&state.store).await;
     let cfg = build_provider_config(
         &provider,
@@ -6250,6 +6268,7 @@ async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::P
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
     )?;
     Ok(wisp_llm::build(cfg))
 }

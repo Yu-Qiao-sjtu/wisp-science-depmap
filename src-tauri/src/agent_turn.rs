@@ -445,7 +445,7 @@ pub(crate) async fn send_message_inner(
     let delegation_enabled =
         delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
     let plan_mode_enabled = plan_mode::session_plan_mode(&state.store, &frame_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
+    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
         match &specialist {
             Some(spec) if !spec.model_id.trim().is_empty() => {
                 specialists::specialist_llm(&state.store, spec).await
@@ -460,6 +460,7 @@ pub(crate) async fn send_message_inner(
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
     )?;
     let primary_supports_vision = models::supports_vision(
         &state.store,

@@ -8929,6 +8929,61 @@ test("UI font size setting scales Chinese chat markdown and composer", async ({ 
   await expect.poll(composerFontSize).toBe("18px");
 });
 
+
+test("model User-Agent advanced option validates, persists, and resets", async ({ page }) => {
+  await enterApp(page);
+  await openModelsSettings(page);
+  const advanced = page.getByTestId("model-advanced-options");
+  const userAgent = page.getByTestId("model-user-agent");
+  await expect(advanced).not.toHaveAttribute("open", "");
+  await expect(userAgent).toBeHidden();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("");
+  await expect(userAgent).toHaveAttribute("placeholder", "wisp-science");
+  await userAgent.fill("research-client/1.0");
+  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
+    .toMatchObject({ settings: { user_agent: "research-client/1.0" } });
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model"))
+    .toMatchObject({ profile: { user_agent: "research-client/1.0" } });
+  await page.locator(".settings-list-row").first().click();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("research-client/1.0");
+  await userAgent.fill("");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model"))
+    .toMatchObject({ profile: { user_agent: "" } });
+  await page.locator(".settings-list-row").first().click();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("");
+});
+
+test("new API access applies its advanced User-Agent to every added model", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByRole("button", { name: /Add API access/i }).click();
+  await page.getByLabel("Base URL").fill("https://research.example/v1");
+  await page.getByLabel("API key (stored in OS keyring)").fill("test-key");
+  await page.getByTestId("provider-model-row").first().getByLabel("Model ID").fill("research-one");
+  await page.getByTestId("provider-add-model").click();
+  await page.getByTestId("provider-model-row").last().getByLabel("Model ID").fill("research-two");
+  await expect(page.getByTestId("model-user-agent")).toBeHidden();
+  await page.getByTestId("model-advanced-options").locator("summary").click();
+  await page.getByTestId("model-user-agent").fill("research-client/2.0");
+  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
+    .toMatchObject({ settings: { user_agent: "research-client/2.0" } });
+  await page.getByTestId("save-provider").click();
+  await expect(page.getByTestId("provider-add-form")).toBeHidden();
+  const models = await page.evaluate(async () => {
+    const models: any[] = await (window as any).__TAURI__.core.invoke("list_models");
+    return models.filter(m => m.api_url === "https://research.example/v1");
+  });
+  expect(models).toHaveLength(2);
+  expect(models.every((m: any) => m.user_agent === "research-client/2.0")).toBe(true);
+});
+
 test("vision assignment keeps model fields and stored key placeholder untouched", async ({ page }) => {
   await enterApp(page);
   await openModelsSettings(page);
