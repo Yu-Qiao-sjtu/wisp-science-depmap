@@ -723,6 +723,17 @@ mod tests {
 
         let mut capability_ids = HashSet::new();
         let mut scripts = HashSet::new();
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri must have a repository parent");
+        let assert_safe_entrypoint = |path: &str| {
+            assert!(!path.starts_with('/') && !path.contains(':'));
+            assert!(!path.split('/').any(|part| part == ".."));
+            assert!(
+                repo_root.join(path).is_file(),
+                "declared module entrypoint must exist: {path}"
+            );
+        };
         for capability in capabilities {
             assert!(capability_ids.insert(capability["id"].as_str().unwrap()));
             for input in capability["inputs"].as_array().unwrap() {
@@ -730,6 +741,14 @@ mod tests {
             }
             for script in capability["scripts"].as_array().unwrap() {
                 assert!(scripts.insert(script.as_str().unwrap()));
+            }
+            if let Some(operations) = capability["operations"].as_object() {
+                for operation in operations.values() {
+                    for input in operation["inputs"].as_array().unwrap() {
+                        assert!(dataset_ids.contains(input.as_str().unwrap()));
+                    }
+                    assert_safe_entrypoint(operation["executable_entrypoint"].as_str().unwrap());
+                }
             }
         }
         let expected_scripts: HashSet<&str> = [
@@ -764,7 +783,12 @@ mod tests {
             .filter(|dataset| dataset["kind"] == "derived")
         {
             for producer in dataset["producer_scripts"].as_array().unwrap() {
-                assert!(scripts.contains(producer.as_str().unwrap()));
+                let producer = producer.as_str().unwrap();
+                if producer.contains('/') {
+                    assert_safe_entrypoint(producer);
+                } else {
+                    assert!(scripts.contains(producer));
+                }
             }
         }
     }

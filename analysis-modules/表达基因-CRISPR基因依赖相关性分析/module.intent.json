@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "module_id": "expression_dependency",
   "analysis_label": "expression_dependency_association",
   "display_name_zh": "表达基因—CRISPR 基因依赖相关性分析",
@@ -21,10 +21,43 @@
   "query_contract": {
     "global_pair": {"mode": "pair", "module": "expression_dependency"},
     "global_top": {"mode": "top", "module": "expression_dependency"},
-    "lineage": {"mode": "lineage_network", "family": "expression_dependency"}
+    "lineage": {"mode": "lineage_network", "family": "expression_dependency"},
+    "global_pathway_enrichment": {
+      "capability_id": "gene_to_dependency",
+      "operation_id": "pathway_enrichment",
+      "execution_mode": "on_demand_cached",
+      "entrypoint": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_dependency_gsea.R",
+      "required_entities": ["expression_source_gene"],
+      "default_parameters": {
+        "scope": "global",
+        "collection": "hallmark",
+        "rank_metric": "negative_signed_t",
+        "min_pair_fraction": 0.8
+      }
+    },
+    "lineage_pathway_context": {
+      "mode": "enrichment",
+      "module": "lineage_gene_enrichment",
+      "method": "rank_sum",
+      "gsea_equivalent": false
+    }
   },
-  "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖"],
-  "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency"],
+  "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖", "高表达时依赖哪些通路", "表达依赖富集", "表达依赖GSEA", "依赖通路富集"],
+  "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency", "expression dependency enrichment", "dependency pathway GSEA", "pathways associated with high gene expression"],
+  "operation_routing": {
+    "association_targets": {
+      "intent": "which dependency genes are associated with expression",
+      "action": "query_precomputed_correlations"
+    },
+    "pathway_enrichment": {
+      "intent": "which dependency pathways are associated with expression",
+      "trigger_requires": ["expression_source_gene", "pathway_or_enrichment_language"],
+      "action": "execute_expression_dependency_gsea",
+      "capability_id": "gene_to_dependency",
+      "operation_id": "pathway_enrichment",
+      "cache_policy": "reuse_exact_release_gene_scope_collection_database_rank_and_pair_threshold_match"
+    }
+  },
   "sign_interpretation": {
     "negative": "higher expression associates with stronger, more negative Gene Effect dependency",
     "positive": "higher expression associates with weaker, less negative Gene Effect dependency"

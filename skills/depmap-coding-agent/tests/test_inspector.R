@@ -16,6 +16,17 @@ manifest <- jsonlite::read_json(
 fixture <- tempfile("depmap-inspector-")
 dir.create(file.path(fixture, "data"), recursive = TRUE)
 dir.create(file.path(fixture, "tm00-script", "scripts"), recursive = TRUE)
+gsea_root <- file.path(
+  fixture,
+  "analysis-modules",
+  "表达基因-CRISPR基因依赖相关性分析"
+)
+utf8_paths_supported <- isTRUE(l10n_info()[["UTF-8"]])
+if (utf8_paths_supported) {
+  dir.create(file.path(gsea_root, "results", "expression_dependency"), recursive = TRUE)
+  dir.create(file.path(gsea_root, "scripts"), recursive = TRUE)
+  file.create(file.path(gsea_root, "scripts", "run_expression_dependency_gsea.R"))
+}
 on.exit(unlink(fixture, recursive = TRUE, force = TRUE), add = TRUE)
 
 for (capability in manifest$capabilities) {
@@ -32,12 +43,16 @@ for (dataset in manifest$datasets) {
 }
 writeLines("DepMap Public 26Q1", file.path(fixture, "data", "README.txt"))
 
-run_inspector <- function(capability) {
-  output <- file.path(fixture, paste0(capability, ".json"))
+run_inspector <- function(capability, operation = NULL) {
+  output <- file.path(
+    fixture,
+    paste0(capability, if (is.null(operation)) "" else paste0("-", operation), ".json")
+  )
+  operation_args <- if (is.null(operation)) character() else c("--operation", operation)
   status <- system2(
     file.path(R.home("bin"), "Rscript"),
     c(shQuote(inspector), "--project-root", shQuote(fixture),
-      "--capability", capability, "--output", shQuote(output)),
+      "--capability", capability, operation_args, "--output", shQuote(output)),
     stdout = TRUE,
     stderr = TRUE
   )
@@ -66,5 +81,20 @@ stopifnot(identical(
 drug_auc <- run_inspector("drug_auc_cross_validation")
 stopifnot(identical(drug_auc$status, "missing_inputs"))
 stopifnot("amg193_auc_csv" %in% unlist(drug_auc$missing_inputs))
+
+gsea <- run_inspector("gene_to_dependency", "pathway_enrichment")
+expected_gsea_status <- if (utf8_paths_supported) "ready" else "preprocessing_required"
+stopifnot(identical(gsea$status, expected_gsea_status))
+stopifnot(identical(gsea$operation_id, "pathway_enrichment"))
+stopifnot(identical(gsea$operation, "gsea"))
+stopifnot(identical(gsea$execution_mode, "on_demand_cached"))
+stopifnot(identical(unname(unlist(gsea$supported_scopes)), "global"))
+stopifnot(identical(
+  basename(tail(unname(unlist(gsea$execution_plan)), 1L)),
+  "run_expression_dependency_gsea.R"
+))
+stopifnot(identical(gsea$defaults$collection, "hallmark"))
+stopifnot(identical(gsea$defaults$rank_metric, "negative_signed_t"))
+stopifnot(identical(gsea$defaults$min_pair_fraction, 0.8))
 
 cat("DepMap inspector fixture tests passed.\n")
