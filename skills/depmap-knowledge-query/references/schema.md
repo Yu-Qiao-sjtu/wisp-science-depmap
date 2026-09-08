@@ -43,6 +43,13 @@ Matrix modules supported by `pair/top`:
 - `damaging_mutation_dependency`, `custom_missense_mutation_dependency`, `hotspot_mutation_dependency`: negative mean difference means mutant models are more dependent.
 - `cnv_amplification_dependency`: negative mean difference means amplified models are more dependent.
 
+For natural-language selection among the first three modules, use
+[intent-routing.md](intent-routing.md). Preserve the returned semantic labels:
+`analysis_label`, `data_modality`, `relation_type`, `scope`, and
+`cohort_policy`. A gene pair without a measurement term is ambiguous and should
+return separate expression and Gene Effect evidence rather than silently
+choosing one.
+
 Every response includes file provenance. FDR is adjusted within the family stated by that module's manifest, not globally across the entire knowledge base.
 
 For `lineage_dependency`, `effect_mean_difference` is the lineage mean Gene

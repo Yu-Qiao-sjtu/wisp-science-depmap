@@ -32,8 +32,8 @@
   ],
   "capabilities": [
     {"id":"core_ingestion","title":"Core 26Q1 ingestion and aligned R objects","scripts":["01_read_depmap.r"],"inputs":["gene_effect_csv","gene_dependency_csv","expression_csv","model_csv","damaging_mutation_matrix_csv"]},
-    {"id":"gene_correlation","title":"Expression gene-gene correlation","scripts":["02_gene_gene_correlation.R"],"inputs":["expression_rds"]},
-    {"id":"co_dependency","title":"Genome-wide co-dependency","scripts":["03_co_dependency.R"],"inputs":["gene_effect_rds"]},
+    {"id":"gene_correlation","title":"Expression gene-gene correlation","analysis_label":"gene_gene_coexpression","data_modality":"transcript_expression_log2_tpm_plus_1","relation_type":"coexpression","module_id":"expression_correlation","scripts":["02_gene_gene_correlation.R"],"inputs":["expression_rds"]},
+    {"id":"co_dependency","title":"Genome-wide co-dependency","analysis_label":"gene_gene_codependency","data_modality":"crispr_gene_effect","relation_type":"codependency","module_id":"effect_correlation","scripts":["03_co_dependency.R"],"inputs":["gene_effect_rds"]},
     {"id":"predictive_biomarkers","title":"Predictive biomarker association and models","scripts":["04_predivtive_biomarkers.R"],"inputs":["gene_effect_rds","expression_rds"]},
     {"id":"gene_to_dependency","title":"Gene-centered dependency and pathway analysis","scripts":["05_from_gene_to_dependency.R"],"inputs":["gene_effect_rds","expression_rds"]},
     {"id":"pathway_ml","title":"Pathway machine learning","scripts":["05.1_ml_pathway.R"],"inputs":["progeny_scores_rds","gene_effect_rds"]},

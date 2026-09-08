@@ -9,6 +9,11 @@ Use the precomputed knowledge base as the default execution path. Natural-langua
 
 ## Routing
 
+For any two-gene correlation request, first apply the measurement and scope
+routing table in [references/intent-routing.md](references/intent-routing.md).
+Do not choose between expression correlation, Gene Effect co-dependency, and
+expression-to-dependency association from gene names alone.
+
 1. When the requested deliverable matches a registered Workflow, call
    `start_workflow` before querying evidence, loading Run history, inspecting
    files, or writing a report. Put only the user's supplied gene, cancer scope,

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "module_id": "effect_correlation",
+  "analysis_label": "gene_gene_codependency",
+  "display_name_zh": "CRISPR 基因—基因共依赖分析",
+  "data_modality": "crispr_gene_effect",
+  "relation_type": "codependency",
+  "entity_roles": {"source": "gene_effect_gene", "target": "gene_effect_gene", "symmetric": true},
+  "metric": "pearson_correlation",
+  "scopes": ["global", "lineage"],
+  "cohort_policy": {
+    "global_primary": "all_available_gene_effect_models",
+    "global_primary_sample_n": 1208,
+    "tm00_reproduction": "gene_effect_expression_model_intersection",
+    "tm00_reproduction_sample_n": 1140,
+    "lineage_min_n": 10
+  },
+  "query_contract": {
+    "global_pair": {"mode": "pair", "module": "effect_correlation"},
+    "global_top": {"mode": "top", "module": "effect_correlation"},
+    "lineage": {"mode": "lineage_network", "family": "effect_correlation"}
+  },
+  "intent_terms_zh": ["共依赖", "依赖相关", "基因效应相关", "敲除相关", "CRISPR相关", "两基因依赖性"],
+  "intent_terms_en": ["co-dependency", "codependency", "gene effect correlation", "CRISPR dependency correlation"],
+  "confusable_modules": ["expression_correlation", "expression_dependency"],
+  "interpretation": "两个基因在细胞系间的 CRISPR Gene Effect 依赖谱是否相似；不等于共表达，也不证明合成致死。"
+}
