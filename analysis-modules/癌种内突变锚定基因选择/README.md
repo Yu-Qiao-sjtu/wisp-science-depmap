@@ -19,3 +19,9 @@
 ## 知识卡片
 
 `scripts/build_anchor_gene_cards.R` 将统计菜单与 HGNC、OncoKB 派生角色和 26Q1 Common Essential 标记合并。卡片包含癌种、基因、突变口径、Mut/WT 数量、频率、基因名称和类型、角色匹配、选择等级、解释与警示。`anchor_gene_cards_all.csv/jsonl` 用于完整检索，`anchor_gene_cards_strict.csv` 用于正式分析候选，`anchor_gene_cards_priority.csv` 是角色匹配且达到严格样本门槛的优先卡片。卡片用于选择和解释，不代表突变已被证明造成依赖或构成合成致死。
+
+## 文档入口
+
+- `问题梳理与结论.md`：汇总本模块建立过程中关于数据、分组、交集、样本门槛、Common Essential 和下游口径的疑问与结论。
+- `突变类型与选择指南.md`：说明 26Q1 分子后果、事件定义及具体选择方法。
+- `知识库提示.md`：供 Agent 检索和意图路由，定义触发语、决策规则、禁止混淆项和标准回答格式。
