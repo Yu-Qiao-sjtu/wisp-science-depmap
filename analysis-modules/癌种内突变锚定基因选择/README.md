@@ -13,3 +13,7 @@
 服务器正式结果位于模块的 `results_20260909_v6/`。`candidate_anchor_genes_by_lineage.csv` 是标准门槛菜单，`selectable_anchor_genes_by_lineage.csv` 是未过滤的严格菜单，`sensitivity_excluding_common_essential.csv` 仅用于评估排除共同必需基因的影响，`selectable_gene_counts_by_lineage.csv` 汇总每个癌种的严格候选数量。
 
 脚本：`scripts/run_anchor_gene_selection_26Q1.R`。先用 AnySelected 查看癌种突变全貌；正式锚定时，TSG 使用 Damaging，OG 使用 Hotspot。三种突变来源分别与 Model 和 Gene Dependency 取交集，不要求不同突变矩阵彼此取交集。
+
+## 知识卡片
+
+`scripts/build_anchor_gene_cards.R` 将统计菜单与 HGNC、OncoKB 派生角色和 26Q1 Common Essential 标记合并。卡片包含癌种、基因、突变口径、Mut/WT 数量、频率、基因名称和类型、角色匹配、选择等级、解释与警示。`anchor_gene_cards_all.csv/jsonl` 用于完整检索，`anchor_gene_cards_strict.csv` 用于正式分析候选，`anchor_gene_cards_priority.csv` 是角色匹配且达到严格样本门槛的优先卡片。卡片用于选择和解释，不代表突变已被证明造成依赖或构成合成致死。
