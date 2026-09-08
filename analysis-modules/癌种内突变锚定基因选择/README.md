@@ -20,6 +20,10 @@
 
 `scripts/build_anchor_gene_cards.R` 将统计菜单与 HGNC、OncoKB 派生角色和 26Q1 Common Essential 标记合并。卡片包含癌种、基因、突变口径、Mut/WT 数量、频率、基因名称和类型、角色匹配、选择等级、解释与警示。`anchor_gene_cards_all.csv/jsonl` 用于完整检索，`anchor_gene_cards_strict.csv` 用于正式分析候选，`anchor_gene_cards_priority.csv` 是角色匹配且达到严格样本门槛的优先卡片。卡片用于选择和解释，不代表突变已被证明造成依赖或构成合成致死。
 
+`scripts/build_all_mutation_gene_annotations_26Q1.R` 进一步生成一行一个基因的全量本地缓存。它覆盖依赖队列突变宇宙中的全部基因，合并 HGNC 身份、历史符号映射、癌种分布、Damaging/Hotspot/ProteinChange 可用性、主要变异类型、OncoKB 派生角色和 Common Essential 标记。全量表用于检索和生成知识卡片；OncoKB 空值表示本地角色快照未收录该基因，不表示抓取失败或该基因没有癌症意义。
+
+全量缓存包含 19,784 行：19,775 个基因已解析到 HGNC，其中 19,739 个为直接符号匹配、36 个通过历史符号匹配；另外 9 个符号保留原始 DepMap 名称并标记为 `unresolved`。仓库保存 `reports/all_gene_annotation_cache_manifest_26Q1.json` 和 `reports/unresolved_hgnc_symbols_26Q1.csv` 供审查，约 9.7 MB 的 CSV 和 28.0 MB 的 JSONL 留在服务器私有模块中。
+
 ## 文档入口
 
 - `突变信息分析模块总览.md`：模块首要入口；按目的、数据、事件定义、脚本流程、双向分析、当前结果、用户工作流和缺口完整梳理。

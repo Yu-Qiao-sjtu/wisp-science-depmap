@@ -12,6 +12,15 @@
   },
   "event_definitions": ["AnySelected", "Damaging", "Hotspot", "ProteinChange"],
   "scopes": ["global", "lineage"],
+  "knowledge_assets": {
+    "all_mutation_gene_annotations": {
+      "csv": "gene_annotation_cache_26Q1/all_mutation_gene_annotations.csv",
+      "jsonl": "gene_annotation_cache_26Q1/all_mutation_gene_annotations.jsonl",
+      "manifest": "gene_annotation_cache_26Q1/manifest.json",
+      "coverage": "all mutation genes with at least one retained record among CRISPR Gene Dependency models",
+      "lookup_key": "gene"
+    }
+  },
   "query_contract": {
     "mutation_to_target": {
       "tool": "depmap_synthetic_lethal_evidence",
