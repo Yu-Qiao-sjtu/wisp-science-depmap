@@ -62,7 +62,7 @@
 
 ## Responsive workspace layout
 
-- The default 1100 px desktop window keeps the sidebar, conversation, and Inspector as resizable columns. The Inspector becomes a modal drawer only below 960 px, where preserving the conversation width takes priority.
+- The default 1100 px desktop window keeps the sidebar, conversation, and Inspector as resizable columns. At 960 px and below, the Inspector becomes a modal drawer, preserving the conversation width. After shrinking the window, Escape closes the drawer's own menu first, then the drawer, then any composer menu or conversation outline it covered. Each press dismisses only the topmost layer; growing back restores the split-pane order.
 - Conversation messages, runtime controls, and the composer grow together with the available center pane, leaving 16 px outer gutters and capping the column at 1280 px on wide screens. Resizing the window or opening the Inspector recalculates that width through CSS; document/chat split views continue to fill their narrower chat pane.
 - Scrollable lists keep stable scrollbar gutters and contain overscroll so a nested list does not unexpectedly move the surrounding workspace.
 

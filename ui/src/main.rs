@@ -8659,6 +8659,24 @@ fn App() -> impl IntoView {
             artifact_menu.set(None);
             return;
         }
+        // Match the drawer breakpoint in right-pane.css. Resizing can leave
+        // composer menus open underneath the Inspector's modal backdrop.
+        // Its own menus (and the floating runtime inspector) still close first;
+        // otherwise Escape dismisses the drawer, preserving the covered layer.
+        if show_right.get() && viewport_size().0 <= 960.0 {
+            ev.prevent_default();
+            if runtime_environment_pinned.get() {
+                runtime_environment.set(None);
+                runtime_environment_pinned.set(false);
+            } else if right_tab_add_menu_open.get() {
+                right_tab_add_menu_open.set(false);
+            } else if side_chat_model_menu_open.get() {
+                side_chat_model_menu_open.set(false);
+            } else {
+                show_right.set(false);
+            }
+            return;
+        }
         if show_proj_menu.get() {
             ev.prevent_default();
             show_proj_menu.set(false);
