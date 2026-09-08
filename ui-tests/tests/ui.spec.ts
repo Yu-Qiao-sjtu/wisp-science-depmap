@@ -28,6 +28,18 @@ async function expectInsideViewport(locator: Locator, width: number, height: num
   expect(box!.y + box!.height).toBeLessThanOrEqual(height);
 }
 
+async function waitForTranscriptFonts(page: Page) {
+  // font-display: swap can change wrapping after the transcript is visible.
+  // Let font layout and scroll anchoring settle before recording a pixel
+  // bookmark; a later, correctly compensated scrollTop is a different value.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+}
+
 async function openModelsSettings(page: Page) {
   await globalSettingsButton(page).click();
   await page.getByRole("button", { name: "Models" }).click();
@@ -11211,6 +11223,7 @@ test("closing a center-file tab restores the conversation reading position", asy
   await page.locator(".proj-card-main").first().click();
   const scroller = page.locator("#chat-scroller");
   await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+  await waitForTranscriptFonts(page);
   await scroller.evaluate((element) => {
     element.scrollTop = Math.max(120, element.scrollHeight / 3);
     element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
@@ -11483,27 +11496,42 @@ test("opening a long conversation lands at the latest message and stays stable o
     .toBeGreaterThan(readingPosition + 400);
 });
 
-test("switching conversations restores each reading position (#849)", async ({ page }) => {
-  await page.goto("/?mockLongPages=8");
-  await page.locator(".proj-card-main").first().click();
+for (const delayedFont of [false, true]) {
+  test(`switching conversations restores each reading position (#849)${delayedFont ? " with delayed fonts" : ""}`, async ({ page }) => {
+    let releaseFont = () => {};
+    if (delayedFont) {
+      const fontGate = new Promise<void>((resolve) => { releaseFont = resolve; });
+      await page.route("**/fonts/source-serif-4-latin.woff2", async (route) => {
+        await fontGate;
+        await route.continue();
+      });
+    }
+    await page.goto("/?mockLongPages=8", { waitUntil: "domcontentloaded" });
+    await page.locator(".proj-card-main").first().click();
 
-  const scroller = page.locator("#chat-scroller");
-  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
-  await scroller.evaluate((element) => {
-    element.scrollTop = Math.max(120, element.scrollHeight / 3);
-    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+    const scroller = page.locator("#chat-scroller");
+    await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+    if (delayedFont) {
+      await expect.poll(() => page.evaluate(() => document.fonts.status)).toBe("loading");
+    }
+    releaseFont();
+    await waitForTranscriptFonts(page);
+    await scroller.evaluate((element) => {
+      element.scrollTop = Math.max(120, element.scrollHeight / 3);
+      element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+    });
+    const readingTop = await scroller.evaluate((element) => element.scrollTop);
+
+    await newSessionButton(page).click();
+    await expect(page.locator(".empty")).toBeVisible();
+    await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
+    await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(readingTop - 40);
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeLessThan(readingTop + 40);
   });
-  const readingTop = await scroller.evaluate((element) => element.scrollTop);
-
-  await newSessionButton(page).click();
-  await expect(page.locator(".empty")).toBeVisible();
-  await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
-  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
-  await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(readingTop - 40);
-  await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-    .toBeLessThan(readingTop + 40);
-});
+}
 
 test("a thread rebuild clamp does not park a followed view at the top (#927)", async ({ page }) => {
   await page.goto("/?mockLongPages=8");
@@ -11610,6 +11638,7 @@ test("conversation outline loads and jumps to an older user question", async ({ 
   );
   await expect(oldestOutline.locator(".conversation-outline-time")).not.toBeEmpty();
   await oldestOutline.click();
+  await expect(oldestOutline).toHaveAttribute("aria-current", "location");
 
   await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({
     id: "long-session",

@@ -55,6 +55,7 @@
 ## Topbar and inspector chrome
 
 - The conversation topbar keeps session tabs as the primary signal. Inbox, terminal, and inspector toggles live in `.topbar-actions`.
+- The conversation outline opens from a list icon and question count in the topbar, keeping navigation off the message canvas. Compact panes hide the count while retaining the labeled icon. The outline is a bounded, scrollable card with quieter numbers and timestamps; the selected question has an accent edge, and Escape closes the card before its parent surface.
 - Status text appears only when non-empty (or when an API-key action is required) and truncates with a `title` for the full value.
 - Specialist labels stay quiet text, not status pills.
 - Artifact type badges are neutral mono labels; only tabular data keeps a clay accent. Prefer `--ok` / `--err` / `--clay` over one-off HSL pill colors.
@@ -62,6 +63,7 @@
 ## Responsive workspace layout
 
 - The default 1100 px desktop window keeps the sidebar, conversation, and Inspector as resizable columns. The Inspector becomes a modal drawer only below 960 px, where preserving the conversation width takes priority.
+- Conversation messages, runtime controls, and the composer grow together with the available center pane, leaving 16 px outer gutters and capping the column at 1280 px on wide screens. Resizing the window or opening the Inspector recalculates that width through CSS; document/chat split views continue to fill their narrower chat pane.
 - Scrollable lists keep stable scrollbar gutters and contain overscroll so a nested list does not unexpectedly move the surrounding workspace.
 
 ## Dense settings lists
