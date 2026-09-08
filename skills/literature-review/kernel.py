@@ -4,8 +4,8 @@ Public helpers (referenced from SKILL.md):
     verify_dois, crossref_lookup, search_openalex, expand_citations,
     extract_dois, style_pass
 
-Top level is definition-only — imports, constants, functions — so the sidecar
-AST gate accepts it. Network access happens only inside function bodies, and
+Top level is definition-only — imports, constants, functions. Network access
+happens only inside function bodies, and
 only against CrossRef, OpenAlex, and doi.org.
 """
 
@@ -53,8 +53,12 @@ def _mailto_param():
     return f"&mailto={urllib.parse.quote(c)}" if c else ""
 
 
-def _get_json(url, timeout=15):
-    """GET → decoded JSON; one 2-second retry on HTTP 429; None otherwise."""
+def _get_json(url, timeout=15, strict=False):
+    """GET JSON, retrying HTTP 429 once. Strict callers surface safe errors.
+
+    Crossref's DOI fallback retains the tolerant None result; OpenAlex queries
+    must distinguish failed retrieval from successful zero-hit responses.
+    """
     for attempt in (0, 1):
         req = urllib.request.Request(url, headers={"User-Agent": _user_agent()})
         try:
@@ -64,9 +68,16 @@ def _get_json(url, timeout=15):
             if e.code == 429 and attempt == 0:
                 time.sleep(2)
                 continue
-            return None
+            failure = f"HTTP {e.code}"
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            failure = "invalid JSON response"
         except Exception:
-            return None
+            failure = "connection failed or timed out"
+        if strict:
+            # Never include the request URL or original exception: URLs can
+            # contain API keys and contact details.
+            raise RuntimeError(f"Literature request failed: {failure}") from None
+        return None
     return None
 
 
@@ -209,6 +220,16 @@ def crossref_lookup(ref_string):
 
 # ----------------------------------------------------------------- OpenAlex
 
+def _openalex_results(url):
+    payload = _get_json(url, strict=True)
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise RuntimeError("OpenAlex returned an invalid results response")
+    rows = payload["results"]
+    if any(not isinstance(row, dict) for row in rows):
+        raise RuntimeError("OpenAlex returned an invalid work record")
+    return rows
+
+
 def _openalex_row(work):
     return {
         "doi": (work.get("doi") or "").replace("https://doi.org/", ""),
@@ -222,16 +243,18 @@ def search_openalex(query, n=10, filters=""):
     """Keyword search over OpenAlex (~250M works), most-cited first.
 
     Returns up to n rows of {doi, title, year, cited_by, venue, oa_url}.
+    Raises RuntimeError on retrieval failure or malformed results; [] means a
+    successful response with no selected results.
     `filters` is a raw OpenAlex filter expression, e.g.
     'from_publication_date:2022-01-01'."""
     q = urllib.parse.quote(query)
     flt = f"&filter={filters}" if filters else ""
-    j = _get_json(
+    works = _openalex_results(
         f"https://api.openalex.org/works?search={q}&per-page={min(n, 25)}"
         f"&sort=cited_by_count:desc{flt}{_mailto_param()}{_openalex_key_param()}"
     )
     rows = []
-    for w in (j or {}).get("results", [])[:n]:
+    for w in works[:n]:
         row = _openalex_row(w)
         source = ((w.get("primary_location") or {}).get("source") or {})
         row["venue"] = source.get("display_name")
@@ -246,23 +269,28 @@ def expand_citations(doi, n_backward=50, n_forward=15):
     `references` — the paper's own bibliography (backward; OpenAlex filter
     `cited_by:<id>`), most-cited first. `cited_by` — papers citing this one
     (forward; filter `cites:<id>`). Rows are {doi, title, year, cited_by}.
-    Costs three OpenAlex requests; both lists come back empty when OpenAlex
-    doesn't know the DOI or rate-limits the list endpoint."""
+    Costs three OpenAlex requests. Missing works, failed retrieval, and malformed
+    responses raise RuntimeError; empty lists require successful list responses.
+    Failure in either direction fails the call instead of reporting a partial
+    graph as complete."""
     extra = _mailto_param() + _openalex_key_param()
     resolved = _get_json(
-        f"https://api.openalex.org/works/doi:{_encode_doi(doi)}?select=id{extra}"
+        f"https://api.openalex.org/works/doi:{_encode_doi(doi)}?select=id{extra}",
+        strict=True,
     )
-    work_id = ((resolved or {}).get("id") or "").rsplit("/", 1)[-1]
+    if not isinstance(resolved, dict) or not isinstance(resolved.get("id"), str):
+        raise RuntimeError("OpenAlex returned an invalid work identity")
+    work_id = resolved["id"].rsplit("/", 1)[-1]
     if not work_id:
-        return {"references": [], "cited_by": []}
+        raise RuntimeError("OpenAlex returned an empty work identity")
 
     def listing(filter_expr, limit):
-        j = _get_json(
+        rows = _openalex_results(
             f"https://api.openalex.org/works?filter={filter_expr}"
             f"&select=doi,title,publication_year,cited_by_count"
             f"&sort=cited_by_count:desc&per-page={min(limit, 100)}{extra}"
         )
-        return [_openalex_row(w) for w in (j or {}).get("results", [])]
+        return [_openalex_row(w) for w in rows]
 
     return {
         "references": listing(f"cited_by:{work_id}", n_backward),

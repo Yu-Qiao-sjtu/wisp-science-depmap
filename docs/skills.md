@@ -98,6 +98,14 @@ Python 3.10+; this skill no longer ships a `kernel.py` REPL wrapper. Resolve the
 helper from the skill directory and run it with the project as the working
 directory.
 
+The `paper-narrative` helper carries each figure's supplied image path with its
+claim in both brief and review prompts. The `literature-review` Python OpenAlex
+helpers raise on failed or malformed retrieval instead of reporting an empty
+search or citation graph; DOI checks retain an explicit unverified state.
+Loading `figure-style` helpers leaves the current matplotlib backend and style
+alone. Apply the style explicitly with `apply_figure_style(...)`; the optional
+`figure_style_self_check()` runs only when called.
+
 The built-in execution guidance and analysis skills describe the available
 execution methods without assigning task categories to a default method.
 `shell` runs short commands in fresh processes; `run_in_context` manages

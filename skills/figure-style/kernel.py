@@ -417,15 +417,16 @@ def panel_crops(fig, dpi=None, pad_px=6, bbox_inches=None, pad_inches=None):
     return out
 
 
-if __name__ == "__main__":
-    # Smoke-check the CJK font wiring: the sans-serif chain must be populated
-    # (so CJK glyphs have somewhere to resolve) and the minus sign must not
-    # be a unicode box. Run: `python kernel.py`.
+def figure_style_self_check():
+    """Explicitly apply defaults and check font wiring; never run on loading.
+
+    Wisp executes sidecars in the REPL's __main__ namespace, so a conventional
+    __main__ guard would run during helper loading as well as direct execution.
+    """
     import matplotlib
-    matplotlib.use("Agg")
     apply_figure_style()
     sans = matplotlib.rcParams["font.sans-serif"]
     assert sans, "font.sans-serif must not be empty"
     assert "DejaVu Sans" in sans, "DejaVu Sans should remain a Latin fallback"
     assert matplotlib.rcParams["axes.unicode_minus"] is False
-    print("figure-style self-check OK; font.sans-serif =", sans)
+    return {"font.sans-serif": list(sans), "axes.unicode_minus": False}

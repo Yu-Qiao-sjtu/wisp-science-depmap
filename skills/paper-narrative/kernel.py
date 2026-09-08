@@ -1,3 +1,19 @@
+import json
+
+
+def _paper_figure_claims_json(figures):
+    """Keep each claim bound to its supplied path, including Windows paths."""
+    return json.dumps([
+        {
+            "key": figure.get("key", "?"),
+            "claim": figure.get("claim") or figure.get("caption", ""),
+            **({"composite_path": figure["composite_path"]}
+               if "composite_path" in figure else {}),
+        }
+        for figure in figures
+    ], ensure_ascii=False, indent=2)
+
+
 def paper_brief_schema():
     return {
         "type": "object",
@@ -24,11 +40,7 @@ def paper_brief_schema():
 
 
 def paper_brief_task(abstract_text, figure_claims):
-    figure_table = "\n".join(
-        f"  {figure.get('key', '?')}: "
-        f"{figure.get('claim') or figure.get('caption', '')}"
-        for figure in figure_claims
-    )
+    figure_table = _paper_figure_claims_json(figure_claims)
     return f"""Act as the corresponding author. Derive a structured paper brief
 from the abstract and figure claims below.
 
@@ -41,7 +53,9 @@ concrete `composite_path`; do not invent paths or artifact ids.
 {abstract_text}
 
 ## Figures
+```json
 {figure_table}
+```
 
 Return only data matching the supplied paper brief schema."""
 
@@ -133,11 +147,7 @@ def narrative_review_schema():
 
 
 def narrative_review_task(brief, deck_paths, rules_path=None):
-    figure_table = "\n".join(
-        f"  {figure.get('key', '?')}: "
-        f"{figure.get('claim') or figure.get('caption', '')}"
-        for figure in brief.get("figures", [])
-    )
+    figure_table = _paper_figure_claims_json(brief.get("figures", []))
     paths = "\n".join(f"- `{path}`" for path in deck_paths)
     rules_line = f"\nDesign-rule source: `{rules_path}`" if rules_path else ""
     return f"""Act as the handling editor deciding whether this submission should
@@ -156,7 +166,9 @@ be page images rendered from a PDF. Do not invent a file resolver.
 {paths}{rules_line}
 
 ## Per-figure claims
+```json
 {figure_table}
+```
 
 Test whether Figure 1 alone creates a compelling hook. Propose the arc from hook
 through mechanism and evidence to application; move misplaced panels; specify
