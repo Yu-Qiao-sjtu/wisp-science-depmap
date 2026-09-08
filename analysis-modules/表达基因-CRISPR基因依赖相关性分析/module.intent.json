@@ -44,6 +44,50 @@
   },
   "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖", "高表达时依赖哪些通路", "表达依赖富集", "表达依赖GSEA", "依赖通路富集"],
   "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency", "expression dependency enrichment", "dependency pathway GSEA", "pathways associated with high gene expression"],
+  "semantic_routing": {
+    "matching_policy": "semantic_with_context_not_keyword_execution",
+    "synonyms": {
+      "expression": ["表达量", "表达水平", "高表达", "低表达", "表达升高", "表达降低", "expression", "expression level", "high expression", "low expression"],
+      "dependency": ["基因依赖", "依赖性", "敲除敏感性", "CRISPR敏感性", "基因敲除效应", "Gene Effect", "dependency", "CRISPR dependency", "knockout sensitivity"],
+      "enrichment": ["富集", "通路富集", "功能富集", "通路分析", "生物过程", "涉及哪些通路", "GSEA", "enrichment", "pathway analysis", "biological processes"],
+      "hallmark": ["Hallmark", "H集合", "标志基因集"],
+      "reactome": ["Reactome", "Reactome通路"]
+    },
+    "required_semantics": ["execution_requested", "expression_source_gene_resolved", "expression_to_crispr_dependency_relation", "pathway_or_enrichment_requested"],
+    "context_policy": {
+      "inherit_only_from": "unambiguous_active_analysis_context",
+      "fields": ["source_gene", "module_id", "scope", "lineage", "collection", "method"],
+      "explicit_user_values_override_context": true,
+      "ambiguous_or_missing_required_context": "clarify",
+      "never_inherit_from": ["unrelated_analysis", "multiple_unresolved_genes", "quoted_example"]
+    },
+    "guards": {
+      "negated_or_deferred_execution": "do_not_execute",
+      "method_explanation_or_capability_question": "explain_only",
+      "drug_sensitivity": "route_drug_analysis",
+      "ambiguous_sensitivity_or_measurement": "clarify",
+      "explicit_ora": "requires_separate_ora_method_do_not_substitute_gsea",
+      "explicit_go_or_kegg": "requires_requested_gene_sets_do_not_substitute_hallmark",
+      "explicit_lineage_gsea": "requires_complete_lineage_ranking",
+      "low_expression": "preserve_requested_direction_do_not_relabel_positive_NES"
+    },
+    "examples": [
+      {"text": "ESR1高表达时更依赖哪些通路？", "expected": "global_gsea"},
+      {"text": "IL6R表达升高与哪些通路的CRISPR敲除敏感性相关？", "expected": "global_gsea"},
+      {"text": "Run Reactome GSEA on FOXA1 expression-to-dependency correlations", "expected": "global_gsea", "collection": "reactome"},
+      {"text": "继续做富集", "context": {"module_id": "expression_dependency", "source_gene": "ESR1", "scope": "global"}, "expected": "global_gsea"},
+      {"text": "继续做富集", "context": {}, "expected": "clarify"},
+      {"text": "先不要做ESR1表达依赖富集", "expected": "do_not_execute"},
+      {"text": "什么是GSEA？", "expected": "explain_only"},
+      {"text": "你能做富集分析吗？", "expected": "explain_only"},
+      {"text": "ESR1表达与哪些基因依赖相关？", "expected": "query_precomputed_correlations"},
+      {"text": "ESR1和FOXA1是否相关？", "expected": "clarify"},
+      {"text": "ESR1高表达与哪些药物敏感性相关？", "expected": "route_drug_analysis"},
+      {"text": "对ESR1表达依赖结果做ORA", "expected": "separate_ora_method"},
+      {"text": "对ESR1表达依赖结果做GO富集", "expected": "requested_gene_sets_required"},
+      {"text": "乳腺癌内ESR1表达依赖结果做GSEA", "expected": "complete_lineage_ranking_required"}
+    ]
+  },
   "operation_routing": {
     "association_targets": {
       "intent": "which dependency genes are associated with expression",

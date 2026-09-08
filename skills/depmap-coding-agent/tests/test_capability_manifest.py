@@ -49,6 +49,29 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
             {"mode": "pair", "module": "expression_dependency"},
         )
 
+    def test_semantic_routing_examples_have_valid_context_and_actions(self):
+        path = self.repo_root / "analysis-modules" / "表达基因-CRISPR基因依赖相关性分析" / "module.intent.json"
+        routing = json.loads(path.read_text(encoding="utf-8"))["semantic_routing"]
+        allowed = {
+            "global_gsea", "clarify", "do_not_execute", "explain_only",
+            "query_precomputed_correlations", "route_drug_analysis",
+            "separate_ora_method", "requested_gene_sets_required",
+            "complete_lineage_ranking_required",
+        }
+        examples = routing["examples"]
+        self.assertEqual({x["expected"] for x in examples}, allowed)
+        for example in examples:
+            self.assertTrue(example["text"].strip())
+            self.assertIn(example["expected"], allowed)
+            if example["expected"] == "global_gsea" and "context" in example:
+                context = example["context"]
+                self.assertEqual(context["module_id"], "expression_dependency")
+                self.assertTrue(context["source_gene"])
+                self.assertEqual(context["scope"], "global")
+        for aliases in routing["synonyms"].values():
+            self.assertEqual(len(aliases), len(set(aliases)))
+            self.assertTrue(all(alias.strip() for alias in aliases))
+
     def test_on_demand_gsea_capability_has_reviewed_entrypoint_and_defaults(self):
         manifest_path = (
             self.repo_root
