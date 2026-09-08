@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "release": "26Q1",
+  "audited_at": "2026-09-09",
+  "inputs": {
+    "Model.csv": {
+      "rows": 2154,
+      "unique_models": 2154
+    },
+    "OmicsSomaticMutationsMatrixDamaging.csv": {
+      "rows": 3044,
+      "default_rows": 1968,
+      "default_unique_models": 1968,
+      "missing_event_cells": 0
+    },
+    "OmicsSomaticMutationsMatrixHotspot.csv": {
+      "rows": 3044,
+      "default_rows": 1968,
+      "default_unique_models": 1968,
+      "missing_event_cells": 0
+    },
+    "CRISPRGeneDependency.csv": {
+      "models": 1208,
+      "genes": 18531,
+      "values": 22385448,
+      "missing_values": 887151,
+      "missing_percent": 3.9631,
+      "genes_with_missing_values": 1444
+    }
+  },
+  "cohorts": {
+    "dependency_model": 1208,
+    "dependency_model_damaging": 1208,
+    "dependency_model_hotspot": 1208,
+    "dependency_model_damaging_hotspot": 1208,
+    "damaging_and_hotspot_default_model_sets_identical": true
+  },
+  "custom_nine_consequence_event": {
+    "selected_variant_records": 735586,
+    "models_with_selected_variant": 1968,
+    "all_default_models_in_long_table": 1968,
+    "models_dropped_by_current_pivot_in_26Q1": 0
+  },
+  "complete_case_example": {
+    "source_event": "ARID1A Damaging",
+    "target": "HMGCR",
+    "mutation_matrix_n_mut": 124,
+    "mutation_matrix_n_wt": 1084,
+    "effective_n_mut": 124,
+    "effective_n_wt": 1084,
+    "missing_dependency": 0
+  },
+  "forward_scan_effective_n_check": {
+    "source_event": "ARID1A Damaging",
+    "targets_total": 18531,
+    "targets_meeting_effective_mut_5_wt_10": 17931,
+    "targets_failing_effective_mut_5_wt_10": 600
+  },
+  "interpretation": "Current 26Q1 event matrices have no missing values and identical default model sets, but Dependency missingness makes pair-specific complete-case counts mandatory. These observations describe this release and do not justify replacing unknown event states with zero in future releases."
+}
