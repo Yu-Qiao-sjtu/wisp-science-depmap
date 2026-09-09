@@ -18,6 +18,8 @@
 
 `06-11突变脚本数理逻辑审计.md` 逐项还原六个原始脚本的队列、门槛、效应量、检验、FDR 和排序公式。结论是：06 用于锚点准入，07 的 Welch 检验与方向内 BH FDR 是正式统计核心，08 用于事件定义审计，09–11 的乘积 `Score` 只可作为探索性可视化优先级。对应的机器可读清单位于 `reports/mutation_script_math_audit_26Q1.csv`，26Q1 实际样本交集和缺失值核对位于 `reports/mutation_script_data_audit_26Q1.json`。
 
+六个被审计的原始文件已归档到 `scripts/tm00-reference/`，并由 `source_manifest.json` 固定文件大小和 SHA256。它们用于历史追溯；新分析使用模块当前脚本和 `module.intent.json` 的统计契约。
+
 ## 知识卡片
 
 `scripts/build_anchor_gene_cards.R` 将统计菜单与 HGNC、OncoKB 派生角色和 26Q1 Common Essential 标记合并。卡片包含癌种、基因、突变口径、Mut/WT 数量、频率、基因名称和类型、角色匹配、选择等级、解释与警示。`anchor_gene_cards_all.csv/jsonl` 用于完整检索，`anchor_gene_cards_strict.csv` 用于正式分析候选，`anchor_gene_cards_priority.csv` 是角色匹配且达到严格样本门槛的优先卡片。卡片用于选择和解释，不代表突变已被证明造成依赖或构成合成致死。

@@ -24,6 +24,11 @@
       "document": "06-11突变脚本数理逻辑审计.md",
       "inventory": "reports/mutation_script_math_audit_26Q1.csv",
       "data_audit": "reports/mutation_script_data_audit_26Q1.json"
+    },
+    "tm00_reference_scripts": {
+      "directory": "scripts/tm00-reference",
+      "manifest": "scripts/tm00-reference/source_manifest.json",
+      "role": "immutable historical reference; not the default execution entrypoint"
     }
   },
   "query_contract": {
