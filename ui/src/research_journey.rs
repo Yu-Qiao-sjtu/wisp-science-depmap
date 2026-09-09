@@ -242,14 +242,14 @@ pub(super) fn ResearchJourneyView(
         }
     });
     view! {
-        <section class="research-journey" data-testid="research-journey" aria-label=move || j(locale.get(),"Research journey","研究轨迹")
+        <section class="research-journey" data-testid="research-journey" aria-label=move || j(locale.get(),"Research journey","研究历程")
             style=move || format!("--journey-left:{}px",left.get())>
             <header class="journey-header">
-                <div class="journey-breadcrumb">{project_name}<span>" / "</span>{move || j(locale.get(),"Research journey","研究轨迹")}</div>
-                <div class="journey-title-row"><div><h1>{move || j(locale.get(),"Research journey","研究轨迹")}</h1>
+                <div class="journey-breadcrumb">{project_name}<span>" / "</span>{move || j(locale.get(),"Research journey","研究历程")}</div>
+                <div class="journey-title-row"><div><h1>{move || j(locale.get(),"Research journey","研究历程")}</h1>
                     <p>{move || j(locale.get(),"Your daily exploration, outputs and decisions — with their sources.","每天的探索、产出与关键决定，都有迹可循。")}</p></div>
                     <div class="journey-actions"><button type="button" class="btn-primary" on:click=move |_| note_open.set(true)>{compose_icon("note-plus")}{move || j(locale.get(),"Add entry","补充记录")}</button>
-                    <button type="button" class="journey-icon" aria-label=move || j(locale.get(),"Close research journey","关闭研究轨迹") on:click=move |_| on_close.call(())>{compose_icon("close")}</button></div>
+                    <button type="button" class="journey-icon" aria-label=move || j(locale.get(),"Close research journey","关闭研究历程") on:click=move |_| on_close.call(())>{compose_icon("close")}</button></div>
                 </div>
                 <div class="journey-toolbar"><div role="tablist" aria-label=move || j(locale.get(),"Research view","研究视图")>
                     <button role="tab" aria-selected=move || (!graph_tab.get()).to_string() class:active=move || !graph_tab.get() on:click=move |_| graph_tab.set(false)>{move || j(locale.get(),"By day","按日")}</button>

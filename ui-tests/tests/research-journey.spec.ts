@@ -13,9 +13,21 @@ test.beforeEach(async ({ page }) => {
 async function open(page: Page, query = "") {
   await page.goto(`/${query}`);
   await page.locator(".proj-card-main").first().click();
-  await page.locator(".sidebar").getByRole("button", { name: /Research journey|研究轨迹/, exact: true }).click();
+  await page.locator(".sidebar").getByRole("button", { name: /Research journey|研究历程/, exact: true }).click();
   await expect(page.getByTestId("research-journey")).toBeVisible();
 }
+
+test("Chinese research journey naming is consistent across navigation and page controls", async ({ page }) => {
+  await open(page, "?mockLocale=zh&mockJourney=design");
+  const journey = page.getByTestId("research-journey");
+  await expect(page.locator(".sidebar").getByRole("button", {name:"研究历程",exact:true})).toBeVisible();
+  await expect(journey).toHaveAttribute("aria-label", "研究历程");
+  await expect(journey.getByRole("heading", {name:"研究历程",exact:true})).toBeVisible();
+  await expect(journey.locator(".journey-breadcrumb")).toContainText("研究历程");
+  await expect(journey.getByRole("button", {name:"关闭研究历程",exact:true})).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(journey).toHaveCount(0);
+});
 
 test("daily history groups sessions, opens exact versions and preserves Escape layers", async ({ page }) => {
   await open(page);

@@ -2775,7 +2775,7 @@ Do not leave generated files in the project root.",
 
         (Locale::Zh, "sidebar.new_session") => Some("新建会话"),
         (Locale::Zh, "sidebar.files") => Some("文件"),
-        (Locale::Zh, "sidebar.graph") => Some("研究轨迹"),
+        (Locale::Zh, "sidebar.graph") => Some("研究历程"),
         (Locale::Zh, "sidebar.publication") => Some("论文证据"),
         (Locale::Zh, "sidebar.library") => Some("收藏库"),
         (Locale::Zh, "sidebar.new_folder") => Some("新建分组"),

@@ -96,3 +96,8 @@ The browser captures use mock Tauri records; no real SSH host, GPU, model key, o
 Remaining P3 differences are intentional integration choices: the existing sidebar/navigation is retained; factual event counts replace the mock's illustrative totals; artifact filenames and real previews replace decorative thumbnails; registration time and exact version are visible rather than claiming every registered file was created that day.
 
 final result: passed
+
+
+## Chinese feature name
+
+The current Chinese UI and usage documentation use **研究历程**. Navigation, page heading, breadcrumb, accessible region/close labels, and the rendered screenshots follow that name. The selected reference image is retained as the original approved concept. The naming change passed WASM compilation, formatting checks, and 11 focused browser checks, including exact Chinese navigation/heading/accessible labels and immediate Escape dismissal.
