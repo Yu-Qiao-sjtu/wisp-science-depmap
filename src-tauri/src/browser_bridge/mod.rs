@@ -3616,6 +3616,30 @@ pub(crate) async fn project_browser_needs_human(
     Ok(prompt)
 }
 
+async fn project_browser_needs_human_targets(
+    bridge: &BrowserBridge,
+    store: &Store,
+    requested: &[BrowserNeedsHumanTab],
+    project_id: Option<&str>,
+) -> Result<Vec<BrowserNeedsHumanTab>, String> {
+    let pending = bridge.snapshot_needs_human().await;
+    let candidates = if requested.is_empty() {
+        pending
+    } else {
+        let requested: HashSet<(&str, i64)> = requested
+            .iter()
+            .map(|tab| (tab.session.as_str(), tab.tab_id))
+            .collect();
+        pending
+            .into_iter()
+            .filter(|tab| requested.contains(&(tab.session.as_str(), tab.tab_id)))
+            .collect()
+    };
+    Ok(project_browser_needs_human(store, &candidates, project_id)
+        .await?
+        .tabs)
+}
+
 pub(crate) async fn emit_browser_needs_human(
     app: &tauri::AppHandle,
     tabs: &[BrowserNeedsHumanTab],
@@ -3671,17 +3695,47 @@ pub async fn list_pending_browser_needs_human(
 #[tauri::command]
 pub async fn confirm_browser_needs_human(
     state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
     tabs: Vec<BrowserNeedsHumanTab>,
 ) -> Result<BrowserNeedsHumanConfirmResult, String> {
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    let tabs = project_browser_needs_human_targets(
+        &state.browser_bridge,
+        &state.store,
+        &tabs,
+        project_id.as_deref(),
+    )
+    .await?;
+    if tabs.is_empty() {
+        return Ok(BrowserNeedsHumanConfirmResult::default());
+    }
     state.browser_bridge.confirm_needs_human(&tabs).await
 }
 
 #[tauri::command]
 pub async fn focus_browser_needs_human(
     state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
     session: String,
     tab_id: i64,
 ) -> Result<(), String> {
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    let requested = BrowserNeedsHumanTab {
+        session: session.clone(),
+        tab_id,
+        ..Default::default()
+    };
+    if project_browser_needs_human_targets(
+        &state.browser_bridge,
+        &state.store,
+        &[requested],
+        project_id.as_deref(),
+    )
+    .await?
+    .is_empty()
+    {
+        return Err("browser tab is not awaiting verification for this project".into());
+    }
     state
         .browser_bridge
         .focus_needs_human_tab(&session, tab_id)
@@ -3754,6 +3808,52 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn browser_challenge_targets_only_belong_to_the_bound_project() {
+        let (store, path) = empty_store().await;
+        let bridge = BrowserBridge::new(PathBuf::from("."));
+        for id in ["a", "b"] {
+            store
+                .create_project(id, id, &format!("/ws/{id}"))
+                .await
+                .unwrap();
+            store.create_frame(id, id, "OPERON", "model").await.unwrap();
+            let tab = BrowserNeedsHumanTab {
+                session: "shared".into(),
+                tab_id: if id == "a" { 11 } else { 22 },
+                frame_id: id.into(),
+                ..Default::default()
+            };
+            bridge
+                .needs_human
+                .lock()
+                .await
+                .insert((tab.session.clone(), tab.tab_id), tab);
+        }
+
+        let all = project_browser_needs_human_targets(&bridge, &store, &[], Some("a"))
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].frame_id, "a");
+
+        let forged = BrowserNeedsHumanTab {
+            session: "shared".into(),
+            tab_id: 22,
+            frame_id: "a".into(),
+            ..Default::default()
+        };
+        assert!(
+            project_browser_needs_human_targets(&bridge, &store, &[forged], Some("a"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
         drop(store);
         let _ = std::fs::remove_file(path);
     }
