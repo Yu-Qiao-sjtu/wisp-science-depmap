@@ -17,6 +17,42 @@ async function open(page: Page, query = "") {
   await expect(page.getByTestId("research-journey")).toBeVisible();
 }
 
+for (const platform of ["Windows NT 10.0; Win64; x64", "Macintosh; Intel Mac OS X 10_15_7"]) {
+  test(`research journey respects the title bar on ${platform}`, async ({ browser }) => {
+    const context = await browser.newContext({ userAgent: `Mozilla/5.0 (${platform}) AppleWebKit/537.36 Chrome/136 Safari/537.36` });
+    const page = await context.newPage();
+    await page.addInitScript(tauriMock);
+    await open(page);
+    const journey = page.getByTestId("research-journey");
+    const windows = platform.startsWith("Windows");
+    for (const width of [1488, 800, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(journey).toHaveCSS("top", windows ? "38px" : "0px");
+      const bounds = (await journey.boundingBox())!;
+      expect(bounds.y + bounds.height).toBe(900);
+      if (windows) {
+        const titlebar = page.locator(".window-titlebar");
+        const header = (await titlebar.boundingBox())!;
+        expect(bounds.y).toBeGreaterThanOrEqual(header.y + header.height);
+        await page.getByRole("button", { name: "Minimize", exact: true }).click({ trial: true });
+        await page.getByTestId("window-maximize").click({ trial: true });
+        await page.locator(".window-close").click({ trial: true });
+      } else {
+        await expect(page.locator(".window-titlebar")).toHaveCount(0);
+      }
+    }
+    if (windows) {
+      await page.setViewportSize({ width: 1488, height: 900 });
+      await page.getByRole("button", { name: "File", exact: true }).click();
+      await expect(page.getByRole("menuitem", { name: "New session Ctrl+N", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.locator(".window-menu-drop")).toHaveCount(0);
+      await expect(journey).toBeVisible();
+    }
+    await context.close();
+  });
+}
+
 test("Chinese research journey naming is consistent across navigation and page controls", async ({ page }) => {
   await open(page, "?mockLocale=zh&mockJourney=design");
   const journey = page.getByTestId("research-journey");
@@ -27,6 +63,67 @@ test("Chinese research journey naming is consistent across navigation and page c
   await expect(journey.getByRole("button", {name:"关闭研究历程",exact:true})).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(journey).toHaveCount(0);
+});
+
+test("run record separates metadata and logs, fits long content and keeps its close button visible", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1488, height: 1058 });
+  await open(page, "?mockLocale=zh&mockJourney=design");
+  const command = "& 'C:\\Users\\researcher\\AppData\\Roaming\\science.wisp-science\\wisp-science\\python\\.venv\\Scripts\\python.exe' plant-sc-papers/scripts/02_filter_classify.py";
+  const output = Array.from({ length: 80 }, (_, i) => `记录 ${i}: ${"normalized_counts_".repeat(12)}`).join("\n");
+  await page.evaluate(({ command, output }) => {
+    Object.assign((window as any).__mockRuns.find((run: any) => run.id === "run-local-002"), {
+      title: "重跑文献分类并检查规则修复", status: "succeeded", context_id: "local",
+      command, stdout_tail: output, stderr_tail: "  \n", exit_code: 0,
+      started_at: 1788933600, ended_at: 1788933660,
+    });
+  }, { command, output });
+  await page.locator(".journey-activity").first().click();
+  const dialog = page.getByRole("dialog", { name: "运行记录", exact: true });
+  await expect(dialog.locator(".journey-run-status")).toHaveText("已完成");
+  await expect(dialog.locator(".journey-run-meta")).toContainText("local");
+  await expect(dialog.locator(".journey-run-meta")).toContainText("2026-09-09");
+  await expect(dialog.getByRole("region", { name: "执行命令", exact: true }).locator("pre")).toHaveText(command);
+  await expect(dialog.getByRole("region", { name: "标准输出 · 日志尾部", exact: true }).locator("pre")).toHaveText(output);
+  await expect(dialog.getByRole("region", { name: "标准错误 · 日志尾部", exact: true })).toContainText("暂无标准错误输出");
+  await expect(dialog.locator("pre")).toHaveCount(2);
+  expect((await dialog.boundingBox())!.width).toBeGreaterThan(800);
+  const body = dialog.locator(".journey-run-body");
+  expect(await body.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  for (const width of [1488, 800, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const bounds = (await dialog.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(900);
+    expect(await body.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await expect(dialog.getByRole("button", { name: "关闭运行记录", exact: true })).toBeInViewport();
+    await body.evaluate(el => { el.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath(`run-record-${width}.png`), animations: "disabled" });
+  }
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("research-journey")).toBeVisible();
+});
+
+test("run record shows failure output and explicit missing values", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => {
+    Object.assign((window as any).__mockRuns.find((run: any) => run.id === "run-local-002"), {
+      status: "failed", command: null, stdout_tail: null,
+      stderr_tail: "Traceback: input file missing", exit_code: 1, started_at: null, ended_at: null,
+    });
+  });
+  await page.locator(".journey-activity").first().click();
+  const dialog = page.getByRole("dialog", { name: "Run record", exact: true });
+  await expect(dialog.locator(".journey-run-status")).toHaveText("Failed");
+  await expect(dialog.locator(".journey-run-meta dd")).toHaveText(["local", "1", "Not recorded", "Not recorded"]);
+  await expect(dialog.getByRole("region", { name: "Command", exact: true })).toContainText("No command recorded");
+  await expect(dialog.getByRole("region", { name: "Standard output · log tail", exact: true })).toContainText("No standard output recorded");
+  await expect(dialog.locator("pre")).toHaveText("Traceback: input file missing");
+  await dialog.getByRole("button", { name: "Close run record", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("research-journey")).toBeVisible();
 });
 
 test("daily history groups sessions, opens exact versions and preserves Escape layers", async ({ page }) => {

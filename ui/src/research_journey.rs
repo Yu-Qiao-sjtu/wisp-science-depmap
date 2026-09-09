@@ -580,6 +580,48 @@ fn JourneyRun(locale: RwSignal<Locale>, run_id: String, on_close: Callback<()>) 
     );
     view! {<div class="overlay journey-detail-overlay" on:click=move |_|on_close.call(())><section class="modal journey-run" role="dialog" aria-modal="true" aria-label=move ||j(locale.get(),"Run record","运行记录") on:click=|ev|ev.stop_propagation()>
         <div class="journey-dialog-head"><h2>{j(locale.get(),"Run record","运行记录")}</h2><button class="journey-icon" aria-label=move ||j(locale.get(),"Close run record","关闭运行记录") on:click=move |_|on_close.call(())>{compose_icon("close")}</button></div>
-        {move ||match detail.get(){None=>view!{<p role="status">{t(locale.get(),"loading")}</p>}.into_view(),Some(Err(e))=>view!{<p role="alert">{e}</p>}.into_view(),Some(Ok(run))=>view!{<h3>{run.title}</h3><p>{format!("{} · {}",run.context_id,status(locale.get(),&run.status))}</p>{run.command.map(|cmd|view!{<pre>{cmd}</pre>})}{run.stdout_tail.map(|out|view!{<pre>{out}</pre>})}{run.stderr_tail.map(|out|view!{<pre class="journey-error">{out}</pre>})}}.into_view()}}
+        <div class="journey-run-body">
+            {move || match detail.get() {
+                None => view!{<p role="status">{t(locale.get(),"loading")}</p>}.into_view(),
+                Some(Err(e)) => view!{<p class="journey-error" role="alert">{e}</p>}.into_view(),
+                Some(Ok(run)) => {
+                    let loc = locale.get();
+                    let timestamp = |value: Option<i64>| value.map(|ts|format!("{} {}",day_key(ts),clock(ts))).unwrap_or_else(||j(loc,"Not recorded","未记录").into());
+                    let failed = matches!(run.status.as_str(), "failed" | "lost");
+                    let succeeded = run.status == "succeeded";
+                    view! {
+                        <div class="journey-run-summary">
+                            <h3>{run.title}</h3>
+                            <span class="journey-run-status" class:succeeded=succeeded class:failed=failed>
+                                {compose_icon(if succeeded {"check"} else if failed {"circle-alert"} else {"clock"})}
+                                {status(loc,&run.status)}
+                            </span>
+                        </div>
+                        <dl class="journey-run-meta">
+                            <div><dt>{j(loc,"Execution context","运行环境")}</dt><dd>{run.context_id}</dd></div>
+                            <div><dt>{j(loc,"Exit code","退出码")}</dt><dd>{run.exit_code.map(|code|code.to_string()).unwrap_or_else(||j(loc,"Not recorded","未记录").into())}</dd></div>
+                            <div><dt>{j(loc,"Started (local time)","开始时间（本地）")}</dt><dd>{timestamp(run.started_at)}</dd></div>
+                            <div><dt>{j(loc,"Ended (local time)","结束时间（本地）")}</dt><dd>{timestamp(run.ended_at)}</dd></div>
+                        </dl>
+                        <JourneyRunText title=j(loc,"Command","执行命令") text=run.command empty=j(loc,"No command recorded","未记录执行命令")/>
+                        <JourneyRunText title=j(loc,"Standard output · log tail","标准输出 · 日志尾部") text=run.stdout_tail empty=j(loc,"No standard output recorded","暂无标准输出")/>
+                        <JourneyRunText title=j(loc,"Standard error · log tail","标准错误 · 日志尾部") text=run.stderr_tail empty=j(loc,"No standard error recorded","暂无标准错误输出")/>
+                    }.into_view()
+                }
+            }}
+        </div>
     </section></div>}
+}
+
+#[component]
+fn JourneyRunText(title: &'static str, text: Option<String>, empty: &'static str) -> impl IntoView {
+    view! {
+        <section class="journey-run-section" aria-label=title>
+            <h4>{title}</h4>
+            {match text.filter(|value| !value.trim().is_empty()) {
+                Some(value) => view!{<pre>{value}</pre>}.into_view(),
+                None => view!{<p>{empty}</p>}.into_view(),
+            }}
+        </section>
+    }
 }
