@@ -7236,6 +7236,7 @@ pub fn run() {
             session_commands::list_recent_sessions,
             session_commands::latest_used_session,
             project_commands::list_projects,
+            project_commands::list_workspace_projects,
             app_commands::pick_directory,
             app_commands::pick_executable_file,
             app_commands::download_file,

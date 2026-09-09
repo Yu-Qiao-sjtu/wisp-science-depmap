@@ -13130,6 +13130,77 @@ test("import can open an existing folder in place without copying it", async ({ 
   await expect.poll(() => lastInvokeArgs(page, "import_project")).toBeNull();
 });
 
+test("opening a registered folder offers every project identity before switching", async ({ page }) => {
+  await page.goto("/?mockWorkspaceProjects=multiple");
+  const openFolder = async () => {
+    await page.getByRole("button", { name: "Import project" }).click();
+    await page.getByTestId("project-import-options")
+      .getByRole("button", { name: "Open a folder in place" }).click();
+  };
+  await openFolder();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker).toBeVisible();
+  await expect(picker.locator("[data-project-id]")).toHaveCount(4);
+  await expect(picker.locator('[data-project-id="P15"]')).toContainText("31 sessions");
+  await expect(picker.locator('[data-project-id="P37"]')).toContainText("9 sessions");
+  await expect(picker.locator('[data-project-id="P15"]')).toContainText("ID: P15");
+  await expect.poll(() => lastInvokeArgs(page, "list_workspace_projects"))
+    .toMatchObject({ workspaceDir: "/mock/root/new-project" });
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
+  await expect(page.locator(".projects-screen")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+
+  await openFolder();
+  await picker.locator('[data-project-id="P15"]').click();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "P15" });
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+  await expect.poll(() => lastInvokeArgs(page, "recover_workspace_sessions")).toBeNull();
+});
+
+test("opening a folder with one existing project reuses its identity", async ({ page }) => {
+  await page.goto("/?mockWorkspaceProjects=single");
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page.getByTestId("project-import-options")
+    .getByRole("button", { name: "Open a folder in place" }).click();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker.locator("[data-project-id]")).toHaveCount(1);
+  await picker.locator('[data-project-id="P37"]').click();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "P37" });
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+});
+
+test("registered folder chooser respects hidden project identities", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("wisp-privacy-mode-active", "1");
+    localStorage.setItem("wisp-privacy-mode-projects", JSON.stringify(["P15"]));
+  });
+  await page.goto("/?mockWorkspaceProjects=multiple");
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page.getByTestId("project-import-options")
+    .getByRole("button", { name: "Open a folder in place" }).click();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker.locator("[data-project-id]")).toHaveCount(3);
+  await expect(picker.locator('[data-project-id="P15"]')).toHaveCount(0);
+  await expect(picker).toContainText("Projects hidden by Privacy mode are omitted");
+});
+
+for (const mode of ["error", "malformed"]) {
+  test(`workspace lookup ${mode} does not fall through to registration`, async ({ page }) => {
+    await page.goto(`/?mockWorkspaceProjects=${mode}`);
+    await page.getByRole("button", { name: "Import project" }).click();
+    await page.getByTestId("project-import-options")
+      .getByRole("button", { name: "Open a folder in place" }).click();
+    await expect(page.locator(".project-open-error")).toBeVisible();
+    await expect(page.locator("#new-project-name")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-project-picker")).toHaveCount(0);
+    await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+    await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+  });
+}
+
 test("workspace recovery previews archived conversations before transactional import", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Import project" }).click();

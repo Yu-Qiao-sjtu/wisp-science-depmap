@@ -134,6 +134,33 @@ pub(super) async fn list_projects(
     Ok(out)
 }
 
+fn matching_workspace_projects(
+    projects: Vec<ProjectSummary>,
+    workspace: &Path,
+) -> Vec<ProjectSummary> {
+    // A path match identifies candidates, never a project identity to merge or
+    // silently select. Older databases can contain several ids for one folder.
+    projects
+        .into_iter()
+        .filter(|project| same_workspace_path(workspace, Path::new(&project.workspace_dir)))
+        .collect()
+}
+
+#[tauri::command]
+pub(super) async fn list_workspace_projects(
+    state: State<'_, AppState>,
+    workspace_dir: String,
+) -> Result<Vec<ProjectSummary>, String> {
+    let workspace = Path::new(workspace_dir.trim());
+    if !workspace.is_dir() {
+        return Err("The selected workspace is not a directory.".into());
+    }
+    Ok(matching_workspace_projects(
+        list_projects(state).await?,
+        workspace,
+    ))
+}
+
 #[tauri::command]
 pub(super) async fn create_project(
     state: State<'_, AppState>,
@@ -967,6 +994,8 @@ pub(super) async fn get_project_info(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
         app_window_title, blank_window_url, cascaded_window_position, load_window_active_projects,
         next_blank_window_label, read_project_agent_context, remember_window_project,
@@ -1013,6 +1042,108 @@ mod tests {
         assert!(same_workspace_path(&root, &root.join(".")));
         assert!(!same_workspace_path(&root, &root.join("other")));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workspace_lookup_keeps_every_identity_and_its_session_count() {
+        let root =
+            std::env::temp_dir().join(format!("wisp_workspace_ids_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let summary = |id: &str, path: &Path, count: i64| super::ProjectSummary {
+            id: id.into(),
+            name: "Same name".into(),
+            description: String::new(),
+            workspace_dir: path.to_string_lossy().into_owned(),
+            session_count: count,
+            artifact_count: 0,
+            updated_at: 1,
+            running_count: 0,
+            needs_you_count: 0,
+            sync_configured: false,
+            last_synced_at: None,
+        };
+        let projects = vec![
+            summary("P37", &root, 9),
+            summary("P15", &root.join("."), 31),
+            summary("P14", &root, 2),
+            summary("P19", &root, 3),
+            summary("unrelated", &root.join("other"), 100),
+        ];
+        let matches = super::matching_workspace_projects(projects, &root);
+        assert_eq!(
+            matches
+                .iter()
+                .map(|p| (p.id.as_str(), p.session_count))
+                .collect::<Vec<_>>(),
+            vec![("P37", 9), ("P15", 31), ("P14", 2), ("P19", 3)]
+        );
+        // The new command reuses the shared UI contract, including full ids.
+        let ui: Vec<wisp_dto::ProjectSummary> =
+            serde_json::from_value(serde_json::to_value(&matches).unwrap()).unwrap();
+        assert_eq!(ui[1].id, "P15");
+        assert_eq!(ui[1].session_count, 31);
+        assert!(super::matching_workspace_projects(matches, &root.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_lookup_resolves_symlink_aliases() {
+        let root =
+            std::env::temp_dir().join(format!("wisp_workspace_alias_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("original")).unwrap();
+        std::os::unix::fs::symlink(root.join("original"), root.join("alias")).unwrap();
+        assert!(same_workspace_path(
+            &root.join("original"),
+            &root.join("alias")
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_lookup_resolves_windows_case_and_separators() {
+        let root =
+            std::env::temp_dir().join(format!("wisp_workspace_case_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let variant = format!(
+            "{}/",
+            root.to_string_lossy()
+                .to_ascii_uppercase()
+                .replace('\\', "/")
+        );
+        assert!(same_workspace_path(&root, Path::new(&variant)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn restart_keeps_selected_identity_when_workspace_has_duplicate_projects() {
+        let root = std::env::temp_dir().join(format!("wisp_restore_ids_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("test.sqlite");
+        let store = wisp_store::Store::open(&database).await.unwrap();
+        for id in ["P15", "P14", "P19", "P37"] {
+            store
+                .create_project(id, "Same name", &root.to_string_lossy())
+                .await
+                .unwrap();
+        }
+        store.set_setting("active_project_id", "P37").await.unwrap();
+        remember_window_project(&store, "main", "P15").await;
+        drop(store);
+        let store = wisp_store::Store::open(&database).await.unwrap();
+        assert_eq!(startup_main_project_id(&store).await, "P15");
+        assert_eq!(store.list_projects().await.unwrap().len(), 4);
+        assert_eq!(
+            store
+                .get_setting("active_project_id")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("P37")
+        );
+        drop(store);
         let _ = std::fs::remove_dir_all(root);
     }
 
