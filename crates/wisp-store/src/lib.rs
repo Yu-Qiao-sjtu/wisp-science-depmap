@@ -27,6 +27,7 @@ mod project_sync;
 mod project_transfer;
 mod projects;
 mod provenance;
+mod publication_sources;
 mod publications;
 mod remote_staging;
 mod research;

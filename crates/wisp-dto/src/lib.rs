@@ -3548,6 +3548,27 @@ pub struct PublicationInfo {
     pub description: String,
 }
 
+/// A bounded, project-scoped source choice. File choices name an immutable
+/// ArtifactVersion; message previews start at byte zero of persisted text.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PublicationSourceChoice {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub text: Option<String>,
+    #[serde(default)]
+    pub text_sha256: Option<String>,
+    pub frame_id: Option<String>,
+    pub message_seq: Option<i64>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublicationSourcePage {
+    pub sources: Vec<PublicationSourceChoice>,
+    pub has_more: bool,
+}
+
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationRevisionInfo {
     pub id: String,
@@ -3669,6 +3690,12 @@ pub struct PublicationLineageInfo {
     pub checksum: Option<String>,
     pub capture_timing: Option<String>,
     pub producing_run_id: Option<String>,
+    #[serde(default)]
+    pub producing_run_title: Option<String>,
+    #[serde(default)]
+    pub input_labels: Vec<String>,
+    #[serde(default)]
+    pub code_labels: Vec<String>,
     pub run_input_count: usize,
     pub run_output_count: usize,
     pub code_snapshot_count: usize,

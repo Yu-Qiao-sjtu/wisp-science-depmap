@@ -27,6 +27,9 @@ pub(crate) struct PublicationLineageSummary {
     pub checksum: Option<String>,
     pub capture_timing: Option<ArtifactCaptureTiming>,
     pub producing_run_id: Option<String>,
+    pub producing_run_title: Option<String>,
+    pub input_labels: Vec<String>,
+    pub code_labels: Vec<String>,
     pub run_input_count: usize,
     pub run_output_count: usize,
     pub code_snapshot_count: usize,
@@ -58,6 +61,7 @@ pub(crate) struct PublicationWorkspace {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkspaceSourceKind {
     Artifact,
+    ArtifactVersion,
     Run,
     ExecutionLog,
     MessageSpan,
@@ -140,6 +144,22 @@ async fn revision_project(store: &Store, revision_id: &str) -> anyhow::Result<St
     Ok(publication.project_id)
 }
 
+pub(crate) async fn validate_publication_revision(
+    state: &AppState,
+    window_label: &str,
+    revision_id: &str,
+) -> Result<(), String> {
+    let project = publication_mainline_project(state, window_label).await?;
+    if revision_project(&state.store, revision_id)
+        .await
+        .map_err(|e| e.to_string())?
+        != project.id
+    {
+        return Err("Publication revision does not belong to the active project".into());
+    }
+    Ok(())
+}
+
 fn readiness_from_report(
     report: wisp_store::PublicationReadinessReport,
 ) -> anyhow::Result<PublicationReadiness> {
@@ -180,6 +200,9 @@ async fn lineage_summary(
     let mut checksum = None;
     let mut capture_timing = None;
     let mut producing_run_id = binding.run_id.clone();
+    let mut producing_run_title = None;
+    let mut input_labels = Vec::new();
+    let mut code_labels = Vec::new();
     let mut environment = false;
     let mut anchored = false;
 
@@ -253,6 +276,7 @@ async fn lineage_summary(
     };
     if let Some(run_id) = producing_run_id.as_deref() {
         if let Some(run) = store.get_run(run_id).await? {
+            producing_run_title = Some(run.title.clone());
             source_label = if binding.source_kind == EvidenceSourceKind::Run {
                 run.title.clone()
             } else {
@@ -262,6 +286,18 @@ async fn lineage_summary(
             let inputs = store.list_run_inputs(run_id).await?;
             let outputs = store.list_run_outputs(run_id).await?;
             let code = store.list_run_code_snapshots(run_id).await?;
+            input_labels = inputs
+                .iter()
+                .map(|input| input.source_ref.clone())
+                .collect();
+            code_labels = code
+                .iter()
+                .map(|code| {
+                    code.source_path
+                        .clone()
+                        .unwrap_or_else(|| code.source_kind.clone())
+                })
+                .collect();
             run_input_count = inputs.len();
             run_output_count = outputs.len();
             code_snapshot_count = code.len();
@@ -299,6 +335,9 @@ async fn lineage_summary(
         checksum,
         capture_timing,
         producing_run_id,
+        producing_run_title,
+        input_labels,
+        code_labels,
         run_input_count,
         run_output_count,
         code_snapshot_count,
@@ -499,6 +538,10 @@ async fn bind_evidence(
         anyhow::bail!("Publication revision does not belong to the active project");
     }
     let (source_kind, source_id) = match input.source_kind {
+        // The store validates project ownership while resolving this exact ID.
+        WorkspaceSourceKind::ArtifactVersion => {
+            (EvidenceSourceKind::ArtifactVersion, input.source_id.clone())
+        }
         WorkspaceSourceKind::Artifact => {
             let context = store
                 .get_latest_artifact_version_context(&input.source_id)
@@ -548,6 +591,22 @@ async fn bind_evidence(
             visibility: input.visibility,
         })
         .await
+}
+
+#[tauri::command]
+pub(super) async fn list_publication_sources(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    kind: String,
+    query: String,
+    offset: u32,
+) -> Result<wisp_dto::PublicationSourcePage, String> {
+    let project = publication_mainline_project(&state, window.label()).await?;
+    state
+        .store
+        .publication_source_page(&project.id, &kind, &query, offset)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -770,7 +829,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let store = Store::open(&root.join("store.sqlite")).await.unwrap();
+        // These command tests exercise metadata, not database persistence. Keep
+        // the database in memory so cleanup never removes an open SQLite file
+        // on Windows; the project directory still validates path ownership.
+        let store = Store::open(std::path::Path::new(":memory:")).await.unwrap();
         store
             .create_project("project", "Project", &root.to_string_lossy())
             .await

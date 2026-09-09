@@ -15,6 +15,7 @@ mod overlays;
 mod pet;
 mod project_landing;
 mod publication;
+mod publication_sources;
 mod research;
 mod research_journey;
 mod runtime_views;
@@ -60,7 +61,7 @@ use overlays::{
 };
 use pet::{PetDesktop, PetOverlay};
 use project_landing::{ProjectLanding, ProjectLandingState};
-use publication::{PublicationEvidenceSource, PublicationWorkspaceModal};
+use publication::{PublicationEvidenceSource, PublicationWorkspacePage};
 use research::refresh_research_graph;
 use research_journey::ResearchJourneyView;
 use serde_wasm_bindgen::{from_value, to_value};
@@ -1549,6 +1550,17 @@ fn App() -> impl IntoView {
     let show_research_graph = create_rw_signal(false);
     let show_publication_workspace = create_rw_signal(false);
     let publication_binding_source = create_rw_signal::<Option<PublicationEvidenceSource>>(None);
+    create_effect(move |previous: Option<Option<String>>| {
+        let project = project_info.get().map(|project| project.id);
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous != &project)
+        {
+            show_publication_workspace.set(false);
+            publication_binding_source.set(None);
+        }
+        project
+    });
     create_effect(move |_| {
         side_chat_items.with(|items| items.len());
         if !show_right.get() || right_tab.get() != RightTab::SideChat {
@@ -5389,6 +5401,8 @@ fn App() -> impl IntoView {
     let remove_specialist_fn = move |id: String| model_settings.remove_specialist(id);
 
     let start_new_session = Callback::new(move |_: ()| {
+        show_publication_workspace.set(false);
+        publication_binding_source.set(None);
         if demo_mode.get_untracked() {
             return;
         }
@@ -5692,6 +5706,8 @@ fn App() -> impl IntoView {
     );
 
     let load_session = Callback::new(move |id: String| {
+        show_publication_workspace.set(false);
+        publication_binding_source.set(None);
         show_research_graph.set(false);
         attachments.set(vec![]);
         sel_artifact.set(0);
@@ -8563,12 +8579,7 @@ fn App() -> impl IntoView {
             modal_artifact.set(None);
             return;
         }
-        if show_publication_workspace.get() {
-            ev.prevent_default();
-            show_publication_workspace.set(false);
-            publication_binding_source.set(None);
-            return;
-        }
+
         if inbox_open.get() {
             ev.prevent_default();
             inbox_open.set(false);
@@ -10382,16 +10393,6 @@ fn App() -> impl IntoView {
                 on_session=Callback::new(move |id| { show_research_graph.set(false); load_session.call(id); })
             />
         })}
-        {move || show_publication_workspace.get().then(|| view! {
-            <PublicationWorkspaceModal
-                locale=locale.read_only()
-                binding_source=publication_binding_source
-                on_close=Callback::new(move |_| {
-                    publication_binding_source.set(None);
-                    show_publication_workspace.set(false);
-                })
-            />
-        })}
         <SshConnectivityOverlay
             state=SshConnectivityOverlayState {
                 locale, ssh_connectivity_modal, ssh_connectivity_busy, execution_contexts,
@@ -10425,20 +10426,23 @@ fn App() -> impl IntoView {
             })
             toggle_proj_menu=Callback::new(toggle_proj_menu)
             open_proj_settings=Callback::new(open_proj_settings)
-            switch_project=switch_project
+            switch_project=Callback::new(move |id| { show_publication_workspace.set(false); publication_binding_source.set(None); switch_project.call(id); })
             new_session=Callback::new(move |ev| { show_research_graph.set(false); new_session(ev); })
             open_search=Callback::new(move |_| {
                 action_palette_open.set(false);
                 command_palette_open.set(true);
             })
             new_folder=Callback::new(new_folder)
-            open_files=Callback::new(move |ev| { show_research_graph.set(false); open_files(ev); })
+            open_files=Callback::new(move |ev| { show_publication_workspace.set(false); show_research_graph.set(false); open_files(ev); })
             research_journey_open=show_research_graph.read_only()
             open_research_graph=Callback::new(move |_| {
+                show_publication_workspace.set(false);
                 show_research_graph.set(true);
                 refresh_research_graph(research_graph);
             })
+            publication_open=show_publication_workspace.read_only()
             open_publication_workspace=Callback::new(move |_| {
+                show_research_graph.set(false);
                 publication_binding_source.set(None);
                 show_publication_workspace.set(true);
             })
@@ -10505,7 +10509,18 @@ fn App() -> impl IntoView {
             on_sidebar_resize_start=Callback::new(on_sidebar_resize_start)
         />
 
-        <div class="workspace-area">
+        <div class="workspace-area" class:publication-active=move || show_publication_workspace.get()>
+        {move || show_publication_workspace.get().then(|| view! {
+            <PublicationWorkspacePage
+                locale=locale.read_only()
+                binding_source=publication_binding_source
+                on_close=Callback::new(move |_| {
+                    publication_binding_source.set(None);
+                    show_publication_workspace.set(false);
+                })
+            />
+        })}
+
         <div class="workspace-main">
         <main class="center" class:split=move || center_split_on.get()
             style=move || center_chat_w.get()
@@ -16356,6 +16371,8 @@ fn App() -> impl IntoView {
             runtime_interpreter_form=runtime_interpreter_form object_states=runtime_object_states
             locale=locale selection_popup=selection_popup
             on_use_in_publication=Callback::new(move |source| {
+                context_details_modal.set(None);
+                show_research_graph.set(false);
                 publication_binding_source.set(Some(source));
                 show_publication_workspace.set(true);
             })
