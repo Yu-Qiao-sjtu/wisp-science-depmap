@@ -12,6 +12,30 @@
   },
   "event_definitions": ["AnySelected", "Damaging", "Hotspot", "ProteinChange"],
   "scopes": ["global", "lineage"],
+  "anchor_selection_contract": {
+    "document": "锚点基因筛选方法.md",
+    "lineage_field": "OncotreeLineage",
+    "cohort_rule": "Intersect each event source independently with Model and CRISPRGeneDependency by ModelID.",
+    "event_states": {
+      "Damaging": "value > 0 is mutant; explicit 0 is wild type; missing is excluded",
+      "Hotspot": "value > 0 is mutant; explicit 0 is wild type; missing is excluded",
+      "AnySelected": "a retained model-gene record is observed; use for landscape only",
+      "ProteinChange": "build an allele-specific event from HugoSymbol plus ProteinChange on demand"
+    },
+    "thresholds": {
+      "standard_candidate": {"min_mut": 3, "min_wt": 5},
+      "strict_candidate": {"min_mut": 10, "min_wt": 5}
+    },
+    "priority_rules": {
+      "tumor_suppressor": "prefer Damaging",
+      "oncogene": "prefer Hotspot",
+      "dual_role": "retain Damaging and Hotspot as separate events",
+      "unclassified": "retain with an explicit unclassified annotation"
+    },
+    "common_essential": "Retain and flag mutation anchors; use filtering or down-weighting on the dependency-target side as sensitivity analysis.",
+    "druggability": "Do not remove a mutation anchor because it is druggable.",
+    "interpretation": "Passing the anchor filter means analyzable sample support, not a significant dependency association."
+  },
   "knowledge_assets": {
     "all_mutation_gene_annotations": {
       "csv": "gene_annotation_cache_26Q1/all_mutation_gene_annotations.csv",
