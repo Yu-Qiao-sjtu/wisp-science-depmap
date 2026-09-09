@@ -16,6 +16,7 @@ mod pet;
 mod project_landing;
 mod publication;
 mod research;
+mod research_calendar;
 mod research_journey;
 mod runtime_views;
 mod session_modals;
@@ -1547,6 +1548,10 @@ fn App() -> impl IntoView {
     // sidebar modal is opened rather than kept live.
     let research_graph = create_rw_signal(ResearchGraph::default());
     let show_research_graph = create_rw_signal(false);
+    let home_calendar_open = create_rw_signal(false);
+    let home_dialog_open = create_rw_signal(false);
+    let calendar_journey_request = create_rw_signal(None::<(String, i64)>);
+    let journey_initial_day = create_rw_signal(None::<i64>);
     let show_publication_workspace = create_rw_signal(false);
     let publication_binding_source = create_rw_signal::<Option<PublicationEvidenceSource>>(None);
     create_effect(move |_| {
@@ -8586,6 +8591,11 @@ fn App() -> impl IntoView {
         }
 
         if show_projects.get() {
+            if home_calendar_open.get() && !home_dialog_open.get() {
+                ev.prevent_default();
+                home_calendar_open.set(false);
+                return;
+            }
             if project_transfer
                 .get()
                 .is_some_and(|transfer| transfer.is_complete() || transfer.is_failed())
@@ -9038,6 +9048,13 @@ fn App() -> impl IntoView {
                 status.set(message);
                 return;
             }
+            let calendar_day = calendar_journey_request
+                .get_untracked()
+                .filter(|(id, _)| id == &project_id)
+                .map(|(_, day)| day);
+            calendar_journey_request.set(None);
+            home_calendar_open.set(false);
+            journey_initial_day.set(None);
             let request_epoch = transition_epoch.get().wrapping_add(1);
             transition_epoch.set(request_epoch);
             *transition_target.borrow_mut() = Some(project_id.clone());
@@ -9150,7 +9167,9 @@ fn App() -> impl IntoView {
 
                 let session_id = match session_id {
                     Some(session_id) => Some(session_id),
-                    None if settings.get_untracked().resume_last_session => {
+                    None if calendar_day.is_none()
+                        && settings.get_untracked().resume_last_session =>
+                    {
                         invoke_latest_used_session().await
                     }
                     None => None,
@@ -9164,6 +9183,11 @@ fn App() -> impl IntoView {
                     return;
                 }
                 project_info.set(Some(project));
+                if let Some(day) = calendar_day {
+                    journey_initial_day.set(Some(day));
+                    show_research_graph.set(true);
+                    refresh_research_graph(research_graph);
+                }
                 if let Some(session_id) = session_id {
                     load_session.call(session_id);
                 }
@@ -10329,10 +10353,14 @@ fn App() -> impl IntoView {
                 demos, modal_artifact, locale, running, approval_pending,
                 sync_actions_available, command_palette_open, project_transfer,
                 privacy_mode_active, privacy_hidden_project_ids,
-                menu_new_project, menu_import_project,
+                menu_new_project, menu_import_project, home_calendar_open, home_dialog_open,
             }
             open_project=switch_project
             open_project_session=palette_open_session
+            open_project_journey=Callback::new(move |(id, day): (String, i64)| {
+                calendar_journey_request.set(Some((id.clone(), day)));
+                open_project_transition.call((id, None));
+            })
             open_scratch=open_scratch
             open_settings=Callback::new(move |section: Option<String>| open_settings_fn(section))
             open_library=Callback::new(move |_| show_library.set(true))
@@ -10372,6 +10400,7 @@ fn App() -> impl IntoView {
             <ResearchJourneyView
                 locale=locale
                 project_name=project_info.get().map(|p|p.name.clone()).unwrap_or_default()
+                initial_day=journey_initial_day.get_untracked()
                 left=Signal::derive(move || if show_sidebar.get() { sidebar_w.get() } else { 0.0 })
                 graph=research_graph.read_only()
                 artifact_open=Signal::derive(move || modal_artifact.get().is_some()
@@ -10435,6 +10464,7 @@ fn App() -> impl IntoView {
             open_files=Callback::new(move |ev| { show_research_graph.set(false); open_files(ev); })
             research_journey_open=show_research_graph.read_only()
             open_research_graph=Callback::new(move |_| {
+                journey_initial_day.set(None);
                 show_research_graph.set(true);
                 refresh_research_graph(research_graph);
             })

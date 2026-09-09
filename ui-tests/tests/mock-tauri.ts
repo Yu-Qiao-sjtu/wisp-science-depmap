@@ -1743,6 +1743,20 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
             return null;
           }
+          case "get_research_calendar": {
+            const mode = new URL(location.href).searchParams.get("mockCalendar");
+            if (mode === "error" || (window as any).__calendarError) throw new Error("Calendar store unavailable");
+            const ids = plain(arg("projectIds")) as string[];
+            const delay = Number((window as any).__calendarDelay ?? 0);
+            const extra = [journeyEntry("other-finding", "finding", "Other project finding", 0, {manual:true}), journeyEntry("other-yesterday", "run", "Other project run failed", 1, {status:"failed"})];
+            const result = ids.map(id => ({project_id:id,
+              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000},
+              error: mode === "partial" && id === "other" ? "Project temporarily unavailable" : null,
+            }));
+            for (const row of result) if(row.error) row.history.entries=[];
+            if (delay) await new Promise(resolve=>setTimeout(resolve,delay));
+            return result;
+          }
           case "get_research_journey": {
             const mode = new URL(location.href).searchParams.get("mockJourney");
             if (mode === "error" || (window as any).__journeyError) throw new Error("Research store unavailable");
