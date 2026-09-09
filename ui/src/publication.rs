@@ -558,6 +558,7 @@ pub(super) fn PublicationWorkspacePage(
                     if !has_publications {
                         view! {
                             <div class="publication-create">
+                                <div class="publication-create-intro">
                                 <h3>{t(locale.get(), "publication.create")}</h3>
                                 <p class="publication-help">{t(locale.get(), "publication.create_hint")}</p>
                                 <ol class="publication-onboarding">
@@ -565,6 +566,8 @@ pub(super) fn PublicationWorkspacePage(
                                     <li>{t(locale.get(), "publication.explain_use")}</li>
                                     <li>{t(locale.get(), "publication.tab_readiness")}</li>
                                 </ol>
+                                </div>
+                                <div class="publication-create-fields">
                                 <label>
                                     <span>{t(locale.get(), "publication.paper_title")}</span>
                                     <input type="text" data-testid="publication-new-title"
@@ -598,6 +601,7 @@ pub(super) fn PublicationWorkspacePage(
                                     }>
                                     {t(locale.get(), "publication.create_action")}
                                 </button>
+                                </div>
                             </div>
                         }.into_view()
                     } else {
