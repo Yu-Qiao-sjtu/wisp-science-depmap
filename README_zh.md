@@ -5,7 +5,6 @@
 **面向 DepMap 分析的本地优先 AI 科研工作台。**
 
 通过可复现脚本、分析模块和 AI 科研智能体，探索 DepMap 的突变、表达量与 CRISPR 基因依赖数据。
-（面向智能科研实践的工作空间）
 
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/v/release/Yu-Qiao-sjtu/wisp-science-depmap" alt="Release"></a>
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/downloads/Yu-Qiao-sjtu/wisp-science-depmap/total" alt="下载量"></a>
