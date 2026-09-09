@@ -3,12 +3,15 @@ use super::*;
 #[component]
 pub(crate) fn ProjectsScreen(
     locale: RwSignal<Locale>,
+    calendar_open: RwSignal<bool>,
+    dialog_open: RwSignal<bool>,
     running: RwSignal<HashSet<String>>,
     approval_pending: ReadSignal<HashSet<String>>,
     sync_actions_available: ReadSignal<bool>,
     open_error: RwSignal<Option<String>>,
     on_open: Callback<String>,
     on_open_session: Callback<(String, String)>,
+    on_open_journey: Callback<(String, i64)>,
     on_open_artifact: Callback<(String, String, String)>,
     on_open_settings: Callback<()>,
     on_open_library: Callback<()>,
@@ -581,6 +584,23 @@ pub(crate) fn ProjectsScreen(
         });
     });
 
+    // The root Escape stack closes the calendar only after these visually
+    // higher, component-owned dialogs have had their turn.
+    create_effect(move |_| {
+        dialog_open.set(
+            confirm_delete_data.get()
+                || settings_confirm_context.get()
+                || settings_project_id.get().is_some()
+                || recovery_preview.get().is_some()
+                || import_options_open.get()
+                || pending_delete.get().is_some()
+                || sync_conflict_project.get().is_some()
+                || search_open.get()
+                || creating.get(),
+        );
+    });
+    on_cleanup(move || dialog_open.set(false));
+
     // Local Escape stack — ProjectsScreen owns its own modals, so the App
     // window listener cannot see `creating` / `pending_delete`. Opening a
     // project disposes this component, so the listener has to go with it:
@@ -654,13 +674,17 @@ pub(crate) fn ProjectsScreen(
             }
             ev.prevent_default();
         }>
-            <div class="projects-head">
+            <div class="projects-head" prop:inert=move ||calendar_open.get()>
                 <div class="projects-brand">
                     <h1 class="projects-title">
                         <span class="projects-brand-mark brand-wordmark" role="img" aria-label="Wisp Science"></span>
                     </h1>
                 </div>
                 <div class="projects-actions">
+                    <button type="button" class="projects-icon-btn" data-testid="open-research-calendar"
+                        title=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
+                        aria-label=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
+                        on:click=move |_| calendar_open.set(true)>{compose_icon("calendar")}</button>
                     <button type="button" class="projects-icon-btn"
                         title=move || t(locale.get(), "sidebar.library")
                         aria-label=move || t(locale.get(), "sidebar.library")
@@ -1149,7 +1173,16 @@ pub(crate) fn ProjectsScreen(
                     </div>
                 </div>
             })}
-            <div class="projects-cols">
+            {move || calendar_open.get().then(|| view! {<div class="home-calendar-page">
+            <crate::research_calendar::ResearchCalendar
+                locale=locale
+                projects=Signal::derive(move || projects.get().into_iter().filter(|p| !project_is_hidden(&p.id)).collect())
+                on_open_journey=on_open_journey
+                on_close=Callback::new(move |_|calendar_open.set(false))
+                project_transfer=project_transfer.read_only()
+            />
+            </div>})}
+            <div class="projects-cols" prop:inert=move ||calendar_open.get()>
                 <div class="projects-col">
                     <h2>{move || t(locale.get(), "projects.title")}</h2>
                     <button type="button" class="proj-card proj-example" on:click=move |_| on_open_demo.call(())>
@@ -1396,7 +1429,7 @@ pub(crate) fn ProjectsScreen(
                     }).collect_view()}
                 </div>
             </div>
-            <div class="projects-footer">
+            <div class="projects-footer" prop:inert=move ||calendar_open.get()>
                 <span>{move || t(locale.get(), "projects.star_hint")}</span>
                 <button type="button" class="projects-star-link"
                     on:click=move |_| open_external_url("https://github.com/xuzhougeng/wisp-science".into())>

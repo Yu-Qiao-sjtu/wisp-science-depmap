@@ -11452,7 +11452,7 @@ test("home search opens artifacts, sessions, and settings", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Back to app" })).toBeVisible();
   await page.locator(".settings-head-close").click();
 
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await expect(search).toBeVisible();
   await expect(page.locator(".project-search-row", { hasText: "nif3.treefile" })).toBeVisible();
@@ -11467,7 +11467,7 @@ test("home search opens artifacts, sessions, and settings", async ({ page }) => 
   await expect(page.locator(".am-name")).toHaveText("nif3.treefile");
   await page.locator(".artifact-modal").getByRole("button", { name: "Close panel" }).click();
 
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await search.fill("Enumerate");
   await expect(page.locator(".project-search-row", { hasText: "Enumerate MCP bio-tools databases" })).toBeVisible();
   await search.press("Enter");
@@ -11846,7 +11846,7 @@ test("branching from a paged transcript uses the global user-turn index", async 
 
 test("HTML artifact modal uses a desktop preview viewport", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("dashboard");
   await search.press("Enter");
@@ -12392,7 +12392,7 @@ test("real SnapGene annotations render in the real Motif MCP App", async ({ page
 
 test("Markdown artifact modal opens its rendered preview in center", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");
@@ -12411,7 +12411,7 @@ test("Markdown artifact modal opens its rendered preview in center", async ({ pa
 
 test("reverse preview selections anchor the action popup above the first selected line (#779)", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");
@@ -12455,7 +12455,7 @@ test("reverse preview selections anchor the action popup above the first selecte
 
 test("bound Markdown resources use immutable versions and a scrollable center preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12494,7 +12494,7 @@ test("bound Markdown resources use immutable versions and a scrollable center pr
 
 test("bound DOCX resources open their immutable preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12514,7 +12514,7 @@ test("bound DOCX resources open their immutable preview", async ({ page }) => {
 
 test("bound Python resources open their immutable code preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12550,7 +12550,7 @@ test("bound Python resources open their immutable code preview", async ({ page }
 
 test("bound R resources open their immutable code preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12590,7 +12590,7 @@ test("bound R resources open their immutable code preview", async ({ page }) => 
 
 test("bound BibTeX resources open their immutable text preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12627,7 +12627,7 @@ async function selectCenterPreviewText(page: Page) {
 
 test("selecting preview text quotes it into chat and saves a review annotation", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");

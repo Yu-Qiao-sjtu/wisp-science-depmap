@@ -7244,6 +7244,7 @@ pub fn run() {
             storage_prefs::set_context_storage_prefs,
             project_commands::get_research_graph,
             project_commands::get_research_journey,
+            project_commands::get_research_calendar,
             project_commands::add_research_journal_entry,
             project_commands::get_research_journey_source,
             session_commands::delete_session,
