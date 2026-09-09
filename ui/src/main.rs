@@ -16,6 +16,7 @@ mod pet;
 mod project_landing;
 mod publication;
 mod research;
+mod research_journey;
 mod runtime_views;
 mod session_modals;
 mod settings_view;
@@ -60,7 +61,8 @@ use overlays::{
 use pet::{PetDesktop, PetOverlay};
 use project_landing::{ProjectLanding, ProjectLandingState};
 use publication::{PublicationEvidenceSource, PublicationWorkspaceModal};
-use research::{refresh_research_graph, ResearchGraphModal};
+use research::refresh_research_graph;
+use research_journey::ResearchJourneyView;
 use serde_wasm_bindgen::{from_value, to_value};
 use session_modals::{
     BranchMergeDetailOverlay, BranchMergeOverlay, BranchMergeOverlayState, EditConfirmOverlay,
@@ -5690,6 +5692,7 @@ fn App() -> impl IntoView {
     );
 
     let load_session = Callback::new(move |id: String| {
+        show_research_graph.set(false);
         attachments.set(vec![]);
         sel_artifact.set(0);
         right_tab.set(RightTab::Artifacts);
@@ -8566,11 +8569,6 @@ fn App() -> impl IntoView {
             publication_binding_source.set(None);
             return;
         }
-        if show_research_graph.get() {
-            ev.prevent_default();
-            show_research_graph.set(false);
-            return;
-        }
         if inbox_open.get() {
             ev.prevent_default();
             inbox_open.set(false);
@@ -8645,6 +8643,13 @@ fn App() -> impl IntoView {
         if show_capabilities.get() {
             ev.prevent_default();
             show_capabilities.set(false);
+            return;
+        }
+
+        // Research journey is a page below the window's dialogs.
+        if show_research_graph.get() {
+            ev.prevent_default();
+            show_research_graph.set(false);
             return;
         }
 
@@ -10364,10 +10369,17 @@ fn App() -> impl IntoView {
             />
         })}
         {move || show_research_graph.get().then(|| view! {
-            <ResearchGraphModal
-                locale=locale.read_only()
+            <ResearchJourneyView
+                locale=locale
+                project_name=project_info.get().map(|p|p.name.clone()).unwrap_or_default()
+                left=Signal::derive(move || if show_sidebar.get() { sidebar_w.get() } else { 0.0 })
                 graph=research_graph.read_only()
+                artifact_open=Signal::derive(move || modal_artifact.get().is_some()
+                    || show_settings.get() || show_library.get() || show_publication_workspace.get()
+                    || show_proj_settings.get() || show_capabilities.get())
                 on_close=Callback::new(move |_| show_research_graph.set(false))
+                on_artifact=Callback::new(move |target| modal_artifact.set(Some(target)))
+                on_session=Callback::new(move |id| { show_research_graph.set(false); load_session.call(id); })
             />
         })}
         {move || show_publication_workspace.get().then(|| view! {
@@ -10414,13 +10426,14 @@ fn App() -> impl IntoView {
             toggle_proj_menu=Callback::new(toggle_proj_menu)
             open_proj_settings=Callback::new(open_proj_settings)
             switch_project=switch_project
-            new_session=Callback::new(new_session)
+            new_session=Callback::new(move |ev| { show_research_graph.set(false); new_session(ev); })
             open_search=Callback::new(move |_| {
                 action_palette_open.set(false);
                 command_palette_open.set(true);
             })
             new_folder=Callback::new(new_folder)
-            open_files=Callback::new(open_files)
+            open_files=Callback::new(move |ev| { show_research_graph.set(false); open_files(ev); })
+            research_journey_open=show_research_graph.read_only()
             open_research_graph=Callback::new(move |_| {
                 show_research_graph.set(true);
                 refresh_research_graph(research_graph);

@@ -6519,60 +6519,29 @@ test("agent menu updates review, reviewer model, and memory preferences", async 
   await expect(page.getByRole("menu", { name: "Reviewer model" })).toBeVisible();
 });
 
-test("project research graph opens from the sidebar in list and graph views", async ({ page }) => {
+test("research relationships remain available inside the daily journey", async ({ page }) => {
   await enterApp(page);
-
-  const sidebar = page.locator(".sidebar");
-  const navLabels = await sidebar.locator(".nav > .side-btn").allTextContents();
-  expect(navLabels.indexOf("Research graph")).toBe(navLabels.indexOf("Publication") - 1);
-  expect(navLabels.indexOf("Publication")).toBe(navLabels.indexOf("Library") - 1);
-
-  await sidebar.getByRole("button", { name: "Research graph", exact: true }).click();
-  const modal = page.getByTestId("research-graph-modal");
-  await expect(modal).toBeVisible();
+  await page.locator(".sidebar").getByRole("button", { name: "Research journey", exact: true }).click();
+  const journey = page.getByTestId("research-journey");
+  await expect(journey).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
-
-  await sidebar.getByRole("button", { name: "Research graph", exact: true }).click();
-  await expect(modal).toBeVisible();
-  await expect(modal.locator(".research-graph-heading h2")).toHaveCSS("font-family", /Source Serif/);
-  await expect(modal).toContainText("5 nodes · 3 relationships");
-  await expect(modal.getByTestId("research-graph-list")).toBeVisible();
-  await expect(modal.getByText("Use DESeq2 over edgeR")).toBeVisible();
-  await expect(modal).toContainText("applies to");
-  await expect(modal).toContainText("confidence: high");
-  await modal.getByRole("button", { name: "cites: Love et al. 2014" }).click();
-  const edgeDetail = modal.getByTestId("research-edge-detail");
-  await expect(edgeDetail).toContainText("Use DESeq2 over edgeR → Love et al. 2014");
-  await expect(edgeDetail).toContainText("confidence");
-  await expect(edgeDetail).toContainText("high");
+  await expect(journey).toHaveCount(0);
+  await page.locator(".sidebar").getByRole("button", { name: "Research journey", exact: true }).click();
+  await journey.getByRole("tab", { name: "Relationships", exact: true }).click();
+  await expect(journey).toContainText("5 nodes · 3 relationships");
+  await journey.getByRole("button", { name: "cites: Love et al. 2014" }).click();
+  await expect(journey.getByTestId("research-edge-detail")).toContainText("Methods section");
   await page.keyboard.press("Escape");
-  await expect(edgeDetail).toHaveCount(0);
-  await expect(modal).toBeVisible();
-  await expect.poll(async () => (await invokeArgsList(page, "get_research_graph")).length).toBe(2);
-
-  await modal.getByRole("tab", { name: "Graph", exact: true }).click();
-  const canvas = modal.getByTestId("research-graph-canvas");
-  await expect(canvas).toBeVisible();
-  await expect(canvas.locator(".research-graph-node")).toHaveCount(5);
-  await expect(canvas.locator(".research-graph-edge")).toHaveCount(3);
-  const metadataEdge = canvas.getByRole("button", { name: /cites.*confidence: high/ });
-  await expect(metadataEdge.locator("title")).toContainText("evidence: Methods section");
-  await metadataEdge.click();
-  await expect(modal.getByTestId("research-edge-detail")).toContainText("Methods section");
-
+  await expect(journey.getByTestId("research-edge-detail")).toHaveCount(0);
+  await expect(journey).toBeVisible();
+  await journey.getByRole("button", { name: "Graph", exact: true }).click();
+  await expect(journey.locator(".research-graph-node")).toHaveCount(5);
+  await journey.getByTestId("research-graph-canvas").getByRole("button", { name: /cites.*confidence: high/ }).click();
   await page.keyboard.press("Escape");
-  await expect(modal.getByTestId("research-edge-detail")).toHaveCount(0);
-  await expect(modal).toBeVisible();
-
+  await expect(journey.getByTestId("research-edge-detail")).toHaveCount(0);
+  await expect(journey).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Toggle panel" }).click();
-  const rightPanel = page.locator(".rightpane");
-  await rightPanel.getByRole("button", { name: "Add panel" }).click();
-  await expect(rightPanel.locator(".rp-tab-add-menu")
-    .getByRole("button", { name: /Research graph/ })).toHaveCount(0);
+  await expect(journey).toHaveCount(0);
 });
 
 test("registered Artifact opens publication binding and Escape keeps Workspace open", async ({ page }) => {

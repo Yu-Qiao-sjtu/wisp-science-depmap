@@ -1348,6 +1348,10 @@ impl Store {
                    AND status NOT IN ('submitted','running','cancelling') ORDER BY id",
             ),
             (
+                "research_journal_entry",
+                "SELECT id,category AS status,title || ':' || body || ':' || occurred_at AS title,created_at AS version FROM research_journal_entries WHERE project_id=? AND exploration_id IS NULL ORDER BY id",
+            ),
+            (
                 "research_node",
                 "SELECT id,kind || ':' || title AS status,metadata_json AS title,updated_at AS version \
                  FROM research_nodes WHERE project_id=? AND exploration_id IS NULL ORDER BY id",
@@ -1783,7 +1787,12 @@ impl Store {
         .bind(&exploration_id)
         .execute(&mut *tx)
         .await?;
-        for table in ["research_nodes", "research_edges", "external_resources"] {
+        for table in [
+            "research_nodes",
+            "research_edges",
+            "external_resources",
+            "research_journal_entries",
+        ] {
             let statement = format!(
                 "UPDATE {table} SET exploration_id=NULL WHERE project_id=? AND exploration_id=?"
             );
@@ -2355,6 +2364,10 @@ where
             "SELECT id,status,title,COALESCE(ended_at,created_at) AS version \
              FROM runs WHERE project_id=? AND exploration_id IS NULL \
                AND status NOT IN ('submitted','running','cancelling') ORDER BY id",
+        ),
+        (
+            "research_journal_entry",
+            "SELECT id,category AS status,title || ':' || body || ':' || occurred_at AS title,created_at AS version FROM research_journal_entries WHERE project_id=? AND exploration_id IS NULL ORDER BY id",
         ),
         (
             "research_node",

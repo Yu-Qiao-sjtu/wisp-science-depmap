@@ -4,7 +4,7 @@
 //
 // Keep it dependency-free and closure-free: Playwright serializes the function
 // source and runs it verbatim in the browser.
-export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string }): void {
+export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string; researchImageBase64?: string }): void {
   class Channel {
     onmessage: ((message: any) => void) | null = null;
   }
@@ -1549,6 +1549,32 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
       { source_id: "run:r1", target_id: "artifact:h1", relation: "produced", metadata_json: "{}" },
     ],
   };
+  const journeyZh = new URL(location.href).searchParams.get("mockJourney") === "design";
+  const journeyText = (en: string, zh: string) => journeyZh ? zh : en;
+  const journeyTime = (daysAgo: number, hour = 12, minute = 0) => {
+    const d = new Date(); d.setDate(d.getDate() - daysAgo); d.setHours(hour, minute, 0, 0); return Math.floor(d.getTime() / 1000);
+  };
+  const journeyEntry = (id: string, kind: string, title: string, daysAgo: number, extra: any = {}) => ({
+    id, kind, title, summary: "", occurred_at: journeyTime(daysAgo), recorded_at: journeyTime(daysAgo),
+    source_id: id, frame_id: null, status: "recorded", content_type: "", version_number: null,
+    source_discarded: false, manual: false, ...extra,
+  });
+  const journeyEntries: any[] = [
+    journeyEntry("progress-today", "progress", journeyText("Compared normalization methods and selected a baseline", "完成归一化对比，确定后续分析方案"), 0, {manual: true, summary: journeyText("Compare low-sample performance; take method B into full-data validation.", "比较两种方法的低样本表现，选择方案 B 进入完整数据验证。")}),
+    journeyEntry("run-compare", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", status: "succeeded", occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("run-clean", "run", journeyText("Completed data cleaning and quality checks", "完成数据清洗与质量检查"), 0, {source_id: "run-kinase-001", status: "succeeded", occurred_at: journeyTime(0,10,20)}),
+    journeyEntry("output-image", "artifact", "normalization_comparison.png", 0, {source_id: "journey-image-v1", content_type: "image/png", version_number: 1, occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("output-data", "artifact", "normalized_counts.csv", 0, {source_id: "journey-data-v2", content_type: "text/csv", version_number: 2}),
+    journeyEntry("output-report", "artifact", "comparison_report.md", 0, {source_id: "journey-report-v1", content_type: "text/markdown", version_number: 1}),
+    journeyEntry("finding-today", "finding", journeyText("Method B is more stable at low sample sizes.", "方案 B 在低样本量下更稳定。"), 0, {manual: true}),
+    journeyEntry("decision-today", "decision", journeyText("Use B and retain A as the baseline.", "采用方案 B，保留方案 A 作为基线。"), 0),
+    journeyEntry("next-today", "next", journeyText("Validate against the full dataset.", "在完整数据集上验证。"), 0, {manual: true}),
+    journeyEntry("session-today", "session", journeyText("Normalization method comparison", "归一化方法比较"), 0, {source_id: "s-complete", frame_id: "s-complete"}),
+    journeyEntry("session-repeat", "session", journeyText("Normalization method comparison", "归一化方法比较"), 0, {source_id: "s-complete", frame_id: "s-complete"}),
+    journeyEntry("progress-yesterday", "progress", journeyText("Completed sample QC and identified batch differences", "完成样本质控，定位批次差异"), 1, {manual: true, summary: journeyText("Generated QC report and selected methods to compare.", "生成 QC 报告，确定需要比较的归一化方法。")}),
+    journeyEntry("output-yesterday", "artifact", "qc_report.md", 1, {source_id: "journey-qc-v1", content_type: "text/markdown", version_number: 1}),
+    journeyEntry("progress-earlier", "progress", journeyText("Imported raw data and established an analysis baseline", "导入原始数据，建立分析基线"), 2, {manual: true}),
+  ];
   let publicationRevisionId = "publication-revision-1";
   let publicationRevisionState = mockPublication === "frozen" ? "frozen" : "draft";
   const publicationItems = [
@@ -1716,6 +1742,25 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             const delay = Number((window as any).__reviewDelayMs ?? 0);
             if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
             return null;
+          }
+          case "get_research_journey": {
+            const mode = new URL(location.href).searchParams.get("mockJourney");
+            if (mode === "error" || (window as any).__journeyError) throw new Error("Research store unavailable");
+            const delay = Number((window as any).__journeyDelay ?? 0);
+            const available = mode === "many" ? [...journeyEntries, ...Array.from({length:5},(_,index)=>journeyEntry(`extra-${index}`,"artifact",`additional_${index}.csv`,0,{source_id:`journey-data-extra-${index}`,content_type:"text/csv",version_number:1}))] : journeyEntries;
+            const entries = mode === "empty" ? [] : available.filter(e => e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until")));
+            if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+            return {entries, truncated: false};
+          }
+          case "add_research_journal_entry": {
+            if ((window as any).__journeySaveError) throw new Error("Journal write failed");
+            const input = plain(arg("input")); const id = `journal-${journeyEntries.length}`;
+            journeyEntries.unshift(journeyEntry(id, input.category, input.title, 0, {summary: input.body, occurred_at: input.occurred_at, recorded_at: Math.floor(Date.now()/1000), manual: true}));
+            return id;
+          }
+          case "get_research_journey_source": {
+            if (arg("versionId") === "journey-qc-v1") return {run_id: null, run_title: "", run_status: "", context_id: "", generated_at: null, inputs: []};
+            return {run_id: "run-local-002", run_title: journeyText("Normalization comparison", "归一化方法比较"), run_status: "succeeded", context_id: "local", generated_at: journeyTime(0,14,35), inputs: [{title: "counts_matrix.csv", role: "counts", version_id: "journey-input-v1", confidence: "exact"}]};
           }
           case "get_research_graph":
             return researchGraph;
@@ -4361,6 +4406,11 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             }
             return { path: `artifact:${arg("id")}`, mime: "text/csv", text: "a,b\n1,2", base64: null };
           case "read_artifact_version":
+            if (String(arg("versionId")).startsWith("journey-")) {
+              const csv = String(arg("versionId")).includes("data") || String(arg("versionId")).includes("input");
+              return {path: `artifact-version:${arg("versionId")}`, mime: csv ? "text/csv" : "text/markdown", base64: null,
+                text: csv ? "cell_id,gene_1,gene_2,gene_3\ncell_001,12,5,6\ncell_002,8,1,9\ncell_003,4,4,1\ncell_004,0,3,8" : journeyText("# Normalization comparison report\n\n## Objective\nCompare methods A and B.\n\n## Results\nMethod B is more stable in this sample.","# 单细胞数据归一化方法对比报告\n\n## 1. 研究目的\n比较方法 A 与方法 B。\n\n## 2. 方法与结果\n方案 B 在当前样本中表现更稳定。")};
+            }
             if (arg("versionId") === "resource-version-markdown") {
               return {
                 path: "artifact-version:resource-version-markdown",
@@ -4403,6 +4453,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string 
             }
             throw new Error("Artifact version not found");
           case "read_artifact_version_bytes":
+            if (arg("versionId") === "journey-image-v1" && fixtures?.researchImageBase64) return base64Bytes(fixtures.researchImageBase64);
             if (arg("versionId") === "resource-version-docx") {
               return base64Bytes(docxBase64);
             }

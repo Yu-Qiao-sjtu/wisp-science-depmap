@@ -532,3 +532,38 @@ fn channels_status_contract_includes_feishu_owner() {
     assert_eq!(dto.feishu_pending_owner_open_id, "ou_pending");
     assert_eq!(dto.feishu_app_id, "cli_1");
 }
+
+#[test]
+fn research_journey_contract_preserves_version_and_occurrence_time() {
+    let backend = wisp_dto::ResearchJourney {
+        entries: vec![wisp_dto::ResearchJourneyEntry {
+            id: "version:v1".into(),
+            kind: "artifact".into(),
+            title: "figure.png".into(),
+            occurred_at: 100,
+            recorded_at: 200,
+            source_id: "v1".into(),
+            version_number: Some(1),
+            source_discarded: true,
+            ..Default::default()
+        }],
+        truncated: true,
+    };
+    let ui: wisp_dto::ResearchJourney = roundtrip(&backend);
+    assert_eq!(ui, backend);
+    let source = wisp_dto::ResearchJourneySource {
+        run_id: Some("run".into()),
+        generated_at: Some(90),
+        inputs: vec![wisp_dto::ResearchJourneyInput {
+            title: "counts.csv".into(),
+            role: "counts".into(),
+            version_id: Some("input-v2".into()),
+            confidence: "exact".into(),
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        roundtrip::<_, wisp_dto::ResearchJourneySource>(&source),
+        source
+    );
+}

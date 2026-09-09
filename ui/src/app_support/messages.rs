@@ -188,6 +188,12 @@ pub(crate) fn SessionStatusBadge(
 /// never font glyphs whose shape varies by platform and fallback font.
 pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
     let body = match kind {
+        "external-link" => view! { <path d="M15 3h6v6M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/> }.into_view(),
+        "table" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/> }.into_view(),
+        "research-trail" => view! { <path d="M3 3v18h18"/><path d="m7 14 4-4 4 3 5-7"/><circle cx="7" cy="14" r="1"/><circle cx="11" cy="10" r="1"/><circle cx="15" cy="13" r="1"/> }.into_view(),
+        "lightbulb" => view! { <path d="M9 18h6M9 21h6"/><path d="M9 15a6 6 0 1 1 6 0v3H9z"/> }.into_view(),
+        "note-plus" => view! { <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M12 11v6M9 14h6"/> }.into_view(),
+        "refresh" => view! { <path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 2M18 18a8 8 0 0 1-13-2"/> }.into_view(),
         "attach" => view! { <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/> }.into_view(),
         "folder" => view! { <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/> }.into_view(),
         "plan" => view! { <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6l1 1 2-2"/><path d="M3 12l1 1 2-2"/><path d="M3 18l1 1 2-2"/> }.into_view(),

@@ -39,6 +39,52 @@ pub(super) async fn get_research_graph(
 }
 
 #[tauri::command]
+pub(super) async fn get_research_journey(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    from: i64,
+    until: i64,
+) -> Result<wisp_dto::ResearchJourney, String> {
+    let (_, scope) =
+        exploration_commands::working_project_for_active_frame(&state, window.label()).await?;
+    state
+        .store
+        .research_journey(&scope, from, until)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn add_research_journal_entry(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    input: wisp_dto::ResearchJournalInput,
+) -> Result<String, String> {
+    let (_, scope) =
+        exploration_commands::working_project_for_active_frame(&state, window.label()).await?;
+    state
+        .store
+        .add_research_journal_entry(&scope, &input)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn get_research_journey_source(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    version_id: String,
+) -> Result<wisp_dto::ResearchJourneySource, String> {
+    let (_, scope) =
+        exploration_commands::working_project_for_active_frame(&state, window.label()).await?;
+    state
+        .store
+        .research_journey_source(&scope, &version_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(super) async fn list_projects(
     state: State<'_, AppState>,
 ) -> Result<Vec<ProjectSummary>, String> {
