@@ -95,22 +95,3 @@ Windows code signing by [SignPath.io](https://signpath.io), certificate by the
 
 [AGPL-3.0-only](LICENSE), except where a directory notes otherwise. Earlier
 releases keep the license published with them.
-
-## Citation
-
-Citation metadata for this repository is available in [CITATION.cff](CITATION.cff). The repository is ready for [Zenodo's GitHub integration](https://help.zenodo.org/docs/github/enable-repository/). After the repository is enabled in Zenodo and a GitHub release is published, Zenodo will archive that release and mint the project DOI.
-
-[![Zenodo DOI](https://zenodo.org/badge/1355841006.svg)](https://zenodo.org/badge/latestdoi/1355841006)
-
-The badge and latest-DOI link above activate when Zenodo archives the first release.
-
-Until the first Zenodo DOI is minted, cite the repository as:
-
-```bibtex
-@software{wisp_depmap_agent_2026,
-  title  = {wisp-depmap-agent},
-  author = {{wisp-depmap-agent project}},
-  year   = {2026},
-  url    = {https://github.com/Yu-Qiao-sjtu/wisp-science-depmap}
-}
-```

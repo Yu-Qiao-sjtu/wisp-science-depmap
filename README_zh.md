@@ -90,22 +90,3 @@ Windows 代码签名由 [SignPath.io](https://signpath.io) 提供，证书由
 
 除另有说明外，采用 [AGPL-3.0-only](LICENSE)。更早发布的版本继续适用其发布时
 附带的许可证。
-
-## 引用
-
-本仓库的引用元数据位于 [CITATION.cff](CITATION.cff)。当前仓库已经具备接入 [Zenodo GitHub 集成](https://help.zenodo.org/docs/github/enable-repository/) 的元数据；在 Zenodo 中启用本仓库并发布一个 GitHub Release 后，Zenodo 会归档该版本并生成项目 DOI。
-
-[![Zenodo DOI](https://zenodo.org/badge/1355841006.svg)](https://zenodo.org/badge/latestdoi/1355841006)
-
-Zenodo 完成首个 Release 归档后，上述徽章和最新 DOI 链接会自动生效。
-
-首个 Zenodo DOI 生成前，请按以下方式引用本仓库：
-
-```bibtex
-@software{wisp_depmap_agent_2026,
-  title  = {wisp-depmap-agent},
-  author = {{wisp-depmap-agent project}},
-  year   = {2026},
-  url    = {https://github.com/Yu-Qiao-sjtu/wisp-science-depmap}
-}
-```
