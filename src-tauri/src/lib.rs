@@ -110,6 +110,7 @@ mod trajectory;
 mod trajectory_export;
 mod turn_memory;
 mod turn_undo;
+mod ui_health;
 mod video_generation_tool;
 mod windows_snap;
 mod workspace_manifest;
@@ -3507,6 +3508,23 @@ fn mac_menu_action(id: &str, focused: bool) -> Option<&'static str> {
 fn wire_macos_menu_events(window: &tauri::WebviewWindow) {
     window.on_menu_event(|window, event| {
         // Tauri invokes every window's menu handler for each native action.
+        if window.is_focused().unwrap_or(false) {
+            match event.id().as_ref() {
+                "recovery.stop-agent" => {
+                    if let Some(target) = window.app_handle().get_webview_window(window.label()) {
+                        ui_health::stop_window_agent(&target);
+                    }
+                    return;
+                }
+                "recovery.reload-window" => {
+                    if let Some(target) = window.app_handle().get_webview_window(window.label()) {
+                        ui_health::reload_window(&target, "native menu");
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Some(action) =
             mac_menu_action(event.id().as_ref(), window.is_focused().unwrap_or(false))
         {
@@ -3696,6 +3714,33 @@ fn install_macos_app_menu(app: &AppHandle, locale_tag: &str) -> Result<(), Strin
         .map_err(|error| error.to_string())?;
 
     let window_menu = SubmenuBuilder::new(app, labels.window)
+        .item(
+            &build_menu_item(
+                app,
+                "recovery.stop-agent",
+                if locale_tag.starts_with("zh") {
+                    "停止当前 Agent"
+                } else {
+                    "Stop current agent"
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .item(
+            &build_menu_item(
+                app,
+                "recovery.reload-window",
+                if locale_tag.starts_with("zh") {
+                    "重载当前窗口"
+                } else {
+                    "Reload current window"
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .separator()
         .item(&PredefinedMenuItem::minimize(app, None).map_err(|error| error.to_string())?)
         .item(&PredefinedMenuItem::maximize(app, None).map_err(|error| error.to_string())?)
         .item(&PredefinedMenuItem::fullscreen(app, None).map_err(|error| error.to_string())?)
@@ -6514,78 +6559,6 @@ pub(crate) fn startup_report_summary() -> String {
         .unwrap_or_default()
 }
 
-/// Frontend `ui_heartbeat` timer. Silence on a focused window means the
-/// renderer died; reload recovers because sessions live in SQLite.
-static UI_HEARTBEAT: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
-static UI_WATCHDOG_LAST_RELOAD: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
-const UI_HEARTBEAT_STALE: std::time::Duration = std::time::Duration::from_secs(60);
-const UI_WATCHDOG_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
-
-#[tauri::command]
-fn ui_heartbeat() {
-    if let Ok(mut last) = UI_HEARTBEAT.lock() {
-        *last = Some(std::time::Instant::now());
-    }
-}
-
-fn ui_watchdog_requires_reload(
-    secs_since_beat: Option<u64>,
-    secs_since_reload: Option<u64>,
-) -> bool {
-    match secs_since_beat {
-        Some(secs) if secs >= UI_HEARTBEAT_STALE.as_secs() => match secs_since_reload {
-            Some(secs) => secs >= UI_WATCHDOG_COOLDOWN.as_secs(),
-            None => true,
-        },
-        _ => false,
-    }
-}
-
-/// Backgrounded webviews throttle JS timers, so elapsed time is not a death
-/// signal. Refresh the clock while unfocused so a later focus does not look
-/// immediately stale. Leave `None` alone: that means "wait for a real beat".
-fn ui_watchdog_note_unfocused(last_beat: &mut Option<std::time::Instant>) {
-    if last_beat.is_some() {
-        *last_beat = Some(std::time::Instant::now());
-    }
-}
-
-async fn run_ui_watchdog(app: tauri::AppHandle) {
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        let secs_since_beat = UI_HEARTBEAT
-            .lock()
-            .ok()
-            .and_then(|last| last.map(|instant| instant.elapsed().as_secs()));
-        let secs_since_reload = UI_WATCHDOG_LAST_RELOAD
-            .lock()
-            .ok()
-            .and_then(|last| last.map(|instant| instant.elapsed().as_secs()));
-        if !ui_watchdog_requires_reload(secs_since_beat, secs_since_reload) {
-            continue;
-        }
-        let Some(window) = app.get_webview_window("main") else {
-            continue;
-        };
-        if !window.is_focused().unwrap_or(false) {
-            if let Ok(mut last) = UI_HEARTBEAT.lock() {
-                ui_watchdog_note_unfocused(&mut last);
-            }
-            continue;
-        }
-        tracing::warn!(target: "wisp", secs_since_beat = secs_since_beat.unwrap_or_default(),
-            "main webview stopped heartbeating; reloading to recover the UI");
-        if window.reload().is_ok() {
-            if let Ok(mut last) = UI_WATCHDOG_LAST_RELOAD.lock() {
-                *last = Some(std::time::Instant::now());
-            }
-            if let Ok(mut last) = UI_HEARTBEAT.lock() {
-                *last = None;
-            }
-        }
-    }
-}
-
 /// Windows creates the main WebView2 before `setup` runs but cannot service it
 /// until the event loop pumps messages, so everything `setup` does on the way
 /// to the first paint is time the user spends looking at a blank window. Record
@@ -6822,11 +6795,15 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
                 record_window_focus(window.label(), *focused);
+                ui_health::note_focus(window.label(), *focused);
                 if *focused {
                     drain_pending_notify_target(window);
                 }
             }
-            tauri::WindowEvent::Destroyed => record_window_focus(window.label(), false),
+            tauri::WindowEvent::Destroyed => {
+                record_window_focus(window.label(), false);
+                ui_health::remove_window(window.label());
+            }
             _ => {}
         })
         // The blank window ends when the main webview finishes loading its
@@ -6867,7 +6844,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             let main_builder = main_builder.decorations(false).shadow(true);
             main_builder.build().expect("create main window");
-            tauri::async_runtime::spawn(run_ui_watchdog(app.handle().clone()));
+            tauri::async_runtime::spawn(ui_health::run_watchdog(app.handle().clone()));
             let mut startup = StartupTimeline::default();
             if let Ok(res) = app.path().resource_dir() {
                 wisp_paths::set_resource_root(res);
@@ -7447,7 +7424,7 @@ pub fn run() {
             app_commands::browser_extension_status,
             app_commands::update_browser_extension,
             app_commands::extension_connected,
-            ui_heartbeat,
+            ui_health::ui_heartbeat,
             app_commands::reveal_in_file_manager,
             app_commands::open_workspace_path,
             connector_commands::list_mcp_connections,

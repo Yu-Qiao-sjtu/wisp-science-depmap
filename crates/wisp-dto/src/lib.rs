@@ -15,6 +15,21 @@ use std::rc::Rc;
 /// The UI must not offer native HTTP transcript recovery for these errors.
 pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
 
+/// Bounded numeric renderer diagnostics. Never includes user or plugin content.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiHealthSnapshot {
+    pub timer_lag_ms: u32,
+    pub long_tasks: u32,
+    pub longest_task_ms: u32,
+    pub script_errors: u32,
+    pub unhandled_rejections: u32,
+    pub active_apps: u32,
+    pub parked_apps: u32,
+    pub app_messages: u32,
+    pub drag_overlays: u32,
+}
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct ContextUsage {
     #[serde(default)]

@@ -590,3 +590,23 @@ fn research_calendar_contract_preserves_project_errors_and_truncation() {
         backend
     );
 }
+#[test]
+fn renderer_health_accepts_partial_numeric_snapshots() {
+    let snapshot: wisp_dto::UiHealthSnapshot = serde_json::from_value(serde_json::json!({
+        "timerLagMs": 850, "activeApps": 1, "parkedApps": 2, "scriptErrors": 3
+    }))
+    .unwrap();
+    assert_eq!(snapshot.timer_lag_ms, 850);
+    assert_eq!(snapshot.active_apps, 1);
+    assert_eq!(snapshot.parked_apps, 2);
+    assert_eq!(snapshot.script_errors, 3);
+    assert_eq!(snapshot.app_messages, 0);
+    let encoded = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(encoded["timerLagMs"], 850);
+    assert!(
+        serde_json::from_value::<wisp_dto::UiHealthSnapshot>(serde_json::json!({
+            "scriptErrors": "arbitrary content"
+        }))
+        .is_err()
+    );
+}

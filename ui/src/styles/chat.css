@@ -1397,7 +1397,7 @@ details.tool:not([open]) > summary.head .run-dot { animation: tool-pulse 1.1s ea
 .composer-fast.pending { opacity: .62; }
 .composer-fast:disabled { cursor: default; }
 .model-picker { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
-.model-picker-btn { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-elev); color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; max-width: min(220px, 38vw); transition: color .12s ease, border-color .12s ease, background .12s ease; }
+.model-picker-btn { min-width: 0; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-elev); color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; max-width: min(220px, 38vw); transition: color .12s ease, border-color .12s ease, background .12s ease; }
 .model-picker-btn:hover, .model-picker-btn.active { color: var(--text); background: var(--bg-sunken); border-color: color-mix(in srgb, var(--clay-strong) 30%, var(--border-strong)); }
 .model-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; letter-spacing: -.01em; }
 .model-picker-chev { flex: 0 0 auto; font-size: 9px; color: var(--text-faint); margin-top: 1px; }

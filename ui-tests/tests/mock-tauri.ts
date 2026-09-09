@@ -4967,6 +4967,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "dismiss_onboarding":
             return null;
           case "stop_agent":
+            (window as any).__healthStressFinish?.();
             if ((window as any).__failStopAgent) {
               throw new Error("stop command unavailable");
             }
@@ -5280,6 +5281,29 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             // Slow stream keeps send_message pending until Done. This mirrors the
             // native command lifecycle and leaves enough live time to assert that
             // Markdown/projection work is deferred between token batches.
+            if (String(arg("message") ?? "").includes("HEALTHSTRESS")) {
+              return await new Promise<string>((resolve) => {
+                const background = "health-background";
+                emit("agent", { kind: "User", frame_id: fid, text: msg });
+                emit("agent", { kind: "User", frame_id: background, text: "background stress" });
+                let n = 0;
+                const timer = setInterval(() => {
+                  for (const id of [fid, background]) {
+                    emit("agent", { kind: "Text", frame_id: id, delta: `**stress ${n}** ${"x".repeat(800)}\n` });
+                  }
+                  n += 1;
+                }, 50);
+                (window as any).__healthStressFinish = () => {
+                  clearInterval(timer);
+                  delete (window as any).__healthStressFinish;
+                  emit("agent", { kind: "Done", frame_id: fid });
+                  emit("agent", { kind: "Done", frame_id: background });
+                  resolve(fid);
+                };
+                // Bound a failed test's producer as well.
+                setTimeout(() => (window as any).__healthStressFinish?.(), 25_000);
+              });
+            }
             if (String(arg("message") ?? "").includes("MARKDOWNSTREAM")) {
               return await new Promise<string>((resolve) => {
                 let n = 0;

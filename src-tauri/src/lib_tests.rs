@@ -10,11 +10,10 @@ use super::{
     persist_ui_events, provenance_ui_file_changes, receive_confirm_decision,
     reclaim_unconsumed_cutin, resolve_acp_artifact_references, resolve_composer_references,
     resolve_reader_references, resolve_review_backend, resolve_workspace, session_runtime_status,
-    should_hide_app_on_macos_close, should_persist_ui_event, ui_watchdog_note_unfocused,
-    ui_watchdog_requires_reload, user_message_start, AgentEvent, ComposerReferenceArg,
-    McpConnection, McpHttpAuth, McpTransport, ProjectActivityLocks, QueuedItem, SessionRuntime,
-    SkillInfo, StartupReport, StartupTimeline, MAX_PENDING_UI_EVENT_BYTES,
-    UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
+    should_hide_app_on_macos_close, should_persist_ui_event, user_message_start, AgentEvent,
+    ComposerReferenceArg, McpConnection, McpHttpAuth, McpTransport, ProjectActivityLocks,
+    QueuedItem, SessionRuntime, SkillInfo, StartupReport, StartupTimeline,
+    MAX_PENDING_UI_EVENT_BYTES, UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -2805,31 +2804,6 @@ fn desktop_app_icon_native_catalog_matches_its_sources_and_bundle_config() {
     assert_eq!(images[0]["value"], "wisp-light.svg");
     assert_eq!(images[1]["appearance"], "dark");
     assert_eq!(images[1]["value"], "wisp-dark.svg");
-}
-
-#[test]
-fn ui_watchdog_reload_decision() {
-    // Never fired a beat (fresh boot, or beat cleared after a reload): the
-    // watchdog must wait for fresh beats, not reload on startup silence.
-    assert!(!ui_watchdog_requires_reload(None, None));
-    // Healthy stream.
-    assert!(!ui_watchdog_requires_reload(Some(5), None));
-    // Freshly reloaded, still loading: inside the cooldown.
-    assert!(!ui_watchdog_requires_reload(Some(120), Some(30)));
-    // Dead renderer, first recovery.
-    assert!(ui_watchdog_requires_reload(Some(120), None));
-    // Dead again after the cooldown expired.
-    assert!(ui_watchdog_requires_reload(Some(120), Some(180)));
-}
-
-#[test]
-fn ui_watchdog_unfocused_silence_is_not_stale() {
-    let mut beat = Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
-    ui_watchdog_note_unfocused(&mut beat);
-    assert!(beat.unwrap().elapsed() < std::time::Duration::from_secs(1));
-    let mut none = None;
-    ui_watchdog_note_unfocused(&mut none);
-    assert!(none.is_none());
 }
 
 async fn open_temp_store(prefix: &str) -> (wisp_store::Store, PathBuf) {
