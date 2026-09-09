@@ -28,6 +28,8 @@ extern "C" {
 #[wasm_bindgen(module = "/src/api.js")]
 extern "C" {
     pub(crate) async fn invoke(cmd: &str, args: JsValue) -> JsValue;
+    pub(crate) fn start_ui_health();
+    pub(crate) fn report_ui_health();
     #[wasm_bindgen(catch, js_name = invoke_strict)]
     pub(crate) async fn invoke_checked(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = invoke_timeout)]

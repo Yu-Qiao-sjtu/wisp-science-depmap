@@ -35,6 +35,8 @@ const TRAY_ID: &str = "wisp-tray";
 #[derive(Debug, PartialEq, Eq)]
 enum TrayAction {
     Show,
+    StopAgent,
+    ReloadWindow,
     Restart,
     Quit,
 }
@@ -43,6 +45,8 @@ enum TrayAction {
 fn tray_action(id: &str) -> Option<TrayAction> {
     match id {
         "tray-show" => Some(TrayAction::Show),
+        "tray-stop-agent" => Some(TrayAction::StopAgent),
+        "tray-reload-window" => Some(TrayAction::ReloadWindow),
         "tray-restart" => Some(TrayAction::Restart),
         "tray-quit" => Some(TrayAction::Quit),
         _ => None,
@@ -69,6 +73,8 @@ impl TrayLocale {
 #[cfg(any(target_os = "windows", test))]
 struct TrayLabels {
     show: &'static str,
+    stop_agent: &'static str,
+    reload_window: &'static str,
     restart: &'static str,
     quit: &'static str,
 }
@@ -78,11 +84,15 @@ fn tray_labels(locale: TrayLocale) -> TrayLabels {
     match locale {
         TrayLocale::Zh => TrayLabels {
             show: "打开 Wisp Science",
+            stop_agent: "停止最近窗口的当前 Agent",
+            reload_window: "重载最近使用的窗口",
             restart: "重启",
             quit: "退出",
         },
         TrayLocale::En => TrayLabels {
             show: "Open Wisp Science",
+            stop_agent: "Stop agent in last active window",
+            reload_window: "Reload last active window",
             restart: "Restart",
             quit: "Quit",
         },
@@ -96,9 +106,11 @@ fn build_tray_menu<M: Manager<tauri::Wry>>(
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let labels = tray_labels(locale);
     let show = MenuItemBuilder::with_id("tray-show", labels.show).build(app)?;
+    let stop = MenuItemBuilder::with_id("tray-stop-agent", labels.stop_agent).build(app)?;
+    let reload = MenuItemBuilder::with_id("tray-reload-window", labels.reload_window).build(app)?;
     let restart = MenuItemBuilder::with_id("tray-restart", labels.restart).build(app)?;
     let quit = MenuItemBuilder::with_id("tray-quit", labels.quit).build(app)?;
-    Menu::with_items(app, &[&show, &restart, &quit])
+    Menu::with_items(app, &[&show, &stop, &reload, &restart, &quit])
 }
 
 pub(crate) fn activate_workspace(app: &AppHandle) {
@@ -250,6 +262,16 @@ pub(crate) fn install_windows_shell(app: &mut App, locale_tag: &str) -> tauri::R
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match tray_action(event.id().as_ref()) {
             Some(TrayAction::Show) => activate_workspace(app),
+            Some(TrayAction::StopAgent) => {
+                if let Some(window) = crate::ui_health::last_workspace_window(app) {
+                    crate::ui_health::stop_window_agent(&window);
+                }
+            }
+            Some(TrayAction::ReloadWindow) => {
+                if let Some(window) = crate::ui_health::last_workspace_window(app) {
+                    crate::ui_health::reload_window(&window, "native tray");
+                }
+            }
             Some(TrayAction::Restart) => app.request_restart(),
             Some(TrayAction::Quit) => app.exit(0),
             _ => {}
@@ -299,6 +321,11 @@ mod tests {
     #[test]
     fn windows_tray_actions_include_restart() {
         assert_eq!(tray_action("tray-show"), Some(TrayAction::Show));
+        assert_eq!(tray_action("tray-stop-agent"), Some(TrayAction::StopAgent));
+        assert_eq!(
+            tray_action("tray-reload-window"),
+            Some(TrayAction::ReloadWindow)
+        );
         assert_eq!(tray_action("tray-restart"), Some(TrayAction::Restart));
         assert_eq!(tray_action("tray-quit"), Some(TrayAction::Quit));
         assert_eq!(tray_action("unknown"), None);
@@ -308,11 +335,15 @@ mod tests {
     fn windows_tray_labels_follow_saved_locale() {
         let zh = tray_labels(TrayLocale::from_tag("zh-CN"));
         assert_eq!(zh.show, "打开 Wisp Science");
+        assert_eq!(zh.stop_agent, "停止最近窗口的当前 Agent");
+        assert_eq!(zh.reload_window, "重载最近使用的窗口");
         assert_eq!(zh.restart, "重启");
         assert_eq!(zh.quit, "退出");
 
         let en = tray_labels(TrayLocale::from_tag("en"));
         assert_eq!(en.show, "Open Wisp Science");
+        assert_eq!(en.stop_agent, "Stop agent in last active window");
+        assert_eq!(en.reload_window, "Reload last active window");
         assert_eq!(en.restart, "Restart");
         assert_eq!(en.quit, "Quit");
 

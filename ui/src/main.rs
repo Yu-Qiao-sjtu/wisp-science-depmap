@@ -7652,14 +7652,11 @@ fn App() -> impl IntoView {
     });
     refresh_runtimes(runtime_infos);
     refresh_runs(run_records, locale);
+    crate::bindings::start_ui_health();
     {
-        // UI liveness heartbeat for the backend watchdog: a webview whose
-        // renderer died (process crash / WASM panic) stops beating and gets
-        // reloaded; see `run_ui_watchdog` in src-tauri/src/lib.rs.
+        // Keep liveness tied to the WASM app, while JS collects bounded metrics.
         let beat = Closure::wrap(Box::new(move || {
-            spawn_local(async move {
-                let _ = invoke("ui_heartbeat", JsValue::UNDEFINED).await;
-            });
+            crate::bindings::report_ui_health();
         }) as Box<dyn FnMut()>);
         if let Some(window) = web_sys::window() {
             let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(

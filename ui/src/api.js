@@ -9,6 +9,57 @@ function tauriEvent() {
   return window.__TAURI__?.event;
 }
 
+let uiHealthStarted = false;
+let reportUiHealth = () => {};
+const uiHealth = { timerLagMs: 0, longTasks: 0, longestTaskMs: 0, scriptErrors: 0, unhandledRejections: 0, appMessages: 0 };
+const boundedHealthCount = (value) => Math.min(1_000_000, Math.max(0, Math.round(value) || 0));
+
+export function report_ui_health() { void reportUiHealth(); }
+
+/** Numeric diagnostics only. The heartbeat is driven by the WASM app timer,
+ * so a broken WASM callback cannot be masked by an independent healthy JS timer. */
+export function start_ui_health() {
+  if (uiHealthStarted) return;
+  uiHealthStarted = true;
+  window.addEventListener("error", () => { uiHealth.scriptErrors = boundedHealthCount(uiHealth.scriptErrors + 1); });
+  window.addEventListener("unhandledrejection", () => { uiHealth.unhandledRejections = boundedHealthCount(uiHealth.unhandledRejections + 1); });
+  if (typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        uiHealth.longTasks = boundedHealthCount(uiHealth.longTasks + 1);
+        uiHealth.longestTaskMs = Math.max(uiHealth.longestTaskMs, boundedHealthCount(entry.duration));
+      }
+    }).observe({ type: "longtask" });
+  }
+  let lastTick = performance.now();
+  let inFlight = false;
+  const beat = async () => {
+    const now = performance.now();
+    const timerLagMs = document.visibilityState === "visible" ? boundedHealthCount(now - lastTick - 5000) : 0;
+    uiHealth.timerLagMs = Math.max(uiHealth.timerLagMs, timerLagMs);
+    lastTick = now;
+    if (inFlight || !tauriCore()) return;
+    inFlight = true;
+    let activeApps = 0;
+    let parkedApps = 0;
+    for (const instance of mcpAppInstances.values()) {
+      if (instance.target?.isConnected) activeApps += 1;
+      else parkedApps += 1;
+    }
+    const snapshot = { ...uiHealth, activeApps, parkedApps,
+      dragOverlays: document.querySelectorAll(".drag-overlay").length };
+    // Counters are cumulative and bounded: a once-per-minute backend log cannot
+    // miss a brief error or message burst between its sampled heartbeats.
+    try { await invoke_timeout("ui_heartbeat", { snapshot }, 4000); }
+    catch { /* A failed IPC must not create its own rejection storm. */ }
+    finally { inFlight = false; }
+  };
+  reportUiHealth = beat;
+  document.addEventListener("visibilitychange", () => { lastTick = performance.now(); });
+  window.addEventListener("focus", () => { lastTick = performance.now(); });
+  void beat();
+}
+
 export function is_windows() {
   return navigator.userAgent.includes("Windows");
 }
@@ -2743,6 +2794,7 @@ function createMcpAppInstance(instanceId, payloadJson) {
   };
   instance.onMessage = (event) => {
     if (event.source !== frame.contentWindow || !event.data || event.data.jsonrpc !== "2.0") return;
+    uiHealth.appMessages = boundedHealthCount(uiHealth.appMessages + 1);
     const message = event.data;
     if (message.method?.startsWith("wisp/notifications/motif-")) {
       if (message.method === "wisp/notifications/motif-bridge-ready") {
