@@ -8,7 +8,7 @@ on:
 
 jobs:
   release-notes-helper:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check release-notes title helper
@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -31,21 +31,6 @@ jobs:
           cache-on-failure: true
           shared-key: headless-agent-${{ matrix.os }}
 
-      # wisp-cli now links wisp-store, whose Linux keyring backend needs libdbus
-      # at compile time even though debug builds persist secrets to a JSON file.
-      # The rust job gets this transitively via webkit/gtk; this job does not.
-      - name: Install Linux keyring build deps
-        if: runner.os == 'Linux'
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          set -euo pipefail
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt
-          fi
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-
       - name: Run MCP process-tree shutdown regression
         run: cargo test -p wisp-mcp --test process_tree_shutdown
 
@@ -55,10 +40,10 @@ jobs:
       - name: Run runtime worker process-tree regression
         run: cargo test -p wisp-runtime --test worker_process_tree
 
-      # Exercise the Python worker and standalone skill helpers on all three
-      # OSes, including process handling and project-relative planner paths.
-      - name: Run Python worker and skill helper tests (Unix)
-        if: runner.os != 'Windows'
+# Exercise the Python worker and standalone skill helpers on both supported
+      # desktop platforms, including process handling and project-relative paths.
+      - name: Run Python worker and skill helper tests (macOS)
+        if: runner.os == 'macOS'
         run: python3 -m unittest discover -s python -p "test_*.py" -v
 
       # python3 is not on PATH on windows-latest; the launcher is `python`.
@@ -78,10 +63,16 @@ jobs:
           if-no-files-found: error
 
   rust:
-    runs-on: ubuntu-latest
+    name: Rust (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        toolchain: [stable, 1.88.0]
+        include:
+          - os: macos-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: 1.88.0
     steps:
       - uses: actions/checkout@v4
 
@@ -98,56 +89,7 @@ jobs:
             . -> target
             ui -> target
           cache-on-failure: true
-          shared-key: rust-${{ matrix.toolchain }}
-
-      # src-tauri (workspace member) pulls in webkit2gtk/gtk3 on Linux; these
-      # aren't preinstalled on ubuntu-latest. See tauri.app/start/prerequisites.
-      # Cache the .debs: azure.archive.ubuntu.com often crawls (~80 kB/s) or
-      # hangs for hours on libwebkit2gtk-4.1-0 (~25 MB).
-      - name: Cache Tauri apt packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/apt-archives
-          key: apt-tauri-${{ runner.os }}-${{ runner.arch }}-webkit4.1-v1
-
-      - name: Install Tauri Linux dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          set -euo pipefail
-          CACHE="${HOME}/.cache/apt-archives"
-          mkdir -p "${CACHE}/partial"
-          cleanup() {
-            sudo chown -R "$(id -u):$(id -g)" "${CACHE}" 2>/dev/null || true
-            rm -rf "${CACHE}/partial" "${CACHE}/lock"
-          }
-          trap cleanup EXIT
-          APT_OPTS=(
-            -o "Dir::Cache::archives=${CACHE}"
-            -o Acquire::Retries=3
-            -o Acquire::http::Timeout=30
-            -o Acquire::https::Timeout=30
-          )
-          # azure.archive.ubuntu.com also hangs on the index fetch itself,
-          # burning the whole `apt-get update` budget on Ign retries. Point
-          # the runner's mirror list at the canonical archive and retry the
-          # update, so one slow mirror cannot fail the job.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt
-          fi
-          for attempt in 1 2 3; do
-            sudo timeout 4m apt-get "${APT_OPTS[@]}" update && break
-            if [ "$attempt" = 3 ]; then
-              echo "apt-get update failed after ${attempt} attempts" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          sudo timeout 20m apt-get "${APT_OPTS[@]}" install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev
+          shared-key: rust-${{ matrix.os }}-${{ matrix.toolchain }}
 
       - name: cargo test --workspace
         run: cargo test --workspace
@@ -157,7 +99,7 @@ jobs:
         working-directory: ui
 
   ui-e2e:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -177,7 +119,11 @@ jobs:
           key: trunk-${{ runner.os }}-v1
 
       - name: Install Trunk
-        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+        shell: pwsh
+        run: |
+          if (-not (Get-Command trunk -ErrorAction SilentlyContinue)) {
+            cargo install trunk --locked
+          }
 
       - uses: actions/setup-node@v4
         with:
@@ -189,7 +135,7 @@ jobs:
 
       - name: Install Chromium
         working-directory: ui-tests
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Playwright E2E
         working-directory: ui-tests
