@@ -699,7 +699,7 @@ mod tests {
 
         let datasets = manifest["datasets"].as_array().unwrap();
         let capabilities = manifest["capabilities"].as_array().unwrap();
-        assert_eq!(capabilities.len(), 22);
+        assert_eq!(capabilities.len(), 23);
         let dataset_ids: HashSet<&str> = datasets
             .iter()
             .map(|dataset| dataset["id"].as_str().unwrap())
@@ -774,6 +774,7 @@ mod tests {
             "16_Dependency_nagative_correlation.R",
             "17_bipolar_dependency_ASB7_as_example.R",
             "18_DrugAUC_and_DepMap_MTAPasExample.R",
+            "analysis-modules/癌种内突变锚定基因选择/scripts/depmap_official_mutation_engine.py",
         ]
         .into_iter()
         .collect();
@@ -793,6 +794,23 @@ mod tests {
         assert_eq!(reverse["entity_roles"]["target"], "dependency_gene");
         assert_eq!(forward["entity_roles"]["symmetric"], false);
         assert_eq!(reverse["entity_roles"]["symmetric"], false);
+
+        let official_mutation = capabilities
+            .iter()
+            .find(|capability| capability["id"] == "mutation_dependency_official_gene_effect_v2")
+            .unwrap();
+        assert_eq!(
+            official_mutation["statistics"]["primary_metric"],
+            "CRISPRGeneEffect"
+        );
+        assert_eq!(
+            official_mutation["statistics"]["test"],
+            "two-sided pooled-variance t-test"
+        );
+        assert_eq!(
+            official_mutation["statistics"]["min_complete_cases_per_group"],
+            5
+        );
 
         for dataset in datasets
             .iter()

@@ -43,10 +43,24 @@ Apply these rules:
 3. A named protein change such as KRAS G12D requires an allele-specific result.
    Do not substitute the gene-level Hotspot or all-missense group when the
    requested allele was not precomputed.
-4. If the user says only “A mutation” without a functional definition, report
-   the available event definitions and counts rather than silently choosing one.
-5. Preserve the returned dependency metric. Positive mutant-minus-control
-   difference means stronger dependency for `CRISPRGeneDependency`; negative
-   difference means stronger dependency for `CRISPRGeneEffect`.
-6. Forward and reverse FDR answer different questions. Preserve the manifest's
+4. If the user says only “A mutation” without a functional definition, use a
+   role-matched default when available and state it: tumor suppressor ->
+   `Damaging`; oncogene -> `Hotspot`; dual-role genes keep both definitions
+   separate. If no role match is available, report event definitions and counts.
+5. The default formal result is the module's
+   `depmap_official_gene_effect_v2`: continuous Chronos Gene Effect, a two-sided
+   pooled-variance t-test with at least five complete cases in both groups, and
+   BH correction across targets for the fixed anchor. The default hit filter is
+   FDR <= 0.10, mutant-minus-matrix-negative Gene Effect < -0.25, and mutant
+   dependent fraction >= 0.10.
+6. Use `CRISPRGeneDependency > 0.5` for dependent fractions and odds ratios.
+   Treat historical probability-as-continuous results as secondary provenance,
+   not as the default ranking.
+7. A matrix value of zero is a mutation-matrix-negative analytical control. Do
+   not expand it to proof that every locus is biologically wild type.
+8. In a DepMap mutation-dependency question, words such as “patient” or “病例”
+   map to the corresponding DepMap cell-line cohort and the answer must state
+   that data entity. Switch to patient-level data only when the user explicitly
+   asks for TCGA, survival, treatment response, pathology, or a clinical cohort.
+9. Forward and reverse FDR answer different questions. Preserve the manifest's
    multiple-testing family for the requested direction.

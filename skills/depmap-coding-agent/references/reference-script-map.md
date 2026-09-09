@@ -19,6 +19,7 @@ review rather than defaults to copy.
 | `prism_drug_sensitivity` | `05.3_drug_sensitivity.R` | PRISM compound-response association | PROGENy scores RDS, PRISM AUC, compound metadata |
 | `wgcna` | `05.4_wgcna.R` | WGCNA module discovery | Expression RDS, Gene Effect RDS |
 | `mutation_anchor_selection` | `06_mut_anchor_gene_selection_26Q1.R` | Select analyzable mutation anchors by lineage and event definition | Somatic mutation table, Damaging and Hotspot matrices, Dependency Probability, Model |
+| `mutation_dependency_official_gene_effect_v2` | `analysis-modules/癌种内突变锚定基因选择/scripts/depmap_official_mutation_engine.py` | Default formal mutation-positive versus matrix-negative dependency analysis adapted from DepMap Context Explorer | Gene Effect, Dependency Probability, Damaging/Hotspot matrices, somatic mutation table, Model, anchor cards |
 | `damaging_mutation_dependency` | `07_mutant_dependency_26Q1.R` | Mutation-stratified dependency and bidirectional batch screening | Damaging mutation matrix, Dependency Probability, Model |
 | `annotated_mutation_dependency` | `08_mutData_updata_26Q1.R` | Audit current mutation definitions and compare custom, Damaging, and Hotspot matrices | Somatic mutations, Damaging and Hotspot matrices, Dependency Probability, Model |
 | `mutation_to_target` | `09_batch_from_mut_to_target_26Q1.R` | Fix one mutation event and screen dependency targets | Damaging mutation, Dependency Probability and cell-info RDS files |
@@ -36,8 +37,8 @@ review rather than defaults to copy.
 
 - Gene overview: `01`, `02`, `03`.
 - Mutation-anchor discovery by cancer: `01`, then `06`.
-- Fixed mutation event to dependency targets: `01`, `08`, then `07`, `09`, or `10`.
-- Fixed dependency target to mutation biomarkers: `01`, then `07` or `11`.
+- Fixed mutation event to dependency targets: use `mutation_dependency_official_gene_effect_v2`; consult `07`, `09`, and `10` for historical behavior.
+- Fixed dependency target to mutation biomarkers: query the reverse axis of `mutation_dependency_official_gene_effect_v2`; consult `07` and `11` for historical behavior.
 - Copy-number amplification dependency: `01`, `12` and/or `13`.
 - Drug-response relationship: `01`, `05.3`, and `18` when cross-platform
   evidence is required.

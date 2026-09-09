@@ -1,0 +1,7 @@
+lineage,anchor_gene,event_type,selection_tier,oncokb_role,base_mut_n,base_wt_n,tested_target_count,official_default_hit_count,strict_fdr_hit_count,best_official_target,best_official_delta_gene_effect,best_official_fdr,best_exploratory_target,best_exploratory_delta_gene_effect,best_exploratory_fdr
+Liver,TP53,Damaging,A_role_matched_strict,TSG,18,7,8860,0,0,,,,SCD,0.613160611736396,0.03559731250524529
+Liver,TERT,Hotspot,B_strict_unclassified,,16,9,8860,0,0,,,,LMO4,0.2582369021321129,0.12419295511092537
+Liver,TP53,Hotspot,B_strict_unclassified,TSG,15,10,8860,0,0,,,,TYSND1,-0.16064666338885825,0.5946446635252385
+Liver,LINC02900,Damaging,C_exploratory,NEITHER,8,17,8860,0,0,,,,BACC1,-0.21170843896620412,0.8416438513126072
+Liver,AXIN1,Damaging,C_exploratory,,5,20,8860,0,0,,,,PGLYRP1,-0.2392466254881583,0.2701896253189806
+Liver,TTN,Damaging,C_exploratory,NEITHER,5,20,8681,0,0,,,,GAREM1,-0.2639612230937928,0.10465048520531108

@@ -1,0 +1,12 @@
+{
+  "status": "pass",
+  "checks": {
+    "lineage_catalog_rows": 30,
+    "lineage_totals_match": true,
+    "public_absolute_path_leak_count": 0,
+    "error_count": 0,
+    "independent_spot_check": "Liver TP53-Damaging / SCD pooled t-test matched scipy.stats.ttest_ind(equal_var=True)"
+  },
+  "errors": [],
+  "leak_files": []
+}

@@ -1,0 +1,33 @@
+{
+  "status": "complete",
+  "scope": "pan-cancer",
+  "release": "DepMap Public 26Q1",
+  "primary_metric": "Chronos CRISPR Gene Effect",
+  "effect": "mean_mutant_minus_mean_matrix_negative; negative means stronger dependency in mutant models",
+  "test": "two-sided pooled-variance independent t-test (scipy.stats.ttest_ind equal_var=True equivalent)",
+  "minimum_complete_cases_per_group_per_target": 5,
+  "multiple_testing_primary": "Benjamini-Hochberg within each mutation anchor across eligible dependency targets",
+  "official_default_hit": {
+    "fdr_max": 0.1,
+    "delta_gene_effect_max": -0.25,
+    "min_mutant_dependent_fraction": 0.1
+  },
+  "secondary_metric": "CRISPR Gene Dependency probability; dependent when probability > 0.5",
+  "eligible_dependency_target_count": 9011,
+  "gene_effect_dependency_model_overlap": 1208,
+  "target_filter": "dependency in >=3 and <=95% of profiled CRISPR models",
+  "official_adaptation": "DepMap Context Explorer method with mutation-positive as in-group and mutation-matrix-negative within the same lineage as out-group",
+  "known_difference_from_portal": "The portal also rescues genes tagged strongly selective in an internal TDA table; that table is not a 26Q1 release download, so the public downloadable base filter is used here.",
+  "privacy": "Only module-relative result locations and public input labels are recorded.",
+  "source_event_count": 58,
+  "tested_pair_count": 513208,
+  "official_default_hit_count": 792,
+  "strict_fdr_hit_count": 618,
+  "hotspot_matrix_model_overlap": 1208,
+  "confounding_control": "Pan-cancer mutation groups can differ in lineage composition; confirm candidates in lineage-specific results or a covariate model.",
+  "input_labels": [
+    "CRISPRGeneEffect.csv",
+    "CRISPRGeneDependency.csv",
+    "OmicsSomaticMutationsMatrixHotspot.csv"
+  ]
+}

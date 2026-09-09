@@ -1,6 +1,6 @@
 # 癌种内突变锚定基因选择
 
-基于 DepMap 26Q1，为每个癌种列出可用于后续突变—依赖分析的锚定基因。正式队列取默认 Damaging、默认 Hotspot、Model 注释和 CRISPR Gene Dependency 四者的 ModelID 交集，保证菜单中的样本确实能够进入后续依赖分析。
+基于 DepMap 26Q1，为每个癌种列出可用于后续突变—依赖分析的锚定基因。正式检验分别将突变事件与 Model、CRISPR Gene Effect 和 CRISPR Gene Dependency 按 ModelID 对齐，保证菜单中的样本能够进入连续 Gene Effect 主分析及依赖概率辅助分析。
 
 - `Damaging`：依据 LikelyLoF，适合 TSG/功能丧失问题。
 - `Hotspot`：依据官方热点规则，适合 OG/功能获得问题。
@@ -16,7 +16,7 @@
 
 变异类型、26Q1 实际数量、选择规则和用户意图映射见 `突变类型与选择指南.md`。`scripts/audit_mutation_types_26Q1.R` 从发布长表生成 `mutation_type_audit_v1/`，用于区分错义、移码、终止、剪接、框内 indel 等分子后果，并核对 LikelyLoF 与 Hotspot 的重叠；它只做概况审计，不替代正式的基因级 Mut/WT 矩阵。小型审计汇总同时保存在 `reports/mutation_type_overview_26Q1.csv`、`reports/damaging_hotspot_overlap_26Q1.csv` 和 `reports/mutation_type_audit_manifest_26Q1.json`。
 
-`06-11突变脚本数理逻辑审计.md` 逐项还原六个原始脚本的队列、门槛、效应量、检验、FDR 和排序公式。结论是：06 用于锚点准入，07 的 Welch 检验与方向内 BH FDR 是正式统计核心，08 用于事件定义审计，09–11 的乘积 `Score` 只可作为探索性可视化优先级。对应的机器可读清单位于 `reports/mutation_script_math_audit_26Q1.csv`，26Q1 实际样本交集和缺失值核对位于 `reports/mutation_script_data_audit_26Q1.json`。
+`06-11突变脚本数理逻辑审计.md` 逐项还原六个原始脚本的队列、门槛、效应量、检验、FDR 和排序公式。06 用于锚点准入，07 的 Welch 检验是历史正式实现，08 用于事件定义审计，09–11 的乘积 `Score` 只可作为探索性可视化优先级。当前默认正式统计已改为 DepMap Context Explorer 方法适配版：连续 Gene Effect、双侧等方差 t 检验、每组至少 5 个完整病例、按锚点 BH 校正。对应依据和全量重算结果见 `DepMap官网统计方法适配与全量重算说明.md`。
 
 六个被审计的原始文件已归档到 `scripts/tm00-reference/`，并由 `source_manifest.json` 固定文件大小和 SHA256。它们用于历史追溯；新分析使用模块当前脚本和 `module.intent.json` 的统计契约。
 
@@ -31,6 +31,7 @@
 ## 文档入口
 
 - `PR说明.md`：PR #6 的中文审查说明；概括问题、数据口径、筛选规则、脚本分工、结果状态和公开仓库边界。
+- `DepMap官网统计方法适配与全量重算说明.md`：记录官网源码口径、旧版系统性问题、新版全量规模及肝癌 TP53 复核。
 - `突变信息分析模块总览.md`：模块首要入口；按目的、数据、事件定义、脚本流程、双向分析、当前结果、用户工作流和缺口完整梳理。
 - `锚点基因筛选方法.md`：逐步记录模型交集、事件定义、癌种内计数、样本门槛、角色匹配、Common Essential 处理和输出等级。
 - `问题梳理与结论.md`：汇总本模块建立过程中关于数据、分组、交集、样本门槛、Common Essential 和下游口径的疑问与结论。
