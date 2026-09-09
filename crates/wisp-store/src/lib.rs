@@ -30,6 +30,7 @@ mod provenance;
 mod publications;
 mod remote_staging;
 mod research;
+mod research_journey;
 mod resources;
 mod runs;
 mod schedules;
@@ -173,6 +174,7 @@ const RUN_LOG_PULL_MIGRATION: &str = "0050_run_log_pull";
 const ORPHAN_FILE_RETENTION_MIGRATION: &str = "0051_orphan_file_retention";
 const RUN_REVIEW_DISMISSED_MIGRATION: &str = "0052_run_review_dismissed";
 const SESSION_SERVICE_TIER_MIGRATION: &str = "0053_session_service_tier";
+const RESEARCH_JOURNAL_MIGRATION: &str = "0054_research_journal";
 
 #[derive(Clone)]
 pub struct Store {
@@ -709,6 +711,16 @@ impl Store {
             Self::add_columns_if_missing(pool, "frames", &[("service_tier", "TEXT")]).await?;
             Self::record_migration(pool, SESSION_SERVICE_TIER_MIGRATION).await?;
         }
+        // Append-only daily notes are separate from scientific decisions.
+        if !Self::migration_applied(pool, RESEARCH_JOURNAL_MIGRATION).await? {
+            Self::execute_sql_script(
+                pool,
+                include_str!("../migrations/0054_research_journal.sql"),
+            )
+            .await?;
+            Self::record_migration(pool, RESEARCH_JOURNAL_MIGRATION).await?;
+        }
+
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was
         // later folded into 0000_init.sql (or into an already-shipped apply_*

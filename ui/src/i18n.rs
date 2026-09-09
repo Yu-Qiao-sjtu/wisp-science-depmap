@@ -66,7 +66,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
     match (locale, key) {
         (Locale::En, "sidebar.new_session") => Some("New session"),
         (Locale::En, "sidebar.files") => Some("Files"),
-        (Locale::En, "sidebar.graph") => Some("Research graph"),
+        (Locale::En, "sidebar.graph") => Some("Research journey"),
         (Locale::En, "sidebar.publication") => Some("Publication"),
         (Locale::En, "sidebar.library") => Some("Library"),
         (Locale::En, "sidebar.new_folder") => Some("New group"),
@@ -2775,7 +2775,7 @@ Do not leave generated files in the project root.",
 
         (Locale::Zh, "sidebar.new_session") => Some("新建会话"),
         (Locale::Zh, "sidebar.files") => Some("文件"),
-        (Locale::Zh, "sidebar.graph") => Some("研究图谱"),
+        (Locale::Zh, "sidebar.graph") => Some("研究轨迹"),
         (Locale::Zh, "sidebar.publication") => Some("论文证据"),
         (Locale::Zh, "sidebar.library") => Some("收藏库"),
         (Locale::Zh, "sidebar.new_folder") => Some("新建分组"),

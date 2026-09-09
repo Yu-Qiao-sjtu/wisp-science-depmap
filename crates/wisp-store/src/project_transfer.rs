@@ -181,6 +181,12 @@ async fn copy_project_children(tx: &mut Transaction<'_, Sqlite>, project_id: &st
          SELECT id,project_id,source_id,target_id,relation,metadata_json,created_at FROM transfer.research_edges WHERE project_id=?",
     ];
 
+    // Older project bundles have no daily notes. Exploration-only notes stay
+    // in their branch, following the existing mainline export boundary.
+    if attached_table_exists(tx, "research_journal_entries").await? {
+        sqlx::query("INSERT INTO research_journal_entries(id,project_id,title,body,category,occurred_at,created_at) SELECT id,project_id,title,body,category,occurred_at,created_at FROM transfer.research_journal_entries WHERE project_id=? AND exploration_id IS NULL")
+            .bind(project_id).execute(&mut **tx).await?;
+    }
     for query in QUERIES {
         sqlx::query(query)
             .bind(project_id)
@@ -873,6 +879,7 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM messages WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM research_edges WHERE project_id=?",
         "DELETE FROM research_nodes WHERE project_id=?",
+        "DELETE FROM research_journal_entries WHERE project_id=?",
         "DELETE FROM artifacts WHERE project_id=?",
         "DELETE FROM external_resources WHERE project_id=?",
         "DELETE FROM runs WHERE project_id=?",
@@ -1331,6 +1338,7 @@ impl Store {
             ("reproduction_results", "*", "id"),
             ("research_nodes", "*", "id"),
             ("research_edges", "*", "id"),
+            ("research_journal_entries", "*", "id"),
         ];
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database.display()))?
             .read_only(true);
