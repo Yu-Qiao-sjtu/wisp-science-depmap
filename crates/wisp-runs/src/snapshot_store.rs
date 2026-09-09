@@ -196,12 +196,14 @@ fn reject_project_symlinks(project_root: &Path, source: &Path) -> Result<(), Str
     // macOS exposes the temporary directory through `/var` while canonical
     // input paths use `/private/var`. Compare against the physical root so a
     // path that is genuinely inside the project is not rejected.
-    let logical_root = project_root;
+    let logical_root = dunce::simplified(project_root);
     let project_root =
         dunce::canonicalize(logical_root).unwrap_or_else(|_| logical_root.to_path_buf());
+    let source = dunce::simplified(source);
     let source = if source.is_absolute() {
         source
             .strip_prefix(logical_root)
+            .or_else(|_| source.strip_prefix(&project_root))
             .map(|relative| project_root.join(relative))
             .unwrap_or_else(|_| source.to_path_buf())
     } else {
@@ -284,6 +286,21 @@ mod tests {
         std::fs::write(root.join(&copied.storage_path), b"corrupt").unwrap();
         let error = capture_file(&root, &source, SnapshotPolicy::Always).unwrap_err();
         assert!(error.contains("corruption"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn accepts_a_canonical_source_inside_a_logical_project_root() {
+        let root =
+            std::env::temp_dir().join(format!("wisp_snapshot_canonical_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("input.txt");
+        std::fs::write(&source, b"input").unwrap();
+        let canonical_source = std::fs::canonicalize(&source).unwrap();
+
+        let captured = capture_file(&root, &canonical_source, SnapshotPolicy::Reference).unwrap();
+        assert_eq!(captured.storage_path, "input.txt");
 
         let _ = std::fs::remove_dir_all(root);
     }
