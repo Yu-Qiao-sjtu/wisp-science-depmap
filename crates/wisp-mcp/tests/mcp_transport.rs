@@ -125,7 +125,16 @@ async fn concurrent_stdio_calls_keep_matching_ids() -> Result<(), String> {
     {
         return Err(format!("fast call received {:?}", fast.structured_content));
     }
-    client.shutdown().await.map_err(|error| error.to_string())?;
+    client
+        .shutdown()
+        .await
+        .map_err(|error| format!("shutdown after successful concurrent calls: {error}"))?;
+    // EOF-only servers exit before the tree's signal grace period. Repeated
+    // shutdown must also succeed once that unreaped zombie has been handled.
+    client
+        .shutdown()
+        .await
+        .map_err(|error| format!("repeated shutdown: {error}"))?;
     Ok(())
 }
 

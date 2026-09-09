@@ -757,6 +757,13 @@ artifacts, not hidden runtime checkpoints.
   budget for one stop request is shared across the runtimes it covers: a worker that
   refuses to exit must never block an Agent turn, a project switch, or app exit.
   Stopping therefore also reclaims a background process a cell left running.
+- On macOS, a process group containing only unreaped zombies can make `killpg`
+  return `EPERM`. The shared process-tree boundary used by runtimes and MCP
+  checks complete group membership and zombie status before treating this case
+  as stopped. Permission errors, failed queries, and changing membership remain
+  errors; live descendants still receive TERM/KILL before the leader is reaped.
+  This lets an EOF-only MCP server close normally and preserves a crashed
+  runtime worker's original exit status in its startup diagnostic.
 - Arbitrary Python/R execution continues to use the existing approval system.
 - Code travels over inherited local/WSL/SSH stdio, not an unauthenticated listening
   port.
