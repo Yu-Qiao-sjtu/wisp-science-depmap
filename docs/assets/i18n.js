@@ -2,7 +2,7 @@ const WISP_PAGES_I18N = {
   zh: {
     "meta.home.title": "Wisp Science | 开源科学计算 Agent",
     "meta.home.desc":
-      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 37 个内置 SKILL。",
+      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 36 个内置 SKILL。",
     "meta.models.title": "模型配置 | Wisp Science",
     "meta.models.desc": "Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
     "meta.acp.title": "ACP Agent 配置 | Wisp Science",
@@ -76,7 +76,7 @@ const WISP_PAGES_I18N = {
       "长驻内核子进程保持变量与 DataFrame 在内存中，且按会话隔离。跨轮次迭代分析无需重复加载数据，并行会话也不会互相覆盖状态。",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# 变量在后续 tool call 中仍然可用\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "37 个内置 SKILL 工作流",
+    "features.skillTitle": "36 个内置 SKILL 工作流",
     "features.skillBody": "从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。",
     "features.skillPre":
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 通过 use_skill 工具按需加载 SKILL.md",
@@ -151,7 +151,7 @@ const WISP_PAGES_I18N = {
     "stack.heading": "对接你的工具链",
     "stack.lead":
       "内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
-    "stack.skill": "37 bundled workflows",
+    "stack.skill": "36 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
     "stack.bioItem": "mcp_bio<span>247 个工具 · 23 个连接器</span>",
     "stack.browse": "查看 MCP 工具目录",
@@ -284,7 +284,7 @@ const WISP_PAGES_I18N = {
   en: {
     "meta.home.title": "Wisp Science | Open-source scientific computing agent",
     "meta.home.desc":
-      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 37 bundled SKILLs.",
+      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 36 bundled SKILLs.",
     "meta.models.title": "Model configuration | Wisp Science",
     "meta.models.desc":
       "Wisp Science model setup: OpenAI-compatible, OpenAI Responses, and Anthropic APIs.",
@@ -359,7 +359,7 @@ const WISP_PAGES_I18N = {
       "Long-lived kernel workers keep variables and DataFrames in memory, isolated per conversation. Iterate across turns without reloading data, and parallel sessions never share state.",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# Variables remain available in later tool calls\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "37 bundled SKILL workflows",
+    "features.skillTitle": "36 bundled SKILL workflows",
     "features.skillBody":
       "Literature review, analysis modules, figures, Python/R environments, and remote SSH compute—ready to load.",
     "features.skillPre":
@@ -443,7 +443,7 @@ const WISP_PAGES_I18N = {
     "stack.heading": "Fits the tools you already use",
     "stack.lead":
       "Built-in mcp_bio queries ~80 scientific databases from an in-process catalog; you can also add custom MCP servers. SKILL.md extends reusable pipelines. The agent treats both as first-class tools.",
-    "stack.skill": "37 bundled workflows",
+    "stack.skill": "36 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
     "stack.bioItem": "mcp_bio<span>247 tools · 23 connectors</span>",
     "stack.browse": "Browse the MCP catalog",
