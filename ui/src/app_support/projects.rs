@@ -679,6 +679,10 @@ pub(crate) fn ProjectsScreen(
                     <h1 class="projects-title">
                         <span class="projects-brand-mark brand-wordmark" role="img" aria-label="Wisp Science"></span>
                     </h1>
+                    <p class="projects-tagline">
+                        <span>{move || t(locale.get(), "projects.tagline_lead")}</span>
+                        <span>{move || t(locale.get(), "projects.tagline_brand")}</span>
+                    </p>
                 </div>
                 <div class="projects-actions">
                     <button type="button" class="projects-icon-btn" data-testid="open-research-calendar"

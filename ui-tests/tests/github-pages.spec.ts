@@ -103,7 +103,7 @@ for (const readme of ["README.md", "README_zh.md"]) {
   });
 }
 
-test("website hero wordmark fits desktop and mobile on its light canvas", async ({ page }) => {
+test("website hero wordmark and bilingual title fit desktop and mobile", async ({ page }) => {
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== "https://wordmark.test") return route.abort();
@@ -123,6 +123,16 @@ test("website hero wordmark fits desktop and mobile on its light canvas", async 
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);
     expect(box.width / box.height).toBeCloseTo(520 / 344, 2);
-    await expect(page.locator(".hero-actions .btn-primary")).toBeInViewport();
+    for (const [lang, title] of [
+      ["zh", "严谨做科研， Wisp Science 在身边。"],
+      ["en", "Let rigor be your guide, with Wisp Science by your side."],
+    ]) {
+      await page.locator(`button[data-lang="${lang}"]`).click();
+      const heading = page.locator(".hero h1");
+      await expect(heading).toHaveText(title, { useInnerText: true });
+      await expect(heading).toBeInViewport();
+      expect(await heading.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      await expect(page.locator(".hero-actions .btn-primary")).toBeInViewport();
+    }
   }
 });

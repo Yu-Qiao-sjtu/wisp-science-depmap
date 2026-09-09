@@ -2591,6 +2591,8 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "onboard.start") => Some("Get started"),
 
         (Locale::En, "projects.title") => Some("Projects"),
+        (Locale::En, "projects.tagline_lead") => Some("Let rigor be your guide,"),
+        (Locale::En, "projects.tagline_brand") => Some("with Wisp Science by your side."),
         (Locale::En, "projects.opening") => Some("Opening project…"),
         (Locale::En, "projects.search") => Some("Search"),
         (Locale::En, "projects.search_ph") => Some("Search projects, artifacts, sessions..."),
@@ -5179,6 +5181,8 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "onboard.start") => Some("开始使用"),
 
         (Locale::Zh, "projects.title") => Some("项目"),
+        (Locale::Zh, "projects.tagline_lead") => Some("严谨做科研，"),
+        (Locale::Zh, "projects.tagline_brand") => Some("Wisp Science 在身边。"),
         (Locale::Zh, "projects.opening") => Some("正在打开项目…"),
         (Locale::Zh, "projects.search") => Some("搜索"),
         (Locale::Zh, "projects.search_ph") => Some("搜索项目、artifacts、会话..."),

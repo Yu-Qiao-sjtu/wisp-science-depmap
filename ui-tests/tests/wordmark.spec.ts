@@ -52,15 +52,23 @@ for (const surface of ["projects", "chat"] as const) {
   });
 }
 
-for (const width of [390, 800, 1600]) {
-  test(`projects wordmark and actions fit a ${width}px window`, async ({ page }) => {
+for (const locale of ["en", "zh"]) {
+for (const width of [390, 800, 1000, 1600]) {
+  test(`projects wordmark, tagline and actions fit a ${width}px window (${locale})`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 800 });
-    await page.goto("/");
+    await page.goto(`/?mockLocale=${locale}`);
     const wordmark = page.getByRole("heading", { name: "Wisp Science", exact: true });
+    const brand = page.locator(".projects-brand");
+    const tagline = page.locator(".projects-tagline");
     const actions = page.locator(".projects-actions");
     await expect(wordmark).toBeVisible();
-    await expect(actions.getByRole("button", { name: "New project" })).toBeVisible();
-    const brandBox = (await wordmark.boundingBox())!;
+    await expect(tagline).toHaveText(locale === "zh"
+      ? "严谨做科研， Wisp Science 在身边。"
+      : "Let rigor be your guide, with Wisp Science by your side.", { useInnerText: true });
+    await expect(tagline).toBeInViewport();
+    expect(await tagline.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await expect(actions.getByRole("button", { name: locale === "zh" ? "新建项目" : "New project" })).toBeVisible();
+    const brandBox = (await brand.boundingBox())!;
     const actionsBox = (await actions.boundingBox())!;
     expect(brandBox.x).toBeGreaterThanOrEqual(0);
     expect(brandBox.x + brandBox.width).toBeLessThanOrEqual(width);
@@ -69,5 +77,7 @@ for (const width of [390, 800, 1600]) {
     expect(actionsBox.x >= brandBox.x + brandBox.width || actionsBox.y >= brandBox.y + brandBox.height).toBe(true);
     const screen = page.locator(".projects-screen");
     expect(await screen.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`projects-${locale}-${width}.png`), animations: "disabled" });
   });
+}
 }

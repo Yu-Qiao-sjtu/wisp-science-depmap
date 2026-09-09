@@ -24,7 +24,7 @@ const WISP_PAGES_I18N = {
     "nav.downloadShort": "下载",
     "lang.aria": "语言",
     "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.5.0",
-    "hero.title": "严谨科研的<br>本地 Agent 工作台",
+    "hero.title": "严谨做科研，<br>Wisp Science 在身边。",
     "hero.lead":
       "Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。",
     "hero.download": "下载桌面安装包",
@@ -307,7 +307,7 @@ const WISP_PAGES_I18N = {
     "nav.downloadShort": "Download",
     "lang.aria": "Language",
     "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.5.0",
-    "hero.title": "A local agent workbench<br>for rigorous research",
+    "hero.title": "Let rigor be your guide,<br>with Wisp Science by your side.",
     "hero.lead":
       "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
     "hero.download": "Download the desktop app",
