@@ -760,7 +760,7 @@ test("Memory settings show the active project name", async ({ page }) => {
   await expect(page.getByTestId("memory-project-select")).toHaveAttribute("data-project-id", "default");
   await expect(page.getByTestId("memory-project-select")).toContainText("wisp-science");
   await expect(project).toContainText("(1)");
-  await expect(page.locator(".conn-group-label", { hasText: "Project memory" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project memory", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Clear all" })).toHaveClass("memory-clear-btn");
   await expect(page.locator(".memory-toggle-label")).toHaveText("Memory");
   await expect(
@@ -1309,6 +1309,59 @@ test("selecting an ACP Agent from a populated HTTP session starts a fresh sessio
   });
   const secondSend = await lastInvokeArgs(page, "send_message");
   expect(secondSend.sessionId).not.toBe(firstSend.sessionId);
+});
+
+for (const [locale, detail] of [
+  ["en", "Agent process exited during startup"],
+  ["en", "api: 401 unauthorized"],
+  ["zh", "api: 403 forbidden"],
+  ["zh", "This ACP Agent cannot resume or load the saved session."],
+  ["en", "api: 400 context window exceeded"],
+]) {
+  test(`ACP failure explains HTTP fallback and billing (${locale}, ${detail}) (#1118)`, async ({ page }) => {
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.locator(".proj-card-main").first().click();
+    await page.locator(".model-picker-btn").click();
+    await page.getByRole("button", { name: /Test ACP Agent/ }).click();
+    await composer(page).fill(`ACPFAIL ${detail}`);
+    await composer(page).press("Enter");
+
+    const error = page.locator(".finding.err");
+    await expect(error).toContainText(detail);
+    await expect(error.locator(".finding-body")).toContainText(
+      locale === "zh" ? "未回退（fallback）到 HTTP 模型" : "did not fall back to an HTTP model",
+    );
+    await expect(error.locator(".finding-body")).toContainText(
+      locale === "zh" ? "可能产生额外费用" : "may incur separate charges",
+    );
+    await expect(error.getByRole("button", { name: locale === "zh" ? "继续执行" : "Resume", exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("context-recovery-modal")).toHaveCount(0);
+    await expect(page.locator(".model-picker-label")).toHaveText("Test ACP Agent");
+    expect(await invokeCount(page, "send_message")).toBe(1);
+
+    await composer(page).fill("retry with the same ACP Agent");
+    await composer(page).press("Enter");
+    await expect(page.getByText("Hello from ACP.")).toBeVisible();
+    expect(await lastInvokeArgs(page, "send_message")).toMatchObject({ acpAgentId: "acp-test" });
+    expect(await invokeCount(page, "send_message")).toBe(2);
+    expect(await invokeCount(page, "set_active_model")).toBe(0);
+  });
+}
+
+test("restored ACP model options are usable before sending a message (#1112)", async ({ page }) => {
+  await openMockPlanSession(page, "acp");
+  await expect(page.locator(".model-picker-btn")).toContainText("Test ACP Agent");
+  await page.locator(".model-picker-btn").click();
+  const config = page.getByTestId("acp-session-config");
+  await expect(config.getByLabel("Model", { exact: true })).toHaveValue("smart");
+  await config.getByLabel("Model", { exact: true }).selectOption("fast");
+  await expect.poll(() => lastInvokeArgs(page, "set_acp_session_config")).toMatchObject({ frameId: "s1", configId: "model", value: { value: "fast" } });
+  await page.keyboard.press("Escape");
+  await newSessionButton(page).click();
+  await page.locator('[data-session-id="s1"]').click();
+  await expect(page.locator(".model-picker-btn")).toContainText("Test ACP Agent");
+  await page.locator(".model-picker-btn").click();
+  await expect(config.getByLabel("Model", { exact: true })).toHaveValue("fast");
 });
 
 test("ACP turn maps config, overlapping tools, plan, usage, and exact permission response", async ({ page }) => {
@@ -1880,6 +1933,59 @@ test("post-start API errors keep the user bubble when an Error event lands first
   // Resume must still see the original question in the transcript.
   await expect(page.getByRole("button", { name: /Resume|继续执行/ })).toBeVisible();
 });
+
+for (const locale of ["zh", "en"]) {
+  test(`long API errors wrap without squeezing the badge or actions (${locale})`, async ({ page }) => {
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.locator(".proj-card-main").first().click();
+    await composer(page).fill("show a network error");
+    await composer(page).press("Enter");
+    await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+    const send = await lastInvokeArgs(page, "send_message");
+    const message = "http: error decoding response body: request or response body error: error reading a body from connection: peer closed connection without sending TLS close_notify: "
+      + "https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof-" + "connection".repeat(30);
+    await emitTauriEvent(page, "agent", { kind: "Error", frame_id: send.sessionId, message });
+    const card = page.locator(".finding.err");
+    await expect(card.locator(".finding-title")).toHaveText(message);
+    await expect(card.getByRole("button", { name: locale === "zh" ? "继续执行" : "Resume", exact: true })).toBeVisible();
+    await expect(card.getByRole("button", { name: locale === "zh" ? "复制" : "Copy", exact: true })).toBeVisible();
+    for (const width of [1440, 820, 360]) {
+      await page.setViewportSize({ width: Math.max(width, 820), height: 1200 });
+      // Also constrain the card itself: narrow panes need the same wrapping
+      // behavior even when the desktop window remains wide.
+      await card.evaluate((el, width) => { el.style.maxWidth = width === 360 ? "360px" : ""; }, width);
+      await card.scrollIntoViewIfNeeded();
+      const layout = await card.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const controls = Array.from(el.querySelectorAll(".finding-tag, button"));
+        const buttonCenters = Array.from(el.querySelectorAll("button"), button => {
+          const rect = button.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        return {
+          overflow: el.scrollWidth > el.clientWidth,
+          controls: controls.map(control => {
+            const rect = control.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(control);
+            return {
+              lines: range.getClientRects().length,
+              inside: rect.left >= bounds.left && rect.right <= bounds.right,
+            };
+          }),
+          buttonsOnSameRow: Math.max(...buttonCenters) - Math.min(...buttonCenters) < 1,
+          actionsBelowSummary: el.querySelector(".finding-actions")!.getBoundingClientRect().top
+            >= el.querySelector(".finding-summary")!.getBoundingClientRect().bottom,
+        };
+      });
+      expect(layout.overflow).toBe(false);
+      expect(layout.controls).toEqual(Array(3).fill({ lines: 1, inside: true }));
+      expect(layout.buttonsOnSameRow).toBe(true);
+      if (width === 360) expect(layout.actionsBelowSummary).toBe(true);
+      await card.screenshot({ path: test.info().outputPath(`error-card-${locale}-${width}.png`) });
+    }
+  });
+}
 
 test("truncated output auto-continue is shown as progress", async ({ page }) => {
   await enterApp(page);
@@ -3334,6 +3440,7 @@ test("Ctrl+P command palette runs commands and switches themes", async ({ page }
   await expect(input).toHaveAttribute("inputmode", "search");
   await expect(input).toHaveAttribute("autocomplete", "off");
   await expect(palette).toContainText("New session");
+  await expect(palette).toContainText("New Window");
   await expect(palette.locator(".action-palette-row", { hasText: "New session" })
     .locator(".action-shortcut")).toHaveText("Ctrl+N");
   await expect(palette.locator(".action-palette-row", { hasText: "Search" })
@@ -5999,41 +6106,32 @@ test("compute menu sets and clears a default analysis environment", async ({ pag
   const menu = page.getByRole("menu", { name: "Compute" });
   const server = menu.locator('[data-context-id="ssh:gpu-server"]');
   await expect(server.locator(".compute-resource-default")).toHaveCount(0);
-  await server.getByRole("button", { name: "Set as default analysis environment" }).click();
-  await expect.poll(() => lastInvokeArgs(page, "set_default_execution_context")).toMatchObject({
+  await server.getByRole("button", { name: "Set as this chat's default" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_session_default_execution_context")).toMatchObject({
     contextId: "ssh:gpu-server",
   });
-  // Setting the default also selects it for the current session.
-  await expect.poll(() => lastInvokeArgs(page, "set_session_execution_context_enabled")).toMatchObject({
-    sessionId: expect.any(String),
-    contextId: "ssh:gpu-server",
-    enabled: true,
-  });
+  expect(await lastInvokeArgs(page, "set_default_execution_context")).toBeNull();
   await expect(server).toHaveClass(/enabled/);
   await expect(server.locator(".compute-resource-default")).toHaveText("Default");
   await expect(server).toContainText("In this chat");
   await expect(agentMenu.getByRole("button", { name: /^Compute/ })).toContainText("Default gpu-server");
 
-  await server.getByRole("button", { name: "Remove default" }).click();
+  await server.getByRole("button", { name: "Use local in this chat" }).click();
   await expect.poll(async () =>
-    (await lastInvokeArgs(page, "set_default_execution_context"))?.contextId ?? null
+    (await lastInvokeArgs(page, "set_session_default_execution_context"))?.contextId ?? null
   ).toBeNull();
   await expect(server.locator(".compute-resource-default")).toHaveCount(0);
   await expect(agentMenu.getByRole("button", { name: /^Compute/ })).toContainText("1 remote");
 });
 
-test("starred default stays visible when the current chat has not attached it", async ({ page }) => {
+test("new chats snapshot the global default without rewriting older chats", async ({ page }) => {
   await enterApp(page);
-
-  const menu = await openComputeMenu(page);
-  await menu.locator('[data-context-id="ssh:gpu-server"]')
-    .getByRole("button", { name: "Set as default analysis environment" })
-    .click();
+  await openSettingsSection(page, "Environments");
+  await page.getByTestId("default-analysis-environment").selectOption("ssh:gpu-server");
   await expect.poll(() => lastInvokeArgs(page, "set_default_execution_context")).toMatchObject({
     contextId: "ssh:gpu-server",
   });
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Back to app" }).click();
   await newSessionButton(page).click();
 
   const agentMenu = await openAgentMenu(page);
@@ -6042,12 +6140,34 @@ test("starred default stays visible when the current chat has not attached it", 
   await agentMenu.getByRole("button", { name: /^Compute/ }).click();
   const server = page.getByRole("menu", { name: "Compute" })
     .locator('[data-context-id="ssh:gpu-server"]');
-  await expect(server).not.toHaveClass(/enabled/);
+  await expect(server).toHaveClass(/enabled/);
   await expect(server.locator(".compute-resource-default")).toHaveText("Default");
-  await expect(server).toContainText("Auto-attaches");
+  await expect(server).toContainText("In this chat");
   await expect(page.getByTestId("session-runtime-strip")
     .locator('[data-testid="session-runtime-group"][data-runtime-context="ssh:gpu-server"]'))
     .toBeVisible();
+});
+
+test("compute menu default is isolated per conversation", async ({ page }) => {
+  await enterApp(page);
+
+  const firstMenu = await openComputeMenu(page);
+  await firstMenu.locator('[data-context-id="ssh:gpu-server"]')
+    .getByRole("button", { name: "Set as this chat's default" })
+    .click();
+  await expect.poll(() => lastInvokeArgs(page, "set_session_default_execution_context")).toMatchObject({
+    contextId: "ssh:gpu-server",
+  });
+  expect(await lastInvokeArgs(page, "set_default_execution_context")).toBeNull();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+
+  await newSessionButton(page).click();
+  const secondMenu = await openComputeMenu(page);
+  await expect(secondMenu.getByTestId("compute-default-analysis")).toHaveValue("");
+  await expect(secondMenu.locator('[data-context-id="ssh:gpu-server"]'))
+    .not.toHaveClass(/enabled/);
+  await expect(page.getByRole("button", { name: /^Compute/ })).toContainText("Local by default");
 });
 
 test("environment panel attaches and detaches remote servers", async ({ page }) => {
@@ -7567,6 +7687,21 @@ test("runtime panel shows lifecycle state and controls start stop restart", asyn
   });
 });
 
+test("terminated runtimes can be dismissed without restarting their interpreter", async ({ page }) => {
+  await enterApp(page);
+  await selectRemoteContext(page);
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.getByRole("button", { name: "Environment", exact: true }).click();
+  await page.locator(".context-card", { hasText: "ssh:gpu-server" }).getByRole("button", { name: "View runtimes" }).click();
+  const runtime = page.locator('.runtime-card[data-runtime-id="runtime-python-ssh"]');
+  await expect(runtime.getByRole("button", { name: "Dismiss", exact: true })).toHaveCount(0);
+  await runtime.getByRole("button", { name: "Stop", exact: true }).click();
+  await runtime.getByRole("button", { name: "Dismiss", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "dismiss_runtime")).toEqual({ runtimeId: "runtime-python-ssh" });
+  await expect(runtime).toHaveCount(0);
+  await expect(page.locator('.runtime-card[data-runtime-language="python"][data-runtime-context="ssh:gpu-server"]')).toContainText("Not started");
+});
+
 test("runtime inspector lists object metadata without loading object contents", async ({ page }) => {
   await enterApp(page);
   await selectRemoteContext(page);
@@ -8737,6 +8872,7 @@ test("custom CSS hides the bold-at-start lead bar", async ({ page }) => {
   expect(await barWidth()).toBe("3px");
 
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
   await page.getByTestId("appearance-custom-css")
     .fill(":root { --md-lead-bar-width: 0; --md-lead-bar-pad: 0; }");
   await page.getByRole("button", { name: "Back to app" }).click();
@@ -8747,6 +8883,7 @@ test("custom CSS hides the bold-at-start lead bar", async ({ page }) => {
 test("appearance custom CSS can be pasted, imported, and cleared", async ({ page }, testInfo) => {
   await enterApp(page);
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
 
   const card = page.getByTestId("appearance-custom-css-card");
   await expect(card).toHaveClass(/appearance-config-card/);
@@ -8781,6 +8918,7 @@ test("appearance custom CSS can be pasted, imported, and cleared", async ({ page
 test("custom CSS sanitizes remote url and import", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Appearance");
+  await page.getByTestId("appearance-custom-css-summary").click();
   await page.getByTestId("appearance-custom-css").fill([
     ":root { --clay: #111111; }",
     '@import url("https://evil.example/x.css");',
@@ -9168,8 +9306,10 @@ test("one DeepSeek Base URL can save Responses and Anthropic protocol models", a
 test("onboarding key setup lands on flash after adding pro", async ({ page }) => {
   await page.goto("/?mockOnboarding=1");
   await expect(page.locator(".onboard-overlay")).toBeVisible();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
+  await page.locator(".onboard-overlay").getByRole("button", { name: "Next" }).click();
   await page.getByLabel("API key (stored in OS keyring)").fill("sk-onboard");
-  await page.getByRole("button", { name: "Next" }).click();
+  await page.keyboard.press("Enter");
   // Order matters: save_model activates each new profile, so flash must land
   // last for the user to start on the cheaper default.
   await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
@@ -9645,7 +9785,10 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator(".cred-help-trigger")).toHaveCount(5);
+  await expect(page.locator(".cred-help-trigger")).toHaveCount(0);
+  await expect(page.locator("[data-credential-service]")).toHaveCount(5);
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator(".cred-help-trigger")).toHaveCount(1);
   const openAlexHelp = page.getByRole("button", { name: "OpenAlex: About this credential" });
   const openAlexTooltip = page.locator("#cred-help-openalex");
   await expect(openAlexTooltip).not.toBeVisible();
@@ -9656,19 +9799,23 @@ test("credential services explain their behavior and open official setup links",
   await expect(openAlexTooltip).toContainText("When not configured");
   await expect(openAlexTooltip).toContainText("falls back to anonymous OpenAlex requests");
 
+  await page.locator(".settings-head-back").click();
+  await page.locator('[data-credential-service="ncbi"]').click();
   const ncbiHelp = page.getByRole("button", { name: "NCBI E-utilities (PubMed): About this credential" });
   await ncbiHelp.focus();
   await expect(page.locator("#cred-help-ncbi")).toBeVisible();
   await expect(page.locator("#cred-help-ncbi")).toContainText("3 requests/s limit");
 
   const links = [
-    ["Get OpenAlex API key", "https://openalex.org/settings/api"],
-    ["Open InfiniSynapse console", "https://app.infinisynapse.cn/tasks"],
-    ["Visit InfiniSynapse", "https://infinisynapse.cn"],
-    ["Get SCIMaster API key", "https://scimaster.bohrium.com/vibe-write/home"],
-    ["Open NCBI account", "https://www.ncbi.nlm.nih.gov/account/"],
+    ["openalex", "Get OpenAlex API key", "https://openalex.org/settings/api"],
+    ["infinisynapse", "Open InfiniSynapse console", "https://app.infinisynapse.cn/tasks"],
+    ["infinisynapse", "Visit InfiniSynapse", "https://infinisynapse.cn"],
+    ["scimaster", "Get SCIMaster API key", "https://scimaster.bohrium.com/vibe-write/home"],
+    ["ncbi", "Open NCBI account", "https://www.ncbi.nlm.nih.gov/account/"],
   ] as const;
-  for (const [label, url] of links) {
+  for (const [service, label, url] of links) {
+    await page.locator(".settings-head-back").click();
+    await page.locator(`[data-credential-service="${service}"]`).click();
     await page.getByRole("button", { name: label, exact: true }).click();
     await expect.poll(() => lastInvokeArgs(page, "open_external_url")).toMatchObject({ url });
   }
@@ -9682,6 +9829,7 @@ test("Chinese NCBI credential help gives the complete account navigation path", 
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "凭据", exact: true }).click();
 
+  await page.locator('[data-credential-service="ncbi"]').click();
   const help = page.getByRole("button", { name: /NCBI E-utilities.*了解该凭据/ });
   await help.focus();
   const tooltip = page.locator("#cred-help-ncbi");
@@ -9699,6 +9847,7 @@ test("Chinese NCBI credential help gives the complete account navigation path", 
 test("credentials settings include SCIMaster and save its key", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
+  await page.locator('[data-credential-service="scimaster"]').click();
   const field = page.locator("label", { hasText: "SCIMaster API key" });
   await expect(field).toContainText("Not configured");
   await field.locator("input").fill("sk-sci-123");
@@ -9714,6 +9863,7 @@ test("credentials settings include SCIMaster and save its key", async ({ page })
 test("DepMap server token is stored through the credential boundary", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
+  await page.locator('[data-credential-service="depmap"]').click();
   const field = page.locator("label", { hasText: "DepMap server token" });
   await expect(field).toContainText("Not configured");
   await field.locator("input").fill("depmap-token-123");
@@ -9723,6 +9873,59 @@ test("DepMap server token is stored through the credential boundary", async ({ p
     value: "depmap-token-123",
   });
   await expect(field).toContainText("Configured");
+});
+
+test("credential service subpages navigate, discard drafts, and update list status", async ({ page }) => {
+  test.setTimeout(60_000);
+  await enterApp(page);
+  await openSettingsSection(page, "Credentials");
+  const list = page.getByTestId("credential-service-list");
+  await expect(list.locator("button")).toHaveCount(5);
+  await expect(list.locator("input")).toHaveCount(0);
+  await expect.poll(async () => (await list.boundingBox())?.height ?? 0).toBeGreaterThan(250);
+  await page.screenshot({ path: test.info().outputPath("credential-services.png"), animations: "disabled" });
+
+  for (const service of ["depmap", "openalex", "infinisynapse", "scimaster", "ncbi"]) {
+    await page.locator(`[data-credential-service="${service}"]`).click();
+    // Escape must work immediately, while focus is still outside the detail form.
+    await page.keyboard.press("Escape");
+    await expect(list).toBeVisible();
+    await expect(page.locator(".settings-page")).toBeVisible();
+  }
+
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator(".settings-crumb-current")).toHaveText("OpenAlex");
+  await expect(page.getByLabel("Service name")).toHaveCount(0);
+  await page.locator('.credentials-pane input[type="password"]').fill("discard-me");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator('[data-credential-service="ncbi"]').click();
+  await expect(page.locator(".credentials-pane input")).toHaveCount(2);
+  await page.screenshot({ path: test.info().outputPath("credential-ncbi.png"), animations: "disabled" });
+  const field = page.locator("label", { hasText: "NCBI API key" });
+  await field.locator("input").fill("ncbi-test-key");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_credential")).toMatchObject({ id: "ncbi_api_key", value: "ncbi-test-key" });
+  await expect(field).toContainText("Configured");
+  await expect(field.locator("input")).toHaveValue("");
+  await page.locator(".settings-crumb-link").click();
+  await expect(page.locator('[data-credential-service="ncbi"]')).toContainText("Configured 1/2");
+  await expect(page.locator('[data-credential-service="openalex"]')).toContainText("Not configured");
+  await page.locator('[data-credential-service="openalex"]').click();
+  await expect(page.locator('.credentials-pane input[type="password"]')).toHaveValue("");
+  await page.locator(".settings-head-back").click();
+  await page.locator('[data-credential-service="ncbi"]').click();
+  await field.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(field).toContainText("Not configured");
+  await page.locator(".settings-head-back").click();
+  await expect(page.locator('[data-credential-service="ncbi"]')).toContainText("Not configured");
+
+  await page.locator('[data-credential-service="scimaster"]').click();
+  await page.locator('.credentials-pane input[type="password"]').fill("discard-on-navigation");
+  await page.locator(".settings-nav").getByRole("button", { name: "General", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "Credentials", exact: true }).click();
+  await expect(list).toBeVisible();
+  await page.locator('[data-credential-service="scimaster"]').click();
+  await expect(page.locator('.credentials-pane input[type="password"]')).toHaveValue("");
 });
 
 test("credentials settings add, replace, clear, and remove a custom credential", async ({ page }) => {
@@ -9803,6 +10006,77 @@ test("capability counts open skills, connections, and editable project memory", 
   });
 });
 
+test("skill detail browses markdown and scripts and persists tags without leaving the file", async ({ page }, testInfo) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "compute", exact: true }).click();
+  await page.locator('[data-skill-name="remote-compute-ssh"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  await expect(page.locator(".settings-crumb-current")).toHaveText("remote-compute-ssh");
+  await expect(detail.getByTestId("skill-file-preview").getByRole("heading", { name: "Skill instructions" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("skill-detail.png"), fullPage: true });
+  await expect.poll(() => lastInvokeArgs(page, "list_skill_files")).toEqual({ name: "remote-compute-ssh" });
+  await expect.poll(() => page.evaluate(() => (window as any).__skillPreviewUnsafe ?? false)).toBe(false);
+  await detail.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(detail.getByTestId("skill-file-source")).toContainText("name: remote-compute-ssh");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("print('analysis ready')");
+  await detail.getByRole("textbox", { name: "Edit tags" }).fill("compute, reviewed");
+  await detail.getByRole("textbox", { name: "Edit tags" }).press("Tab");
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_tags")).toEqual({ name: "remote-compute-ssh", tags: ["compute", "reviewed"] });
+  await expect(picker).toHaveValue("scripts/nested/analyze.py");
+  await detail.locator("label.toggle").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_skill_enabled")).toEqual({ name: "remote-compute-ssh", enabled: false });
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.locator(".settings-crumb-link").click();
+  const row = page.locator('[data-skill-name="remote-compute-ssh"]');
+  await expect(row.locator('.skill-tag')).toHaveText(["compute", "reviewed"]);
+  await expect(row.getByRole("checkbox")).not.toBeChecked();
+  await expect(page.locator('[data-skill-name="literature-review"]')).toHaveCount(0);
+  await row.locator('.skill-row-open').click();
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+  await page.locator('.skill-tags-filter').getByRole("button", { name: "All", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("skill-catalog.png"), fullPage: true });
+});
+
+test("skill detail shows file errors and ignores stale file responses", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  const detail = page.getByTestId("skill-detail");
+  const picker = detail.getByRole("combobox", { name: "Select skill file" });
+  await expect(detail.getByTestId("skill-file-preview")).toBeVisible();
+  await picker.selectOption("assets/image.png");
+  await expect(detail.getByRole("alert")).toContainText("Binary files cannot be previewed");
+  await expect(detail.getByTestId("skill-file-preview")).toBeHidden();
+  await picker.selectOption("scripts/slow.py");
+  await picker.selectOption("scripts/nested/analyze.py");
+  await expect(detail.getByTestId("skill-file-source")).toContainText("analysis ready");
+  await page.waitForTimeout(500);
+  await expect(detail.getByTestId("skill-file-source")).not.toContainText("old slow response");
+  await picker.selectOption("references/guide.md");
+  await expect(detail.getByTestId("skill-file-preview")).toContainText("Reference guide");
+  await detail.getByRole("link", { name: "Paper reference" }).click();
+  await expect(page.getByTestId("external-link-confirm")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("external-link-confirm")).toBeHidden();
+  await expect(detail).toBeVisible();
+  await expect(picker).toHaveValue("references/guide.md");
+});
+
+test("skill detail reports unavailable packages and can return immediately", async ({ page }) => {
+  await enterApp(page, "/?mockSkillFilesError=1");
+  await openSettingsSection(page, "Skills");
+  await page.locator('[data-skill-name="literature-review"] .skill-row-open').click();
+  await expect(page.getByTestId("skill-detail").getByRole("alert")).toContainText("Skill package is unavailable");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("skill-detail")).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+});
+
 test("skill manager filters by tag and batch disables visible skills", async ({ page }) => {
   await enterApp(page);
   await page.getByRole("button", { name: "Add to message" }).click();
@@ -9812,7 +10086,7 @@ test("skill manager filters by tag and batch disables visible skills", async ({ 
   await expect(page.locator(".settings-search")).toHaveAttribute("inputmode", "search");
   await expect(page.locator(".settings-search")).toHaveAttribute("autocomplete", "off");
   await expect(page.locator(".settings-filter")).toContainText(/visible.*enabled/);
-  await expect(page.locator(".skill-tags-editor").first()).not.toHaveAttribute("open", "");
+  await expect(page.locator(".skill-tags-input")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Disabled", exact: true }).click();
   await expect(page.getByText("No skills match the current filters.")).toBeVisible();
@@ -9845,7 +10119,7 @@ test("skill manager reloads manually copied skills and shows their scope", async
 
   const fresh = page.locator('[data-skill-name="fresh-project-skill"]');
   await expect.poll(() => lastInvokeArgs(page, "reload_skills")).toEqual({});
-  await expect(fresh).toContainText("Newly copied project skill");
+  await expect(fresh).toContainText("fresh-project-skill");
   await expect(fresh).toContainText("Project");
   await expect(fresh.locator('input[type="checkbox"]')).toBeChecked();
   await expect(fresh.getByRole("button", { name: "Delete skill" })).toHaveCount(0);
@@ -9870,9 +10144,14 @@ test("skill manager updates and deletes user-added skills", async ({ page }) => 
   await expect(page.getByText("Skill added or updated.")).toBeVisible();
 
   const skill = page.locator('[data-skill-name="paper-narrative"]');
-  await expect(skill.getByRole("button", { name: "Delete skill" })).toBeVisible();
-  await skill.getByRole("button", { name: "Delete skill" }).click();
+  await skill.locator(".skill-row-open").click();
+  const detail = page.getByTestId("skill-detail");
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   const confirm = page.getByTestId("skill-remove-confirm");
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Delete skill" }).click();
   await expect(confirm).toContainText(
     "Delete paper-narrative? Its installed files will be removed. This cannot be undone.",
   );
@@ -9996,7 +10275,7 @@ test("custom MCP row opens tools while edit uses a dedicated button", async ({ p
 
   const row = page.locator(".settings-list-row", { hasText: "wolai_cmp" });
   await row.click();
-  await expect(page.getByText("wolai_search")).toBeVisible();
+  await page.getByRole("button", { name: "wolai_search", exact: true }).click();
   await expect(page.getByText("Search Wolai pages")).toBeVisible();
 
   await page.locator(".settings-head-back").click();
@@ -10064,6 +10343,97 @@ test("Notion uses the generic Remote URL OAuth connection flow", async ({ page }
   await expect(page.getByText("OAuth", { exact: true })).toBeVisible();
 });
 
+test("MCP env values stay focused while typing and can be revealed", async ({ page }) => {
+  await enterApp(page);
+  await globalSettingsButton(page).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name: "Add connection" }).click();
+
+  const name = page.getByTestId("conn-secret-name").first();
+  const value = page.getByTestId("conn-secret-value").first();
+  const reveal = page.getByTestId("conn-secret-reveal").first();
+  await expect(value).toHaveAttribute("type", "password");
+  await expect(reveal).toHaveAttribute("aria-pressed", "false");
+
+  // Character-by-character: the previous list rebuilt every keystroke from
+  // conn_form, so focus dropped after the first letter and only paste worked.
+  await name.click();
+  await name.pressSequentially("API_KEY");
+  await expect(name).toHaveValue("API_KEY");
+  await expect(name).toBeFocused();
+
+  await value.click();
+  await value.pressSequentially("secret-token");
+  await expect(value).toHaveValue("secret-token");
+  await expect(value).toBeFocused();
+
+  await reveal.click();
+  await expect(value).toHaveAttribute("type", "text");
+  await expect(value).toHaveValue("secret-token");
+  await expect(reveal).toHaveAttribute("aria-pressed", "true");
+  await expect(value).toBeFocused();
+
+  await value.pressSequentially("-more");
+  await expect(value).toHaveValue("secret-token-more");
+  await expect(value).toBeFocused();
+
+  await reveal.click();
+  await expect(value).toHaveAttribute("type", "password");
+  await expect(value).toHaveValue("secret-token-more");
+
+  await page.getByRole("button", { name: "Add variable" }).click();
+  await expect(page.getByTestId("conn-secret-row")).toHaveCount(2);
+  const secondName = page.getByTestId("conn-secret-name").nth(1);
+  const secondValue = page.getByTestId("conn-secret-value").nth(1);
+  await secondName.fill("OTHER");
+  await secondValue.fill("second-value");
+  await expect(value).toHaveValue("secret-token-more");
+
+  await page.getByLabel("Name").fill("local-mcp");
+  await page.getByRole("textbox", { name: "Command" }).fill("npx");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "add_mcp_connection")).toMatchObject({
+    conn: {
+      name: "local-mcp",
+      transport: {
+        kind: "stdio",
+        command: "npx",
+        env: [
+          { name: "API_KEY", value: "secret-token-more" },
+          { name: "OTHER", value: "second-value" },
+        ],
+      },
+    },
+  });
+});
+
+test("MCP test disables the button and shows progress until it finishes", async ({ page }) => {
+  await enterApp(page);
+  await globalSettingsButton(page).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name: "Add connection" }).click();
+  await page.getByLabel("Name").fill("local-mcp");
+  await page.getByRole("textbox", { name: "Command" }).fill("npx");
+  await page.evaluate(() => (window as any).__delayNextMcpTest(1200));
+
+  const testBtn = page.getByTestId("conn-test");
+  await testBtn.click();
+  await expect(testBtn).toBeDisabled();
+  await expect(testBtn).toHaveText("Testing…");
+  await expect(testBtn).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("conn-test-status")).toContainText("Testing the connection");
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+  await testBtn.click({ force: true });
+  await expect.poll(async () => (await invokeArgsList(page, "test_mcp_connection")).length).toBe(1);
+
+  await expect(page.getByTestId("conn-test-status")).toHaveText("OK — 2 tools");
+  await expect(testBtn).toBeEnabled();
+  await expect(testBtn).toHaveText("Test");
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+});
+
 test("OAuth authorization keeps Cancel available and clears form status", async ({ page }) => {
   await enterApp(page, "/?mockOAuthPending=1");
   await globalSettingsButton(page).click();
@@ -10077,6 +10447,8 @@ test("OAuth authorization keeps Cancel available and clears form status", async 
 
   await page.getByRole("button", { name: "Test" }).click();
   await expect(page.getByText("Complete authorization in your browser…")).toBeVisible();
+  await expect(page.getByTestId("conn-test")).toBeDisabled();
+  await expect(page.getByTestId("conn-test")).toHaveAttribute("aria-busy", "true");
   const cancel = page.getByRole("button", { name: "Cancel" });
   await expect(cancel).toBeEnabled();
   await cancel.click();
@@ -10351,6 +10723,107 @@ test("settings permissions lists and revokes remembered approvals", async ({ pag
   await expect(page.getByText("No remembered approvals.")).toBeVisible();
 });
 
+test("project approval modes live in Permissions and persist independently of grants", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Connections");
+  await expect(page.getByTestId("project-approval-settings")).toHaveCount(0);
+  const featured = page.locator(".conn-group-label").first();
+  const note = page.locator(".connections-pane > .settings-note");
+  const gap = (await featured.boundingBox())!.y - ((await note.boundingBox())!.y + (await note.boundingBox())!.height);
+  expect(gap).toBeLessThan(40);
+  await expect(page.locator(".connections-pane > .settings-list").first()).toHaveJSProperty("scrollHeight",
+    await page.locator(".connections-pane > .settings-list").first().evaluate(el => el.clientHeight));
+
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  const rules = mode.getByRole("button", { name: "Per-tool rules", exact: true });
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await expect(mode).toContainText("Current project · applies from the next tool call");
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("approval-mode-description")).toContainText("Dangerous commands still require confirmation.");
+  await page.getByRole("button", { name: "Revoke all" }).click();
+  await expect(page.getByText("No remembered approvals.")).toBeVisible();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await rules.click();
+  await expect(rules).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => page.evaluate(() => (window as any).__skillInvokeLog
+    .filter((entry: any) => entry.cmd === "set_approval_scope")
+    .map((entry: any) => entry.args instanceof Map ? entry.args.get("scope") : entry.args.scope))).toEqual(["auto", "ask"]);
+});
+
+test("full bypass is an advanced choice and stays visible when collapsed or reopened", async ({ page }) => {
+  await enterApp(page, "/?mockApprovalScope=full");
+  await openSettingsSection(page, "Permissions");
+  const mode = page.getByTestId("project-approval-settings");
+  const advanced = page.getByTestId("approval-mode-advanced");
+  const description = page.getByTestId("approval-mode-description");
+  await expect(advanced).not.toHaveAttribute("open", "");
+  await expect(description).toContainText("Full bypass");
+  await expect(description).toContainText("including confirmation for dangerous commands");
+  await mode.getByRole("button", { name: "Per-tool rules", exact: true }).click();
+  await expect(description).toContainText("Per-tool rules");
+  await advanced.locator("summary").click();
+  await mode.getByRole("button", { name: "Full bypass", exact: true }).click();
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await advanced.locator("summary").click();
+  await expect(description).toContainText("Full bypass");
+  await expect(mode.getByRole("button", { name: "Full bypass", exact: true })).toBeHidden();
+  await page.keyboard.press("Escape");
+  await openSettingsSection(page, "Permissions");
+  await expect(description).toContainText("Full bypass");
+  await mode.getByRole("button", { name: "Auto-approve", exact: true }).click();
+  await expect(description).toContainText("Auto-approve");
+});
+
+test("approval mode save failures keep the previous selection and allow retry", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Permissions");
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = "Could not save project approval mode"; });
+  const mode = page.getByTestId("project-approval-settings");
+  const auto = mode.getByRole("button", { name: "Auto-approve", exact: true });
+  await auto.click();
+  await expect(mode.getByRole("alert")).toContainText("Could not save project approval mode");
+  await expect(mode.getByRole("button", { name: "Per-tool rules", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(auto).toBeEnabled();
+  await page.evaluate(() => { (window as any).__mockApprovalScopeError = null; });
+  await auto.click();
+  await expect(auto).toHaveAttribute("aria-pressed", "true");
+  await expect(mode.getByRole("alert")).toHaveCount(0);
+});
+
+test("Chinese approval settings fit desktop and narrow windows", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/?mockLocale=zh");
+  await page.locator(".proj-card-main").first().click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByText("审批范围", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".settings-list-row-link", { hasText: "BioMart" })).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("connections-zh.png") });
+  await page.locator(".settings-nav").getByRole("button", { name: "权限", exact: true }).click();
+  const mode = page.getByTestId("project-approval-settings");
+  await expect(mode).toContainText("工具审批模式");
+  await expect(mode).toContainText("当前项目 · 从下一次工具调用起生效");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-zh.png") });
+  await page.setViewportSize({ width: 820, height: 740 });
+  await expectInsideViewport(mode, 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "按工具规则", exact: true }), 820, 740);
+  await expectInsideViewport(mode.getByRole("button", { name: "自动批准", exact: true }), 820, 740);
+  await page.getByTestId("approval-mode-advanced").locator("summary").click();
+  const full = mode.getByRole("button", { name: "完全放行", exact: true });
+  await expectInsideViewport(full, 820, 740);
+  await full.click();
+  await expect(page.getByTestId("approval-mode-description")).toContainText("完全放行");
+  await expect(full).toHaveCSS("color", "rgb(255, 255, 255)");
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("permissions-narrow-zh.png") });
+});
+
 test("browser URL filters persist block and prefer hosts", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Browser");
@@ -10429,6 +10902,115 @@ test("browser tab cleanup confirms selected tabs and Escape keeps them", async (
   await expect.poll(async () => page.evaluate(() =>
     ((window as any).__skillInvokeLog ?? []).some((c: any) => c.cmd === "dismiss_browser_tab_cleanup")
   )).toBe(true);
+});
+
+test("switching projects clears browser prompts without dismissing the other project's tabs", async ({ page }) => {
+  await enterApp(page);
+  const tabs = [{ session: "shared", tab_id: 11, url: "https://paper.example", title: "Project A", frame_id: "s1", turn_id: "turn-a" }];
+  await emitTauriEvent(page, "browser-tab-cleanup", { turn_id: "turn-a", frame_id: "s1", tabs });
+  await emitTauriEvent(page, "browser-tab-cleanup", { turn_id: "turn-queued", frame_id: "s1", tabs });
+  await emitTauriEvent(page, "browser-needs-human", { tabs });
+  await expect(page.getByTestId("browser-needs-human")).toBeVisible();
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame" });
+  await expect(page.getByTestId("browser-tab-cleanup")).toHaveCount(0);
+  await expect(page.getByTestId("browser-needs-human")).toHaveCount(0);
+  expect(await lastInvokeArgs(page, "dismiss_browser_tab_cleanup")).toBeNull();
+  expect(await lastInvokeArgs(page, "confirm_browser_tab_cleanup")).toBeNull();
+});
+
+test("a delayed browser verification cannot restore another project's prompt", async ({ page }) => {
+  await enterApp(page);
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const invoke = core.invoke;
+    core.invoke = (cmd: string, args: unknown) => cmd === "confirm_browser_needs_human"
+      ? new Promise((resolve) => { (window as any).__resolveVerification = resolve; })
+      : invoke(cmd, args);
+  });
+  const tabs = [{ session: "shared", tab_id: 11, url: "https://paper.example", title: "Project A", frame_id: "s1", turn_id: "turn-a" }];
+  await emitTauriEvent(page, "browser-needs-human", { tabs });
+  await page.getByTestId("browser-needs-human-done").click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__resolveVerification)).toBe("function");
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame" });
+  await page.evaluate((tabs) => {
+    (window as any).__resolveVerification({ still_required: tabs, cleared: [] });
+  }, tabs);
+  await emitTauriEvent(page, "native-menu-action", "settings");
+  await expect(page.getByTestId("settings-nav-session")).toBeVisible();
+  await expect(page.getByTestId("browser-needs-human")).toHaveCount(0);
+});
+
+test("browser needs-human overlay reminds, confirms, and Escape snoozes", async ({ page }) => {
+  await enterApp(page);
+  const prompt = {
+    tabs: [
+      {
+        session: "shared",
+        tab_id: 12,
+        url: "https://www.sciencedirect.com/science",
+        title: "Just a moment...",
+        reason: "captcha_challenge",
+        frame_id: "s1",
+        turn_id: "turn-human",
+      },
+    ],
+  };
+  await emitTauriEvent(page, "browser-needs-human", prompt);
+  const dialog = page.getByTestId("browser-needs-human");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Human verification needed");
+  await expect(dialog).toContainText("Just a moment...");
+  await page.getByTestId("browser-needs-human-row-12").click();
+  await expect.poll(() => lastInvokeArgs(page, "focus_browser_needs_human")).toMatchObject({
+    session: "shared",
+    tabId: 12,
+  });
+
+  await page.evaluate(() => { (window as any).__mockNeedsHumanStillRequired = true; });
+  await page.getByTestId("browser-needs-human-done").click();
+  await expect(page.getByTestId("browser-needs-human-error")).toContainText("still on the page");
+  await expect(dialog).toBeVisible();
+
+  await page.evaluate(() => { (window as any).__mockNeedsHumanStillRequired = false; });
+  await page.getByTestId("browser-needs-human-done").click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => lastInvokeArgs(page, "confirm_browser_needs_human")).toMatchObject({
+    tabs: [{ tab_id: 12 }],
+  });
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+    sessionId: "s1",
+    message: "I completed the human verification in the browser. Continue.",
+  });
+
+  await emitTauriEvent(page, "browser-needs-human", prompt);
+  await expect(page.getByTestId("browser-needs-human")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("browser-needs-human")).toHaveCount(0);
+});
+
+test("browser needs-human Escape closes only the overlay while settings stay open", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Browser");
+  await expect(page.getByTestId("browser-url-filters")).toBeVisible();
+  await emitTauriEvent(page, "browser-needs-human", {
+    tabs: [
+      {
+        session: "shared",
+        tab_id: 7,
+        url: "https://www.sciencedirect.com/science",
+        title: "Are you a robot?",
+        reason: "captcha_challenge",
+        frame_id: "s1",
+        turn_id: "turn-settings",
+      },
+    ],
+  });
+  await expect(page.getByTestId("browser-needs-human")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("browser-needs-human")).toHaveCount(0);
+  await expect(page.getByTestId("browser-url-filters")).toBeVisible();
 });
 
 test("browser tab cleanup Escape closes only the overlay while settings stay open", async ({ page }) => {
@@ -10566,6 +11148,48 @@ test("step commentary renders full Markdown before the overall turn finishes", a
   await expect(settledStep.locator("li")).toHaveCount(2);
   await expect(settledStep.locator("table")).toContainText("ESR1");
   await expect(settledStep.locator("code")).toHaveText("normalized_counts.csv");
+});
+
+test("long workspace scrolling keeps all headers visible across session switches (#1110)", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("make volcano.png");
+  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.locator(".rp-tabs").getByRole("button", { name: /^Artifacts/ }).click();
+  const tiles = page.locator(".rp-tiles");
+  await expect(tiles).toBeVisible();
+  await tiles.evaluate((el) => {
+    const content = document.createElement("div");
+    content.style.cssText = "min-height:4000px;flex-shrink:0";
+    const end = document.createElement("button");
+    end.textContent = "Last artifact";
+    content.appendChild(end);
+    el.appendChild(content);
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect.poll(() => tiles.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  // A focus/outline jump must not turn clipped shell ancestors into scrollers.
+  await page.evaluate(() => {
+    for (const selector of [".app", ".sidebar", ".center", ".rightpane"]) {
+      const shell = document.querySelector<HTMLElement>(selector)!;
+      const overflow = document.createElement("div");
+      overflow.style.cssText = "position:absolute;top:1800px;width:1px;height:1px";
+      shell.appendChild(overflow);
+      overflow.scrollIntoView({ block: "start" });
+      shell.scrollTop = 600;
+    }
+  });
+  const viewport = page.viewportSize()!;
+  for (const selector of [".sidebar-head", ".center > .topbar", ".rp-tabs"]) {
+    await expectInsideViewport(page.locator(selector), viewport.width, viewport.height);
+  }
+  await newSessionButton(page).click();
+  await composer(page).fill("make second.png");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect.poll(() => tiles.evaluate((el) => el.scrollTop)).toBe(0);
+  for (const name of ["Agents", "Files", "Artifacts"]) {
+    await page.locator(".rp-tabs").getByRole("button", { name: new RegExp(`^${name}`) }).click();
+  }
 });
 
 test("chat keeps the user's reading position when streaming finishes (#670)", async ({ page }) => {
@@ -11760,7 +12384,10 @@ test("reverse preview selections anchor the action popup above the first selecte
   const popup = page.locator(".selection-popup");
   await expect(popup).toBeVisible();
   const anchorY = await popup.evaluate((element) => Number.parseFloat((element as HTMLElement).style.top));
-  expect(anchorY).toBeCloseTo(selection.top, 0);
+  // selection_popup_y keeps ≥120px clearance. CI fonts often land the heading
+  // just under that (~117px), so the popup clamps to 120 instead of selection.top.
+  const expectedY = Math.max(120, Math.round(selection.top));
+  expect(anchorY).toBeCloseTo(expectedY, 0);
   await expect.poll(() => popup.evaluate((element) => element.getBoundingClientRect().bottom))
     .toBeLessThan(selection.top);
 });
@@ -11993,7 +12620,7 @@ test("projects landing stays centered on wide windows", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".projects-head")).toBeVisible();
   await expect(page.locator(".projects-brand-mark")).toBeVisible();
-  await expect(page.locator(".projects-title")).toHaveText("Wisp Science");
+  await expect(page.getByRole("heading", { name: "Wisp Science", exact: true })).toBeVisible();
   await expect.poll(async () => page.locator(".projects-head").evaluate((el) => {
     const rect = el.getBoundingClientRect();
     return Math.round(rect.width);
@@ -12008,7 +12635,7 @@ test("empty session shows the branded chat empty state", async ({ page }) => {
   await expect(empty.locator(".empty-logo")).toBeVisible();
   await expect.poll(() => empty.locator(".empty-logo").evaluate((el) =>
     Math.round(el.getBoundingClientRect().width)
-  )).toBe(32);
+  )).toBe(208);
   await expect(empty.locator("h1")).not.toBeEmpty();
   await expect(empty.locator("h1")).toHaveCSS("font-family", /Source Serif/);
 });
@@ -12042,6 +12669,7 @@ test("Windows uses the integrated title bar without covering the project landing
   // Home menus only list actions that work without an open project.
   await page.getByRole("button", { name: "File", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: "New project" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "New Window" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Import project" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Scratch chat" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Open settings" })).toBeVisible();
@@ -12078,6 +12706,7 @@ test("Windows uses the integrated title bar without covering the project landing
   await page.getByRole("button", { name: "File", exact: true }).click();
   // Inside a workspace the menus flip back to the session-scoped set.
   await expect(page.getByRole("menuitem", { name: "New session" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "New Window" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New project" })).toHaveCount(0);
   const exportCurrentProject = page.getByRole("menuitem", { name: "Export current project" });
   await expect(exportCurrentProject).toBeEnabled();
@@ -12257,6 +12886,30 @@ test("Windows titlebar menus close on Escape", async ({ browser }) => {
   await expect(page.getByRole("menu")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
+
+  await context.close();
+});
+
+test("File New Window asks the host for a second GUI", async ({ browser }) => {
+  // File/Edit/View live on the Windows integrated titlebar; Linux/macOS CI
+  // user agents never render that bar, so this must pin a Windows UA.
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/136 Safari/537.36",
+  });
+  const page = await context.newPage();
+  await page.addInitScript(tauriMock);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New Window" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "open_new_window")).not.toBeNull();
+
+  // Stay on this document so the invoke log is not wiped by enterApp()'s goto.
+  await page.locator(".proj-card-main").first().click();
+  await expect(newSessionButton(page)).toBeVisible();
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New Window" }).click();
+  await expect.poll(() => invokeCount(page, "open_new_window")).toBeGreaterThan(1);
 
   await context.close();
 });
@@ -12732,7 +13385,9 @@ test("session settings configure truncated-output auto-continue", async ({ page 
   await openSettingsSection(page, "Session");
   const toggle = page.getByTestId("auto-continue-enabled");
   await expect(toggle).not.toBeChecked();
+  await expect(page.getByTestId("auto-continue-limit")).toBeDisabled();
   await toggle.locator("..").click();
+  await expect(page.getByTestId("auto-continue-limit")).toBeEnabled();
   await page.getByTestId("auto-continue-limit").fill("4");
   await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
@@ -12753,24 +13408,206 @@ test("session settings enable follow-up question suggestions by default", async 
   });
 });
 
-test("general settings keep workspace prefs without agent loop or proxy controls", async ({ page }) => {
+for (const locale of ["en", "zh"]) {
+  test(`general settings cards align and fit in ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.getByRole("button", { name: locale === "zh" ? "设置" : "Settings", exact: true }).click();
+    await page.locator(".settings-nav").getByRole("button", { name: locale === "zh" ? "常规" : "General", exact: true }).click();
+    const pane = page.getByTestId("general-settings-pane");
+    const groups = pane.locator(".general-group");
+    const first = await groups.nth(0).boundingBox();
+    const second = await groups.nth(1).boundingBox();
+    expect(Math.abs(first!.y - second!.y)).toBeLessThan(2);
+    expect(second!.x).toBeGreaterThan(first!.x + first!.width);
+    const language = await page.getByTestId("settings-language").boundingBox();
+    expect(language!.width).toBeLessThan(200);
+    await expect(pane.locator(".general-preferences-footer")).toContainText(locale === "zh" ? "分别保存" : "saved separately");
+    await page.screenshot({ animations: "disabled", path: testInfo.outputPath(`general-${locale}-desktop.png`) });
+    await page.setViewportSize({ width: 820, height: 740 });
+    const narrowFirst = await groups.nth(0).boundingBox();
+    const narrowSecond = await groups.nth(1).boundingBox();
+    expect(narrowSecond!.y).toBeGreaterThanOrEqual(narrowFirst!.y + narrowFirst!.height);
+    const environment = page.getByTestId("local-environment");
+    await environment.getByRole("button", { name: locale === "zh" ? "编辑路径" : "Edit paths", exact: true }).click();
+    const python = environment.getByRole("textbox", { name: "Python", exact: true });
+    await python.fill("C:/Users/Researcher/" + "long-environment-directory/".repeat(12) + "python.exe");
+    await python.scrollIntoViewIfNeeded();
+    await expectInsideViewport(python, 820, 740);
+    for (const scope of ["model", "mcp", "command"]) {
+      await page.getByTestId(`proxy-mode-${scope}`).selectOption("custom");
+      const save = page.getByTestId(`save-proxy-${scope}`);
+      await save.evaluate(el => el.scrollIntoView({ block: "center" }));
+      await expectInsideViewport(save, 820, 740);
+      await expectInsideViewport(page.getByTestId(`proxy-address-${scope}`), 820, 740);
+    }
+    expect(await pane.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ animations: "disabled", path: testInfo.outputPath(`general-${locale}-narrow.png`) });
+  });
+}
+
+test("general settings group workspace prefs, local environment, and network", async ({ page }) => {
   await page.goto("/");
   await openSettingsSection(page, "General");
+  await expect(page.locator(".settings-content > .settings-head h2")).toHaveText("General");
   await expect(page.getByTestId("settings-language")).toBeVisible();
   await expect(page.getByTestId("resume-last-session-enabled")).toBeAttached();
   await expect(page.getByTestId("max-iter")).toHaveCount(0);
   await expect(page.getByTestId("proxy-url")).toHaveCount(0);
+  await expect(page.getByTestId("local-environment")).toBeVisible();
+  await expect(page.getByTestId("network-proxy-model")).toBeVisible();
+  await expect(page.locator(".settings-nav").getByRole("button", { name: "Network", exact: true })).toHaveCount(0);
+  await page.locator(".settings-nav").getByRole("button", { name: "Models", exact: true }).click();
+  await expect(page.getByTestId("local-environment")).toHaveCount(0);
+  await expect(page.locator(".network-settings")).toHaveCount(0);
+  await expect(page.getByTestId("models-category-http")).toBeVisible();
 });
 
-test("model settings save the model API proxy", async ({ page }) => {
-  await page.goto("/");
+test("network saves each proxy independently and preserves the legacy model proxy", async ({ page }) => {
+  await page.goto("/?mockLegacyProxy=http://127.0.0.1:7890");
   await openSettingsSection(page, "Models");
-  await expect(page.getByTestId("proxy-url")).toBeVisible();
-  await page.getByTestId("proxy-url").fill("none");
-  await page.locator(".model-settings-pane .settings-footer").getByRole("button", { name: "Save" }).click();
-  await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
-    settings: { proxy_url: "none" },
+  await expect(page.getByTestId("proxy-url")).toHaveCount(0);
+  await page.locator(".settings-nav").getByRole("button", { name: "General", exact: true }).click();
+  await expect(page.getByTestId("proxy-address-model")).toHaveValue("http://127.0.0.1:7890");
+  await page.getByTestId("proxy-address-model").fill("");
+  await expect(page.getByTestId("proxy-mode-model")).toHaveValue("custom");
+  await expect(page.getByTestId("proxy-address-model")).toBeEnabled();
+  await page.getByTestId("proxy-address-model").fill("http://127.0.0.1:7890");
+  await page.getByTestId("proxy-mode-command").selectOption("custom");
+  await page.getByTestId("proxy-address-command").fill("http://127.0.0.1:8080");
+  await page.getByTestId("proxy-mode-mcp").selectOption("direct");
+  await page.getByTestId("save-proxy-mcp").click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+    settings: { model_proxy_url: "http://127.0.0.1:7890", mcp_proxy_url: "none", command_proxy_url: "" },
   });
+  await expect(page.getByTestId("proxy-address-command")).toHaveValue("http://127.0.0.1:8080");
+  await page.getByTestId("save-proxy-command").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+    settings: { command_proxy_url: "http://127.0.0.1:8080", mcp_proxy_url: "none" },
+  });
+  await page.getByTestId("network-proxy-model").getByRole("button", { name: "Clear" }).click();
+  await page.getByTestId("save-proxy-model").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+    settings: { model_proxy_url: "", mcp_proxy_url: "none", command_proxy_url: "http://127.0.0.1:8080" },
+  });
+  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.locator(".settings-footer").getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".settings-page")).toHaveCount(0);
+  await openSettingsSection(page, "General");
+  await expect(page.getByTestId("proxy-mode-model")).toHaveValue("system");
+  await expect(page.getByTestId("proxy-mode-mcp")).toHaveValue("direct");
+  await expect(page.getByTestId("proxy-address-command")).toHaveValue("http://127.0.0.1:8080");
+});
+
+test("network package mirror saves guidance and Escape closes only its subpage", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "General");
+  await page.getByTestId("configure-package-mirrors").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("package-mirrors")).toHaveCount(0);
+  await expect(page.getByTestId("configure-package-mirrors")).toBeVisible();
+  await page.getByTestId("configure-package-mirrors").click();
+  await page.getByTestId("conda-mirror").fill("https://mirror.example.com/conda-forge");
+  await page.getByTestId("pip-index").fill("https://mirror.example.com/simple");
+  await page.getByTestId("mirror-ca-bundle").fill("C:/certs/corp.pem");
+  await page.getByTestId("save-package-mirrors").click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+    settings: { conda_mirror_url: "https://mirror.example.com/conda-forge", pip_index_url: "https://mirror.example.com/simple", ca_bundle_path: "C:/certs/corp.pem" },
+  });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("package-mirror-summary")).toContainText("Configured");
+  await page.getByTestId("configure-package-mirrors").click();
+  await expect(page.getByTestId("pip-index")).toHaveValue("https://mirror.example.com/simple");
+  await page.getByTestId("pip-index").fill("https://unsaved.example.com/simple");
+  await page.getByTestId("package-mirrors").getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByTestId("configure-package-mirrors").click();
+  await expect(page.getByTestId("pip-index")).toHaveValue("https://mirror.example.com/simple");
+  await page.getByTestId("conda-mirror").fill("");
+  await page.getByTestId("pip-index").fill("");
+  await page.getByTestId("mirror-ca-bundle").fill("");
+  await page.getByTestId("save-package-mirrors").click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("package-mirror-summary")).toContainText("Not configured");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".settings-page")).toHaveCount(0);
+});
+
+test("network Chinese pages fit desktop and narrow windows", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/?mockLocale=zh&mockLegacyProxy=http://127.0.0.1:7890");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "常规", exact: true }).click();
+  await expect(page.locator(".settings-content > .settings-head h2")).toHaveText("常规");
+  await expect(page.locator(".network-heading h3")).toHaveText("网络");
+  await page.locator(".network-settings").scrollIntoViewIfNeeded();
+  await expect(page.getByTestId("save-proxy-model")).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("network-zh.png") });
+  await page.getByTestId("configure-package-mirrors").click();
+  await expect(page.getByTestId("save-package-mirrors")).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("package-mirror-zh.png") });
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 820, height: 740 });
+  for (const scope of ["model", "mcp", "command"]) {
+    await page.getByTestId(`network-proxy-${scope}`).scrollIntoViewIfNeeded();
+    if (scope === "model") {
+      await expectInsideViewport(page.getByTestId(`proxy-address-${scope}`), 820, 740);
+    } else {
+      await expect(page.getByTestId(`proxy-address-${scope}`)).toHaveCount(0);
+    }
+    await expectInsideViewport(page.getByTestId(`save-proxy-${scope}`), 820, 740);
+  }
+  await page.screenshot({ animations: "disabled", path: testInfo.outputPath("network-narrow.png") });
+});
+
+test("network address fields appear only for custom proxies in every scope", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "General");
+  for (const scope of ["model", "mcp", "command"]) {
+    const mode = page.getByTestId(`proxy-mode-${scope}`);
+    const address = page.getByTestId(`proxy-address-${scope}`);
+    await expect(mode).toHaveValue("system");
+    await expect(address).toHaveCount(0);
+    await mode.selectOption("direct");
+    await expect(address).toHaveCount(0);
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "none" },
+    });
+    await mode.selectOption("custom");
+    await expect(address).toBeVisible();
+    await expect(address).toBeEnabled();
+    await address.fill("http://localhost:8080");
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "http://localhost:8080" },
+    });
+    await expect(address).toHaveValue("http://localhost:8080");
+    await mode.selectOption("system");
+    await expect(address).toHaveCount(0);
+    await page.getByTestId(`save-proxy-${scope}`).click();
+    await expect.poll(() => lastInvokeArgs(page, "set_network_settings")).toMatchObject({
+      settings: { [`${scope}_proxy_url`]: "" },
+    });
+  }
+});
+
+test("network shows validation errors without discarding the draft", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "General");
+  await page.getByTestId("proxy-mode-mcp").selectOption("custom");
+  await page.getByTestId("save-proxy-mcp").click();
+  await expect(page.getByRole("alert")).toContainText("Enter a proxy address");
+  await page.getByTestId("proxy-address-mcp").fill("invalid address");
+  await page.getByTestId("save-proxy-mcp").click();
+  await expect(page.getByRole("alert")).toContainText("complete URL");
+  await expect(page.getByTestId("proxy-address-mcp")).toHaveValue("invalid address");
+  await page.getByTestId("proxy-address-mcp").fill("http://localhost:8080");
+  await page.getByTestId("save-proxy-mcp").click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("general settings resume the last workspace conversation by default", async ({ page }) => {
@@ -13004,6 +13841,57 @@ test("desktop pet shows active Run titles and celebrates completion (#693)", asy
   });
   await expect(pet).toHaveAttribute("data-state", "jumping", { timeout: 5_000 });
   await expect(pet.getByText("Done")).toBeVisible();
+});
+
+test("session and native menu events listen on the current window", async ({ page }) => {
+  await enterApp(page);
+  const windowEvents = [
+    "agent",
+    "confirm-request",
+    "browser-tab-cleanup",
+    "permission-request",
+    "acp-session-update",
+    "acp-session-state",
+    "permission-resolved",
+    "ask-user-request",
+    "ask-user-resolved",
+    "native-menu-action",
+    "browser-needs-human",
+  ];
+  for (const event of windowEvents) {
+    await expect.poll(() => page.evaluate((name) =>
+      Boolean((window as any).__tauriListenerReady?.(name)), event
+    )).toBe(true);
+    await expect.poll(() => page.evaluate((name) =>
+      (window as any).__tauriListenerScope(name), event
+    )).toBe("window");
+  }
+  await expect.poll(() => page.evaluate(() =>
+    Boolean((window as any).__tauriListenerReady?.("bootstrap-status")),
+  )).toBe(true);
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__tauriListenerScope("bootstrap-status"),
+  )).toBe("app");
+});
+
+test("native menu actions from another window leave this project alone", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("keep this draft");
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__tauriListenerReady("native-menu-action"),
+  )).toBe(true);
+  await page.evaluate(() => {
+    (window as any).__tauriEmitToOtherWindow("native-menu-action", "new-window");
+    (window as any).__tauriEmitToOtherWindow("native-menu-action", "projects");
+  });
+  // Await a local menu action to ensure the callbacks above have been handled.
+  await emitTauriEvent(page, "native-menu-action", "settings");
+  await expect(page.getByTestId("settings-nav-session")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(composer(page)).toHaveValue("keep this draft");
+  expect(await lastInvokeArgs(page, "open_new_window")).toBeNull();
+  await emitTauriEvent(page, "native-menu-action", "new-window");
+  await expect.poll(() => invokeArgsList(page, "open_new_window")).toHaveLength(1);
 });
 
 test("notification navigation opens the project and session that need the user (#499)", async ({ page }) => {
@@ -14498,4 +15386,343 @@ test("Escape after leaving the projects screen does not touch disposed signals",
   await page.keyboard.press("Escape");
   await expect(newSessionButton(page)).toBeVisible();
   expect(browserErrors.filter((message) => message.includes("disposed"))).toEqual([]);
+});
+
+test("bundled connector details show real descriptions, parameters and operator links", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Connections");
+  await page.locator(".settings-list-row-link", { hasText: "BioMart" }).click();
+  const detail = page.getByTestId("connector-detail");
+  await expect(detail.getByRole("heading", { name: "BioMart", exact: true })).toBeVisible();
+  await expect(detail).toContainText("genomic annotations, identifier translation");
+  await expect(detail.locator(".conn-tool")).toHaveCount(8);
+  await expect(detail.locator(".conn-tool").first()).toHaveAttribute("data-tool", "list_marts");
+  await expect(detail.getByTestId("connector-tool-documentation")).toHaveCount(0);
+  const datasets = detail.locator('[data-tool="list_datasets"]');
+  await datasets.getByRole("button", { name: "list_datasets", exact: true }).click();
+  await expect(datasets.getByRole("button", { name: "list_datasets", exact: true })).toHaveAttribute("aria-expanded", "true");
+  await expect(datasets).toContainText("List species datasets");
+  await expect(datasets.locator("tr", { hasText: "Mart identifier returned by list_marts." })).toContainText("Required");
+  await expect(datasets.locator("tr", { hasText: "max_results" })).toContainText("200");
+  await datasets.getByText("Full input schema", { exact: true }).click();
+  await expect(datasets.locator("pre")).toContainText('"required"');
+  const sources = detail.getByTestId("connector-source-details");
+  await expect(sources).toContainText("Wisp Science");
+  await expect(sources.getByRole("link", { name: "Ensembl usage terms" })).toHaveAttribute("href", "https://www.ensembl.org/info/about/legal/disclaimer.html");
+  await sources.getByRole("link", { name: "Ensembl BioMart", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "open_external_url")).toMatchObject({ url: "https://www.ensembl.org/info/data/biomart/index.html" });
+  expect(await invokeArgsList(page, "test_mcp_connection")).toHaveLength(0);
+});
+
+test("connector approval changes preserve expanded documentation and enabled state", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Connections");
+  await page.locator(".settings-list-row-link", { hasText: "BioMart" }).click();
+  const detail = page.getByTestId("connector-detail");
+  const tool = detail.locator('[data-tool="list_marts"]');
+  await tool.getByRole("button", { name: "list_marts", exact: true }).click();
+  const deny = tool.getByRole("button", { name: "Deny — block this tool", exact: true });
+  await deny.click();
+  await expect(deny).toHaveAttribute("aria-pressed", "true");
+  await expect(tool.getByTestId("connector-tool-documentation")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page, "set_tool_approval")).toMatchObject({ tool: "list_marts", mode: "deny" });
+  const skip = detail.locator(".settings-list-row", { hasText: "Skip approvals" }).locator("label.toggle");
+  await skip.click();
+  await expect(deny).toBeDisabled();
+  await expect(tool.getByTestId("connector-tool-documentation")).toBeVisible();
+  await skip.click();
+  await expect(deny).toBeEnabled();
+  await expect(deny).toHaveAttribute("aria-pressed", "true");
+  await detail.locator(".conn-detail-heading label.toggle").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_connector_enabled")).toMatchObject({ key: "biomart", enabled: false });
+  await expect(detail.getByRole("checkbox", { name: "Enable connector" })).not.toBeChecked();
+  await expect(tool.getByTestId("connector-tool-documentation")).toBeVisible();
+});
+
+test("custom connector documentation keeps server schemas and escapes untrusted text", async ({ page }) => {
+  await enterApp(page);
+  await page.evaluate(() => {
+    (window as any).__mockMcpTools = [
+      { name: "remote_query", description: 'Search records.\n<script>window.__connectorScriptRan = true</script>', inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string", description: "Search words" } } }, outputSchema: { type: "object", properties: { total: { type: "integer" } } } },
+      { name: "legacy_tool" },
+    ];
+  });
+  await openSettingsSection(page, "Connections");
+  await page.locator(".settings-list-row-link", { hasText: "wolai_cmp" }).click();
+  const detail = page.getByTestId("connector-detail");
+  await detail.getByRole("button", { name: "remote_query", exact: true }).click();
+  const remote = detail.locator('[data-tool="remote_query"]');
+  await expect(remote).toContainText("<script>");
+  await expect(remote.locator("script")).toHaveCount(0);
+  await expect(remote.locator("tr", { hasText: "Search words" })).toContainText("Required");
+  await remote.getByText("Output schema", { exact: true }).click();
+  await expect(remote.locator("details[open] pre")).toContainText('"total"');
+  await detail.getByRole("button", { name: "legacy_tool", exact: true }).click();
+  await expect(detail.locator('[data-tool="legacy_tool"]')).toContainText("No description provided.");
+  expect(await page.evaluate(() => (window as any).__connectorScriptRan)).toBeUndefined();
+  await expect(detail.getByTestId("connector-source-details")).toHaveCount(0);
+});
+
+test("connector detail uses the Chinese introduction and Escape returns to its parent", async ({ page }) => {
+  await page.goto("/?mockLocale=zh");
+  await page.locator(".proj-card-main").first().click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-nav").getByRole("button", { name: "连接", exact: true }).click();
+  await page.locator(".settings-list-row-link", { hasText: "BioMart" }).click();
+  const detail = page.getByTestId("connector-detail");
+  await expect(detail).toContainText("查询基因组注释");
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+  await expect(page.getByRole("button", { name: "添加连接", exact: true })).toBeVisible();
+});
+
+
+test("optional environment detection does not block first-run model setup", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__mockLocalEnvironment = { paths: {}, warning: null };
+  });
+  await page.goto("/?mockOnboarding=1");
+  const onboard = page.locator(".onboard-overlay");
+  await expect(onboard).toBeVisible();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await onboard.getByRole("button", { name: "Next" }).click();
+  await expect(onboard.getByTestId("local-environment")).toHaveCount(0);
+  await onboard.getByRole("button", { name: "Set up later" }).click();
+  const environment = onboard.getByTestId("local-environment");
+  await expect(environment).toContainText("local-env-setup");
+  await expect(environment.locator("dd")).toHaveCount(7);
+  await expect(environment.locator("dd").first()).toContainText("Not found");
+  await expect(onboard.getByRole("button", { name: "Get started" })).toBeEnabled();
+  const viewport = page.viewportSize()!;
+  await expectInsideViewport(onboard.getByRole("button", { name: "Get started" }), viewport.width, viewport.height);
+  await onboard.getByRole("button", { name: "Get started" }).click();
+  await expect(onboard).toBeHidden();
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+});
+
+test("general settings show discovered paths and can recheck without installing", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "General");
+  const environment = page.getByTestId("local-environment");
+  await expect(environment).toContainText("/mock/bin/python3");
+  await expect(environment).toContainText("/mock/bin/Rscript");
+  await expect(environment).toContainText("/mock/bin/uv");
+  await expect(environment).toContainText("/mock/bin/node");
+  await page.evaluate(() => {
+    (window as any).__mockLocalEnvironment = {
+      paths: { python_executable: "C:\\Users\\Researcher\\python.exe" }, warning: null,
+    };
+  });
+  await environment.getByRole("button", { name: "Check paths again" }).click();
+  await expect(environment).toContainText("Researcher");
+  await expect(environment).not.toContainText("/mock/bin/python3");
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".settings-page")).toBeHidden();
+});
+
+for (const platform of ["Linux x86_64", "MacIntel"]) {
+  test(`command palette reopens quick setup without resetting settings (${platform})`, async ({ page }) => {
+    await page.addInitScript((value) => {
+      Object.defineProperty(navigator, "platform", { configurable: true, value });
+      Object.defineProperty(navigator, "userAgent", { configurable: true, value: "wisp-science/Tauri" });
+    }, platform);
+    await enterApp(page);
+    await openSettingsSection(page, "Models");
+    const shortcut = platform === "MacIntel" ? "Meta+p" : "Control+p";
+    for (let reopen = 0; reopen < 2; reopen++) {
+      await page.keyboard.press(shortcut);
+      const palette = page.getByRole("dialog", { name: "Command Palette" });
+      await expect(palette).toBeVisible();
+      await page.locator("#action-palette-input").fill(platform === "MacIntel" ? "environment" : "配置");
+      await palette.getByText("Quick setup", { exact: true }).click();
+      const setup = page.locator(".onboard-overlay");
+      await expect(setup).toBeVisible();
+      await expect(setup.getByRole("heading", { name: "Welcome to wisp-science" })).toBeVisible();
+      await expect(setup.getByLabel("API key (stored in OS keyring)")).toHaveCount(0);
+      await expect(setup.getByTestId("local-environment")).toHaveCount(0);
+      // Immediate Escape closes the topmost setup page, preserving Settings.
+      await page.keyboard.press("Escape");
+      await expect(setup).toBeHidden();
+      await expect(page.locator(".settings-page")).toBeVisible();
+      await expect(page.locator(".settings-nav button.active")).toHaveText("Models");
+    }
+    expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+    expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+    await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
+      .filter((call: any) => call.cmd === "detect_local_environment").length)).toBe(2);
+  });
+}
+
+test("onboarding Enter advances once, respects composition and controls, and finishes", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await expect(modal).toBeFocused();
+  await page.keyboard.down("Enter");
+  await expect(modal.locator(".onboard-dot.active")).toHaveCount(1);
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await page.keyboard.down("Enter"); // Auto-repeat must not skip another page.
+  await page.keyboard.up("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await modal.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+  await modal.dispatchEvent("compositionend", { bubbles: true });
+  await modal.dispatchEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true });
+  await page.keyboard.press("Shift+Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  // Native keyboard activation of Back still returns exactly one page.
+  await modal.getByRole("button", { name: "Back", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Welcome to wisp-science");
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("What wisp-science can do");
+  await modal.locator(".row > .primary").focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Set up your model");
+  await modal.locator('input[type="password"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(modal.getByRole("heading")).toHaveText("Local environment (optional)");
+  expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+  await modal.getByRole("button", { name: "Edit paths" }).focus();
+  await page.keyboard.press("Enter");
+  const python = modal.getByRole("textbox", { name: "Python", exact: true });
+  await python.fill("C:\\Custom Python\\python.exe");
+  await page.keyboard.press("Enter");
+  await expect(python).toHaveValue("C:\\Custom Python\\python.exe");
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.focus();
+  await page.keyboard.press("Enter");
+  await expect(modal).toBeHidden();
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+  await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
+    .filter((call: any) => call.cmd === "dismiss_onboarding").length)).toBe(1);
+});
+
+test("onboarding keeps its backdrop and dialog mounted when navigating", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await expect(modal).toBeVisible();
+  const shell = await page.evaluateHandle(() => ({
+    backdrop: document.querySelector(".onboard-overlay"),
+    dialog: document.querySelector(".onboard"),
+    next: document.querySelector(".onboard > .row > .primary"),
+  }));
+  // Let the initial opening animation finish before watching for restarts.
+  await modal.evaluate(async el => {
+    await Promise.all(el.parentElement!.getAnimations({ subtree: true }).map(a => a.finished));
+    (window as any).__onboardAnimationStarts = [];
+    el.parentElement!.addEventListener("animationstart", event => {
+      (window as any).__onboardAnimationStarts.push((event as AnimationEvent).animationName);
+    });
+  });
+  let previousStep = 0;
+  for (const step of [1, 2, 3, 2, 1, 0]) {
+    if (step < previousStep) {
+      await page.keyboard.press("Escape");
+    } else {
+      await modal.locator(".row > .primary").click();
+    }
+    await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+    expect(await shell.evaluate(saved => saved.backdrop === document.querySelector(".onboard-overlay")
+      && saved.dialog === document.querySelector(".onboard")
+      && saved.next === document.querySelector(".onboard > .row > .primary"))).toBe(true);
+    previousStep = step;
+  }
+  expect(await page.evaluate(() => (window as any).__onboardAnimationStarts)).toEqual([]);
+  await shell.dispose();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+});
+
+for (const locale of ["en", "zh"]) {
+  test(`onboarding has four separate pages without overflowing the modal (${locale})`, async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 620 });
+    await page.addInitScript(() => {
+      (window as any).__mockLocalEnvironment = { paths: {
+        python_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\science.wisp-science\\wisp-science\\python\\.venv\\Scripts\\python.exe",
+        rscript_executable: "C:\\Program Files\\R-4.6.1\\bin\\x64\\Rscript.exe",
+        uv_executable: "C:\\Users\\Researcher\\AppData\\Local\\Microsoft\\WinGet\\Links\\uv.exe",
+        node_executable: "C:\\Program Files\\nodejs\\node.exe",
+        npm_executable: "C:\\Program Files\\nodejs\\npm.cmd",
+        sci_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\npm\\sci.cmd",
+        pixi_executable: "C:\\Users\\Researcher\\.pixi\\bin\\pixi.exe",
+      }, warning: null };
+    });
+    await page.goto(`/?mockOnboarding=1&mockLocale=${locale}`);
+    const modal = page.locator(".onboard");
+    const titles = locale === "zh"
+      ? ["欢迎使用 wisp-science", "wisp-science 能做什么", "配置模型", "本地环境（可选）"]
+      : ["Welcome to wisp-science", "What wisp-science can do", "Set up your model", "Local environment (optional)"];
+    const next = locale === "zh" ? "下一步" : "Next";
+    for (let step = 0; step < 4; step++) {
+      await expect(modal.getByRole("heading", { name: titles[step], exact: true })).toBeVisible();
+      await expect(modal.locator(".onboard-dot")).toHaveCount(4);
+      await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+      await expect(modal.locator('input[type="password"]')).toHaveCount(step === 2 ? 1 : 0);
+      await expect(modal.getByTestId("local-environment")).toHaveCount(step === 3 ? 1 : 0);
+      await expectInsideViewport(modal, 700, 620);
+      expect(await modal.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+      expect(await modal.locator(".onboard-content").evaluate((el) => ({
+        fits: el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight,
+        scrollbar: getComputedStyle(el).scrollbarWidth,
+      }))).toEqual({ fits: true, scrollbar: "none" });
+      await page.screenshot({ path: test.info().outputPath(`onboarding-${locale}-${step}.png`), animations: "disabled" });
+      if (step < 3) await modal.getByRole("button", { name: step === 2 ? (locale === "zh" ? "稍后配置" : "Set up later") : next, exact: true }).click();
+    }
+    // Even at high zoom / short window height, navigation stays outside the
+    // scrollable content and long paths never force horizontal scrolling.
+    await page.setViewportSize({ width: 460, height: 360 });
+    const content = modal.locator(".onboard-content");
+    await expectInsideViewport(modal.locator(".row"), 460, 360);
+    expect(await content.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await content.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(modal.getByRole("button", { name: locale === "zh" ? "编辑路径" : "Edit paths", exact: true })).toBeInViewport();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[2], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[1], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal.getByRole("heading", { name: titles[0], exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+    expect(await lastInvokeArgs(page, "save_model")).toBeNull();
+  });
+}
+
+test("local environment manual paths save, survive reopening, and preserve failed edits", async ({ page }) => {
+  await page.goto("/?mockOnboarding=1");
+  const modal = page.locator(".onboard");
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Next", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  const env = modal.getByTestId("local-environment");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(7);
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("/mock/bin/python3");
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("C:\\Custom Python\\python.exe");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toBeFocused();
+  await env.getByRole("textbox", { name: "npm", exact: true }).fill("C:\\Program Files\\nodejs\\npm.cmd");
+  await env.getByRole("textbox", { name: "uv", exact: true }).fill("");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = true; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("alert")).toContainText("file not found");
+  await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("C:\\Custom Python\\python.exe");
+  await page.evaluate(() => { (window as any).__failSaveLocalEnvironment = false; });
+  await env.getByRole("button", { name: "Save paths" }).click();
+  await expect(env.getByRole("textbox")).toHaveCount(0);
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await expect.poll(() => lastInvokeArgs(page, "save_local_environment_paths")).toMatchObject({ paths: {
+    python_executable: "C:\\Custom Python\\python.exe", npm_executable: "C:\\Program Files\\nodejs\\npm.cmd", uv_executable: "",
+  } });
+  await env.getByRole("button", { name: "Check paths again" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await modal.getByRole("button", { name: "Back", exact: true }).click();
+  await modal.getByRole("button", { name: "Set up later" }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  await env.getByRole("button", { name: "Edit paths" }).click();
+  await env.getByRole("textbox", { name: "Python", exact: true }).fill("/discard/python");
+  await env.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(env).toContainText("C:\\Custom Python\\python.exe");
+  expect(await lastInvokeArgs(page, "send_message")).toBeNull();
 });

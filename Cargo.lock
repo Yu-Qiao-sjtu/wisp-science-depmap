@@ -443,7 +443,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
 ]
 
 [[package]]
@@ -451,6 +451,15 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -3049,6 +3058,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
+
+[[package]]
 name = "minisign-verify"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3155,6 +3174,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "noodles-bgzf"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37290f565045fd2775b549e62dffca7e1afadc70d8d5a3a2ef19609eb3d8193b"
+dependencies = [
+ "bytes",
+ "crossbeam-channel",
+ "flate2",
+]
+
+[[package]]
+name = "noodles-core"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53e1e8a419dbba0e4000b0e60830b124138c7f2277ad556463506f1a81d32d17"
+dependencies = [
+ "bstr",
+]
+
+[[package]]
+name = "noodles-csi"
+version = "0.55.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9c846d8128bd80b18d891b13cb9e0bc1d364429d6ab3ec3c83939f3d32ba105"
+dependencies = [
+ "bit-vec 0.9.1",
+ "bstr",
+ "indexmap 2.14.0",
+ "noodles-bgzf",
+ "noodles-core",
+]
+
+[[package]]
+name = "noodles-tabix"
+version = "0.61.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2443d0852c9618cd4aa8d11bc7c1884285e46aa4466cf5c1e49f3d9756ca7ced"
+dependencies = [
+ "bstr",
+ "indexmap 2.14.0",
+ "noodles-bgzf",
+ "noodles-core",
+ "noodles-csi",
 ]
 
 [[package]]
@@ -4140,6 +4205,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -4239,6 +4305,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -7138,7 +7213,7 @@ checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wisp-acp"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -7150,8 +7225,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "wisp-bio"
+version = "1.10.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "flate2",
+ "noodles-bgzf",
+ "noodles-core",
+ "noodles-csi",
+ "noodles-tabix",
+ "reqwest 0.12.28",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "wisp-llm",
+ "wisp-tools",
+]
+
+[[package]]
 name = "wisp-cli"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7164,6 +7262,7 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "uuid",
+ "wisp-bio",
  "wisp-core",
  "wisp-dto",
  "wisp-llm",
@@ -7177,7 +7276,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-core"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7199,7 +7298,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-dto"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7207,7 +7306,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-llm"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -7221,7 +7320,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-mcp"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7234,17 +7333,16 @@ dependencies = [
  "tracing",
  "windows-sys 0.61.2",
  "wisp-llm",
- "wisp-paths",
  "wisp-tools",
 ]
 
 [[package]]
 name = "wisp-paths"
-version = "1.8.1"
+version = "1.10.0"
 
 [[package]]
 name = "wisp-runs"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7270,7 +7368,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-runtime"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7291,7 +7389,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-skills"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -7307,7 +7405,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-store"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7326,7 +7424,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-sync"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7347,7 +7445,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tauri"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7394,6 +7492,7 @@ dependencies = [
  "windows",
  "winreg 0.55.0",
  "wisp-acp",
+ "wisp-bio",
  "wisp-core",
  "wisp-dto",
  "wisp-llm",
@@ -7410,7 +7509,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tools"
-version = "1.8.1"
+version = "1.10.0"
 dependencies = [
  "anydoc",
  "async-trait",

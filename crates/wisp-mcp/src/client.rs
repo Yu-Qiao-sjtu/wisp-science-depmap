@@ -1,7 +1,7 @@
 //! Minimal stdio JSON-RPC 2.0 MCP client.
 //!
 //! Launches any MCP server that speaks newline-delimited JSON over stdio
-//! (the upstream `mcp-servers/bio-tools/run_server.py <pkg>` among them),
+//! configured by the user,
 //! performs the `initialize` handshake, lists tools, and dispatches
 //! `tools/call`. Each remote tool is exposed to the agent as a
 //! [`wisp_tools::Tool`] via [`McpTool`].
@@ -10,7 +10,6 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -28,11 +27,6 @@ const STDIO_SHUTDOWN_EOF_GRACE: std::time::Duration = std::time::Duration::from_
 const STDIO_SHUTDOWN_TERM_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 const STDIO_SHUTDOWN_KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 const STDIO_SHUTDOWN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Path to the vendored bio-tools MCP servers bundled with the app.
-pub fn bundled_bio_tools_dir() -> Option<PathBuf> {
-    wisp_paths::bio_tools_dir()
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoteTool {
@@ -282,19 +276,6 @@ impl Drop for CancellationCleanup<'_> {
     }
 }
 
-fn bio_tools_command(
-    python: &std::path::Path,
-    run_server: &std::path::Path,
-    pkg: &str,
-    envs: &[(String, String)],
-) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(python);
-    cmd.arg(run_server).arg(pkg);
-    cmd.envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    cmd.env("PYTHONDONTWRITEBYTECODE", "1");
-    cmd
-}
-
 impl McpClient {
     /// Spawn `command args...` and perform the MCP initialize handshake.
     pub async fn launch(command: &str, args: &[String]) -> Result<Self> {
@@ -400,14 +381,28 @@ impl McpClient {
     /// caller-supplied auth headers (e.g. `Authorization`) injected on every
     /// request.
     pub async fn connect_http(url: &str, headers: &[(String, String)]) -> Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::connect_http_with_proxy(url, headers, "").await
+    }
+
+    /// Same transport with an independent proxy policy: empty inherits, `none`
+    /// forces direct, and a URL overrides the ambient proxy.
+    pub async fn connect_http_with_proxy(
+        url: &str,
+        headers: &[(String, String)],
+        proxy: &str,
+    ) -> Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             // ponytail: 120s request ceiling so a connected-but-hung host eventually
             // errors instead of blocking a turn forever; raise if a legit HTTP MCP
             // tool call needs longer than this.
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .timeout(std::time::Duration::from_secs(120));
+        builder = match proxy.trim() {
+            "" => builder,
+            "none" => builder.no_proxy(),
+            proxy => builder.proxy(reqwest::Proxy::all(proxy)?),
+        };
+        let http = builder.build()?;
         let client = Self {
             transport: Transport::Http(HttpTransport {
                 client: http,
@@ -712,22 +707,6 @@ impl McpClient {
             .await
     }
 
-    /// Launch a bundled bio-tools server (`<bundled>/run_server.py <pkg>`)
-    /// using `python` (typically a uv-provisioned venv interpreter). The venv
-    /// must already have the bio-tools dependencies installed. `envs` are
-    /// extra environment variables (e.g. service API keys) for the server.
-    pub async fn launch_bio_tools(
-        python: &std::path::Path,
-        pkg: &str,
-        envs: &[(String, String)],
-    ) -> Result<Self> {
-        let dir =
-            bundled_bio_tools_dir().ok_or_else(|| anyhow!("bundled bio-tools dir not found"))?;
-        let run_server = dir.join("run_server.py");
-        let cmd = bio_tools_command(python, &run_server, pkg, envs);
-        Self::launch_with_command(cmd).await
-    }
-
     /// Stop this MCP connection and, for stdio transports, its complete child
     /// process tree. Safe to call repeatedly. Drop remains a forceful safety
     /// net for owners that cannot await this method.
@@ -964,24 +943,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bio_tools_command_forces_python_not_to_write_bytecode() {
-        let envs = vec![("PYTHONDONTWRITEBYTECODE".to_string(), "0".to_string())];
-        let cmd = bio_tools_command(
-            std::path::Path::new("python"),
-            std::path::Path::new("run_server.py"),
-            "mcp_bio",
-            &envs,
-        );
-
-        let value = cmd
-            .as_std()
-            .get_envs()
-            .find(|(key, _)| *key == std::ffi::OsStr::new("PYTHONDONTWRITEBYTECODE"))
-            .and_then(|(_, value)| value);
-        assert_eq!(value, Some(std::ffi::OsStr::new("1")));
-    }
-
-    #[test]
     fn sse_body_yields_matching_jsonrpc_result() {
         // An MCP server may answer over text/event-stream. Frames are
         // `data: <json>` lines separated by blank lines. We want the result
@@ -1088,6 +1049,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_explicit_proxy_routes_an_unresolvable_mcp_host_through_proxy() {
+        // A loopback fake proxy handles MCP itself. The target deliberately
+        // cannot resolve, so this succeeds only if the explicit proxy is used.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(3) {
+                serve_http_jsonrpc(stream.unwrap());
+            }
+        });
+        let client = McpClient::connect_http_with_proxy("http://mcp.invalid/mcp", &[], &proxy)
+            .await
+            .unwrap();
+        let response = client
+            .tool_call_rich("echo", &json!({"token": "proxied"}))
+            .await
+            .unwrap();
+        assert_eq!(response.structured_content.unwrap()["token"], "proxied");
+    }
+
+    #[tokio::test]
+    async fn http_invalid_proxy_fails_before_connecting() {
+        assert!(McpClient::connect_http_with_proxy(
+            "http://mcp.invalid/mcp",
+            &[],
+            "socks42://localhost:1234"
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
     async fn http_concurrent_calls_keep_matching_ids() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1101,7 +1094,9 @@ mod tests {
         });
 
         let url = format!("http://{addr}/mcp");
-        let client = McpClient::connect_http(&url, &[]).await.unwrap();
+        let client = McpClient::connect_http_with_proxy(&url, &[], "none")
+            .await
+            .unwrap();
         let slow_args = json!({ "token": "slow", "delay_ms": 180 });
         let fast_args = json!({ "token": "fast", "delay_ms": 20 });
         let slow = client.tool_call_rich("echo", &slow_args);

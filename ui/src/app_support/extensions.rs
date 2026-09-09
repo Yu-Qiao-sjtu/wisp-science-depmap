@@ -97,12 +97,18 @@ impl ExtensionsState {
     pub(crate) fn save_skill_tags(self, name: String, raw: String) {
         let tags = split_tags(&raw);
         spawn_local(async move {
-            let _ = invoke_checked(
+            let result = invoke_checked(
                 "set_skill_tags",
                 to_value(&serde_json::json!({ "name": name, "tags": tags })).unwrap(),
             )
             .await;
-            self.refresh_skills();
+            match result {
+                Ok(_) => {
+                    self.skills_msg.set(None);
+                    self.refresh_skills();
+                }
+                Err(error) => self.skills_msg.set(Some((false, js_error_text(error)))),
+            }
         });
     }
 

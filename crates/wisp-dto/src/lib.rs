@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Identifies a stopped ACP turn in persisted errors and invoke rejections.
+/// The UI must not offer native HTTP transcript recovery for these errors.
+pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct ContextUsage {
     #[serde(default)]
@@ -1701,6 +1705,42 @@ pub struct BrowserTabCleanupPrompt {
     pub tabs: Vec<BrowserTabCleanupItem>,
 }
 
+/// A tab whose current page needs the user to complete a human-verification
+/// challenge before browser automation may continue.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanTab {
+    #[serde(default)]
+    pub session: String,
+    pub tab_id: i64,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub frame_id: String,
+    #[serde(default)]
+    pub turn_id: String,
+}
+
+/// Live set of tabs waiting on human verification. Replaces the previous
+/// snapshot each time it is emitted.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanPrompt {
+    #[serde(default)]
+    pub tabs: Vec<BrowserNeedsHumanTab>,
+}
+
+/// Result of re-scanning tabs the user marked as completed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanConfirmResult {
+    #[serde(default)]
+    pub still_required: Vec<BrowserNeedsHumanTab>,
+    #[serde(default)]
+    pub cleared: Vec<BrowserNeedsHumanTab>,
+}
+
 /// Reply of `open_browser_extension_page`: managed extension path and whether
 /// a browser was launched on its extension-manager page.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2046,7 +2086,7 @@ pub struct AcpSessionUpdate {
     pub payload: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpSessionState {
     pub frame_id: String,
@@ -2884,6 +2924,12 @@ pub struct SkillRow {
     pub dir: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillFileContent {
+    pub path: String,
+    pub content: String,
+}
+
 #[derive(Clone, serde::Deserialize, PartialEq)]
 pub struct PluginRow {
     pub id: String,
@@ -3023,15 +3069,24 @@ pub struct ConnView {
 fn default_tool_mode() -> String {
     "allow".into()
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorTool {
     pub name: String,
     #[serde(default = "default_tool_mode")]
     pub mode: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, alias = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, alias = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConnectorLink {
+    pub label: String,
+    pub url: String,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorInfo {
     pub key: String,
     pub name: String,
@@ -3042,12 +3097,20 @@ pub struct ConnectorInfo {
     pub subtitle: String,
     #[serde(default)]
     pub auth: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub description_zh: String,
+    #[serde(default)]
+    pub maintainer: String,
+    #[serde(default)]
+    pub links: Vec<ConnectorLink>,
     pub tools: Vec<ConnectorTool>,
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorsView {
     pub connectors: Vec<ConnectorInfo>,
-    /// Global approval scope: "full" | "auto" | "ask".
+    /// This window's project approval scope, or its inherited global default.
     pub scope: String,
 }
 
@@ -3065,8 +3128,11 @@ pub struct ApprovalGrantRow {
 
 /// Editor row for a header or env secret. `value` is the typed replacement;
 /// empty keeps the stored secret when `has_value` is true.
+///
+/// `row_id` is UI-only (keyed list identity). It is not serialized.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct ConnSecretField {
+    pub row_id: u64,
     pub name: String,
     pub value: String,
     pub has_value: bool,
@@ -3075,6 +3141,7 @@ pub struct ConnSecretField {
 impl ConnSecretField {
     pub fn from_entry(entry: &McpSecretEntry) -> Self {
         Self {
+            row_id: 0,
             name: entry.name.clone(),
             value: String::new(),
             has_value: entry.has_value
@@ -3364,15 +3431,24 @@ pub struct TurnMemoryProposal {
     pub global_memories: Vec<GlobalMemory>,
 }
 
-#[derive(Deserialize, Clone)]
+/// Paths found without launching interpreters or installing packages.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct LocalEnvironmentStatus {
+    pub paths: std::collections::BTreeMap<String, String>,
+    pub warning: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BootstrapStatus {
     pub skills_loaded: usize,
     pub python_ok: bool,
     #[serde(default)]
-    pub python_initializing: bool,
+    pub local_environment: Option<LocalEnvironmentStatus>,
     pub mcp_catalog: usize,
     pub uv_ok: bool,
     pub node_ok: bool,
+    #[serde(default)]
+    pub npm_ok: bool,
     pub sci_ok: bool,
     pub pixi_ok: bool,
     pub app_version: String,
@@ -4251,6 +4327,10 @@ pub struct RuntimeKeyDto {
     pub project_id: String,
     pub context_id: String,
     pub language: String,
+    #[serde(default)]
+    pub scope_key: String,
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Deserialize, Clone, PartialEq, Eq)]
@@ -4832,4 +4912,17 @@ mod mcp_secret_entry_tests {
         assert_eq!(entry.value.as_deref(), Some("secret-value"));
         assert!(entry.has_value);
     }
+}
+/// Independently saved network preferences. Empty proxies inherit platform /
+/// environment defaults; `none` forces direct connections. Mirrors are agent
+/// installation guidance, not a network access policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkSettings {
+    pub model_proxy_url: String,
+    pub mcp_proxy_url: String,
+    pub command_proxy_url: String,
+    pub conda_mirror_url: String,
+    pub pip_index_url: String,
+    pub ca_bundle_path: String,
 }

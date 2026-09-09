@@ -372,6 +372,11 @@ const CREDENTIALS: &[Credential] = &[
         secret: "depmap_knowledge_api_token",
         env: "DEPMAP_KNOWLEDGE_API_TOKEN",
     },
+    Credential {
+        id: "openfda_api_key",
+        secret: "openfda_api_key",
+        env: "OPENFDA_API_KEY",
+    },
 ];
 
 fn credential(id: &str) -> Option<&'static Credential> {
@@ -1350,7 +1355,7 @@ pub async fn get_session_model(
     window: tauri::WebviewWindow,
     session_id: String,
 ) -> Result<String, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&session_id)
@@ -1379,7 +1384,7 @@ pub async fn get_session_reasoning_effort(
     window: tauri::WebviewWindow,
     session_id: String,
 ) -> Result<Option<String>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&session_id)
@@ -1403,7 +1408,7 @@ pub async fn get_session_service_tier(
     window: tauri::WebviewWindow,
     session_id: String,
 ) -> Result<Option<String>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&session_id)

@@ -22,8 +22,8 @@
 
 ## Brand surfaces
 
-- Projects landing keeps a serif hero title with the logo mark and a soft clay wash — not a dashboard of promo cards.
-- Chat empty and research-graph empty reuse the logo treatment (`.empty-logo` / `.rp-empty-icon.brand`) instead of dashed placeholders.
+- Projects landing and chat empty use the full molecular wordmark (`.brand-wordmark`) with transparent backgrounds. Select its light or dark asset through the app theme; explicit appearance choices override the system preference.
+- Keep the wordmark large enough for the “science” lettering to read. Compact chrome and the research-graph empty state retain a small symbol; chat greetings retain the serif typography.
 - Research graph headings use Source Serif at `--text-lg`; list/canvas stay utilitarian.
 
 ## Queued follow-ups

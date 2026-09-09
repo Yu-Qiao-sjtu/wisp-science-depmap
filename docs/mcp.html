@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="mcp">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science 内置科研 MCP：进程内 mcp_bio catalog，23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。">
+  <title>科研 MCP | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="doc-page">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="index.html#features" data-i18n="nav.features">功能</a>
+        <a href="index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="mcp.html" aria-current="page" data-i18n="nav.mcp">MCP</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="doc-hero">
+      <div class="container">
+        <div class="eyebrow">Settings → Connections</div>
+        <h1 data-i18n="mcp.title">科研 MCP</h1>
+        <p class="lead" data-i18n="mcp.lead">
+          公开生物与化学检索是进程内的原生 catalog（mcp_bio），不是 Python MCP 子进程，也不再附带 ketcher。默认 23 个连接器、247 个工具，覆盖约 80 个上游数据库。Agent 用 search_mcp_tools 发现、use_mcp_tool 调用。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-i18n="models.download">下载最新版</a>
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/wiki/Bioinformatics-Databases" data-i18n="mcp.wiki">GitHub Wiki 清单</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 001 ]</span>
+          <span data-i18n="mcp.howKicker">How it works</span>
+        </div>
+        <div class="feature-list doc-card-grid">
+          <div class="feature-list-item">
+            <h4 data-i18n="mcp.nativeTitle">进程内 catalog</h4>
+            <p data-i18n="mcp.nativeBody">桌面、CLI 与 ACP bridge 共用 crates/wisp-bio。默认 mcp_bio 挂全部已实现域；WISP_MCP_PKG=mcp_pubmed 可只挂一个域。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="mcp.discoverTitle">先发现，再调用</h4>
+            <p data-i18n="mcp.discoverBody">完整 schema 不会塞进每一轮提示词。说清数据库或目标即可，不要猜工具名。连接改动对新会话或空闲 Agent 重建生效。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="mcp.customTitle">自定义 MCP</h4>
+            <p data-i18n="mcp.customBody">设置 → 连接 → Add connection 可加本地命令或远程 URL（含 OAuth）。与这份原生 catalog 分开，密钥只进操作系统钥匙串。</p>
+          </div>
+        </div>
+        <p class="lead doc-note" data-i18n="mcp.notice">KEGG / CADD / PanglaoDB / Sanger Cell Model Passports 带有学术或快照使用说明。ZINC SmallWorld 是公开 ZINC20 在售索引。PubMed 的开放获取标志不是再利用授权。结果几乎都是有界页，不是全库导出。</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 002 ]</span>
+          <span data-i18n="mcp.tocKicker">23 connectors</span>
+        </div>
+        <h2 class="doc-subhead" data-i18n="mcp.tocHeading">连接器一览</h2>
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thConnector">连接器</th>
+                <th data-i18n="mcp.thPkg">包名</th>
+                <th data-i18n="mcp.thCount">工具</th>
+                <th data-i18n="mcp.thUpstream">上游</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="#biomart"><span class="lang-zh">BioMart</span><span class="lang-en">BioMart</span></a></td>
+                <td><code>mcp_biomart</code></td>
+                <td>8</td>
+                <td>Ensembl BioMart, Ensembl usage terms</td>
+              </tr>
+              <tr>
+                <td><a href="#biorxiv"><span class="lang-zh">bioRxiv</span><span class="lang-en">bioRxiv</span></a></td>
+                <td><code>mcp_biorxiv</code></td>
+                <td>7</td>
+                <td>bioRxiv / medRxiv API</td>
+              </tr>
+              <tr>
+                <td><a href="#cancer-models"><span class="lang-zh">癌症模型</span><span class="lang-en">Cancer Models</span></a></td>
+                <td><code>mcp_cancer_models</code></td>
+                <td>11</td>
+                <td>cBioPortal, Sanger Cell Model Passports</td>
+              </tr>
+              <tr>
+                <td><a href="#cellguide"><span class="lang-zh">CellGuide</span><span class="lang-en">CellGuide</span></a></td>
+                <td><code>mcp_cellguide</code></td>
+                <td>5</td>
+                <td>CZ CELLxGENE CellGuide</td>
+              </tr>
+              <tr>
+                <td><a href="#chembl"><span class="lang-zh">ChEMBL</span><span class="lang-en">ChEMBL</span></a></td>
+                <td><code>mcp_chembl</code></td>
+                <td>6</td>
+                <td>ChEMBL web services</td>
+              </tr>
+              <tr>
+                <td><a href="#chemistry"><span class="lang-zh">化学</span><span class="lang-en">Chemistry</span></a></td>
+                <td><code>mcp_chemistry</code></td>
+                <td>12</td>
+                <td>PubChem, ChEBI, Rhea, BindingDB</td>
+              </tr>
+              <tr>
+                <td><a href="#clinical-genomics"><span class="lang-zh">临床基因组学</span><span class="lang-en">Clinical Genomics</span></a></td>
+                <td><code>mcp_clinical_genomics</code></td>
+                <td>20</td>
+                <td>CIViC, ClinGen, Open Targets</td>
+              </tr>
+              <tr>
+                <td><a href="#clinical-trials"><span class="lang-zh">临床试验</span><span class="lang-en">Clinical Trials</span></a></td>
+                <td><code>mcp_clinical_trials</code></td>
+                <td>6</td>
+                <td>ClinicalTrials.gov API</td>
+              </tr>
+              <tr>
+                <td><a href="#drug-regulatory"><span class="lang-zh">药品监管</span><span class="lang-en">Drug Regulatory</span></a></td>
+                <td><code>mcp_drug_regulatory</code></td>
+                <td>7</td>
+                <td>openFDA Drugs@FDA, openFDA drug labels</td>
+              </tr>
+              <tr>
+                <td><a href="#expression"><span class="lang-zh">表达</span><span class="lang-en">Expression</span></a></td>
+                <td><code>mcp_expression</code></td>
+                <td>15</td>
+                <td>GTEx, PanglaoDB</td>
+              </tr>
+              <tr>
+                <td><a href="#genes-ontologies"><span class="lang-zh">基因与本体</span><span class="lang-en">Genes Ontologies</span></a></td>
+                <td><code>mcp_genes_ontologies</code></td>
+                <td>10</td>
+                <td>MyGene.info, UniProt, OLS, QuickGO, Reactome, KEGG API and usage conditions</td>
+              </tr>
+              <tr>
+                <td><a href="#genomes"><span class="lang-zh">基因组</span><span class="lang-en">Genomes</span></a></td>
+                <td><code>mcp_genomes</code></td>
+                <td>11</td>
+                <td>Ensembl REST, UCSC Genome Browser API</td>
+              </tr>
+              <tr>
+                <td><a href="#human-genetics"><span class="lang-zh">人类遗传学</span><span class="lang-en">Human Genetics</span></a></td>
+                <td><code>mcp_human_genetics</code></td>
+                <td>14</td>
+                <td>GWAS Catalog, eQTL Catalogue, PheWeb</td>
+              </tr>
+              <tr>
+                <td><a href="#literature"><span class="lang-zh">文献</span><span class="lang-en">Literature</span></a></td>
+                <td><code>mcp_literature</code></td>
+                <td>9</td>
+                <td>OpenAlex, arXiv API, arXiv API usage terms</td>
+              </tr>
+              <tr>
+                <td><a href="#omics-archives"><span class="lang-zh">组学归档</span><span class="lang-en">Omics Archives</span></a></td>
+                <td><code>mcp_omics_archives</code></td>
+                <td>17</td>
+                <td>NCBI GEO, ArrayExpress, MetaboLights, MGnify, PRIDE</td>
+              </tr>
+              <tr>
+                <td><a href="#protein-annotation"><span class="lang-zh">蛋白注释</span><span class="lang-en">Protein Annotation</span></a></td>
+                <td><code>mcp_protein_annotation</code></td>
+                <td>13</td>
+                <td>InterPro, Human Protein Atlas, STRING</td>
+              </tr>
+              <tr>
+                <td><a href="#pubmed"><span class="lang-zh">PubMed</span><span class="lang-en">PubMed</span></a></td>
+                <td><code>mcp_pubmed</code></td>
+                <td>7</td>
+                <td>PubMed, NCBI E-utilities, Europe PMC</td>
+              </tr>
+              <tr>
+                <td><a href="#regulation"><span class="lang-zh">调控</span><span class="lang-en">Regulation</span></a></td>
+                <td><code>mcp_regulation</code></td>
+                <td>16</td>
+                <td>ENCODE, JASPAR, UniBind</td>
+              </tr>
+              <tr>
+                <td><a href="#research-resources"><span class="lang-zh">研究资源</span><span class="lang-en">Research Resources</span></a></td>
+                <td><code>mcp_research_resources</code></td>
+                <td>5</td>
+                <td>Antibody Registry, Grants.gov API</td>
+              </tr>
+              <tr>
+                <td><a href="#rna"><span class="lang-zh">RNA</span><span class="lang-en">RNA</span></a></td>
+                <td><code>mcp_rna</code></td>
+                <td>9</td>
+                <td>Rfam API</td>
+              </tr>
+              <tr>
+                <td><a href="#structures-interactions"><span class="lang-zh">结构与相互作用</span><span class="lang-en">Structures Interactions</span></a></td>
+                <td><code>mcp_structures_interactions</code></td>
+                <td>16</td>
+                <td>RCSB PDB, AlphaFold DB, EMDB, Complex Portal, IntAct</td>
+              </tr>
+              <tr>
+                <td><a href="#variants"><span class="lang-zh">变异</span><span class="lang-en">Variants</span></a></td>
+                <td><code>mcp_variants</code></td>
+                <td>18</td>
+                <td>CADD API and usage conditions, gnomAD, ClinVar, dbSNP</td>
+              </tr>
+              <tr>
+                <td><a href="#zinc"><span class="lang-zh">ZINC</span><span class="lang-en">ZINC</span></a></td>
+                <td><code>mcp_zinc</code></td>
+                <td>5</td>
+                <td>ZINC / CartBlanche22, SmallWorld API</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="biomart">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 003 ]</span>
+          <span><code>mcp_biomart</code> · 8</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">BioMart</span><span class="lang-en">BioMart</span></h2>
+        <p class="lang-zh">通过 Ensembl BioMart 查询基因组注释、转换标识符并查找交叉引用。可先浏览数据库、物种数据集、属性和筛选条件，再获取查询结果。</p>
+        <p class="lang-en">Query Ensembl BioMart for genomic annotations, identifier translation and cross-references. Discover marts, species datasets, attributes and filters before retrieving a bounded result table.</p>
+        <p class="mcp-sources"><a href="https://www.ensembl.org/info/data/biomart/index.html">Ensembl BioMart</a> · <a href="https://www.ensembl.org/info/about/legal/disclaimer.html">Ensembl usage terms</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>list_marts</code></td>
+                <td><span class="lang-zh">列出 Ensembl BioMart 的 mart 数据库</span><span class="lang-en">List Ensembl BioMart marts.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_datasets</code></td>
+                <td><span class="lang-zh">列出某个 mart 下的物种/数据集</span><span class="lang-en">List datasets in one Ensembl BioMart mart.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_common_attributes</code></td>
+                <td><span class="lang-zh">列出数据集 Features 页上的常用属性</span><span class="lang-en">List attributes on the Ensembl Genes Features page (attribute page feature_page) for a dataset.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_all_attributes</code></td>
+                <td><span class="lang-zh">列出数据集的全部 BioMart 属性（含同源、芯片页）</span><span class="lang-en">List every BioMart attribute for a dataset.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_filters</code></td>
+                <td><span class="lang-zh">列出数据集可用的筛选条件</span><span class="lang-en">List BioMart filters for a dataset.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_data</code></td>
+                <td><span class="lang-zh">按属性与筛选条件查询有界 TSV 结果表</span><span class="lang-en">Query Ensembl BioMart for a bounded TSV table.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_translation</code></td>
+                <td><span class="lang-zh">在两个 BioMart 属性之间翻译单个标识符</span><span class="lang-en">Translate one identifier between BioMart attributes (for example hgnc_symbol → ensembl_gene_id) by querying the dataset with an ID-list filter, not a full-ta…</span></td>
+              </tr>
+              <tr>
+                <td><code>batch_translate</code></td>
+                <td><span class="lang-zh">一次把最多 200 个标识符在两个属性之间翻译</span><span class="lang-en">Translate up to 200 identifiers between BioMart attributes in one ID-list query (from_attr must be a filter).</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="biorxiv">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 004 ]</span>
+          <span><code>mcp_biorxiv</code> · 7</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">bioRxiv</span><span class="lang-en">bioRxiv</span></h2>
+        <p class="lang-zh">检索 bioRxiv、medRxiv 预印本，查看稿件版本与正式发表链接，并获取学科、资助方和使用统计。</p>
+        <p class="lang-en">Find bioRxiv and medRxiv preprints, inspect manuscript versions and publication links, and retrieve category, funder and usage summaries.</p>
+        <p class="mcp-sources"><a href="https://api.biorxiv.org/">bioRxiv / medRxiv API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>get_categories</code></td>
+                <td><span class="lang-zh">列出 bioRxiv Content API 接受的 27 个学科分类</span><span class="lang-en">List the 27 bioRxiv subject categories accepted as the Content API category query parameter.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_content_statistics</code></td>
+                <td><span class="lang-zh">获取 bioRxiv 平台新稿与修订预印本计数</span><span class="lang-en">Retrieve platform-wide bioRxiv new and revised preprint counts from the Content API summary endpoint.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_preprint</code></td>
+                <td><span class="lang-zh">按 DOI 取一篇 bioRxiv/medRxiv 预印本的全部版本</span><span class="lang-en">Retrieve every version of one bioRxiv or medRxiv preprint by DOI from the Content API.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_usage_statistics</code></td>
+                <td><span class="lang-zh">获取摘要浏览、全文浏览和 PDF 下载次数</span><span class="lang-en">Retrieve abstract-view, full-text-view and PDF-download counts from the Content API usage endpoint.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_by_funder</code></td>
+                <td><span class="lang-zh">按资助方 ROR 标识分页浏览预印本</span><span class="lang-en">Page through preprints that declare a funder ROR identifier.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_preprints</code></td>
+                <td><span class="lang-zh">分页浏览 bioRxiv/medRxiv 预印本元数据（无关键词检索）</span><span class="lang-en">Page through bioRxiv or medRxiv preprint metadata.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_published_preprints</code></td>
+                <td><span class="lang-zh">分页浏览预印本到期刊的发表链接</span><span class="lang-en">Page through preprint-to-journal links from the Content API pubs endpoint, or from the bioRxiv-only publisher prefix endpoint.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="cancer-models">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 005 ]</span>
+          <span><code>mcp_cancer_models</code> · 11</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">癌症模型</span><span class="lang-en">Cancer Models</span></h2>
+        <p class="lang-zh">浏览 cBioPortal 癌症研究、分子谱、样本和临床数据，以及 Sanger Cell Model Passports 中的癌症模型。</p>
+        <p class="lang-en">Explore cBioPortal cancer studies, molecular profiles, samples and clinical data, alongside Sanger Cell Model Passports for cancer models.</p>
+        <p class="mcp-sources"><a href="https://docs.cbioportal.org/web-API-and-Clients/">cBioPortal</a> · <a href="https://depmap.sanger.ac.uk/documentation/api/">Sanger Cell Model Passports</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>cbioportal_clinical_attributes</code></td>
+                <td><span class="lang-zh">列出某项 cBioPortal 研究的临床属性</span><span class="lang-en">Catalogue clinical attributes for one cBioPortal study (patient- or sample-level; STRING or NUMBER).</span></td>
+              </tr>
+              <tr>
+                <td><code>cbioportal_cna_in_gene</code></td>
+                <td><span class="lang-zh">取某基因在一项研究中的离散拷贝数（GISTIC −2..2）</span><span class="lang-en">Discrete copy-number calls (GISTIC-style −2..2) for one gene in one cBioPortal study.</span></td>
+              </tr>
+              <tr>
+                <td><code>cbioportal_get_study</code></td>
+                <td><span class="lang-zh">按 studyId 取一项 cBioPortal 研究的引用、平台样本数和分子谱</span><span class="lang-en">Retrieve one cBioPortal study by studyId: citation, platform sample counts, and molecular profiles.</span></td>
+              </tr>
+              <tr>
+                <td><code>cbioportal_list_studies</code></td>
+                <td><span class="lang-zh">列出公开的 cBioPortal 癌症基因组学研究</span><span class="lang-en">List public cBioPortal cancer genomics studies.</span></td>
+              </tr>
+              <tr>
+                <td><code>cbioportal_mutation_frequency</code></td>
+                <td><span class="lang-zh">比较 1–12 项研究中某基因的突变样本比例</span><span class="lang-en">Compare the fraction of sequenced samples with at least one mutation in a gene across 1–12 cBioPortal studies.</span></td>
+              </tr>
+              <tr>
+                <td><code>cbioportal_mutations_in_gene</code></td>
+                <td><span class="lang-zh">列出某基因在一项研究中的体细胞突变</span><span class="lang-en">List somatic mutations for one HUGO symbol or Entrez gene ID in one cBioPortal study.</span></td>
+              </tr>
+              <tr>
+                <td><code>gene_dependencies</code></td>
+                <td><span class="lang-zh">按 CMP 基因符号取 CRISPR 敲除依赖分数</span><span class="lang-en">CRISPR knock-out dependency scores for one official CMP gene symbol.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_model</code></td>
+                <td><span class="lang-zh">按 SIDM 或精确名称取一个 Sanger Cell Model Passports 模型</span><span class="lang-en">Retrieve one Sanger Cell Model Passports model by SIDM id (case-insensitive prefix) or exact name/synonym.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_models</code></td>
+                <td><span class="lang-zh">列出 Sanger Cell Model Passports 模型（可按组织/癌种过滤）</span><span class="lang-en">List Sanger Cell Model Passports models (SIDM ids).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_genes</code></td>
+                <td><span class="lang-zh">按官方 CMP 符号搜索 Sanger 基因</span><span class="lang-en">Search Sanger Cell Model Passports genes by official CMP symbol (GET /genes).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_models</code></td>
+                <td><span class="lang-zh">按关键词搜索 Sanger 细胞模型</span><span class="lang-en">Search Sanger Cell Model Passports models.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="cellguide">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 006 ]</span>
+          <span><code>mcp_cellguide</code> · 5</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">CellGuide</span><span class="lang-en">CellGuide</span></h2>
+        <p class="lang-zh">基于 CZ CELLxGENE CellGuide 的图谱快照，浏览细胞类型、标记基因及其组织背景。</p>
+        <p class="lang-en">Explore CZ CELLxGENE CellGuide cell types, marker genes and tissue context from its published atlas snapshots.</p>
+        <p class="mcp-sources"><a href="https://cellxgene.cziscience.com/cellguide">CZ CELLxGENE CellGuide</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>search_cell_types</code></td>
+                <td><span class="lang-zh">在 CellGuide 快照中搜索细胞类型</span><span class="lang-en">Search CZ CELLxGENE CellGuide cell types in the current snapshot&#x27;s celltype_metadata.json.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_cell_type_info</code></td>
+                <td><span class="lang-zh">取一个细胞类型的 Cell Ontology 元数据与叙事</span><span class="lang-en">Retrieve Cell Ontology metadata and the CellGuide narrative for one cell type.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_marker_genes</code></td>
+                <td><span class="lang-zh">列出某细胞类型的标记基因</span><span class="lang-en">List marker genes for a CellGuide cell type from the current snapshot.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_source_data</code></td>
+                <td><span class="lang-zh">列出贡献该细胞类型的 CELLxGENE 数据集</span><span class="lang-en">List CZ CELLxGENE Discover collections that contribute cells of this type in the CellGuide snapshot (source_collections/).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_cell_tissues</code></td>
+                <td><span class="lang-zh">列出该细胞类型出现的 UBERON 组织</span><span class="lang-en">List UBERON tissues in which a cell type appears in the human (NCBITaxon:9606) CellGuide ontology tree: ontology_tree/NCBITaxon_9606/celltype_to_tissue_mappi…</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="chembl">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 007 ]</span>
+          <span><code>mcp_chembl</code> · 6</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">ChEMBL</span><span class="lang-en">ChEMBL</span></h2>
+        <p class="lang-zh">搜索 ChEMBL 分子，查询化合物性质、靶点、实验、活性数据和药物作用机制。</p>
+        <p class="lang-en">Search ChEMBL molecules and retrieve compound properties, targets, assays, bioactivities and drug mechanisms.</p>
+        <p class="mcp-sources"><a href="https://chembl.gitbook.io/chembl-interface-documentation/web-services/chembl-data-web-services">ChEMBL web services</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>compound_search</code></td>
+                <td><span class="lang-zh">按名称、标识符或 SMILES 搜索 ChEMBL 分子</span><span class="lang-en">Search ChEMBL molecules by name or synonym, molecule identifier, or SMILES.</span></td>
+              </tr>
+              <tr>
+                <td><code>drug_search</code></td>
+                <td><span class="lang-zh">按疾病 EFO/MeSH 查找关联的 ChEMBL 药物</span><span class="lang-en">Find ChEMBL parent drugs linked to a disease indication through EFO term or MeSH heading.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_admet</code></td>
+                <td><span class="lang-zh">取一个分子的计算性质（分子量、ALogP、QED 等）</span><span class="lang-en">Retrieve ChEMBL calculated molecule properties for one molecule identifier: molecular weight, ALogP, polar surface area, hydrogen-bond counts, rotatable bond…</span></td>
+              </tr>
+              <tr>
+                <td><code>get_bioactivity</code></td>
+                <td><span class="lang-zh">取分子和/或靶点的有界活性记录页</span><span class="lang-en">Retrieve a bounded page of ChEMBL activity records for a molecule and/or target identifier.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_mechanism</code></td>
+                <td><span class="lang-zh">取分子和/或靶点的作用机制记录</span><span class="lang-en">Retrieve curated ChEMBL mechanism-of-action records for a molecule and/or target identifier.</span></td>
+              </tr>
+              <tr>
+                <td><code>target_search</code></td>
+                <td><span class="lang-zh">按标识符、名称、基因符号、物种或类型搜索靶点</span><span class="lang-en">Search ChEMBL targets by identifier, preferred name, gene symbol, organism or target type.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="chemistry">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 008 ]</span>
+          <span><code>mcp_chemistry</code> · 12</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">化学</span><span class="lang-en">Chemistry</span></h2>
+        <p class="lang-zh">从 PubChem、ChEBI、Rhea 和 BindingDB 查询化学标识符、结构、性质、本体条目、生化反应及结合测量数据。</p>
+        <p class="lang-en">Retrieve chemical identifiers, structures, properties, ontology entries, biochemical reactions and binding measurements from PubChem, ChEBI, Rhea and BindingDB.</p>
+        <p class="mcp-sources"><a href="https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest">PubChem</a> · <a href="https://www.ebi.ac.uk/chebi/">ChEBI</a> · <a href="https://www.rhea-db.org/help/sparql">Rhea</a> · <a href="https://www.bindingdb.org/rwd/bind/BindingDBRESTfulAPI.jsp">BindingDB</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>pubchem_search_compounds</code></td>
+                <td><span class="lang-zh">按名称、SMILES、InChIKey 或 CID 解析 PubChem 化合物</span><span class="lang-en">Resolve a chemical name, SMILES, InChIKey or CID to PubChem compound IDs with PUG REST.</span></td>
+              </tr>
+              <tr>
+                <td><code>pubchem_get_compounds</code></td>
+                <td><span class="lang-zh">取最多 50 个 CID 的计算性质</span><span class="lang-en">Retrieve computed PubChem properties for up to 50 CIDs.</span></td>
+              </tr>
+              <tr>
+                <td><code>pubchem_similarity_search</code></td>
+                <td><span class="lang-zh">按 SMILES 做同步 2D Tanimoto 相似搜索</span><span class="lang-en">Synchronous 2D Tanimoto similarity search over PubChem (`fastsimilarity_2d`).</span></td>
+              </tr>
+              <tr>
+                <td><code>pubchem_get_bioassay_summary</code></td>
+                <td><span class="lang-zh">取一个 CID 的生物测定活性摘要</span><span class="lang-en">Bioassay activity summary for one PubChem CID: assay IDs, outcomes, targets and potency when PubChem supplies them.</span></td>
+              </tr>
+              <tr>
+                <td><code>pubchem_get_safety</code></td>
+                <td><span class="lang-zh">取一个 CID 的 GHS 分类（信号、象形图、危害声明）</span><span class="lang-en">GHS classification for one PubChem CID from PUG-View, aggregated across SDS sources (signals, pictograms, hazard statements, precautionary codes).</span></td>
+              </tr>
+              <tr>
+                <td><code>chebi_search</code></td>
+                <td><span class="lang-zh">按名称、同义词、分子式或 InChIKey 搜索 ChEBI</span><span class="lang-en">Full-text search of ChEBI entities (names, synonyms, formulae, InChIKeys) via the public backend.</span></td>
+              </tr>
+              <tr>
+                <td><code>chebi_get_entity</code></td>
+                <td><span class="lang-zh">取完整 ChEBI 实体（结构、化学数据、角色、交叉引用）</span><span class="lang-en">Full ChEBI entity: structure, chemical data, roles and cross-references.</span></td>
+              </tr>
+              <tr>
+                <td><code>chebi_get_ontology</code></td>
+                <td><span class="lang-zh">取一个实体的出入本体关系</span><span class="lang-en">Outgoing and incoming ChEBI ontology relations for one entity (is a, has role, conjugate acid/base, functional parent, tautomer, enantiomer, and others).</span></td>
+              </tr>
+              <tr>
+                <td><code>rhea_search_reactions</code></td>
+                <td><span class="lang-zh">通过 SPARQL 搜索 Rhea 主反应</span><span class="lang-en">Search Rhea master reactions through the public SPARQL endpoint.</span></td>
+              </tr>
+              <tr>
+                <td><code>rhea_get_reaction</code></td>
+                <td><span class="lang-zh">取一个 Rhea 反应的方程式、EC、引用和底物</span><span class="lang-en">One Rhea reaction: equation, status, transport/balance flags, EC numbers, PubMed citations, directional family IDs, and left/right participants with ChEBI ac…</span></td>
+              </tr>
+              <tr>
+                <td><code>bindingdb_ligands_by_target</code></td>
+                <td><span class="lang-zh">取一个 UniProt 靶点的 BindingDB 亲和力配体</span><span class="lang-en">Measured BindingDB affinities (Ki/Kd/IC50/EC50) for ligands of one UniProt target.</span></td>
+              </tr>
+              <tr>
+                <td><code>bindingdb_targets_by_compound</code></td>
+                <td><span class="lang-zh">按查询 SMILES 的 2D 相似化合物找 BindingDB 靶点</span><span class="lang-en">Protein targets with measured BindingDB affinities for compounds 2D-similar to a query SMILES.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="clinical-genomics">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 009 ]</span>
+          <span><code>mcp_clinical_genomics</code> · 20</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">临床基因组学</span><span class="lang-en">Clinical Genomics</span></h2>
+        <p class="lang-zh">查询 CIViC 变异证据、ClinGen 基因与疾病及剂量敏感性评估，以及 Open Targets 靶点与疾病关联。</p>
+        <p class="lang-en">Retrieve CIViC variant evidence, ClinGen gene-disease and dosage assessments, and Open Targets target-disease associations.</p>
+        <p class="mcp-sources"><a href="https://docs.civicdb.org/en/latest/api.html">CIViC</a> · <a href="https://search.clinicalgenome.org/kb/downloads">ClinGen</a> · <a href="https://platform-docs.opentargets.org/data-access/graphql-api">Open Targets</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>civic_gene_variants</code></td>
+                <td><span class="lang-zh">按 CIViC 基因 id 列出该基因的变异</span><span class="lang-en">List CIViC variants for one gene by internal CIViC gene id via GraphQL variants(geneId).</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_get_assertion</code></td>
+                <td><span class="lang-zh">取一条 CIViC assertion（分级、疾病、疗法、分子谱）</span><span class="lang-en">Retrieve one CIViC assertion by internal id: AMP/ASCO/CAP tier, significance, disease, therapies and linked molecular profile.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_get_evidence_item</code></td>
+                <td><span class="lang-zh">取一条 CIViC 证据项（级别、类型、方向、引用）</span><span class="lang-en">Retrieve one CIViC evidence item by internal id: evidence level A–E, type, direction, significance, disease, therapies, molecular profile and citation.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_get_molecular_profile</code></td>
+                <td><span class="lang-zh">取一个分子谱及其组成变异 id</span><span class="lang-en">Retrieve one CIViC molecular profile by internal id, including parsed name and component variant ids.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_get_variant</code></td>
+                <td><span class="lang-zh">取一个 CIViC 变异（别名、类型、基因关联）</span><span class="lang-en">Retrieve one CIViC variant by internal id, including aliases, variant types and gene/feature linkage.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_assertions</code></td>
+                <td><span class="lang-zh">搜索 CIViC assertions</span><span class="lang-en">Search CIViC assertions through the GraphQL assertions connection.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_diseases</code></td>
+                <td><span class="lang-zh">按名称子串搜索 CIViC 疾病</span><span class="lang-en">Search CIViC disease records by name substring through GraphQL diseases(name).</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_evidence</code></td>
+                <td><span class="lang-zh">搜索 CIViC 证据项</span><span class="lang-en">Search CIViC evidence items through the GraphQL evidenceItems connection.</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_genes</code></td>
+                <td><span class="lang-zh">按精确 Entrez 符号查找 CIViC 基因</span><span class="lang-en">Find CIViC gene records by exact Entrez symbol through GraphQL genes(entrezSymbols).</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_molecular_profiles</code></td>
+                <td><span class="lang-zh">按名称子串搜索分子谱</span><span class="lang-en">Search CIViC molecular profiles by name substring through GraphQL molecularProfiles(name).</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_therapies</code></td>
+                <td><span class="lang-zh">按名称子串搜索疗法</span><span class="lang-en">Search CIViC therapy records by name substring through GraphQL therapies(name).</span></td>
+              </tr>
+              <tr>
+                <td><code>civic_search_variants</code></td>
+                <td><span class="lang-zh">按名称子串搜索变异（可限定基因）</span><span class="lang-en">Search CIViC variants by name substring through GraphQL variants(name), optionally scoped to a CIViC gene id.</span></td>
+              </tr>
+              <tr>
+                <td><code>clingen_actionability</code></td>
+                <td><span class="lang-zh">取 ClinGen 成人/儿科临床可操作性摘要</span><span class="lang-en">ClinGen clinical actionability summaries from the Adult and Pediatric JSON APIs (flavor=flat).</span></td>
+              </tr>
+              <tr>
+                <td><code>clingen_dosage_sensitivity</code></td>
+                <td><span class="lang-zh">取 ClinGen 剂量敏感性（单倍不足/三倍敏感）</span><span class="lang-en">ClinGen dosage sensitivity curations (haploinsufficiency and triplosensitivity) from search.clinicalgenome.org/api/dosage.</span></td>
+              </tr>
+              <tr>
+                <td><code>clingen_gene_validity</code></td>
+                <td><span class="lang-zh">取 ClinGen 基因–疾病有效性分级</span><span class="lang-en">ClinGen gene-disease validity classifications from search.clinicalgenome.org/api/validity (Definitive, Strong, Moderate, Limited, Disputed, Refuted, No Known…</span></td>
+              </tr>
+              <tr>
+                <td><code>clingen_variant_classifications</code></td>
+                <td><span class="lang-zh">取 ClinGen VCEP 变异致病性分类</span><span class="lang-en">ClinGen Evidence Repository VCEP variant pathogenicity classifications.</span></td>
+              </tr>
+              <tr>
+                <td><code>open_targets_disease_drugs</code></td>
+                <td><span class="lang-zh">取某疾病的已知与在研药物</span><span class="lang-en">Known and investigational drugs for a disease from the Open Targets Platform GraphQL API (Disease.drugAndClinicalCandidates).</span></td>
+              </tr>
+              <tr>
+                <td><code>open_targets_disease_targets</code></td>
+                <td><span class="lang-zh">按综合关联分列出疾病的顶级靶点</span><span class="lang-en">Top associated targets for a disease ranked by Open Targets overall association score (Disease.associatedTargets, page index 0).</span></td>
+              </tr>
+              <tr>
+                <td><code>open_targets_drug</code></td>
+                <td><span class="lang-zh">按 ChEMBL id 取药物注释与最高临床阶段</span><span class="lang-en">Drug annotation from the Open Targets Platform by ChEMBL identifier (drug(chemblId)), including drug type, maximum clinical stage and mechanisms of action.</span></td>
+              </tr>
+              <tr>
+                <td><code>open_targets_graphql</code></td>
+                <td><span class="lang-zh">向 Open Targets Platform 发送只读 GraphQL 查询</span><span class="lang-en">POST a read-only GraphQL query to the Open Targets Platform API (https://api.platform.opentargets.org/api/v4/graphql).</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="clinical-trials">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 010 ]</span>
+          <span><code>mcp_clinical_trials</code> · 6</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">临床试验</span><span class="lang-en">Clinical Trials</span></h2>
+        <p class="lang-zh">检索 ClinicalTrials.gov 临床研究，查看入组条件、干预措施、结局指标、申办方与研究状态。</p>
+        <p class="lang-en">Search ClinicalTrials.gov studies and inspect trial eligibility, interventions, outcomes, sponsors and study status.</p>
+        <p class="mcp-sources"><a href="https://clinicaltrials.gov/data-api/api">ClinicalTrials.gov API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>search_trials</code></td>
+                <td><span class="lang-zh">按病况、干预、申办方、地点、分期或状态检索 ClinicalTrials.gov</span><span class="lang-en">Search ClinicalTrials.gov (API v2) for registered studies.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_trial_details</code></td>
+                <td><span class="lang-zh">按 NCT ID 取一项研究的方案、入组、终点和状态</span><span class="lang-en">Retrieve one ClinicalTrials.gov study by NCT ID.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_by_eligibility</code></td>
+                <td><span class="lang-zh">按患者画像匹配入组条件</span><span class="lang-en">Find ClinicalTrials.gov studies whose eligibility constraints match a patient profile.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_by_sponsor</code></td>
+                <td><span class="lang-zh">按主要申办方名称检索研究</span><span class="lang-en">Find ClinicalTrials.gov studies by lead sponsor name (query.lead / LeadSponsorName).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_investigators</code></td>
+                <td><span class="lang-zh">列出匹配的研究者与中心联系人</span><span class="lang-en">List investigators and site contacts from ClinicalTrials.gov studies matching an investigator name, institution, location, condition or status.</span></td>
+              </tr>
+              <tr>
+                <td><code>analyze_endpoints</code></td>
+                <td><span class="lang-zh">汇总方案结局指标（单研究或一批 NCT）</span><span class="lang-en">Summarize protocol outcome measures from ClinicalTrials.gov.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="drug-regulatory">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 011 ]</span>
+          <span><code>mcp_drug_regulatory</code> · 7</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">药品监管</span><span class="lang-en">Drug Regulatory</span></h2>
+        <p class="lang-zh">检索 openFDA 药品申请和说明书，筛选监管记录并汇总指定申请字段。</p>
+        <p class="lang-en">Search openFDA drug applications and labeling, filter regulatory records, and summarize selected application fields.</p>
+        <p class="mcp-sources"><a href="https://open.fda.gov/apis/drug/drugsfda/">openFDA Drugs@FDA</a> · <a href="https://open.fda.gov/apis/drug/label/">openFDA drug labels</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>count_drug_applications</code></td>
+                <td><span class="lang-zh">按申办方、剂型、给药途径、上市状态等计 Drugs@FDA 申请数</span><span class="lang-en">Count Drugs@FDA applications by one field (sponsor, dosage form, route, marketing status, TE code, or pharmacologic class).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_drug_application</code></td>
+                <td><span class="lang-zh">按 NDA/ANDA/BLA 号取一份申请</span><span class="lang-en">Fetch one Drugs@FDA application by NDA, ANDA, or BLA number (prefix plus six digits).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_drug_statistics</code></td>
+                <td><span class="lang-zh">Drugs@FDA 语料快照：总数、更新日期、状态与热门剂型</span><span class="lang-en">Corpus snapshot of Drugs@FDA: application total, last_updated, marketing-status counts, and the top dosage forms, routes, and sponsors.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_generic_equivalents</code></td>
+                <td><span class="lang-zh">按品牌药活性成分集合找仿制药申请</span><span class="lang-en">Find Drugs@FDA applications whose product active-ingredient set matches a brand-name reference.</span></td>
+              </tr>
+              <tr>
+                <td><code>list_pharmacologic_classes</code></td>
+                <td><span class="lang-zh">列出 Drugs@FDA 中的药理学分类及申请数</span><span class="lang-en">List pharmacologic classes attached to Drugs@FDA records, with application counts.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_drug_applications</code></td>
+                <td><span class="lang-zh">按商品名、通用名、成分、申办方等搜索 Drugs@FDA</span><span class="lang-en">Search FDA Drugs@FDA applications (NDA/ANDA/BLA) by brand, generic name, active ingredient, sponsor, marketing status, dosage form, route, pharmacologic clas…</span></td>
+              </tr>
+              <tr>
+                <td><code>search_drug_labels</code></td>
+                <td><span class="lang-zh">搜索 FDA 结构化产品说明书（SPL）</span><span class="lang-en">Search FDA Structured Product Labels via openFDA /drug/label.json by substance, generic or brand name, route, or product type (HUMAN PRESCRIPTION DRUG / HUMA…</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="expression">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 012 ]</span>
+          <span><code>mcp_expression</code> · 15</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">表达</span><span class="lang-en">Expression</span></h2>
+        <p class="lang-zh">查询 GTEx 组织表达和 eQTL 关联，以及 PanglaoDB 已发布快照中的细胞标记基因。</p>
+        <p class="lang-en">Explore GTEx tissue expression and eQTL associations, and query the published PanglaoDB marker-gene snapshot.</p>
+        <p class="mcp-sources"><a href="https://gtexportal.org/home/apiPage">GTEx</a> · <a href="https://panglaodb.se/faq.html">PanglaoDB</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>gtex_calculate_eqtl</code></td>
+                <td><span class="lang-zh">在指定组织中计算一对基因–变异的 eQTL（含不显著结果）</span><span class="lang-en">Calculate a gene–variant eQTL in one GTEx tissue with GET /association/dyneqtl.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_dataset_info</code></td>
+                <td><span class="lang-zh">列出 GTEx 数据集版本（GENCODE、基因组、dbSNP、样本数）</span><span class="lang-en">List GTEx dataset releases.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_eqtl_genes</code></td>
+                <td><span class="lang-zh">列出某组织中至少有一个显著 cis-eQTL 的基因</span><span class="lang-en">List eGenes (genes with at least one significant cis-eQTL) for a tissue.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_expression_summary</code></td>
+                <td><span class="lang-zh">汇总一个基因在各 GTEx 组织中的表达</span><span class="lang-en">Profile one gene across GTEx tissues: resolve a symbol or Ensembl ID to the pinned dataset&#x27;s versioned GENCODE ID (GET /reference/gene), then rank tissues by…</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_gene_expression</code></td>
+                <td><span class="lang-zh">取样本级（非中位）标准化表达</span><span class="lang-en">Sample-level (not median) normalized expression.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_median_expression</code></td>
+                <td><span class="lang-zh">取基因 × 组织的中位 TPM</span><span class="lang-en">Median gene expression (TPM) for genes × tissues.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_multi_tissue_eqtls</code></td>
+                <td><span class="lang-zh">取 METASOFT 多组织 eQTL 元分析</span><span class="lang-en">METASOFT multi-tissue eQTL meta-analysis.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_resolve_genes</code></td>
+                <td><span class="lang-zh">把基因符号或 Ensembl ID 解析为带版本的 GENCODE ID</span><span class="lang-en">Resolve gene symbols or Ensembl IDs to versioned GENCODE IDs with GET /reference/gene.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_sample_info</code></td>
+                <td><span class="lang-zh">取 GTEx 分析样本与供体元数据</span><span class="lang-en">GTEx analysis-sample and donor metadata.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_single_tissue_eqtls</code></td>
+                <td><span class="lang-zh">取预计算的显著单组织 eQTL</span><span class="lang-en">Precomputed significant single-tissue eQTLs.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_tissue_sites</code></td>
+                <td><span class="lang-zh">列出某数据集的组织位点（gtex_v8 约 54 个）</span><span class="lang-en">List GTEx tissue site details for a pinned dataset.</span></td>
+              </tr>
+              <tr>
+                <td><code>gtex_top_expressed_genes</code></td>
+                <td><span class="lang-zh">按中位 TPM 列出某组织表达最高的基因</span><span class="lang-en">Top-n genes by median TPM in one tissue.</span></td>
+              </tr>
+              <tr>
+                <td><code>panglaodb_cell_types_for_gene</code></td>
+                <td><span class="lang-zh">查某基因在 PanglaoDB 中作为标记的细胞类型</span><span class="lang-en">Look up PanglaoDB cell types for which a gene is listed as a marker.</span></td>
+              </tr>
+              <tr>
+                <td><code>panglaodb_marker_genes</code></td>
+                <td><span class="lang-zh">过滤 PanglaoDB 细胞类型标记表快照</span><span class="lang-en">Filter the frozen PanglaoDB cell-type marker table.</span></td>
+              </tr>
+              <tr>
+                <td><code>panglaodb_options</code></td>
+                <td><span class="lang-zh">枚举 PanglaoDB 标记表中可用于过滤的取值</span><span class="lang-en">Enumerate distinct PanglaoDB marker-table values for use as panglaodb_marker_genes filters: species (verbatim, including dirty upstream tokens), organs (orga…</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="genes-ontologies">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 013 ]</span>
+          <span><code>mcp_genes_ontologies</code> · 10</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">基因与本体</span><span class="lang-en">Genes Ontologies</span></h2>
+        <p class="lang-zh">通过 MyGene.info、UniProt、OLS、QuickGO、Reactome 和 KEGG 解析基因与蛋白标识符，浏览生物本体、功能注释和通路。</p>
+        <p class="lang-en">Resolve gene and protein identifiers, browse biological ontologies and annotations, and query pathways with MyGene.info, UniProt, OLS, QuickGO, Reactome and KEGG.</p>
+        <p class="mcp-sources"><a href="https://docs.mygene.info/en/latest/">MyGene.info</a> · <a href="https://www.uniprot.org/help/api_retrieve_entries">UniProt</a> · <a href="https://www.ebi.ac.uk/ols4/">OLS</a> · <a href="https://www.ebi.ac.uk/QuickGO/api/index.html">QuickGO</a> · <a href="https://reactome.org/AnalysisService">Reactome</a> · <a href="https://www.kegg.jp/kegg/rest/keggapi.html">KEGG API and usage conditions</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>get_go_annotations</code></td>
+                <td><span class="lang-zh">按 UniProt 登录号取 QuickGO 基因本体注释（有界页）</span><span class="lang-en">Retrieve Gene Ontology annotations for one UniProt accession from EMBL-EBI QuickGO (GET /services/annotation/search).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_kegg_entries</code></td>
+                <td><span class="lang-zh">按 KEGG 标识取基因、通路、化合物等条目（学术用途）</span><span class="lang-en">Retrieve KEGG entries (genes, pathways, compounds and other databases).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_ontology_term</code></td>
+                <td><span class="lang-zh">按本体 id 与 CURIE/IRI 取 OLS4 术语</span><span class="lang-en">Look up one OLS4 term by ontology id plus CURIE, short form or IRI (GET /api/ontologies/{id}/terms).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_uniprot_entries</code></td>
+                <td><span class="lang-zh">按最多 50 个登录号批量取 UniProtKB 记录</span><span class="lang-en">Retrieve UniProtKB records for a batch of accessions through rest.uniprot.org search (one OR-query, at most 50 accessions).</span></td>
+              </tr>
+              <tr>
+                <td><code>link_kegg_ids</code></td>
+                <td><span class="lang-zh">在 KEGG 数据库之间交叉引用或转换外部标识</span><span class="lang-en">Cross-reference KEGG identifiers with GET /link/{target_db}/{ids} or convert outside identifiers with GET /conv/{target_db}/{ids} (https://www.kegg.jp/kegg/r…</span></td>
+              </tr>
+              <tr>
+                <td><code>list_ontologies</code></td>
+                <td><span class="lang-zh">列出 OLS4 中的本体</span><span class="lang-en">List ontologies in the EMBL-EBI Ontology Lookup Service (OLS4 GET /api/ontologies).</span></td>
+              </tr>
+              <tr>
+                <td><code>map_reactome_pathways</code></td>
+                <td><span class="lang-zh">把基因符号或 UniProt 登录号映射到 Reactome 通路</span><span class="lang-en">Map gene symbols or UniProt accessions to Reactome pathways via AnalysisService (POST /identifiers/ with a text/plain identifier list).</span></td>
+              </tr>
+              <tr>
+                <td><code>query_genes</code></td>
+                <td><span class="lang-zh">通过 MyGene.info 批量解析基因符号或标识符</span><span class="lang-en">Resolve gene symbols or identifiers through MyGene.info v3 batch query (POST /v3/query).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_kegg</code></td>
+                <td><span class="lang-zh">在 KEGG 标识与名称字段中做子串搜索（学术用途）</span><span class="lang-en">Search KEGG identifier and name fields.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_ontology_terms</code></td>
+                <td><span class="lang-zh">搜索 OLS4 术语标签与同义词</span><span class="lang-en">Search OLS4 term labels and synonyms (GET /api/search).</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="genomes">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 014 ]</span>
+          <span><code>mcp_genomes</code> · 11</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">基因组</span><span class="lang-en">Genomes</span></h2>
+        <p class="lang-zh">查询 Ensembl 基因组注释、同源关系、序列和变异，以及 UCSC 基因组组装和轨道。坐标规则取决于所选数据源。</p>
+        <p class="lang-en">Retrieve Ensembl genome annotations, homology, sequences and variants, and inspect UCSC genome assemblies and tracks. Coordinate conventions depend on the selected source.</p>
+        <p class="mcp-sources"><a href="https://rest.ensembl.org/">Ensembl REST</a> · <a href="https://genome.ucsc.edu/goldenPath/help/api.html">UCSC Genome Browser API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>ensembl_homology</code></td>
+                <td><span class="lang-zh">取一个基因的 Ensembl Compara 同源/旁系（无比对）</span><span class="lang-en">Retrieve Ensembl Compara orthologues, paralogues or projections for one gene as condensed rows (no alignments).</span></td>
+              </tr>
+              <tr>
+                <td><code>ensembl_lookup</code></td>
+                <td><span class="lang-zh">查找一个 Ensembl 基因、转录本或蛋白</span><span class="lang-en">Look up one Ensembl gene, transcript or protein.</span></td>
+              </tr>
+              <tr>
+                <td><code>ensembl_overlap_region</code></td>
+                <td><span class="lang-zh">列出与基因组区间重叠的 Ensembl 特征</span><span class="lang-en">List Ensembl features overlapping a genomic region.</span></td>
+              </tr>
+              <tr>
+                <td><code>ensembl_sequence</code></td>
+                <td><span class="lang-zh">从 Ensembl 取序列</span><span class="lang-en">Fetch sequence from Ensembl.</span></td>
+              </tr>
+              <tr>
+                <td><code>ensembl_vep_variant</code></td>
+                <td><span class="lang-zh">用 Ensembl VEP 预测变异后果</span><span class="lang-en">Predict variant consequences with Ensembl VEP.</span></td>
+              </tr>
+              <tr>
+                <td><code>ensembl_xrefs</code></td>
+                <td><span class="lang-zh">列出一个 Ensembl 稳定 ID 的外部交叉引用</span><span class="lang-en">List external cross-references for one Ensembl stable ID.</span></td>
+              </tr>
+              <tr>
+                <td><code>ucsc_chrom_sizes</code></td>
+                <td><span class="lang-zh">列出某 UCSC 组装的染色体/contig 名称与长度</span><span class="lang-en">List chromosome and contig names with sizes for a UCSC assembly.</span></td>
+              </tr>
+              <tr>
+                <td><code>ucsc_conservation</code></td>
+                <td><span class="lang-zh">汇总某 UCSC wiggle/bigWig 轨道的逐碱基保守性</span><span class="lang-en">Summarise per-base conservation for a UCSC wiggle/bigWig track (default phyloP100way).</span></td>
+              </tr>
+              <tr>
+                <td><code>ucsc_list_tracks</code></td>
+                <td><span class="lang-zh">列出某 UCSC 组装的叶轨道</span><span class="lang-en">List leaf tracks for a UCSC assembly.</span></td>
+              </tr>
+              <tr>
+                <td><code>ucsc_tfbs_clusters</code></td>
+                <td><span class="lang-zh">取与区间重叠的 ENCODE 转录因子结合位点簇</span><span class="lang-en">ENCODE transcription-factor binding-site clusters overlapping a region.</span></td>
+              </tr>
+              <tr>
+                <td><code>ucsc_track_data</code></td>
+                <td><span class="lang-zh">取任意 UCSC 轨道在某区间的原始行</span><span class="lang-en">Fetch raw rows for any UCSC track in a region.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="human-genetics">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 015 ]</span>
+          <span><code>mcp_human_genetics</code> · 14</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">人类遗传学</span><span class="lang-en">Human Genetics</span></h2>
+        <p class="lang-zh">查询 GWAS Catalog 关联、eQTL Catalogue 数据集及指定区域的汇总统计，以及公开 PheWeb 门户。</p>
+        <p class="lang-en">Find GWAS Catalog associations, inspect eQTL Catalogue datasets and bounded summary-statistic regions, and query public PheWeb portals.</p>
+        <p class="mcp-sources"><a href="https://www.ebi.ac.uk/gwas/docs/api">GWAS Catalog</a> · <a href="https://www.ebi.ac.uk/eqtl/Data_access/">eQTL Catalogue</a> · <a href="https://github.com/statgen/pheweb">PheWeb</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>eqtl_associations</code></td>
+                <td><span class="lang-zh">用官方元数据与 tabix 字节范围读取 eQTL Catalogue 汇总统计</span><span class="lang-en">Read eQTL Catalogue summary statistics using the official metadata and tabix-indexed HTTPS byte ranges; the retired REST API is not used.</span></td>
+              </tr>
+              <tr>
+                <td><code>eqtl_list_datasets</code></td>
+                <td><span class="lang-zh">列出 eQTL Catalogue 数据集（研究 × 组织 × 定量方法）</span><span class="lang-en">List datasets from the official eQTL Catalogue metadata (one study × tissue or cell type × quantification method), cached for the process lifetime.</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_associations_for_gene</code></td>
+                <td><span class="lang-zh">列出映射到某 HGNC 基因的 GWAS Catalog 关联</span><span class="lang-en">List NHGRI-EBI GWAS Catalog v2 associations whose variants map to one HGNC gene symbol (Ensembl mapping, including flanking genes for intergenic variants).</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_associations_for_trait</code></td>
+                <td><span class="lang-zh">列出注释到某 EFO/MONDO/HP 性状的 GWAS 关联</span><span class="lang-en">List NHGRI-EBI GWAS Catalog v2 associations annotated to one EFO/MONDO/HP trait.</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_associations_for_variant</code></td>
+                <td><span class="lang-zh">列出某个 dbSNP rsID 的 GWAS 关联</span><span class="lang-en">List NHGRI-EBI GWAS Catalog v2 associations for one dbSNP rsID.</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_get_study</code></td>
+                <td><span class="lang-zh">按 GCST 登录号取一项 GWAS Catalog 研究</span><span class="lang-en">Fetch one NHGRI-EBI GWAS Catalog v2 study by GCST accession.</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_get_variant</code></td>
+                <td><span class="lang-zh">按 rsID 取 GWAS Catalog 变异记录（GRCh38）</span><span class="lang-en">Fetch one NHGRI-EBI GWAS Catalog v2 variant record (GRCh38 location, mapped genes, consequence) by dbSNP rsID.</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_search_studies</code></td>
+                <td><span class="lang-zh">按 EFO、性状标签或 PubMed id 搜索 GWAS 研究</span><span class="lang-en">Search NHGRI-EBI GWAS Catalog v2 studies by EFO id, exact EFO trait label, and/or PubMed id (filters combine).</span></td>
+              </tr>
+              <tr>
+                <td><code>gwas_search_traits</code></td>
+                <td><span class="lang-zh">按标签子串搜索 GWAS Catalog 性状</span><span class="lang-en">Search NHGRI-EBI GWAS Catalog v2 EFO trait annotations by case-insensitive label substring.</span></td>
+              </tr>
+              <tr>
+                <td><code>phewas_finngen_gene</code></td>
+                <td><span class="lang-zh">FinnGen R12 基因区 PheWAS（每个表型区内最显著变异）</span><span class="lang-en">Gene-region PheWAS from the FinnGen R12 public PheWeb (GRCh38): for each disease endpoint, the best-associated variant in the padded gene region.</span></td>
+              </tr>
+              <tr>
+                <td><code>phewas_instances</code></td>
+                <td><span class="lang-zh">列出本域可查询的公开 PheWeb 门户</span><span class="lang-en">List the public PheWeb PheWAS portals this domain can query.</span></td>
+              </tr>
+              <tr>
+                <td><code>phewas_list_phenotypes</code></td>
+                <td><span class="lang-zh">列出 PheWeb 实例发布的疾病终点（目前 FinnGen R12）</span><span class="lang-en">List disease endpoints from a PheWeb instance that publishes /api/phenos (currently FinnGen R12).</span></td>
+              </tr>
+              <tr>
+                <td><code>phewas_search_phenotypes</code></td>
+                <td><span class="lang-zh">按自由文本搜索 PheWeb 表型自动补全</span><span class="lang-en">Search a PheWeb instance&#x27;s phenotype autocomplete by free text (disease name, code, and on some instances gene or rsID).</span></td>
+              </tr>
+              <tr>
+                <td><code>phewas_variant</code></td>
+                <td><span class="lang-zh">对一个变异做针对门户全部表型的 PheWAS</span><span class="lang-en">PheWAS for one variant against every phenotype in a public PheWeb portal, most-significant first.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="literature">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 016 ]</span>
+          <span><code>mcp_literature</code> · 9</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">文献</span><span class="lang-en">Literature</span></h2>
+        <p class="lang-zh">通过 OpenAlex 和 arXiv 检索学术文献，获取出版元数据和可用的访问链接。</p>
+        <p class="lang-en">Search scholarly works through OpenAlex and arXiv, and retrieve publication metadata and available access links.</p>
+        <p class="mcp-sources"><a href="https://docs.openalex.org/">OpenAlex</a> · <a href="https://info.arxiv.org/help/api/user-manual.html">arXiv API</a> · <a href="https://info.arxiv.org/help/api/tou.html">arXiv API usage terms</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>openalex_search_works</code></td>
+                <td><span class="lang-zh">按文本、年份、类型、期刊或开放获取状态搜索 OpenAlex 作品</span><span class="lang-en">Search OpenAlex scholarly works by text, year, type, venue, or open-access status.</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_get_work</code></td>
+                <td><span class="lang-zh">按 W-id、URL 或 DOI 取一篇 OpenAlex 作品</span><span class="lang-en">Fetch one OpenAlex work by OpenAlex W-id, openalex.org URL, or DOI.</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_get_author</code></td>
+                <td><span class="lang-zh">按 A-id、URL 或 ORCID 取作者主页（可选代表作）</span><span class="lang-en">Fetch one OpenAlex author profile by A-id, openalex.org URL, or ORCID, optionally with a bounded sample of that author&#x27;s most-cited works.</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_search_authors</code></td>
+                <td><span class="lang-zh">按姓名搜索 OpenAlex 作者</span><span class="lang-en">Search OpenAlex author profiles by name.</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_citations</code></td>
+                <td><span class="lang-zh">列出引用某作品的文献（入边引用图）</span><span class="lang-en">List works that cite a given OpenAlex work (incoming citation graph).</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_references</code></td>
+                <td><span class="lang-zh">列出某作品引用的文献</span><span class="lang-en">List the works a given OpenAlex work cites.</span></td>
+              </tr>
+              <tr>
+                <td><code>openalex_venue_info</code></td>
+                <td><span class="lang-zh">按 S-id、ISSN、URL 或名称查找期刊/仓储</span><span class="lang-en">Look up OpenAlex sources (journals, repositories, conferences) by S-id, ISSN, source URL, or name.</span></td>
+              </tr>
+              <tr>
+                <td><code>arxiv_search</code></td>
+                <td><span class="lang-zh">通过官方 Atom API 搜索 arXiv 预印本</span><span class="lang-en">Search arXiv preprints through the official Atom API.</span></td>
+              </tr>
+              <tr>
+                <td><code>arxiv_get_papers</code></td>
+                <td><span class="lang-zh">按标识符批量取 arXiv 元数据与摘要</span><span class="lang-en">Fetch arXiv paper metadata, including abstracts, for a batch of identifiers.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="omics-archives">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 017 ]</span>
+          <span><code>mcp_omics_archives</code> · 17</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">组学归档</span><span class="lang-en">Omics Archives</span></h2>
+        <p class="lang-zh">在 GEO、ArrayExpress、MetaboLights、MGnify 和 PRIDE Archive 中查找实验、研究及数据文件引用。</p>
+        <p class="lang-en">Discover experiments, studies and file references in GEO, ArrayExpress, MetaboLights, MGnify and PRIDE Archive.</p>
+        <p class="mcp-sources"><a href="https://www.ncbi.nlm.nih.gov/geo/info/geo_paccess.html">NCBI GEO</a> · <a href="https://www.ebi.ac.uk/biostudies/arrayexpress/help">ArrayExpress</a> · <a href="https://www.ebi.ac.uk/metabolights/">MetaboLights</a> · <a href="https://www.ebi.ac.uk/metagenomics/">MGnify</a> · <a href="https://www.ebi.ac.uk/pride/">PRIDE</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>arrayexpress_get_experiment</code></td>
+                <td><span class="lang-zh">按登录号取一项 ArrayExpress/BioStudies 功能基因组实验</span><span class="lang-en">Retrieve one ArrayExpress functional-genomics experiment from the EMBL-EBI BioStudies JSON API (GET /studies/{accession}).</span></td>
+              </tr>
+              <tr>
+                <td><code>arrayexpress_get_experiment_files</code></td>
+                <td><span class="lang-zh">列出实验声明的文件及 FTP/HTTP 基址（不下载内容）</span><span class="lang-en">List files declared on an ArrayExpress BioStudies submission (GET /studies/{accession}) together with the /info FTP and HTTP base links when present.</span></td>
+              </tr>
+              <tr>
+                <td><code>arrayexpress_get_experiment_samples</code></td>
+                <td><span class="lang-zh">把 MAGE-TAB SDRF 解析为逐样本行</span><span class="lang-en">Parse the MAGE-TAB SDRF of an ArrayExpress experiment into per-sample rows (characteristics, factor values, assay/data-file columns).</span></td>
+              </tr>
+              <tr>
+                <td><code>arrayexpress_search_experiments</code></td>
+                <td><span class="lang-zh">通过 BioStudies 搜索 ArrayExpress 实验</span><span class="lang-en">Search the ArrayExpress collection through BioStudies GET /arrayexpress/search.</span></td>
+              </tr>
+              <tr>
+                <td><code>geo_get_series</code></td>
+                <td><span class="lang-zh">取 NCBI GEO 系列（GSE）元数据，含样本</span><span class="lang-en">Fetch NCBI GEO series (GSE) metadata.</span></td>
+              </tr>
+              <tr>
+                <td><code>geo_search_series</code></td>
+                <td><span class="lang-zh">搜索 GEO DataSets 并返回有界摘要页</span><span class="lang-en">Search NCBI GEO DataSets (ESearch db=gds) and return a bounded ESummary page.</span></td>
+              </tr>
+              <tr>
+                <td><code>metabolights_get_studies</code></td>
+                <td><span class="lang-zh">取公开 MetaboLights 研究（MTBLS）的 ISA 投影</span><span class="lang-en">Fetch public MetaboLights studies (MTBLSnnn).</span></td>
+              </tr>
+              <tr>
+                <td><code>metabolights_get_study_files</code></td>
+                <td><span class="lang-zh">列出公开 MetaboLights 研究的文件</span><span class="lang-en">List files for a public MetaboLights study.</span></td>
+              </tr>
+              <tr>
+                <td><code>metabolights_list_studies</code></td>
+                <td><span class="lang-zh">列出公开 MetaboLights 研究登录号</span><span class="lang-en">List public MetaboLights study accessions.</span></td>
+              </tr>
+              <tr>
+                <td><code>metabolights_search_data_files</code></td>
+                <td><span class="lang-zh">在研究的 FILES 树中搜索数据文件</span><span class="lang-en">Search a public MetaboLights study&#x27;s FILES tree.</span></td>
+              </tr>
+              <tr>
+                <td><code>mgnify_get_studies</code></td>
+                <td><span class="lang-zh">取 MGnify 宏基因组研究（MGYS）</span><span class="lang-en">Retrieve MGnify metagenomics studies (MGYSnnnnnnnn).</span></td>
+              </tr>
+              <tr>
+                <td><code>mgnify_get_study_analyses</code></td>
+                <td><span class="lang-zh">列出一项 MGnify 研究的分析</span><span class="lang-en">List analyses for one MGnify study.</span></td>
+              </tr>
+              <tr>
+                <td><code>mgnify_search_studies</code></td>
+                <td><span class="lang-zh">搜索 MGnify 研究</span><span class="lang-en">Search MGnify studies through API v2.</span></td>
+              </tr>
+              <tr>
+                <td><code>pride_find_projects_for_protein</code></td>
+                <td><span class="lang-zh">按蛋白（多为 UniProt）查找 PRIDE 项目</span><span class="lang-en">Find PRIDE Archive projects whose identifications include a protein (typically a UniProt accession).</span></td>
+              </tr>
+              <tr>
+                <td><code>pride_get_projects</code></td>
+                <td><span class="lang-zh">按 PXD/PAD/PRD 取 PRIDE 项目元数据</span><span class="lang-en">Fetch PRIDE Archive project metadata (PXD, PAD or PRD accessions).</span></td>
+              </tr>
+              <tr>
+                <td><code>pride_search_project_proteins</code></td>
+                <td><span class="lang-zh">列出亲和蛋白质组项目中的蛋白证据行</span><span class="lang-en">List protein evidence rows for one PRIDE affinity-proteomics project.</span></td>
+              </tr>
+              <tr>
+                <td><code>pride_search_projects</code></td>
+                <td><span class="lang-zh">搜索 PRIDE Archive 蛋白质组项目</span><span class="lang-en">Search PRIDE Archive proteomics projects.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="protein-annotation">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 018 ]</span>
+          <span><code>mcp_protein_annotation</code> · 13</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">蛋白注释</span><span class="lang-en">Protein Annotation</span></h2>
+        <p class="lang-zh">查询 InterPro/Pfam 蛋白结构域与特征、Human Protein Atlas 组织及细胞注释，以及 STRING 蛋白关联。</p>
+        <p class="lang-en">Inspect protein domains and signatures with InterPro/Pfam, tissue and cell annotations from the Human Protein Atlas, and STRING protein associations.</p>
+        <p class="mcp-sources"><a href="https://www.ebi.ac.uk/interpro/">InterPro</a> · <a href="https://www.proteinatlas.org/about/help/dataaccess">Human Protein Atlas</a> · <a href="https://string-db.org/help/api/">STRING</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>get_domain_architecture</code></td>
+                <td><span class="lang-zh">取 UniProt 蛋白的 InterPro 结构域架构</span><span class="lang-en">Retrieve InterPro domain architecture for UniProt proteins.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_interpro_entry</code></td>
+                <td><span class="lang-zh">取一个 InterPro 条目或 Pfam 家族</span><span class="lang-en">Fetch one InterPro entry (IPRxxxxxx) or Pfam family (PFxxxxx).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_pfam_clan</code></td>
+                <td><span class="lang-zh">取一个 Pfam clan（InterPro set）</span><span class="lang-en">Fetch a Pfam clan (InterPro set CLxxxx).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_pfam_family_proteins</code></td>
+                <td><span class="lang-zh">列出匹配某 Pfam 家族的 UniProt 蛋白</span><span class="lang-en">List UniProt proteins matching a Pfam family.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_pfam_family_proteomes</code></td>
+                <td><span class="lang-zh">报告含某 Pfam 家族的 UniProt 蛋白质组</span><span class="lang-en">Report UniProt proteomes that contain a Pfam family.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_protein_atlas_gene</code></td>
+                <td><span class="lang-zh">取 Human Protein Atlas 基因记录</span><span class="lang-en">Retrieve a Human Protein Atlas gene record.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_string_best_similarity_hits</code></td>
+                <td><span class="lang-zh">把基因映射到 STRING 后取最佳 Smith–Waterman 命中</span><span class="lang-en">Map gene symbols to STRING IDs then GET/POST /api/json/homology_best for the best Smith–Waterman hit of each protein in a target species.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_string_network</code></td>
+                <td><span class="lang-zh">取 STRING v12.0 互作网络</span><span class="lang-en">Map gene symbols to STRING v12.0 identifiers then retrieve the interaction network.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_string_similarity_scores</code></td>
+                <td><span class="lang-zh">取基因之间的 Smith–Waterman bitscore</span><span class="lang-en">Map gene symbols then retrieve Smith–Waterman bitscores among them.</span></td>
+              </tr>
+              <tr>
+                <td><code>map_string_ids</code></td>
+                <td><span class="lang-zh">把基因符号、同义词或 UniProt 登录号映射为 STRING ID</span><span class="lang-en">Map gene symbols, synonyms or UniProt accessions to STRING v12.0 protein identifiers.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_interpro_entries</code></td>
+                <td><span class="lang-zh">按关键词搜索 InterPro 或成员数据库</span><span class="lang-en">Keyword search of InterPro or a member database.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_pfam_clans</code></td>
+                <td><span class="lang-zh">按关键词搜索 Pfam clan</span><span class="lang-en">Keyword search of Pfam clans (InterPro sets).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_protein_atlas</code></td>
+                <td><span class="lang-zh">按选定列搜索 Human Protein Atlas</span><span class="lang-en">Column-selected Human Protein Atlas search.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="pubmed">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 019 ]</span>
+          <span><code>mcp_pubmed</code> · 7</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">PubMed</span><span class="lang-en">PubMed</span></h2>
+        <p class="lang-zh">检索生物医学文献，获取 PubMed 记录和相关文章、转换文献标识符，并通过 NCBI 和 Europe PMC 查询可用的开放全文及访问元数据。</p>
+        <p class="lang-en">Search biomedical literature, retrieve PubMed records and related articles, convert identifiers, and access available open full text and access metadata through NCBI and Europe PMC.</p>
+        <p class="mcp-sources"><a href="https://pubmed.ncbi.nlm.nih.gov/about/">PubMed</a> · <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/">NCBI E-utilities</a> · <a href="https://europepmc.org/RestfulWebService">Europe PMC</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>search_articles</code></td>
+                <td><span class="lang-zh">用 Entrez 查询检索 PubMed，返回 PMID、总数和有界页</span><span class="lang-en">Search PubMed with an Entrez query.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_article_metadata</code></td>
+                <td><span class="lang-zh">取最多 200 个 PMID 的题录、标识符和摘要（不是全文）</span><span class="lang-en">Retrieve NCBI PubMed metadata for up to 200 PMIDs: citation summaries, article identifiers and abstracts when available.</span></td>
+              </tr>
+              <tr>
+                <td><code>convert_article_ids</code></td>
+                <td><span class="lang-zh">用 PMC ID Converter 在 PMID / PMCID / DOI 之间转换</span><span class="lang-en">Convert a same-type batch of PMID, PMCID or DOI identifiers with the NCBI PMC ID Converter.</span></td>
+              </tr>
+              <tr>
+                <td><code>find_related_articles</code></td>
+                <td><span class="lang-zh">用 ELink 查找相关文献、PMC、基因、蛋白或核酸</span><span class="lang-en">Find Entrez records linked to PubMed articles with NCBI ELink.</span></td>
+              </tr>
+              <tr>
+                <td><code>lookup_article_by_citation</code></td>
+                <td><span class="lang-zh">用 ECitMatch 把书目引文匹配到 PMID</span><span class="lang-en">Match bibliographic citations to PubMed IDs with NCBI ECitMatch.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_full_text_article</code></td>
+                <td><span class="lang-zh">从 Europe PMC 取开放获取全文 XML（最多 5 个 PMCID）</span><span class="lang-en">Retrieve Open Access full-text XML from Europe PMC for PMC articles.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_copyright_status</code></td>
+                <td><span class="lang-zh">报告元数据、可访问全文和已声明许可（OA 标志不是再利用授权）</span><span class="lang-en">Report metadata availability, accessible full text, and stated licenses for PubMed articles using Europe PMC core metadata and PMC ID Converter embargo fields.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="regulation">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 020 ]</span>
+          <span><code>mcp_regulation</code> · 16</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">调控</span><span class="lang-en">Regulation</span></h2>
+        <p class="lang-zh">查找 ENCODE 实验与调控数据、JASPAR 转录因子基序，以及 UniBind 结合位点证据。</p>
+        <p class="lang-en">Find ENCODE experiments and regulatory data, JASPAR transcription-factor motifs, and UniBind binding-site evidence.</p>
+        <p class="mcp-sources"><a href="https://www.encodeproject.org/help/rest-api/">ENCODE</a> · <a href="https://jaspar.elixir.no/api/overview">JASPAR</a> · <a href="https://unibind.uio.no/api/overview">UniBind</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>encode_search_experiments</code></td>
+                <td><span class="lang-zh">按测定、靶点、生物样本等搜索 ENCODE 实验</span><span class="lang-en">Search ENCODE functional-genomics experiments through the portal JSON search API.</span></td>
+              </tr>
+              <tr>
+                <td><code>encode_search_biosamples</code></td>
+                <td><span class="lang-zh">搜索 ENCODE 生物样本（细胞系、组织、原代细胞）</span><span class="lang-en">Search ENCODE biosamples (cell lines, tissues, primary cells) through the portal JSON search API.</span></td>
+              </tr>
+              <tr>
+                <td><code>encode_list_files</code></td>
+                <td><span class="lang-zh">列出 ENCODE 数据文件（格式、输出类型、组装）</span><span class="lang-en">List ENCODE data files through the portal JSON search API.</span></td>
+              </tr>
+              <tr>
+                <td><code>encode_get_experiment</code></td>
+                <td><span class="lang-zh">按 ENCSR 登录号取一项实验</span><span class="lang-en">Retrieve one ENCODE experiment by accession (ENCSR…).</span></td>
+              </tr>
+              <tr>
+                <td><code>encode_get_file</code></td>
+                <td><span class="lang-zh">按 ENCFF 登录号取一个文件记录</span><span class="lang-en">Retrieve one ENCODE file record by accession (ENCFF…).</span></td>
+              </tr>
+              <tr>
+                <td><code>encode_get_biosample</code></td>
+                <td><span class="lang-zh">按 ENCBS 登录号取一个生物样本</span><span class="lang-en">Retrieve one ENCODE biosample by accession (ENCBS…).</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_get_matrix</code></td>
+                <td><span class="lang-zh">按版本化矩阵 id 取 JASPAR 转录因子谱（含 PFM 与 logo）</span><span class="lang-en">Retrieve one JASPAR transcription-factor profile by versioned matrix id (for example MA0002.2), including the position frequency matrix, species, collection…</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_matrix_versions</code></td>
+                <td><span class="lang-zh">列出某 JASPAR 基础矩阵 id 的已发布版本</span><span class="lang-en">List released versions of a JASPAR base matrix id (for example MA0002).</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_list_matrices</code></td>
+                <td><span class="lang-zh">列出 JASPAR TF 结合谱（可按集合过滤）</span><span class="lang-en">List JASPAR TF binding profiles.</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_list_species</code></td>
+                <td><span class="lang-zh">列出有 JASPAR 谱的物种</span><span class="lang-en">List species that have JASPAR profiles (NCBI tax_id and scientific name).</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_list_taxa</code></td>
+                <td><span class="lang-zh">列出 JASPAR 分类群（脊椎、植物、昆虫等）</span><span class="lang-en">List JASPAR taxonomic groups.</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_list_collections</code></td>
+                <td><span class="lang-zh">列出 JASPAR 集合（CORE 为非冗余精选集）</span><span class="lang-en">List JASPAR collections.</span></td>
+              </tr>
+              <tr>
+                <td><code>jaspar_list_releases</code></td>
+                <td><span class="lang-zh">列出 JASPAR 数据库发行版</span><span class="lang-en">List JASPAR database releases.</span></td>
+              </tr>
+              <tr>
+                <td><code>unibind_search_tfbs</code></td>
+                <td><span class="lang-zh">搜索带直接 TF–DNA 预测的 UniBind ChIP-seq 数据集</span><span class="lang-en">Search UniBind ChIP-seq datasets with direct TF–DNA predictions.</span></td>
+              </tr>
+              <tr>
+                <td><code>unibind_get_dataset</code></td>
+                <td><span class="lang-zh">按 tf_id 取一个 UniBind 数据集</span><span class="lang-en">Retrieve one UniBind dataset by tf_id (identifier.cell_line.TF, as returned by unibind_search_tfbs).</span></td>
+              </tr>
+              <tr>
+                <td><code>unibind_tfbs_in_region</code></td>
+                <td><span class="lang-zh">返回与基因组区间重叠的 UniBind 2021 结合位点</span><span class="lang-en">Return UniBind 2021 TF binding sites overlapping a genomic interval via the UCSC Genome Browser hubApi (GET /getData/track) against UniBind&#x27;s public Robust o…</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="research-resources">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 021 ]</span>
+          <span><code>mcp_research_resources</code> · 5</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">研究资源</span><span class="lang-en">Research Resources</span></h2>
+        <p class="lang-zh">检索 Antibody Registry 的抗体记录与 RRID，并通过 Grants.gov 查找资助机会。</p>
+        <p class="lang-en">Search antibody records and RRIDs in the Antibody Registry, and discover funding opportunities through Grants.gov.</p>
+        <p class="mcp-sources"><a href="https://www.antibodyregistry.org/">Antibody Registry</a> · <a href="https://www.grants.gov/api/api-guide">Grants.gov API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>search_antibodies</code></td>
+                <td><span class="lang-zh">按名称、靶点、货号或克隆搜索 Antibody Registry</span><span class="lang-en">Search the Antibody Registry (RRID:SCR_006397) by antibody name, target, catalog number or clone.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_antibody</code></td>
+                <td><span class="lang-zh">按登录号或 RRID 取抗体记录</span><span class="lang-en">Retrieve Antibody Registry records for one accession or RRID (3643095, AB_3643095, or RRID:AB_3643095).</span></td>
+              </tr>
+              <tr>
+                <td><code>find_antibodies_by_catalog</code></td>
+                <td><span class="lang-zh">按厂商货号精确匹配抗体记录</span><span class="lang-en">Find Antibody Registry records whose catalogNum or listed catAlt alternatives equal a vendor catalog number (case-insensitive).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_antibody_registry_stats</code></td>
+                <td><span class="lang-zh">取 Antibody Registry 规模与更新日期</span><span class="lang-en">Return Antibody Registry size and last-update date.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_grants</code></td>
+                <td><span class="lang-zh">搜索 Grants.gov 资助机会</span><span class="lang-en">Search Grants.gov funding opportunities.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="rna">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 022 ]</span>
+          <span><code>mcp_rna</code> · 9</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">RNA</span><span class="lang-en">RNA</span></h2>
+        <p class="lang-zh">浏览 Rfam RNA 家族、注释、序列比对与协方差模型，或提交序列检索。</p>
+        <p class="lang-en">Explore Rfam RNA families, annotations, alignments and covariance models, or submit a bounded sequence search.</p>
+        <p class="mcp-sources"><a href="https://docs.rfam.org/en/latest/api.html">Rfam API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>accession_to_id</code></td>
+                <td><span class="lang-zh">把 Rfam 登录号（RF00001）转成家族 id</span><span class="lang-en">Convert an Rfam accession (RF00001) to its family id.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_covariance_model</code></td>
+                <td><span class="lang-zh">下载 Rfam 家族的 Infernal 协方差模型</span><span class="lang-en">Download the Infernal covariance model for an Rfam family from https://rfam.org/family/{id}/cm.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_family</code></td>
+                <td><span class="lang-zh">按登录号或家族 id 取 Rfam 家族元数据</span><span class="lang-en">Retrieve Rfam family metadata by accession (RF00001) or family id from https://rfam.org/family/{id}?content-type=application/json.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_seed_alignment</code></td>
+                <td><span class="lang-zh">下载 Rfam SEED 比对</span><span class="lang-en">Download the Rfam SEED alignment from https://rfam.org/family/{id}/alignment.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_sequence_regions</code></td>
+                <td><span class="lang-zh">列出家族 FULL 比对中的序列区间（有界页）</span><span class="lang-en">List FULL-alignment sequence regions for an Rfam family from https://rfam.org/family/{id}/regions as a bounded page.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_structure_mapping</code></td>
+                <td><span class="lang-zh">取家族到 PDB 残基的映射</span><span class="lang-en">Retrieve PDB residue mappings for an Rfam family from https://rfam.org/family/{id}/structures?content-type=application/json.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_tree</code></td>
+                <td><span class="lang-zh">下载 SEED 系统发生树（NHX/Newick）</span><span class="lang-en">Download the Rfam seed phylogenetic tree in NHX/Newick form from https://rfam.org/family/{id}/tree.</span></td>
+              </tr>
+              <tr>
+                <td><code>id_to_accession</code></td>
+                <td><span class="lang-zh">把 Rfam 家族 id 转成登录号</span><span class="lang-en">Convert an Rfam family id to its accession (RF00001).</span></td>
+              </tr>
+              <tr>
+                <td><code>search_sequence</code></td>
+                <td><span class="lang-zh">把一条 DNA/RNA 序列提交到 Rfam 协方差模型库检索</span><span class="lang-en">Search one DNA/RNA sequence against the Rfam covariance-model library.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="structures-interactions">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 023 ]</span>
+          <span><code>mcp_structures_interactions</code> · 16</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">结构与相互作用</span><span class="lang-en">Structures Interactions</span></h2>
+        <p class="lang-zh">查询 RCSB PDB 结构、AlphaFold 预测、EMDB 密度图、Complex Portal 复合物和 IntAct 分子相互作用。</p>
+        <p class="lang-en">Search RCSB PDB structures, AlphaFold predictions, EMDB maps, Complex Portal complexes and IntAct molecular interactions.</p>
+        <p class="mcp-sources"><a href="https://www.rcsb.org/">RCSB PDB</a> · <a href="https://alphafold.ebi.ac.uk/">AlphaFold DB</a> · <a href="https://www.ebi.ac.uk/emdb/">EMDB</a> · <a href="https://www.ebi.ac.uk/complexportal/">Complex Portal</a> · <a href="https://www.ebi.ac.uk/intact/">IntAct</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>alphafold_check_coverage</code></td>
+                <td><span class="lang-zh">检查最多 40 个 UniProt 登录号是否有 AlphaFold DB 覆盖</span><span class="lang-en">Check AlphaFold DB coverage for up to 40 unique UniProt accessions.</span></td>
+              </tr>
+              <tr>
+                <td><code>alphafold_get_prediction</code></td>
+                <td><span class="lang-zh">取一个 UniProt 登录号的 AlphaFold 预测结构元数据</span><span class="lang-en">Retrieve AlphaFold DB predicted-structure metadata for one UniProt accession.</span></td>
+              </tr>
+              <tr>
+                <td><code>complexportal_get_complexes</code></td>
+                <td><span class="lang-zh">按 CPX 登录号取 Complex Portal 复合物</span><span class="lang-en">Fetch curated Complex Portal records by CPX accession from the EBI Complex Portal web service.</span></td>
+              </tr>
+              <tr>
+                <td><code>complexportal_search_by_participant</code></td>
+                <td><span class="lang-zh">按参与者登录号（UniProt/ChEBI/RNAcentral）搜索复合物</span><span class="lang-en">Search Complex Portal for complexes that mention a participant accession (UniProt, ChEBI or RNAcentral).</span></td>
+              </tr>
+              <tr>
+                <td><code>emdb_get_entries</code></td>
+                <td><span class="lang-zh">取最多 25 个 EMDB 电镜条目的元数据</span><span class="lang-en">Fetch EMDB cryo-EM entry metadata for up to 25 accessions (EMD-1234, emd-1234 or 1234).</span></td>
+              </tr>
+              <tr>
+                <td><code>emdb_get_entry_section</code></td>
+                <td><span class="lang-zh">取 EMDB 条目的详细分区（文献、map、样品等）</span><span class="lang-en">Fetch one detailed metadata section for EMDB entries: publications (primary and auxiliary citations), map (dimensions, voxel size, statistics, contour, symme…</span></td>
+              </tr>
+              <tr>
+                <td><code>emdb_get_validation</code></td>
+                <td><span class="lang-zh">取 EMDB 验证指标（Q-score、FSC 分辨率等）</span><span class="lang-en">Fetch EMDB validation-analysis metrics (Q-score, atom inclusion, contour recommendations, FSC-derived resolution, volume estimates).</span></td>
+              </tr>
+              <tr>
+                <td><code>emdb_search_entries</code></td>
+                <td><span class="lang-zh">用 Solr/Lucene 查询搜索 EMDB</span><span class="lang-en">Search EMDB with a Solr/Lucene query against GET /search/{query}.</span></td>
+              </tr>
+              <tr>
+                <td><code>intact_build_network</code></td>
+                <td><span class="lang-zh">围绕 UniProt 种子构建深度为 1 的 IntAct 二体互作网络</span><span class="lang-en">Build a depth-1 IntAct binary-interaction network around UniProt seed accessions.</span></td>
+              </tr>
+              <tr>
+                <td><code>intact_fetch_interactions</code></td>
+                <td><span class="lang-zh">按 UniProt、基因符号或 MIQL 搜索 IntAct 互作</span><span class="lang-en">Search IntAct binary interactions with a UniProt accession, gene symbol or MIQL query via the Interaction Search service.</span></td>
+              </tr>
+              <tr>
+                <td><code>intact_get_interaction_details</code></td>
+                <td><span class="lang-zh">按 EBI- 登录号取一条互作的策展细节</span><span class="lang-en">Retrieve curated detail for one IntAct interaction accession (EBI-…) from the graph data service: type, host, detection method, publication, cross-references…</span></td>
+              </tr>
+              <tr>
+                <td><code>intact_get_interactor</code></td>
+                <td><span class="lang-zh">把 UniProt、基因符号或 IntAct AC 解析为互作体记录</span><span class="lang-en">Resolve a UniProt accession, gene symbol or IntAct interactor AC to IntAct interactor records.</span></td>
+              </tr>
+              <tr>
+                <td><code>pdb_get_entities</code></td>
+                <td><span class="lang-zh">取一个 PDB 条目的聚合物实体元数据</span><span class="lang-en">Retrieve polymer-entity metadata for one PDB entry from the RCSB Data API, including polymer type, chain IDs, source organisms, UniProt mappings and SIFTS-al…</span></td>
+              </tr>
+              <tr>
+                <td><code>pdb_get_ligands</code></td>
+                <td><span class="lang-zh">列出 PDB 条目中结合的非聚合物配体</span><span class="lang-en">List bound nonpolymer ligands for one PDB entry from the RCSB Data API, with chemical-component formula, InChIKey and stereo SMILES when served.</span></td>
+              </tr>
+              <tr>
+                <td><code>pdb_get_structures</code></td>
+                <td><span class="lang-zh">取最多 25 个 PDB ID 的条目级摘要</span><span class="lang-en">Fetch entry-level RCSB PDB summaries for up to 25 unique PDB IDs: title, experimental methods, resolution, determination methodology, dates, assembly/entity…</span></td>
+              </tr>
+              <tr>
+                <td><code>pdb_search_structures</code></td>
+                <td><span class="lang-zh">用 Search API v2 搜索 RCSB PDB 条目</span><span class="lang-en">Search RCSB PDB entries with the Search API v2.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="variants">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 024 ]</span>
+          <span><code>mcp_variants</code> · 18</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">变异</span><span class="lang-en">Variants</span></h2>
+        <p class="lang-zh">查询 CADD 变异评分、gnomAD 群体频率、ClinVar 解读和 dbSNP 记录。</p>
+        <p class="lang-en">Look up CADD variant scores, gnomAD population frequencies, ClinVar interpretations and dbSNP records.</p>
+        <p class="mcp-sources"><a href="https://cadd.gs.washington.edu/api">CADD API and usage conditions</a> · <a href="https://gnomad.broadinstitute.org/">gnomAD</a> · <a href="https://www.ncbi.nlm.nih.gov/clinvar/">ClinVar</a> · <a href="https://www.ncbi.nlm.nih.gov/snp/">dbSNP</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>cadd_position_scores</code></td>
+                <td><span class="lang-zh">返回一个核基因组位点上所有可能 SNV 的 CADD 分数</span><span class="lang-en">Return CADD raw and PHRED scores for every possible SNV at one nuclear position (up to three alts).</span></td>
+              </tr>
+              <tr>
+                <td><code>cadd_range_scores</code></td>
+                <td><span class="lang-zh">返回最多 100 bp 窗口内每个 SNV 的 CADD 分数</span><span class="lang-en">Return CADD raw and PHRED scores for every SNV in a nuclear window of at most 100 bp (1-based inclusive).</span></td>
+              </tr>
+              <tr>
+                <td><code>cadd_variant_score</code></td>
+                <td><span class="lang-zh">返回一个核基因组 SNV 的 CADD raw 与 PHRED 分数</span><span class="lang-en">Return the CADD raw and PHRED score for one nuclear SNV (chrom, pos, ref, alt).</span></td>
+              </tr>
+              <tr>
+                <td><code>get_variant</code></td>
+                <td><span class="lang-zh">按 chrom-pos-ref-alt 查 gnomAD 短变异的群体等位基因计数</span><span class="lang-en">Look up one gnomAD short variant by chrom-pos-ref-alt on the chosen dataset and return population allele counts.</span></td>
+              </tr>
+              <tr>
+                <td><code>search_variants</code></td>
+                <td><span class="lang-zh">按 rsID、变异 ID 或前缀搜索 gnomAD 变异</span><span class="lang-en">Search gnomAD for variant IDs matching an rsID, a chrom-pos-ref-alt ID, or a prefix.</span></td>
+              </tr>
+              <tr>
+                <td><code>gene_variants</code></td>
+                <td><span class="lang-zh">列出一个基因中的 gnomAD 短变异</span><span class="lang-en">List gnomAD short variants in one gene (HGNC symbol or Ensembl gene ID).</span></td>
+              </tr>
+              <tr>
+                <td><code>gene_constraint</code></td>
+                <td><span class="lang-zh">取 gnomAD 基因约束指标（pLI、o/e、z）</span><span class="lang-en">Fetch gnomAD gene constraint metrics (pLI, observed/expected LoF/missense/synonymous ratios with 90% CI, z-scores) for one HGNC symbol or Ensembl gene ID.</span></td>
+              </tr>
+              <tr>
+                <td><code>region_variants</code></td>
+                <td><span class="lang-zh">列出最多 1 Mb 核基因组窗口中的 gnomAD 短变异</span><span class="lang-en">List gnomAD short variants in a nuclear genomic window of at most 1 Mb (1-based inclusive).</span></td>
+              </tr>
+              <tr>
+                <td><code>liftover_variant</code></td>
+                <td><span class="lang-zh">用 gnomAD liftover 表在 GRCh37 与 GRCh38 之间映射变异</span><span class="lang-en">Map a chrom-pos-ref-alt variant ID between GRCh37 and GRCh38 using gnomAD&#x27;s liftover table.</span></td>
+              </tr>
+              <tr>
+                <td><code>clinvar_variants</code></td>
+                <td><span class="lang-zh">列出 gnomAD 镜像的基因内 ClinVar 变异</span><span class="lang-en">List ClinVar variants in a gene as mirrored by gnomAD, including clinical significance, review status and gold stars.</span></td>
+              </tr>
+              <tr>
+                <td><code>structural_variants</code></td>
+                <td><span class="lang-zh">列出与基因重叠的 gnomAD 结构变异</span><span class="lang-en">List gnomAD structural variants overlapping a gene.</span></td>
+              </tr>
+              <tr>
+                <td><code>get_structural_variant</code></td>
+                <td><span class="lang-zh">按发行版标识符取一个 gnomAD 结构变异</span><span class="lang-en">Look up one gnomAD structural variant by its release-specific identifier (for example DEL_chr17_599b1512 in gnomad_sv_r4).</span></td>
+              </tr>
+              <tr>
+                <td><code>mitochondrial_variants</code></td>
+                <td><span class="lang-zh">列出 MT 基因或 chrM 窗口中的 gnomAD 线粒体变异</span><span class="lang-en">List gnomAD mitochondrial variants with heteroplasmy-aware counts (ac_het, ac_hom, max_heteroplasmy) for one MT gene or a chrM window.</span></td>
+              </tr>
+              <tr>
+                <td><code>clinvar_search</code></td>
+                <td><span class="lang-zh">搜索 NCBI ClinVar 并返回种系/体细胞分类</span><span class="lang-en">Search live NCBI ClinVar (ESearch+ESummary, db=clinvar) and return variation records with germline, somatic clinical-impact and oncogenicity classifications,…</span></td>
+              </tr>
+              <tr>
+                <td><code>clinvar_get_records</code></td>
+                <td><span class="lang-zh">按最多 50 个 VCV/RCV 或变异 ID 取 ClinVar 记录</span><span class="lang-en">Fetch live NCBI ClinVar variation records for up to 50 VCV/RCV accessions or bare variation IDs.</span></td>
+              </tr>
+              <tr>
+                <td><code>clinvar_variant_by_rsid</code></td>
+                <td><span class="lang-zh">按 dbSNP rsID 取关联的 ClinVar 变异记录</span><span class="lang-en">Return live NCBI ClinVar variation records that reference a dbSNP rsID (one rsID can map to several VCVs).</span></td>
+              </tr>
+              <tr>
+                <td><code>dbsnp_get_rsids</code></td>
+                <td><span class="lang-zh">取最多 20 个 rsID 的 RefSNP 记录（坐标、等位基因、频率）</span><span class="lang-en">Fetch NCBI Variation Services RefSNP records for up to 20 rsIDs: GRCh38/GRCh37 placements, alleles, gene context, per-study frequencies and ClinVar xrefs.</span></td>
+              </tr>
+              <tr>
+                <td><code>dbsnp_search_by_region</code></td>
+                <td><span class="lang-zh">列出基因组窗口中的 dbSNP rsID</span><span class="lang-en">List dbSNP rsIDs in a genomic window via ESearch db=snp (Variation Services has no region endpoint).</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="mcp-domain" id="zinc">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 025 ]</span>
+          <span><code>mcp_zinc</code> · 5</span>
+        </div>
+        <h2 class="doc-subhead"><span class="lang-zh">ZINC</span><span class="lang-en">ZINC</span></h2>
+        <p class="lang-zh">按 ZINC 标识符查找可购买化合物，通过 SmallWorld 检索相似分子，并查看三维分区元数据与下载引用。</p>
+        <p class="lang-en">Find purchasable compounds by ZINC identifier, search similar molecules through SmallWorld, and inspect 3D tranche metadata and download references.</p>
+        <p class="mcp-sources"><a href="https://cartblanche22.docking.org/">ZINC / CartBlanche22</a> · <a href="https://wiki.docking.org/index.php?title=How_to_use_SmallWorld_API">SmallWorld API</a></p>
+        <div class="table-wrap">
+          <table class="doc-table doc-table-compact">
+            <thead>
+              <tr>
+                <th data-i18n="mcp.thTool">工具</th>
+                <th data-i18n="mcp.thDoes">做什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>zinc_search_by_id</code></td>
+                <td><span class="lang-zh">按 ZINC 标识符查找可购买化合物</span><span class="lang-en">Look up purchasable ZINC22/ZINC20 compounds by ZINC identifier through CartBlanche22.</span></td>
+              </tr>
+              <tr>
+                <td><code>zinc_search_by_smiles</code></td>
+                <td><span class="lang-zh">在公开 SmallWorld ZINC20 在售索引上按 SMILES 搜索相似分子</span><span class="lang-en">Search the active public SmallWorld ZINC20 for-sale index by SMILES.</span></td>
+              </tr>
+              <tr>
+                <td><code>zinc_search_by_supplier</code></td>
+                <td><span class="lang-zh">把厂商货号解析为 ZINC 物质</span><span class="lang-en">Resolve vendor catalog numbers to ZINC substances through CartBlanche22 /catitems.txt.</span></td>
+              </tr>
+              <tr>
+                <td><code>zinc_get_3d</code></td>
+                <td><span class="lang-zh">定位对接可用的 3D 构象及 tranche 下载引用</span><span class="lang-en">Locate docking-ready 3D conformers for ZINC compounds.</span></td>
+              </tr>
+              <tr>
+                <td><code>zinc_random_sample</code></td>
+                <td><span class="lang-zh">抽取可购买 ZINC22 化合物的随机样本</span><span class="lang-en">Draw a random sample of purchasable ZINC22 compounds through CartBlanche22 /substance/random.json and its dedicated /substance/random/{task}.json polling route.</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="assets/i18n.js"></script>
+</body>
+</html>

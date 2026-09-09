@@ -7,9 +7,10 @@ use crate::app_support::{
 use crate::bindings::{invoke_checked, open_external_url, render_share_png, snapshot_share_theme};
 use crate::dto::*;
 use crate::i18n::{localize_backend, t, tf, Locale};
-use crate::text::{dom_value, event_target_value, file_kind, format_bytes};
+use crate::text::{dom_value, event_target_value, file_kind, format_bytes, ime_composing};
 use leptos::*;
 use serde_wasm_bindgen::to_value;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub(super) fn AddHostOverlay(
@@ -1178,6 +1179,107 @@ pub(super) fn StoragePrefsOverlay(
 }
 
 #[component]
+pub(super) fn LocalEnvironmentPanel(
+    locale: RwSignal<Locale>,
+    bootstrap: RwSignal<Option<BootstrapStatus>>,
+    #[prop(default = false)] hide_title: bool,
+) -> impl IntoView {
+    let checking = create_rw_signal(false);
+    let editing = create_rw_signal(false);
+    let draft = create_rw_signal(std::collections::BTreeMap::<String, String>::new());
+    let error = create_rw_signal(None::<String>);
+    let refresh = move |save: bool| {
+        checking.set(true);
+        error.set(None);
+        let args = if save {
+            to_value(&serde_json::json!({ "paths": draft.get_untracked() })).unwrap()
+        } else {
+            wasm_bindgen::JsValue::UNDEFINED
+        };
+        spawn_local(async move {
+            match invoke_checked(
+                if save {
+                    "save_local_environment_paths"
+                } else {
+                    "detect_local_environment"
+                },
+                args,
+            )
+            .await
+            {
+                Ok(value) => match serde_wasm_bindgen::from_value::<BootstrapStatus>(value) {
+                    Ok(status) => {
+                        bootstrap.set(Some(status));
+                        editing.set(false);
+                        if save {
+                            show_toast(&t(locale.get_untracked(), "env.saved"));
+                        }
+                    }
+                    Err(value) => error.set(Some(value.to_string())),
+                },
+                Err(value) => error.set(Some(localize_backend(
+                    locale.get_untracked(),
+                    &js_error_text(value),
+                ))),
+            }
+            checking.set(false);
+        });
+    };
+    view! {
+        <section class="local-environment" data-testid="local-environment">
+            {(!hide_title).then(|| view! { <h3>{move || t(locale.get(), "env.title")}</h3> })}
+            <p class="hint">{move || t(locale.get(), "env.optional")}</p>
+            <dl class="environment-paths">
+                {[
+                    ("Python", "python_executable"), ("Rscript", "rscript_executable"),
+                    ("uv", "uv_executable"), ("Node", "node_executable"),
+                    ("npm", "npm_executable"), ("sci", "sci_executable"), ("pixi", "pixi_executable"),
+                ].into_iter().map(|(label, key)| {
+                    view! {
+                        <div><dt>{label}</dt><dd>
+                            {move || if editing.get() {
+                                view! { <input type="text" aria-label=label autocomplete="off" spellcheck="false"
+                                    disabled=move || checking.get()
+                                    placeholder=move || t(locale.get(), "env.missing")
+                                    prop:value=move || draft.with(|paths| paths.get(key).cloned().unwrap_or_default())
+                                    on:input=move |ev| draft.update(|paths| { paths.insert(key.into(), event_target_value(&ev)); }) /> }.into_view()
+                            } else {
+                                view! { <span>{move || bootstrap.get().and_then(|b| b.local_environment)
+                                    .map(|report| report.paths.get(key).cloned().unwrap_or_else(|| t(locale.get(), "env.missing").into()))
+                                    .unwrap_or_else(|| t(locale.get(), "env.checking").into())}</span> }.into_view()
+                            }}
+                        </dd></div>
+                    }
+                }).collect_view()}
+            </dl>
+            {move || bootstrap.get().and_then(|b| b.local_environment).and_then(|report| report.warning)
+                .map(|warning| view! { <p class="hint">{warning}</p> })}
+            {move || error.get().map(|message| view! { <p class="settings-status fail" role="alert">{message}</p> })}
+            {move || if editing.get() {
+                view! {
+                    <p class="hint">{move || t(locale.get(), "env.edit_hint")}</p>
+                    <div class="environment-actions">
+                        <button type="button" disabled=move || checking.get() on:click=move |_| refresh(true)>{move || t(locale.get(), "env.save")}</button>
+                        <button type="button" disabled=move || checking.get() on:click=move |_| { editing.set(false); error.set(None); }>{move || t(locale.get(), "share.cancel")}</button>
+                    </div>
+                }.into_view()
+            } else {
+                view! {
+                    <div class="environment-actions">
+                        <button type="button" disabled=move || checking.get() on:click=move |_| refresh(false)>{move || t(locale.get(), "env.check_again")}</button>
+                        <button type="button" disabled=move || checking.get() on:click=move |_| {
+                            draft.set(bootstrap.get_untracked().and_then(|b| b.local_environment).map(|report| report.paths).unwrap_or_default());
+                            error.set(None);
+                            editing.set(true);
+                        }>{move || t(locale.get(), "env.edit")}</button>
+                    </div>
+                }.into_view()
+            }}
+        </section>
+    }
+}
+
+#[component]
 pub(super) fn CapabilitiesOverlay(
     locale: RwSignal<Locale>,
     show_capabilities: RwSignal<bool>,
@@ -1208,14 +1310,7 @@ pub(super) fn CapabilitiesOverlay(
                     <h3>{tf(loc, "caps.runtime", &[("version", &b.app_version)])}</h3>
                     <p class="hint">{tf(loc, "caps.workspace", &[("path", &b.workspace)])}</p>
                     <p class="hint">{{
-                        let ready = t(loc, "caps.ready");
-                        let missing = t(loc, "caps.missing");
                         tf(loc, "caps.runtime_status", &[
-                        ("py", if b.python_ok { &ready } else { &missing }),
-                        ("uv", if b.uv_ok { &ready } else { &missing }),
-                        ("node", if b.node_ok { &ready } else { &missing }),
-                        ("sci", if b.sci_ok { &ready } else { &missing }),
-                        ("pixi", if b.pixi_ok { &ready } else { &missing }),
                         ("skills", &b.skills_loaded.to_string()),
                         ("mcp", &b.mcp_catalog.to_string()),
                     ])}}</p>
@@ -1272,15 +1367,14 @@ pub(super) fn CapabilitiesOverlay(
                     </button>
                 </div>
             })}
+            <LocalEnvironmentPanel locale=locale bootstrap=bootstrap />
             <div class="row">
                 <button on:click=move |_| show_capabilities.set(false)>
                     {move || t(locale.get(), "caps.close")}
                 </button>
-                {move || bootstrap.get().filter(|b| !b.python_initializing && (!b.python_ok || !b.uv_ok || !b.node_ok || !b.sci_ok || !b.pixi_ok)).map(|_| view! {
-                    <button class="primary" disabled=move || busy.get() on:click=move |ev| start_env_setup.call(ev)>
-                        {move || t(locale.get(), "caps.setup_env")}
-                    </button>
-                })}
+                <button class="primary" disabled=move || busy.get() on:click=move |ev| start_env_setup.call(ev)>
+                    {move || t(locale.get(), "caps.setup_env")}
+                </button>
             </div>
         </div>
     </div>
@@ -1294,22 +1388,80 @@ const DEEPSEEK_KEY_URL: &str = "https://platform.deepseek.com/api_keys";
 #[component]
 pub(super) fn OnboardingOverlay(
     locale: RwSignal<Locale>,
+    bootstrap: RwSignal<Option<BootstrapStatus>>,
     show_onboarding: RwSignal<bool>,
     onboard_step: RwSignal<usize>,
     onboard_key: RwSignal<String>,
     save_onboard_key: Callback<()>,
-    dismiss_onboard: Callback<web_sys::MouseEvent>,
+    dismiss_onboard: Callback<()>,
 ) -> impl IntoView {
+    let modal_ref = create_node_ref::<html::Div>();
+    // Focus the dialog on opening and after changing pages, including when the
+    // previously focused input has just been removed. Escape stays in the app stack.
+    create_effect(move |_| {
+        let visible = show_onboarding.get();
+        let _ = onboard_step.get();
+        if visible {
+            if let Some(modal) = modal_ref.get() {
+                let _ = modal.focus();
+            }
+        }
+    });
+    let advance = Callback::new(move |()| {
+        let step = onboard_step.get_untracked();
+        if step < 3 {
+            if step == 2 {
+                save_onboard_key.call(());
+            }
+            onboard_step.set(step + 1);
+        } else {
+            dismiss_onboard.call(());
+        }
+    });
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" || ev.default_prevented() || ime_composing(&ev) {
+            return;
+        }
+        if ev.repeat() {
+            ev.prevent_default();
+            return;
+        }
+        if ev.alt_key() || ev.ctrl_key() || ev.meta_key() || ev.shift_key() {
+            return;
+        }
+        if let Some(target) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            // Preserve native Enter on links, Back, and environment controls.
+            // The API-key field is the one text entry that submits this step.
+            if target
+                .closest("button, a, input, textarea, select, [contenteditable]")
+                .ok()
+                .flatten()
+                .is_some()
+                && !target
+                    .matches(".onboard > .row > .primary, .onboard-steps input[type=password]")
+                    .unwrap_or(false)
+            {
+                return;
+            }
+        }
+        ev.prevent_default();
+        advance.call(());
+    };
     move || {
         show_onboarding.get().then(|| {
-    let step = onboard_step.get();
-    let loc = locale.get();
     view! {
         <div class="overlay onboard-overlay">
-            <div class="modal onboard">
-                {match step {
-                    0 => view! {
-                        <h2>{t(loc, "onboard.apikey.title")}</h2>
+            <div class="modal onboard" node_ref=modal_ref tabindex="-1" on:keydown=on_keydown
+                role="dialog" aria-modal="true" aria-labelledby="onboard-title">
+                <div class="onboard-content">
+                {move || {
+                    let loc = locale.get();
+                    match onboard_step.get() {
+                    2 => view! {
+                        <h2 id="onboard-title">{t(loc, "onboard.apikey.title")}</h2>
                         <ol class="onboard-steps">
                             <li>
                                 <p class="hint">{t(loc, "onboard.getkey.body")}</p>
@@ -1328,36 +1480,36 @@ pub(super) fn OnboardingOverlay(
                             </li>
                         </ol>
                     }.into_view(),
-                    1 => view! {
-                        <h2>{t(loc, "onboard.welcome.title")}</h2>
+                    0 => view! {
+                        <h2 id="onboard-title">{t(loc, "onboard.welcome.title")}</h2>
                         <p class="hint">{t(loc, "onboard.welcome.body")}</p>
                     }.into_view(),
-                    _ => view! {
-                        <h2>{t(loc, "onboard.features.title")}</h2>
+                    1 => view! {
+                        <h2 id="onboard-title">{t(loc, "onboard.features.title")}</h2>
                         <p class="hint">{t(loc, "onboard.features.body")}</p>
                     }.into_view(),
-                }}
-                <div class="onboard-dots">
-                    {(0..3).map(|i| view! {
+                    _ => view! {
+                        <h2 id="onboard-title">{t(loc, "env.title")}</h2>
+                        <LocalEnvironmentPanel locale=locale bootstrap=bootstrap hide_title=true />
+                    }.into_view(),
+                }}}
+                </div>
+                <div class="onboard-dots" aria-hidden="true">
+                    {(0..4).map(|i| view! {
                         <span class="onboard-dot" class:active=move || onboard_step.get() == i></span>
                     }).collect_view()}
                 </div>
                 <div class="row">
-                    {if step > 0 {
+                    {move || if onboard_step.get() > 0 {
                         view! { <button on:click=move |_| onboard_step.update(|s| *s = s.saturating_sub(1))>{move || t(locale.get(), "onboard.back")}</button> }.into_view()
                     } else { view! { <span></span> }.into_view() }}
-                    {if step < 2 {
-                        view! { <button class="primary" on:click=move |_| {
-                            if step == 0 { save_onboard_key.call(()); }
-                            onboard_step.update(|s| *s += 1);
-                        }>{move || t(locale.get(), if step == 0 && onboard_key.get().trim().is_empty() {
+                    <button class="primary" on:click=move |_| advance.call(())>
+                        {move || t(locale.get(), if onboard_step.get() == 3 {
+                            "onboard.start"
+                        } else if onboard_step.get() == 2 && onboard_key.get().trim().is_empty() {
                             "onboard.apikey.later"
-                        } else { "onboard.next" })}</button> }.into_view()
-                    } else {
-                        view! {
-                            <button class="primary" on:click=move |ev| dismiss_onboard.call(ev)>{move || t(locale.get(), "onboard.start")}</button>
-                        }.into_view()
-                    }}
+                        } else { "onboard.next" })}
+                    </button>
                 </div>
             </div>
         </div>

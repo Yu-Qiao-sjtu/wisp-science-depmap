@@ -537,6 +537,30 @@ def _execute_cell(code: str, cell_tag: str, namespace: dict) -> None:
         print(repr(result))
 
 
+def _execute_script(code: str, source_name: str, namespace: dict) -> None:
+    """Execute saved source with a temporary file identity in the same namespace.
+
+    On SSH, source_name is a logical project-relative path under the runtime
+    workdir: the host sends source content, not a remote file deployment.
+    """
+    missing = object()
+    previous_file = namespace.get("__file__", missing)
+    namespace["__file__"] = os.path.abspath(source_name)
+    try:
+        try:
+            exec(compile(code, source_name, "exec"), namespace)
+        except SystemExit as exc:
+            # A successful CLI-style return must not fail the cell or kill the
+            # worker. Nonzero/string exits remain errors with source traceback.
+            if exc.code is not None and not (isinstance(exc.code, int) and exc.code == 0):
+                raise
+    finally:
+        if previous_file is missing:
+            namespace.pop("__file__", None)
+        else:
+            namespace["__file__"] = previous_file
+
+
 def main():
     import threading
 
@@ -714,7 +738,10 @@ def main():
             sys.stdout = stdout_cap
             sys.stderr = stderr_cap
             try:
-                _execute_cell(code, cell_tag, namespace)
+                if isinstance(source_name, str) and source_name:
+                    _execute_script(code, source_name, namespace)
+                else:
+                    _execute_cell(code, cell_tag, namespace)
             except BaseException as e:  # noqa: BLE001 — survive hostile exceptions
                 error = traceback.format_exc()
                 error_lineno = _error_lineno(e, cell_tag)

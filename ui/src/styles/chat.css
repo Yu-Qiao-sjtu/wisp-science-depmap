@@ -586,11 +586,7 @@
   pointer-events: none; z-index: 0;
 }
 .empty > * { position: relative; z-index: 1; }
-.empty-logo {
-  width: 32px; height: 32px; border-radius: var(--radius-sm);
-  background: center / contain no-repeat url("logo.svg");
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--clay) 22%, transparent);
-}
+.empty-logo { width: min(208px, 100%); }
 .empty h1 { margin: var(--space-1) 0 0; font-family: var(--font-serif); font-size: var(--text-xl); font-weight: 500; letter-spacing: -0.02em; color: var(--text); }
 .empty p { margin: 0; font-size: var(--text-md); max-width: 420px; line-height: 1.55; font-weight: 400; }
 

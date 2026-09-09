@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -30,6 +30,7 @@ use tokio_tungstenite::{accept_hdr_async, WebSocketStream};
 use uuid::Uuid;
 use wisp_dto::{
     BrowserExtensionSetup, BrowserExtensionStatus, BrowserExtensionUpdateResult,
+    BrowserNeedsHumanConfirmResult, BrowserNeedsHumanPrompt, BrowserNeedsHumanTab,
     BrowserTabCleanupItem, BrowserTabCleanupPrompt,
 };
 use wisp_llm::ToolSchema;
@@ -64,6 +65,7 @@ const MAX_RESULT_CHARS: usize = 200_000;
 /// 5 MB decoded limit (base64 inflates by 4/3).
 const MAX_SCREENSHOT_B64: usize = 7 * 1024 * 1024;
 const PENDING_CLEANUP_KEY: &str = "browser_tab_cleanup_pending";
+const PENDING_NEEDS_HUMAN_KEY: &str = "browser_needs_human_pending";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BrowserTab {
@@ -157,7 +159,6 @@ struct RefusedConnection {
 #[derive(Default)]
 struct BridgeState {
     sessions: HashMap<String, SessionState>,
-    last_session: Option<String>,
     startup_error: Option<String>,
     workspace_pid: Option<u32>,
     last_refusal: Option<RefusedConnection>,
@@ -178,6 +179,20 @@ pub struct BrowserBridge {
     /// Tabs `web_open_tab` / tab-create commands opened, keyed by turn id.
     turn_ledgers: Mutex<HashMap<String, TurnTabLedger>>,
     pending_cleanups: Mutex<HashMap<String, PendingCleanup>>,
+    /// Tabs whose current page needs a human to complete a CAPTCHA / robot
+    /// check. Keyed by `(session, tab_id)` so a later turn's auto-close cannot
+    /// take them, and so the UI can remind the user independently of the LLM.
+    needs_human: Mutex<HashMap<(String, i64), BrowserNeedsHumanTab>>,
+    needs_human_tx: Mutex<Option<mpsc::UnboundedSender<Vec<BrowserNeedsHumanTab>>>>,
+    /// One real Chrome session. Occupancy is held from the first browser tool
+    /// of a project+turn until `complete_turn`, not per tool call — two tools
+    /// in the same turn must not open a gap a foreign project can sneak into.
+    occupancy: StdMutex<Option<BrowserOccupancy>>,
+}
+
+struct BrowserOccupancy {
+    project_id: String,
+    turns: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -275,7 +290,7 @@ fn session_requires_update(meta: &SessionMeta, bundled_version: Option<&str>) ->
         || extension_version_outdated(&meta.extension_version, bundled_version)
 }
 
-fn session_name_locked(state: &BridgeState, requested: Option<&str>) -> Result<String, String> {
+fn resolve_session_name(requested: Option<&str>) -> Result<String, String> {
     if let Some(name) = requested {
         if name != "shared" && name != "workspace" {
             return Err(errors::structured(
@@ -286,32 +301,7 @@ fn session_name_locked(state: &BridgeState, requested: Option<&str>) -> Result<S
         }
         return Ok(name.to_string());
     }
-    let connected: Vec<&str> = ["shared", "workspace"]
-        .into_iter()
-        .filter(|name| {
-            state
-                .sessions
-                .get(*name)
-                .and_then(|session| session.client.as_ref())
-                .is_some()
-        })
-        .collect();
-    if connected.is_empty() {
-        return Ok("shared".into());
-    }
-    if connected.len() == 1 {
-        return Ok(connected[0].to_string());
-    }
-    if let Some(last) = state.last_session.as_deref() {
-        if connected.iter().any(|name| *name == last) {
-            return Ok(last.to_string());
-        }
-    }
-    Err(errors::structured(
-        errors::SESSION_REQUIRED,
-        "shared and workspace are both connected; pass session=shared or session=workspace",
-        false,
-    ))
+    Ok("shared".into())
 }
 
 #[allow(dead_code)]
@@ -329,6 +319,41 @@ impl BrowserBridge {
             extension_update_lock: Mutex::new(()),
             turn_ledgers: Mutex::new(HashMap::new()),
             pending_cleanups: Mutex::new(HashMap::new()),
+            needs_human: Mutex::new(HashMap::new()),
+            needs_human_tx: Mutex::new(None),
+            occupancy: StdMutex::new(None),
+        }
+    }
+
+    fn occupy_turn(&self, project_id: &str, turn_id: &str) -> Result<(), String> {
+        let mut occupancy = self.occupancy.lock().unwrap_or_else(|p| p.into_inner());
+        match occupancy.as_mut() {
+            Some(current) if current.project_id == project_id => {
+                current.turns.insert(turn_id.to_string());
+                Ok(())
+            }
+            Some(current) => Err(format!(
+                "browser is currently in use by another project ({}). Only one project's agent can drive the shared Chrome session at a time; wait until that turn finishes or stop it.",
+                current.project_id
+            )),
+            None => {
+                *occupancy = Some(BrowserOccupancy {
+                    project_id: project_id.to_string(),
+                    turns: HashSet::from([turn_id.to_string()]),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn release_turn(&self, turn_id: &str) {
+        let mut occupancy = self.occupancy.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(current) = occupancy.as_mut() else {
+            return;
+        };
+        current.turns.remove(turn_id);
+        if current.turns.is_empty() {
+            *occupancy = None;
         }
     }
 
@@ -363,8 +388,12 @@ impl BrowserBridge {
             extension_update_lock: Mutex::new(()),
             turn_ledgers: Mutex::new(HashMap::new()),
             pending_cleanups: Mutex::new(HashMap::new()),
+            needs_human: Mutex::new(HashMap::new()),
+            needs_human_tx: Mutex::new(None),
+            occupancy: StdMutex::new(None),
         });
         bridge.load_pending_cleanups().await;
+        bridge.load_pending_needs_human().await;
         match TcpListener::bind(BRIDGE_ADDR).await {
             Ok(listener) => {
                 let task_bridge = bridge.clone();
@@ -404,19 +433,17 @@ impl BrowserBridge {
         let state = self.state.lock().await;
         let extension_path = self.verified_extension_path();
         let extension_ready = extension_path.is_some();
-        // A live extension connection is the only proof that live retrieval
-        // works. It outranks an unverifiable bundled copy: a user who loaded the
-        // extension from another folder still browses fine, and reporting
-        // extension_missing there told the model and the UI "no live retrieval"
-        // on every turn (#921).
-        let any_connected = ["shared", "workspace"].into_iter().any(|name| {
-            state
-                .sessions
-                .get(name)
-                .and_then(|session| session.client.as_ref())
-                .is_some()
-        });
-        let status = if any_connected {
+        // A live shared extension connection is the only proof that the default
+        // live-retrieval route works. It outranks an unverifiable bundled copy: a
+        // user who loaded the extension from another folder still browses fine,
+        // and reporting extension_missing there told the model and the UI "no
+        // live retrieval" on every turn (#921).
+        let shared_connected = state
+            .sessions
+            .get("shared")
+            .and_then(|session| session.client.as_ref())
+            .is_some();
+        let status = if shared_connected {
             "connected"
         } else if state.startup_error.is_some() {
             "error"
@@ -450,9 +477,7 @@ impl BrowserBridge {
         let bundled_extension_version = bundled_manifest_version(&self.bundled_extension_dir);
         let shared = session_summary(&state, "shared", bundled_extension_version.as_deref());
         let workspace = session_summary(&state, "workspace", bundled_extension_version.as_deref());
-        let reload_required = [&shared, &workspace]
-            .into_iter()
-            .any(|session| session["reload_required"] == Value::Bool(true));
+        let reload_required = shared["reload_required"] == Value::Bool(true);
         let assistant_instruction = match (live_retrieval, reload_required) {
             (true, false) => path_instruction.to_string(),
             (true, true) => format!("{STALE_ASSISTANT_INSTRUCTION} {path_instruction}"),
@@ -764,13 +789,13 @@ impl BrowserBridge {
     ) -> Result<BrowserExecution, String> {
         let id = Uuid::new_v4().to_string();
         let (response_tx, response_rx) = oneshot::channel();
-        self.ensure_extension().await;
+        self.ensure_extension(session).await;
         let (session_name, tab_id) = {
             let mut state = self.state.lock().await;
             if let Some(error) = &state.startup_error {
                 return Err(self.unavailable_message(error));
             }
-            let session_name = session_name_locked(&state, session)?;
+            let session_name = resolve_session_name(session)?;
             let slot = session_slot(&mut state, &session_name);
             if slot.meta.paused {
                 return Err(errors::structured(
@@ -785,7 +810,6 @@ impl BrowserBridge {
             let tab_id = select_tab(slot, requested_tab)?;
             slot.selected_tab = Some(tab_id);
             slot.pending.insert(id.clone(), response_tx);
-            state.last_session = Some(session_name.clone());
             let payload = request_payload(&id, Some(tab_id), code, timeout);
             if client.tx.send(Message::Text(payload.into())).is_err() {
                 if let Some(slot) = state.sessions.get_mut(client.session.as_str()) {
@@ -847,7 +871,7 @@ impl BrowserBridge {
         code: String,
         timeout: Duration,
     ) -> Result<(String, BridgeReply), String> {
-        self.ensure_extension().await;
+        self.ensure_extension(session).await;
         let id = Uuid::new_v4().to_string();
         let (response_tx, response_rx) = oneshot::channel();
         let session_name = {
@@ -855,7 +879,7 @@ impl BrowserBridge {
             if let Some(error) = &state.startup_error {
                 return Err(self.unavailable_message(error));
             }
-            let session_name = session_name_locked(&state, session)?;
+            let session_name = resolve_session_name(session)?;
             let slot = session_slot(&mut state, &session_name);
             if slot.meta.paused {
                 return Err(errors::structured(
@@ -868,7 +892,6 @@ impl BrowserBridge {
                 return Err(self.unavailable_message("browser extension is not connected"));
             };
             slot.pending.insert(id.clone(), response_tx);
-            state.last_session = Some(session_name.clone());
             let payload = request_payload(&id, None, &code, timeout);
             if client.tx.send(Message::Text(payload.into())).is_err() {
                 if let Some(slot) = state.sessions.get_mut(client.session.as_str()) {
@@ -926,11 +949,12 @@ impl BrowserBridge {
         session: Option<&str>,
         capability: &str,
     ) -> Result<String, String> {
+        self.ensure_extension(session).await;
         let state = self.state.lock().await;
         if let Some(error) = &state.startup_error {
             return Err(self.unavailable_message(error));
         }
-        let session_name = session_name_locked(&state, session)?;
+        let session_name = resolve_session_name(session)?;
         let Some(slot) = state.sessions.get(&session_name) else {
             return Err(self.unavailable_message("browser extension is not connected"));
         };
@@ -1053,12 +1077,12 @@ impl BrowserBridge {
     }
 
     async fn tabs(&self) -> Result<Vec<BrowserTab>, String> {
-        self.ensure_extension().await;
+        self.ensure_extension(None).await;
         let state = self.state.lock().await;
         if let Some(error) = &state.startup_error {
             return Err(self.unavailable_message(error));
         }
-        let session_name = session_name_locked(&state, None)?;
+        let session_name = resolve_session_name(None)?;
         let Some(slot) = state.sessions.get(&session_name) else {
             return Err(self.unavailable_message("browser extension is not connected"));
         };
@@ -1069,11 +1093,12 @@ impl BrowserBridge {
     }
 
     async fn tabs_on(&self, session: Option<&str>) -> Result<Vec<BrowserTab>, String> {
+        self.ensure_extension(session).await;
         let state = self.state.lock().await;
         if let Some(error) = &state.startup_error {
             return Err(self.unavailable_message(error));
         }
-        let session_name = session_name_locked(&state, session)?;
+        let session_name = resolve_session_name(session)?;
         let Some(slot) = state.sessions.get(&session_name) else {
             return Err(self.unavailable_message("browser extension is not connected"));
         };
@@ -1095,8 +1120,20 @@ impl BrowserBridge {
     /// If the extension is down and auto-launch is on, start the user's
     /// Chrome/Chromium/Edge so the already-installed unpacked extension can
     /// reconnect. Never used from tests (`can_launch` is false on `new()`).
-    async fn ensure_extension(&self) {
-        if self.client_connected().await {
+    async fn ensure_extension(&self, session: Option<&str>) {
+        self.ensure_extension_with(session, || spawn_user_browser(None), AUTO_LAUNCH_WAIT)
+            .await;
+    }
+
+    async fn ensure_extension_with(
+        &self,
+        session: Option<&str>,
+        launch: impl FnOnce() -> Result<(), String>,
+        wait: Duration,
+    ) {
+        // Auto-launch owns only the default shared profile. Workspace mode is
+        // opt-in and starts exclusively through browser_setup.start_workspace.
+        if session.is_some_and(|name| name != "shared") || self.session_connected("shared").await {
             return;
         }
         if !self.can_launch {
@@ -1113,16 +1150,16 @@ impl BrowserBridge {
             return;
         }
         let _guard = self.launch_lock.lock().await;
-        if self.client_connected().await {
+        if self.session_connected("shared").await {
             return;
         }
-        if let Err(error) = spawn_user_browser() {
+        if let Err(error) = launch() {
             tracing::warn!(target: "wisp", "browser auto-launch failed: {error}");
             return;
         }
-        let deadline = tokio::time::Instant::now() + AUTO_LAUNCH_WAIT;
+        let deadline = tokio::time::Instant::now() + wait;
         while tokio::time::Instant::now() < deadline {
-            if self.client_connected().await {
+            if self.session_connected("shared").await {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1217,6 +1254,17 @@ impl BrowserBridge {
         drop(ledgers);
         drop(pending);
         self.persist_pending().await;
+        let mut human = self.needs_human.lock().await;
+        let before = human.len();
+        human.retain(|(session_name, tab_id), _| {
+            !(session_name == session && id_set.contains(tab_id))
+        });
+        let changed = human.len() != before;
+        drop(human);
+        if changed {
+            self.persist_needs_human().await;
+            self.emit_needs_human().await;
+        }
     }
 
     fn still_open_tabs(state: &BridgeState, tabs: &[TrackedTab]) -> Vec<TrackedTab> {
@@ -1359,7 +1407,24 @@ impl BrowserBridge {
             .collect()
     }
 
+    async fn project_pending_cleanups(
+        &self,
+        store: &Store,
+        project_id: Option<&str>,
+    ) -> Result<Vec<BrowserTabCleanupPrompt>, String> {
+        let mut prompts = Vec::new();
+        for prompt in self.list_pending_cleanups().await {
+            if browser_frame_belongs_to_project(store, &prompt.frame_id, project_id).await? {
+                prompts.push(prompt);
+            }
+        }
+        Ok(prompts)
+    }
+
     pub(crate) async fn complete_turn(&self, turn_id: &str) -> TabCleanupAction {
+        // Occupancy outlives individual tool calls; release even when this
+        // turn opened no tabs so a foreign project can acquire next.
+        self.release_turn(turn_id);
         let ledger = self.turn_ledgers.lock().await.remove(turn_id);
         let Some(ledger) = ledger else {
             return TabCleanupAction::None;
@@ -1375,9 +1440,25 @@ impl BrowserBridge {
             Some(store) => browser_url_filters::auto_close_tabs_enabled(store).await,
             None => false,
         };
-        let prompt = Self::prompt_from_tabs(&ledger.turn_id, &ledger.frame_id, &tabs);
+        let held_keys: HashSet<(String, i64)> =
+            self.needs_human.lock().await.keys().cloned().collect();
+        let held_this_turn = tabs
+            .iter()
+            .any(|tab| held_keys.contains(&(tab.session.clone(), tab.tab_id)));
+        let closeable: Vec<TrackedTab> = tabs
+            .into_iter()
+            .filter(|tab| !held_keys.contains(&(tab.session.clone(), tab.tab_id)))
+            .collect();
+        if held_this_turn {
+            self.emit_needs_human().await;
+        }
+        if closeable.is_empty() {
+            return TabCleanupAction::None;
+        }
+        let prompt = Self::prompt_from_tabs(&ledger.turn_id, &ledger.frame_id, &closeable);
         if auto_close {
-            let items: Vec<BrowserTabCleanupItem> = tabs.iter().map(TrackedTab::to_item).collect();
+            let items: Vec<BrowserTabCleanupItem> =
+                closeable.iter().map(TrackedTab::to_item).collect();
             match self.close_items(&items).await {
                 Ok(_) => TabCleanupAction::Closed,
                 Err(_) => {
@@ -1430,6 +1511,262 @@ impl BrowserBridge {
     pub(crate) async fn dismiss_cleanup(&self, turn_id: &str) {
         self.pending_cleanups.lock().await.remove(turn_id);
         self.persist_pending().await;
+    }
+
+    pub(crate) async fn set_needs_human_sink(
+        &self,
+        tx: mpsc::UnboundedSender<Vec<BrowserNeedsHumanTab>>,
+    ) {
+        *self.needs_human_tx.lock().await = Some(tx);
+    }
+
+    pub(crate) async fn list_needs_human(&self) -> BrowserNeedsHumanPrompt {
+        BrowserNeedsHumanPrompt {
+            tabs: self.snapshot_needs_human().await,
+        }
+    }
+
+    async fn snapshot_needs_human(&self) -> Vec<BrowserNeedsHumanTab> {
+        let mut tabs: Vec<BrowserNeedsHumanTab> =
+            self.needs_human.lock().await.values().cloned().collect();
+        tabs.sort_by(|left, right| {
+            left.session
+                .cmp(&right.session)
+                .then(left.tab_id.cmp(&right.tab_id))
+        });
+        tabs
+    }
+
+    async fn emit_needs_human(&self) {
+        let tabs = self.snapshot_needs_human().await;
+        if let Some(tx) = self.needs_human_tx.lock().await.as_ref() {
+            let _ = tx.send(tabs);
+        }
+    }
+
+    async fn persist_needs_human(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let tabs = self.snapshot_needs_human().await;
+        let json = serde_json::to_string(&tabs).unwrap_or_else(|_| "[]".into());
+        let _ = store.set_setting(PENDING_NEEDS_HUMAN_KEY, &json).await;
+    }
+
+    async fn load_pending_needs_human(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(raw) = store
+            .get_setting(PENDING_NEEDS_HUMAN_KEY)
+            .await
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let Ok(tabs) = serde_json::from_str::<Vec<BrowserNeedsHumanTab>>(&raw) else {
+            return;
+        };
+        let mut map = self.needs_human.lock().await;
+        for tab in tabs {
+            if tab.tab_id != 0 && !tab.session.is_empty() {
+                map.insert((tab.session.clone(), tab.tab_id), tab);
+            }
+        }
+    }
+
+    async fn apply_human_verification(
+        &self,
+        session: &str,
+        tab_id: i64,
+        page: &Value,
+        frame_id: &str,
+        turn_id: &str,
+    ) {
+        match human_verification_handoff(page) {
+            Some(handoff) => {
+                let reason = handoff
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("captcha_challenge")
+                    .to_string();
+                let url = page
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let title = page
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let mut map = self.needs_human.lock().await;
+                let key = (session.to_string(), tab_id);
+                let inserted = !map.contains_key(&key);
+                let turn_changed = map
+                    .get(&key)
+                    .is_some_and(|existing| !turn_id.is_empty() && existing.turn_id != turn_id);
+                let entry = map.entry(key).or_insert_with(|| BrowserNeedsHumanTab {
+                    session: session.to_string(),
+                    tab_id,
+                    url: url.clone(),
+                    title: title.clone(),
+                    reason: reason.clone(),
+                    frame_id: frame_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                });
+                if !url.is_empty() {
+                    entry.url = url;
+                }
+                if !title.is_empty() {
+                    entry.title = title;
+                }
+                entry.reason = reason;
+                if entry.frame_id.is_empty() && !frame_id.is_empty() {
+                    entry.frame_id = frame_id.to_string();
+                }
+                if !turn_id.is_empty() {
+                    entry.turn_id = turn_id.to_string();
+                }
+                drop(map);
+                self.persist_needs_human().await;
+                if inserted || turn_changed {
+                    self.emit_needs_human().await;
+                }
+            }
+            None => {
+                let removed = self
+                    .needs_human
+                    .lock()
+                    .await
+                    .remove(&(session.to_string(), tab_id))
+                    .is_some();
+                if removed {
+                    self.persist_needs_human().await;
+                    self.emit_needs_human().await;
+                }
+            }
+        }
+    }
+
+    async fn refuse_if_needs_human(
+        &self,
+        session: Option<&str>,
+        requested_tab: Option<i64>,
+        script: &str,
+    ) -> Result<(), String> {
+        let pending: HashSet<(String, i64)> =
+            self.needs_human.lock().await.keys().cloned().collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let state = self.state.lock().await;
+        let session_name = match resolve_session_name(session) {
+            Ok(name) => name,
+            Err(_) => return Ok(()),
+        };
+        if let Some(ids) = close_ids_from_script(script) {
+            if ids
+                .iter()
+                .any(|id| pending.contains(&(session_name.clone(), *id)))
+            {
+                return Err(needs_human_block_message());
+            }
+        }
+        if script_allowed_during_needs_human(script) {
+            return Ok(());
+        }
+        let Some(slot) = state.sessions.get(&session_name) else {
+            return Ok(());
+        };
+        let Ok(tab_id) = select_tab(slot, requested_tab) else {
+            return Ok(());
+        };
+        if pending.contains(&(session_name, tab_id)) {
+            return Err(needs_human_block_message());
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn confirm_needs_human(
+        &self,
+        tabs: &[BrowserNeedsHumanTab],
+    ) -> Result<BrowserNeedsHumanConfirmResult, String> {
+        let targets = if tabs.is_empty() {
+            self.snapshot_needs_human().await
+        } else {
+            tabs.to_vec()
+        };
+        let mut still_required = Vec::new();
+        let mut cleared = Vec::new();
+        for tab in targets {
+            match self
+                .execute_on(
+                    Some(&tab.session),
+                    Some(tab.tab_id),
+                    TEXT_SCAN_SCRIPT,
+                    Duration::from_millis(DEFAULT_TIMEOUT_MS),
+                )
+                .await
+            {
+                Ok(execution) => {
+                    self.apply_human_verification(
+                        &execution.session,
+                        execution.tab_id,
+                        &execution.value,
+                        &tab.frame_id,
+                        &tab.turn_id,
+                    )
+                    .await;
+                    if human_verification_handoff(&execution.value).is_some() {
+                        still_required.push(
+                            self.needs_human
+                                .lock()
+                                .await
+                                .get(&(execution.session.clone(), execution.tab_id))
+                                .cloned()
+                                .unwrap_or(tab),
+                        );
+                    } else {
+                        cleared.push(tab);
+                    }
+                }
+                Err(error)
+                    if error.contains("is not available")
+                        || error.contains("no HTTP(S) tabs")
+                        || error.contains("no browser tab is selected") =>
+                {
+                    self.needs_human
+                        .lock()
+                        .await
+                        .remove(&(tab.session.clone(), tab.tab_id));
+                    self.persist_needs_human().await;
+                    self.emit_needs_human().await;
+                    cleared.push(tab);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(BrowserNeedsHumanConfirmResult {
+            still_required,
+            cleared,
+        })
+    }
+
+    pub(crate) async fn focus_needs_human_tab(
+        &self,
+        session: &str,
+        tab_id: i64,
+    ) -> Result<(), String> {
+        let code = json!({ "cmd": "tabs", "method": "switch", "tabId": tab_id }).to_string();
+        self.send_command_on(
+            Some(session),
+            code,
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn retry_pending_auto_close(&self) {
@@ -1594,9 +1931,15 @@ impl BrowserBridge {
 
 /// Start the user's existing Chrome/Chromium/Edge so the unpacked Wisp
 /// extension can reconnect. Does not use a temporary automation profile.
-fn spawn_user_browser() -> Result<(), String> {
+fn spawn_user_browser(url: Option<&str>) -> Result<(), String> {
     let (program, args) = first_available_browser()
         .ok_or_else(|| "no Chrome, Chromium, or Edge browser was found".to_string())?;
+    let mut args = shared_browser_launch_args(&program, args);
+    if let Some(url) = url {
+        *args
+            .last_mut()
+            .expect("shared launch always includes a URL") = url.into();
+    }
     let mut command = std::process::Command::new(&program);
     command
         .args(&args)
@@ -1612,6 +1955,17 @@ fn spawn_user_browser() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("failed to start {}: {error}", program.display()))
+}
+
+fn shared_browser_launch_args(program: &Path, mut args: Vec<String>) -> Vec<String> {
+    if program.ends_with("open") {
+        args.push("--args".into());
+    }
+    args.push(format!(
+        "{}/",
+        extensions_page_url(program, &args).replace("extensions", "newtab")
+    ));
+    args
 }
 
 fn first_available_browser() -> Option<(PathBuf, Vec<String>)> {
@@ -2096,9 +2450,27 @@ fn human_verification_handoff(page: &Value) -> Option<Value> {
     Some(json!({
         "required": true,
         "reason": "captcha_challenge",
-        "instruction": "Stop browser automation and ask the user to complete the human-verification challenge manually in this current visible browser tab. Wait for the user to confirm completion before scanning the same tab again.",
-        "resume": "After the user confirms, call web_scan on the same tab and continue only when the challenge is no longer detected."
+        "instruction": "A verification prompt has been shown in the Wisp app. Stop browser automation. Do not call ask_user and do not click, solve, or bypass the challenge. End your turn. The user will confirm in the app after completing the challenge in the visible browser tab.",
+        "resume": "After the user confirms, a follow-up message arrives. Call web_scan on the same tab and continue only when the challenge is no longer detected."
     }))
+}
+
+fn needs_human_block_message() -> String {
+    "This tab needs human verification. Do not automate the challenge. Wait for the user to complete it in the visible browser tab and confirm in the Wisp app.".into()
+}
+
+fn script_allowed_during_needs_human(script: &str) -> bool {
+    let Some(value) = json_command(script) else {
+        return false;
+    };
+    match value.get("cmd").and_then(Value::as_str) {
+        Some("control") => true,
+        Some("tabs") => matches!(
+            value.get("method").and_then(Value::as_str),
+            None | Some("switch") | Some("query") | Some("list")
+        ),
+        _ => false,
+    }
 }
 
 const SCAN_SCRIPT: &str = r##"(() => {
@@ -2145,6 +2517,21 @@ const TEXT_SCAN_SCRIPT: &str = r#"(() => ({
   text: (document.body?.innerText || '').slice(0, 50000)
 }))()"#;
 
+/// Acquire occupancy for this project+turn, or skip when the host has no
+/// project/turn (CLI and tests). Does not release on Drop — `complete_turn`
+/// owns the lifetime so two tools in one turn cannot open a gap.
+fn occupy_or_fail(bridge: &BrowserBridge, env: &dyn ToolEnv) -> Result<(), ToolResult> {
+    let Some(project_id) = env.project_id().filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let Some(turn_id) = env.turn_id().filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    bridge
+        .occupy_turn(project_id, turn_id)
+        .map_err(ToolResult::fail)
+}
+
 pub struct BrowserSetupTool {
     bridge: Arc<BrowserBridge>,
     store: Store,
@@ -2165,11 +2552,12 @@ impl Tool for BrowserSetupTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             self.name(),
-            "Call when the user asks to configure, install, set up, update, or connect the real browser, and before any live page retrieval. Wisp verifies the bundled extension and maintains extension_path in a stable application-data directory. Copy extension_path character-for-character and never convert it between Windows, WSL, macOS, or Linux. If status is not connected, live_retrieval is false: do not answer live, latest, current, or URL-specific questions from prior knowledge; relay the steps and wait. If refused_connection is present, relay its explanation. If update_required is true, call this tool again with action=update_extension; compatible extensions reload automatically, while older extensions return manual_reload_required with the exact path. If extension_path_verified is false, report the validation error and never invent a path.",
+            "Call with no action before live page retrieval. The default is the user's shared daily Chrome profile: Wisp reuses it when connected and, when automatic launch is enabled, starts that normal profile so its installed extension can reconnect. Workspace is never a fallback; call action=start_workspace only when the user explicitly requests an isolated browser. Wisp verifies the bundled extension and maintains extension_path in a stable application-data directory. Copy extension_path character-for-character and never convert it between Windows, WSL, macOS, or Linux. If status is not connected, live_retrieval is false: do not answer live, latest, current, or URL-specific questions from prior knowledge; relay the steps and wait. If refused_connection is present, relay its explanation. If update_required is true, call this tool again with action=update_extension; compatible extensions reload automatically, while older extensions return manual_reload_required with the exact path. If extension_path_verified is false, report the validation error and never invent a path.",
             json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "description": "Optional: update_extension (verifies the managed shared extension and attempts automatic reload), start_workspace (returns only once the workspace extension connects), or stop_workspace" }
+                    "action": { "type": "string", "description": "Usually omit this for shared Chrome status/auto-launch. update_extension verifies the managed shared extension and attempts automatic reload. start_workspace and stop_workspace are only for a user-explicit isolated workspace browser." },
+                    "url": { "type": "string", "description": "Optional target http(s) URL for automatically launching disconnected shared Chrome; otherwise opens the new-tab page. Connected Chrome is left untouched." }
                 },
                 "additionalProperties": false
             }),
@@ -2180,8 +2568,16 @@ impl Tool for BrowserSetupTool {
         "show real-browser setup status and extension path".into()
     }
 
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
-        if let Some(action) = args.get("action").and_then(Value::as_str) {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
+        if let Some(action) = args
+            .get("action")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|action| !action.is_empty())
+        {
             let result = match action {
                 "update_extension" => {
                     let result = self.bridge.update_extension().await;
@@ -2203,9 +2599,25 @@ impl Tool for BrowserSetupTool {
                 Err(error) => ToolResult::fail(error),
             };
         }
-        self.bridge.ensure_extension().await;
-        let mut info = self.bridge.setup_info().await;
         let filters = browser_url_filters::load(&self.store).await;
+        let url = args
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty());
+        if let Some(url) = url {
+            if !matches!(url::Url::parse(url), Ok(parsed) if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some())
+            {
+                return ToolResult::fail("url must be an absolute http:// or https:// address");
+            }
+            if let Some(rule) = filters.blocked(url) {
+                return ToolResult::fail(browser_url_filters::block_message(url, rule));
+            }
+        }
+        self.bridge
+            .ensure_extension_with(None, || spawn_user_browser(url), AUTO_LAUNCH_WAIT)
+            .await;
+        let mut info = self.bridge.setup_info().await;
         info["url_filters"] = json!({
             "block": filters.block,
             "prefer": filters.prefer,
@@ -2234,7 +2646,7 @@ impl Tool for WebScanTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             self.name(),
-            "Read visible content and actionable elements from the user's real, persistent Chrome/Chromium session. The browser keeps its existing cookies, login state, extensions, GPU/WebGL behavior, and normal profile fingerprint. Waits until the tab's document is complete before reading (or until timeout). The result includes ready and page.ready_state; if ready is false, scan again instead of clicking a partial page. Use tabs_only first when the target tab is unclear. If the result contains human_intervention.required=true, stop browser automation, ask the user to complete the challenge in the current visible tab, and wait for confirmation before scanning again.",
+            "Read visible content and actionable elements from the user's real, persistent Chrome/Chromium session. The browser keeps its existing cookies, login state, extensions, GPU/WebGL behavior, and normal profile fingerprint. Waits until the tab's document is complete before reading (or until timeout). The result includes ready and page.ready_state; if ready is false, scan again instead of clicking a partial page. Use tabs_only first when the target tab is unclear. If the result contains human_intervention.required=true, a verification prompt has been shown to the user: stop browser automation, do not call ask_user, do not click the challenge, and end your turn.",
             json!({
                 "type": "object",
                 "properties": {
@@ -2242,7 +2654,7 @@ impl Tool for WebScanTool {
                     "switch_tab_id": { "type": ["integer", "string"], "description": "Tab id returned by this tool; selects that tab for this and later calls" },
                     "text_only": { "type": "boolean", "description": "Return page text without the actionable-element snapshot" },
                     "mode": { "type": "string", "description": "default | text | article. article adds images[], figures[], code_blocks[]" },
-                    "session": { "type": "string", "description": "shared or workspace" }
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" }
                 }
             }),
         )
@@ -2266,7 +2678,10 @@ impl Tool for WebScanTool {
         }
     }
 
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let session = match session_arg(args) {
             Ok(session) => session,
             Err(error) => return ToolResult::fail(error),
@@ -2320,6 +2735,15 @@ impl Tool for WebScanTool {
             .await
         {
             Ok(execution) => {
+                self.bridge
+                    .apply_human_verification(
+                        &execution.session,
+                        execution.tab_id,
+                        &execution.value,
+                        env.frame_id().unwrap_or(""),
+                        env.turn_id().unwrap_or(""),
+                    )
+                    .await;
                 let handoff = human_verification_handoff(&execution.value);
                 ToolResult::ok(render_json(&merge_ready_wait(
                     json!({
@@ -2356,14 +2780,14 @@ impl Tool for WebExecuteJsTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             self.name(),
-            "Execute JavaScript in a tab from the user's real, persistent Chrome/Chromium session. The extension waits until the tab's document is complete before running the script, and waits again if the script navigates. The result includes ready; if ready is false, scan again before clicking. Call web_scan first and do not guess selectors. To close tabs, never call window.close(); send {\"cmd\":\"tabs\",\"method\":\"close\",\"tabIds\":[...]} using ids returned by web_open_tab/web_scan. If web_scan reports human_intervention.required=true, do not automate the challenge; wait for the user to complete it and confirm before continuing. For a task that will trigger multiple file downloads, first tell the user how to allow automatic multiple downloads for the trusted target site at chrome://settings/content/automaticDownloads or edge://settings/content/automaticDownloads, then wait for confirmation; until confirmed, trigger at most one file download. A JSON script with cmd='cdp' may call one Chrome DevTools Protocol method for trusted input or other advanced browser actions.",
+            "Execute JavaScript in a tab from the user's real, persistent Chrome/Chromium session. The extension waits until the tab's document is complete before running the script, and waits again if the script navigates. The result includes ready; if ready is false, scan again before clicking. Call web_scan first and do not guess selectors. To close tabs, never call window.close(); send {\"cmd\":\"tabs\",\"method\":\"close\",\"tabIds\":[...]} using ids returned by web_open_tab/web_scan. If web_scan reports human_intervention.required=true, do not automate the challenge; a verification prompt has been shown to the user. For a task that will trigger multiple file downloads, first tell the user how to allow automatic multiple downloads for the trusted target site at chrome://settings/content/automaticDownloads or edge://settings/content/automaticDownloads, then wait for confirmation; until confirmed, trigger at most one file download. A JSON script with cmd='cdp' may call one Chrome DevTools Protocol method for trusted input or other advanced browser actions.",
             json!({
                 "type": "object",
                 "properties": {
                     "script": { "type": "string", "description": "JavaScript, or a JSON command such as {\"cmd\":\"cdp\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{...}}" },
                     "switch_tab_id": { "type": ["integer", "string"], "description": "Tab id returned by web_scan" },
                     "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000, "description": "Execution timeout in milliseconds (default 15000)" },
-                    "session": { "type": "string", "description": "shared or workspace" }
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" }
                 },
                 "required": ["script"]
             }),
@@ -2384,6 +2808,9 @@ impl Tool for WebExecuteJsTool {
     }
 
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let Some(script) = args
             .get("script")
             .and_then(Value::as_str)
@@ -2420,6 +2847,13 @@ impl Tool for WebExecuteJsTool {
             Ok(session) => session,
             Err(error) => return ToolResult::fail(error),
         };
+        if let Err(error) = self
+            .bridge
+            .refuse_if_needs_human(session.as_deref(), tab_id, script)
+            .await
+        {
+            return ToolResult::fail(error);
+        }
         match self
             .bridge
             .execute_on(
@@ -2486,7 +2920,7 @@ impl Tool for WebOpenTabTool {
                 "properties": {
                     "url": { "type": "string", "description": "Absolute http:// or https:// URL to open" },
                     "active": { "type": "boolean", "description": "Focus the new tab (default false)" },
-                    "session": { "type": "string", "description": "shared or workspace" }
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" }
                 },
                 "required": ["url"]
             }),
@@ -2503,6 +2937,9 @@ impl Tool for WebOpenTabTool {
     }
 
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let Some(url) = args
             .get("url")
             .and_then(Value::as_str)
@@ -2574,7 +3011,7 @@ impl Tool for WebScreenshotTool {
                     "full_page": { "type": "boolean" },
                     "selector": { "type": "string" },
                     "save_path": { "type": "string", "description": "Optional project-relative PNG path. Screenshots are not original figures." },
-                    "session": { "type": "string" }
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" }
                 }
             }),
         )
@@ -2591,6 +3028,9 @@ impl Tool for WebScreenshotTool {
     }
 
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let tab_id = match tab_id_arg(args) {
             Ok(tab_id) => tab_id,
             Err(error) => return ToolResult::fail(error),
@@ -2736,7 +3176,7 @@ impl Tool for WebSaveAssetsTool {
                     "urls": { "type": "array", "items": { "type": "string" }, "description": "http(s) asset URLs" },
                     "referrer": { "type": "string" },
                     "dest_dir": { "type": "string", "description": "Project-relative destination, default browser-assets" },
-                    "session": { "type": "string" },
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" },
                     "switch_tab_id": { "type": ["integer", "string"] }
                 },
                 "required": ["urls"]
@@ -2758,6 +3198,9 @@ impl Tool for WebSaveAssetsTool {
     }
 
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let session = match session_arg(args) {
             Ok(session) => session,
             Err(error) => return ToolResult::fail(error),
@@ -2895,11 +3338,11 @@ impl Tool for WebAgentSendTool {
         "web_agent_send"
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name(), "Send one prompt to a signed-in in-browser chat composer (ChatGPT, Gemini, or Google AI Mode). Requires an already-open tab at chatgpt.com, gemini.google.com, or google.com/search?udm=50. Does not type passwords. session is required when both browsers are connected.", json!({
+        ToolSchema::new(self.name(), "Send one prompt to a signed-in in-browser chat composer (ChatGPT, Gemini, or Google AI Mode). Requires an already-open tab at chatgpt.com, gemini.google.com, or google.com/search?udm=50. Does not type passwords. Defaults to the shared daily browser; pass workspace only when the user explicitly requested isolation.", json!({
             "type": "object",
             "properties": {
                 "prompt": { "type": "string" },
-                "session": { "type": "string" },
+                "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" },
                 "switch_tab_id": { "type": ["integer", "string"] }
             },
             "required": ["prompt"]
@@ -2919,7 +3362,10 @@ impl Tool for WebAgentSendTool {
                 .collect::<String>()
         )
     }
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let turn = match begin_chat_turn(&self.bridge, args).await {
             Ok(turn) => turn,
             Err(error) => return ToolResult::fail(error),
@@ -3005,7 +3451,7 @@ impl Tool for WebAgentWaitTool {
         ToolSchema::new(self.name(), "Wait until the in-browser chat turn looks complete (stop control gone / assistant text stable). Works on ChatGPT, Gemini, and Google AI Mode. Uses the Wait Engine, not document.complete.", json!({
             "type": "object",
             "properties": {
-                "session": { "type": "string" },
+                "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" },
                 "switch_tab_id": { "type": ["integer", "string"] },
                 "timeout_ms": { "type": "integer" }
             }
@@ -3017,7 +3463,10 @@ impl Tool for WebAgentWaitTool {
     fn preview(&self, _args: &Value) -> String {
         "wait for in-browser chat reply".into()
     }
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let turn = match begin_chat_turn(&self.bridge, args).await {
             Ok(turn) => turn,
             Err(error) => return ToolResult::fail(error),
@@ -3082,7 +3531,7 @@ impl Tool for WebAgentReadTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "session": { "type": "string" },
+                    "session": { "type": "string", "description": "shared (default) or workspace (only when the user explicitly requested isolation)" },
                     "switch_tab_id": { "type": ["integer", "string"] }
                 }
             }),
@@ -3094,7 +3543,10 @@ impl Tool for WebAgentReadTool {
     fn preview(&self, _args: &Value) -> String {
         "read last in-browser chat answer".into()
     }
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        if let Err(fail) = occupy_or_fail(&self.bridge, env) {
+            return fail;
+        }
         let turn = match begin_chat_turn(&self.bridge, args).await {
             Ok(turn) => turn,
             Err(error) => return ToolResult::fail(error),
@@ -3125,8 +3577,87 @@ impl Tool for WebAgentReadTool {
 #[tauri::command]
 pub async fn list_pending_browser_tab_cleanups(
     state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
 ) -> Result<Vec<BrowserTabCleanupPrompt>, String> {
-    Ok(state.browser_bridge.list_pending_cleanups().await)
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    state
+        .browser_bridge
+        .project_pending_cleanups(&state.store, project_id.as_deref())
+        .await
+}
+
+async fn browser_frame_belongs_to_project(
+    store: &Store,
+    frame_id: &str,
+    project_id: Option<&str>,
+) -> Result<bool, String> {
+    let Some(project_id) = project_id else {
+        return Ok(false);
+    };
+    Ok(store
+        .frame_project_id(frame_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some(project_id))
+}
+
+pub(crate) async fn project_browser_needs_human(
+    store: &Store,
+    tabs: &[BrowserNeedsHumanTab],
+    project_id: Option<&str>,
+) -> Result<BrowserNeedsHumanPrompt, String> {
+    let mut prompt = BrowserNeedsHumanPrompt::default();
+    for tab in tabs {
+        if browser_frame_belongs_to_project(store, &tab.frame_id, project_id).await? {
+            prompt.tabs.push(tab.clone());
+        }
+    }
+    Ok(prompt)
+}
+
+async fn project_browser_needs_human_targets(
+    bridge: &BrowserBridge,
+    store: &Store,
+    requested: &[BrowserNeedsHumanTab],
+    project_id: Option<&str>,
+) -> Result<Vec<BrowserNeedsHumanTab>, String> {
+    let pending = bridge.snapshot_needs_human().await;
+    let candidates = if requested.is_empty() {
+        pending
+    } else {
+        let requested: HashSet<(&str, i64)> = requested
+            .iter()
+            .map(|tab| (tab.session.as_str(), tab.tab_id))
+            .collect();
+        pending
+            .into_iter()
+            .filter(|tab| requested.contains(&(tab.session.as_str(), tab.tab_id)))
+            .collect()
+    };
+    Ok(project_browser_needs_human(store, &candidates, project_id)
+        .await?
+        .tabs)
+}
+
+pub(crate) async fn emit_browser_needs_human(
+    app: &tauri::AppHandle,
+    tabs: &[BrowserNeedsHumanTab],
+) {
+    use tauri::{Emitter, Manager};
+    let state = app.state::<crate::AppState>();
+    for (label, window) in app.webview_windows() {
+        let project_id = crate::window_bound_project_id(&state, &label);
+        if let Ok(prompt) =
+            project_browser_needs_human(&state.store, tabs, project_id.as_deref()).await
+        {
+            if crate::window_bound_project_id(&state, &label) != project_id {
+                continue;
+            }
+            // Empty snapshots also clear prompts after verification finishes.
+            let _ = window.emit_to(&label, "browser-needs-human", prompt);
+        }
+    }
 }
 
 #[tauri::command]
@@ -3151,11 +3682,181 @@ pub async fn dismiss_browser_tab_cleanup(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn list_pending_browser_needs_human(
+    state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
+) -> Result<BrowserNeedsHumanPrompt, String> {
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    let prompt = state.browser_bridge.list_needs_human().await;
+    project_browser_needs_human(&state.store, &prompt.tabs, project_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn confirm_browser_needs_human(
+    state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
+    tabs: Vec<BrowserNeedsHumanTab>,
+) -> Result<BrowserNeedsHumanConfirmResult, String> {
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    let tabs = project_browser_needs_human_targets(
+        &state.browser_bridge,
+        &state.store,
+        &tabs,
+        project_id.as_deref(),
+    )
+    .await?;
+    if tabs.is_empty() {
+        return Ok(BrowserNeedsHumanConfirmResult::default());
+    }
+    state.browser_bridge.confirm_needs_human(&tabs).await
+}
+
+#[tauri::command]
+pub async fn focus_browser_needs_human(
+    state: tauri::State<'_, crate::AppState>,
+    window: tauri::WebviewWindow,
+    session: String,
+    tab_id: i64,
+) -> Result<(), String> {
+    let project_id = crate::window_bound_project_id(&state, window.label());
+    let requested = BrowserNeedsHumanTab {
+        session: session.clone(),
+        tab_id,
+        ..Default::default()
+    };
+    if project_browser_needs_human_targets(
+        &state.browser_bridge,
+        &state.store,
+        &[requested],
+        project_id.as_deref(),
+    )
+    .await?
+    .is_empty()
+    {
+        return Err("browser tab is not awaiting verification for this project".into());
+    }
+    state
+        .browser_bridge
+        .focus_needs_human_tab(&session, tab_id)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
     use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn pending_browser_prompts_only_belong_to_the_bound_project() {
+        let (store, path) = empty_store().await;
+        let bridge = BrowserBridge::new(PathBuf::from("."));
+        let mut tabs = Vec::new();
+        for id in ["a", "b"] {
+            store
+                .create_project(id, id, &format!("/ws/{id}"))
+                .await
+                .unwrap();
+            store.create_frame(id, id, "OPERON", "model").await.unwrap();
+            bridge
+                .stash_pending(
+                    BrowserTabCleanupPrompt {
+                        frame_id: id.into(),
+                        turn_id: id.into(),
+                        tabs: vec![BrowserTabCleanupItem {
+                            tab_id: 11,
+                            ..Default::default()
+                        }],
+                    },
+                    false,
+                )
+                .await;
+            tabs.push(BrowserNeedsHumanTab {
+                frame_id: id.into(),
+                ..Default::default()
+            });
+        }
+        for id in ["a", "b"] {
+            let cleanups = bridge
+                .project_pending_cleanups(&store, Some(id))
+                .await
+                .unwrap();
+            assert_eq!(cleanups.len(), 1);
+            assert_eq!(cleanups[0].frame_id, id);
+            let human = project_browser_needs_human(&store, &tabs, Some(id))
+                .await
+                .unwrap();
+            assert_eq!(human.tabs.len(), 1);
+            assert_eq!(human.tabs[0].frame_id, id);
+        }
+        for project_id in [None, Some("unrelated")] {
+            assert!(bridge
+                .project_pending_cleanups(&store, project_id)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(project_browser_needs_human(&store, &tabs, project_id)
+                .await
+                .unwrap()
+                .tabs
+                .is_empty());
+        }
+        store.delete_project("a").await.unwrap();
+        assert!(bridge
+            .project_pending_cleanups(&store, Some("a"))
+            .await
+            .unwrap()
+            .is_empty());
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn browser_challenge_targets_only_belong_to_the_bound_project() {
+        let (store, path) = empty_store().await;
+        let bridge = BrowserBridge::new(PathBuf::from("."));
+        for id in ["a", "b"] {
+            store
+                .create_project(id, id, &format!("/ws/{id}"))
+                .await
+                .unwrap();
+            store.create_frame(id, id, "OPERON", "model").await.unwrap();
+            let tab = BrowserNeedsHumanTab {
+                session: "shared".into(),
+                tab_id: if id == "a" { 11 } else { 22 },
+                frame_id: id.into(),
+                ..Default::default()
+            };
+            bridge
+                .needs_human
+                .lock()
+                .await
+                .insert((tab.session.clone(), tab.tab_id), tab);
+        }
+
+        let all = project_browser_needs_human_targets(&bridge, &store, &[], Some("a"))
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].frame_id, "a");
+
+        let forged = BrowserNeedsHumanTab {
+            session: "shared".into(),
+            tab_id: 22,
+            frame_id: "a".into(),
+            ..Default::default()
+        };
+        assert!(
+            project_browser_needs_human_targets(&bridge, &store, &[forged], Some("a"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
 
     struct NoEnv(PathBuf);
 
@@ -3170,6 +3871,134 @@ mod tests {
         }
 
         async fn emit(&self, _event: wisp_tools::ToolEvent) {}
+    }
+
+    struct OccupancyEnv {
+        root: PathBuf,
+        project_id: Option<String>,
+        turn_id: Option<String>,
+    }
+
+    impl OccupancyEnv {
+        fn new(project_id: &str, turn_id: &str) -> Self {
+            Self {
+                root: PathBuf::from("."),
+                project_id: Some(project_id.into()),
+                turn_id: Some(turn_id.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolEnv for OccupancyEnv {
+        fn project_root(&self) -> &std::path::Path {
+            &self.root
+        }
+        async fn confirm(&self, _message: &str) -> bool {
+            true
+        }
+        async fn emit(&self, _event: wisp_tools::ToolEvent) {}
+        fn turn_id(&self) -> Option<&str> {
+            self.turn_id.as_deref()
+        }
+        fn project_id(&self) -> Option<&str> {
+            self.project_id.as_deref()
+        }
+    }
+
+    #[test]
+    fn occupancy_reenters_same_project_and_blocks_foreign_until_release() {
+        let bridge = BrowserBridge::new(PathBuf::from("extension"));
+        bridge.occupy_turn("proj-a", "turn-1").unwrap();
+        bridge.occupy_turn("proj-a", "turn-2").unwrap();
+        let error = bridge.occupy_turn("proj-b", "turn-3").unwrap_err();
+        assert!(
+            error.contains("another project"),
+            "foreign project should see occupancy: {error}"
+        );
+        assert!(error.contains("proj-a"), "{error}");
+        bridge.release_turn("turn-1");
+        let still_held = bridge.occupy_turn("proj-b", "turn-3").unwrap_err();
+        assert!(still_held.contains("proj-a"), "{still_held}");
+        bridge.release_turn("turn-2");
+        bridge.occupy_turn("proj-b", "turn-3").unwrap();
+    }
+
+    #[tokio::test]
+    async fn occupancy_complete_turn_releases_holder() {
+        let bridge = BrowserBridge::new(PathBuf::from("extension"));
+        bridge.occupy_turn("proj-a", "turn-a").unwrap();
+        assert!(matches!(
+            bridge.complete_turn("turn-a").await,
+            TabCleanupAction::None
+        ));
+        bridge.occupy_turn("proj-b", "turn-b").unwrap();
+    }
+
+    #[test]
+    fn occupancy_holds_across_two_tools_in_one_turn() {
+        let bridge = BrowserBridge::new(PathBuf::from("extension"));
+        let env = OccupancyEnv::new("proj-a", "turn-1");
+        occupy_or_fail(&bridge, &env).unwrap();
+        occupy_or_fail(&bridge, &env).unwrap();
+        let foreign = OccupancyEnv::new("proj-b", "turn-2");
+        let fail = occupy_or_fail(&bridge, &foreign).unwrap_err();
+        assert!(!fail.success);
+        assert!(
+            fail.content.contains("proj-a"),
+            "foreign project should see occupying id: {}",
+            fail.content
+        );
+        assert!(fail.content.contains("another project"), "{}", fail.content);
+    }
+
+    #[test]
+    fn occupancy_skips_envs_without_project_or_turn() {
+        let bridge = BrowserBridge::new(PathBuf::from("extension"));
+        let no_project = OccupancyEnv {
+            root: PathBuf::from("."),
+            project_id: None,
+            turn_id: Some("turn-1".into()),
+        };
+        occupy_or_fail(&bridge, &no_project).unwrap();
+        occupy_or_fail(&bridge, &NoEnv(PathBuf::from("."))).unwrap();
+
+        occupy_or_fail(&bridge, &OccupancyEnv::new("proj-a", "turn-1")).unwrap();
+        occupy_or_fail(&bridge, &no_project).unwrap();
+        occupy_or_fail(&bridge, &NoEnv(PathBuf::from("."))).unwrap();
+        occupy_or_fail(
+            &bridge,
+            &OccupancyEnv {
+                root: PathBuf::from("."),
+                project_id: Some(String::new()),
+                turn_id: Some("turn-2".into()),
+            },
+        )
+        .unwrap();
+        occupy_or_fail(
+            &bridge,
+            &OccupancyEnv {
+                root: PathBuf::from("."),
+                project_id: Some("proj-b".into()),
+                turn_id: None,
+            },
+        )
+        .unwrap();
+        occupy_or_fail(
+            &bridge,
+            &OccupancyEnv {
+                root: PathBuf::from("."),
+                project_id: Some("proj-b".into()),
+                turn_id: Some(String::new()),
+            },
+        )
+        .unwrap();
+        let fail = occupy_or_fail(&bridge, &OccupancyEnv::new("proj-b", "turn-3")).unwrap_err();
+        assert!(
+            fail.content.contains("proj-a"),
+            "skipping the lock must not release it: {}",
+            fail.content
+        );
     }
 
     async fn empty_store() -> (Store, PathBuf) {
@@ -3272,12 +4101,23 @@ mod tests {
         assert!(handoff["instruction"]
             .as_str()
             .unwrap()
-            .contains("Wait for the user to confirm"));
+            .contains("verification prompt"));
+        assert!(handoff["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("Do not call ask_user"));
         assert!(human_verification_handoff(&json!({
             "title": "Browser automation article",
             "text": "This article asks: Are you a robot?"
         }))
         .is_none());
+        let sciencedirect = human_verification_handoff(&json!({
+            "title": "Just a moment...",
+            "url": "https://www.sciencedirect.com/science/article/pii/S000",
+            "text": "Are you a robot?\nPlease confirm you are a human by completing the captcha challenge below."
+        }))
+        .unwrap();
+        assert_eq!(sciencedirect["reason"], "captcha_challenge");
     }
 
     #[tokio::test]
@@ -3791,17 +4631,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_sessions_require_an_explicit_session_argument() {
+    async fn omitted_session_prefers_shared_when_both_are_connected() {
         let bridge = Arc::new(BrowserBridge::new(PathBuf::from("extension")));
         let (tx_a, _rx_a) = mpsc::unbounded_channel();
         let (tx_b, _rx_b) = mpsc::unbounded_channel();
         bridge.install_client_on(1, tx_a, "shared").await;
         bridge.install_client_on(2, tx_b, "workspace").await;
-        let err = WebScanTool::new(bridge)
+        bridge
+            .handle_text(
+                2,
+                r#"{"type":"ext_ready","tabs":[{"id":22,"url":"https://workspace.example","title":"Workspace","active":true}]}"#,
+            )
+            .await;
+        let result = WebScanTool::new(bridge)
             .run(&json!({ "tabs_only": true }), &NoEnv(PathBuf::from(".")))
             .await;
-        assert!(!err.success);
-        assert!(err.content.contains("SESSION_REQUIRED"));
+        assert!(result.success, "{}", result.content);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.content).unwrap()["tabs"],
+            json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_only_does_not_make_default_setup_connected() {
+        let bridge = Arc::new(BrowserBridge::new(PathBuf::from("extension")));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        bridge.install_client_on(1, tx, "workspace").await;
+
+        let info = bridge.setup_info().await;
+        assert_eq!(info["status"], "extension_missing");
+        assert_eq!(info["live_retrieval"], false);
+        assert_eq!(info["sessions"]["workspace"]["connected"], true);
+        assert_eq!(info["sessions"]["shared"]["connected"], false);
+        assert!(bridge.tabs_on(None).await.is_err());
+        assert!(bridge.tabs_on(Some("workspace")).await.is_ok());
+    }
+
+    #[test]
+    fn shared_launch_uses_normal_profile_and_new_tab_on_each_platform() {
+        for (program, args, expected) in [
+            ("chrome.exe", vec![], vec!["chrome://newtab/"]),
+            ("msedge.exe", vec![], vec!["edge://newtab/"]),
+            (
+                "/usr/bin/open",
+                vec!["-a", "Google Chrome"],
+                vec!["-a", "Google Chrome", "--args", "chrome://newtab/"],
+            ),
+        ] {
+            let actual = shared_browser_launch_args(
+                Path::new(program),
+                args.into_iter().map(String::from).collect(),
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_launch_targets_only_disconnected_shared() {
+        let (store, tmp) = empty_store().await;
+        let bridge =
+            BrowserBridge::construct(PathBuf::from("extension"), Some(store.clone()), true);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        bridge.install_client_on(1, tx, "workspace").await;
+        let launches = std::sync::atomic::AtomicUsize::new(0);
+        let launch = || {
+            launches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        };
+        bridge
+            .ensure_extension_with(Some("workspace"), launch, Duration::ZERO)
+            .await;
+        assert_eq!(launches.load(std::sync::atomic::Ordering::SeqCst), 0);
+        bridge
+            .ensure_extension_with(None, launch, Duration::ZERO)
+            .await;
+        assert_eq!(launches.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let (tx, _rx_shared) = mpsc::unbounded_channel();
+        bridge.install_client_on(2, tx, "shared").await;
+        bridge
+            .ensure_extension_with(None, launch, Duration::ZERO)
+            .await;
+        assert_eq!(launches.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(bridge.state.lock().await.workspace_pid.is_none());
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn blank_setup_action_is_a_shared_status_check() {
+        let bridge = Arc::new(BrowserBridge::new(PathBuf::from("extension")));
+        let (store, tmp) = empty_store().await;
+        let tool = BrowserSetupTool::new(bridge, store);
+        assert!(tool
+            .schema()
+            .function
+            .description
+            .contains("Workspace is never a fallback"));
+        let result = tool
+            .run(&json!({ "action": "  " }), &NoEnv(PathBuf::from(".")))
+            .await;
+
+        assert!(result.success, "{}", result.content);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.content).unwrap()["live_retrieval"],
+            false
+        );
+        for url in ["file:///tmp/private", "javascript:alert(1)", "https://"] {
+            let result = tool
+                .run(&json!({ "url": url }), &NoEnv(PathBuf::from(".")))
+                .await;
+            assert!(!result.success, "{url}");
+        }
+        let _ = std::fs::remove_file(tmp);
     }
 
     #[test]
@@ -4157,6 +5098,38 @@ mod tests {
         }
     }
 
+    async fn reply_scan(
+        bridge: &BrowserBridge,
+        rx: &mut mpsc::UnboundedReceiver<Message>,
+        url: &str,
+        title: &str,
+        text: &str,
+    ) {
+        let outbound = rx.recv().await.unwrap().into_text().unwrap();
+        let outbound: Value = serde_json::from_str(&outbound).unwrap();
+        let id = outbound["id"].as_str().unwrap();
+        bridge
+            .handle_text(
+                1,
+                &json!({
+                    "type": "result",
+                    "id": id,
+                    "result": {
+                        "url": url,
+                        "title": title,
+                        "text": text,
+                        "ready_state": "complete"
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+    }
+
+    fn captcha_text() -> &'static str {
+        "Are you a robot? Please confirm you are a human by completing the captcha challenge below."
+    }
+
     async fn reply_open_tab(
         bridge: &BrowserBridge,
         rx: &mut mpsc::UnboundedReceiver<Message>,
@@ -4463,6 +5436,337 @@ mod tests {
         assert_eq!(child_prompt.tabs.len(), 1);
         assert_eq!(child_prompt.tabs[0].session, "workspace");
         assert_eq!(child_prompt.tabs[0].tab_id, 31);
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn captcha_scan_marks_needs_human_and_skips_auto_close() {
+        let (store, tmp) = empty_store().await;
+        store
+            .set_setting(browser_url_filters::AUTO_CLOSE_TABS_KEY, "true")
+            .await
+            .unwrap();
+        let bridge = Arc::new(BrowserBridge::new_with_store(
+            PathBuf::from("extension"),
+            store.clone(),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+
+        let env = TurnEnv {
+            root: PathBuf::from("."),
+            turn_id: "turn-human".into(),
+            frame_id: "frame-human".into(),
+        };
+        for (id, url, title) in [
+            (11, "https://keep.example/paper", "Paper"),
+            (
+                12,
+                "https://www.sciencedirect.com/science",
+                "Just a moment...",
+            ),
+        ] {
+            let opening = {
+                let bridge = bridge.clone();
+                let store = store.clone();
+                let env = env.clone();
+                tokio::spawn(async move {
+                    WebOpenTabTool::new(bridge, store)
+                        .run(&json!({ "url": url }), &env)
+                        .await
+                })
+            };
+            reply_open_tab(&bridge, &mut rx, id, url, title).await;
+            assert!(opening.await.unwrap().success);
+        }
+
+        let scanning = {
+            let bridge = bridge.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebScanTool::new(bridge)
+                    .run(&json!({ "switch_tab_id": 12 }), &env)
+                    .await
+            })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://www.sciencedirect.com/science",
+            "Just a moment...",
+            captcha_text(),
+        )
+        .await;
+        let scan = scanning.await.unwrap();
+        assert!(scan.success);
+        assert!(scan.content.contains("\"required\": true"));
+        let pending = bridge.list_needs_human().await;
+        assert_eq!(pending.tabs.len(), 1);
+        assert_eq!(pending.tabs[0].tab_id, 12);
+        assert_eq!(pending.tabs[0].frame_id, "frame-human");
+
+        let closing = {
+            let bridge = bridge.clone();
+            tokio::spawn(async move { bridge.complete_turn("turn-human").await })
+        };
+        reply_close_tabs(&bridge, &mut rx, &[11]).await;
+        match closing.await.unwrap() {
+            TabCleanupAction::Closed => {}
+            other => panic!("expected closed, got {other:?}"),
+        }
+        assert_eq!(bridge.list_needs_human().await.tabs.len(), 1);
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn complete_turn_prompt_excludes_needs_human_tabs() {
+        let (store, tmp) = empty_store().await;
+        let bridge = Arc::new(BrowserBridge::new_with_store(
+            PathBuf::from("extension"),
+            store.clone(),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+        let env = TurnEnv {
+            root: PathBuf::from("."),
+            turn_id: "turn-prompt".into(),
+            frame_id: "frame-prompt".into(),
+        };
+        for (id, url) in [(21, "https://keep.example"), (22, "https://robot.example")] {
+            let opening = {
+                let bridge = bridge.clone();
+                let store = store.clone();
+                let env = env.clone();
+                tokio::spawn(async move {
+                    WebOpenTabTool::new(bridge, store)
+                        .run(&json!({ "url": url }), &env)
+                        .await
+                })
+            };
+            reply_open_tab(&bridge, &mut rx, id, url, "T").await;
+            assert!(opening.await.unwrap().success);
+        }
+        let scanning = {
+            let bridge = bridge.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebScanTool::new(bridge)
+                    .run(&json!({ "switch_tab_id": 22 }), &env)
+                    .await
+            })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://robot.example",
+            "Are you a robot?",
+            captcha_text(),
+        )
+        .await;
+        assert!(scanning.await.unwrap().success);
+
+        let TabCleanupAction::Prompt(prompt) = bridge.complete_turn("turn-prompt").await else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.tabs.len(), 1);
+        assert_eq!(prompt.tabs[0].tab_id, 21);
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn execute_js_is_refused_on_a_needs_human_tab() {
+        let (store, tmp) = empty_store().await;
+        let bridge = Arc::new(BrowserBridge::new_with_store(
+            PathBuf::from("extension"),
+            store.clone(),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+        let env = TurnEnv {
+            root: PathBuf::from("."),
+            turn_id: "turn-js".into(),
+            frame_id: "frame-js".into(),
+        };
+        let opening = {
+            let bridge = bridge.clone();
+            let store = store.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebOpenTabTool::new(bridge, store)
+                    .run(&json!({ "url": "https://robot.example" }), &env)
+                    .await
+            })
+        };
+        reply_open_tab(&bridge, &mut rx, 33, "https://robot.example", "Robot").await;
+        assert!(opening.await.unwrap().success);
+        let scanning = {
+            let bridge = bridge.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebScanTool::new(bridge)
+                    .run(&json!({ "switch_tab_id": 33 }), &env)
+                    .await
+            })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://robot.example",
+            "Are you a robot?",
+            captcha_text(),
+        )
+        .await;
+        assert!(scanning.await.unwrap().success);
+
+        let result = WebExecuteJsTool::new(bridge.clone(), store)
+            .run(
+                &json!({
+                    "switch_tab_id": 33,
+                    "script": "document.querySelector('button').click()"
+                }),
+                &env,
+            )
+            .await;
+        assert!(!result.success);
+        assert!(result.content.contains("human verification"));
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn confirm_needs_human_clears_when_challenge_is_gone() {
+        let (store, tmp) = empty_store().await;
+        let bridge = Arc::new(BrowserBridge::new_with_store(
+            PathBuf::from("extension"),
+            store.clone(),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+        let env = TurnEnv {
+            root: PathBuf::from("."),
+            turn_id: "turn-confirm".into(),
+            frame_id: "frame-confirm".into(),
+        };
+        let opening = {
+            let bridge = bridge.clone();
+            let store = store.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebOpenTabTool::new(bridge, store)
+                    .run(
+                        &json!({ "url": "https://www.sciencedirect.com/science" }),
+                        &env,
+                    )
+                    .await
+            })
+        };
+        reply_open_tab(
+            &bridge,
+            &mut rx,
+            44,
+            "https://www.sciencedirect.com/science",
+            "Just a moment...",
+        )
+        .await;
+        assert!(opening.await.unwrap().success);
+        let scanning = {
+            let bridge = bridge.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebScanTool::new(bridge)
+                    .run(&json!({ "switch_tab_id": 44 }), &env)
+                    .await
+            })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://www.sciencedirect.com/science",
+            "Just a moment...",
+            captcha_text(),
+        )
+        .await;
+        assert!(scanning.await.unwrap().success);
+
+        let confirming = {
+            let bridge = bridge.clone();
+            tokio::spawn(async move { bridge.confirm_needs_human(&[]).await })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://www.sciencedirect.com/science/article/pii/S000",
+            "Article",
+            "Abstract of the paper.",
+        )
+        .await;
+        let result = confirming.await.unwrap().unwrap();
+        assert!(result.still_required.is_empty());
+        assert_eq!(result.cleared.len(), 1);
+        assert!(bridge.list_needs_human().await.tabs.is_empty());
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[tokio::test]
+    async fn confirm_needs_human_keeps_waiting_when_challenge_remains() {
+        let (store, tmp) = empty_store().await;
+        let bridge = Arc::new(BrowserBridge::new_with_store(
+            PathBuf::from("extension"),
+            store.clone(),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+        let env = TurnEnv {
+            root: PathBuf::from("."),
+            turn_id: "turn-still".into(),
+            frame_id: "frame-still".into(),
+        };
+        let opening = {
+            let bridge = bridge.clone();
+            let store = store.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebOpenTabTool::new(bridge, store)
+                    .run(&json!({ "url": "https://robot.example" }), &env)
+                    .await
+            })
+        };
+        reply_open_tab(&bridge, &mut rx, 55, "https://robot.example", "Robot").await;
+        assert!(opening.await.unwrap().success);
+        let scanning = {
+            let bridge = bridge.clone();
+            let env = env.clone();
+            tokio::spawn(async move {
+                WebScanTool::new(bridge)
+                    .run(&json!({ "switch_tab_id": 55 }), &env)
+                    .await
+            })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://robot.example",
+            "Are you a robot?",
+            captcha_text(),
+        )
+        .await;
+        assert!(scanning.await.unwrap().success);
+
+        let confirming = {
+            let bridge = bridge.clone();
+            tokio::spawn(async move { bridge.confirm_needs_human(&[]).await })
+        };
+        reply_scan(
+            &bridge,
+            &mut rx,
+            "https://robot.example",
+            "Are you a robot?",
+            captcha_text(),
+        )
+        .await;
+        let result = confirming.await.unwrap().unwrap();
+        assert_eq!(result.still_required.len(), 1);
+        assert!(result.cleared.is_empty());
+        assert_eq!(bridge.list_needs_human().await.tabs.len(), 1);
         let _ = std::fs::remove_file(tmp);
     }
 

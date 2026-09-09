@@ -26,14 +26,73 @@ cargo tauri dev      # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri build    # installers under target/release/bundle
 ```
 
-Desktop icons come from two masters via `src-tauri/gen-icons.ps1`
-(`cargo tauri icon`). Both keep the DNA mark inset; do not regenerate from
-`ui/logo.svg`, which fills the canvas and looks oversized on every launcher.
+The desktop icon uses the three-wisp design by
+[SpicyChicken6 in Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154),
+with a teal mark (`#0D9488`) on an off-white tile (`#FAF9F6`). The original
+arc paths and optical centering are preserved from the
+[editable SVG bundle](https://raw.githubusercontent.com/SpicyChicken6/wisp-science/a1b35d00f2031890d835eefa6196cbb25fce058b/logo-proposal/wisp-science-logo-and-icon-assets.zip).
 
-- `src-tauri/icons/app-icon.svg` is full-bleed. macOS Dock/Launchpad apply a
-  squircle, so a baked badge would be double-masked and look small.
-- `src-tauri/icons/app-icon-rounded.svg` clips the same mark to rounded
-  corners. Windows taskbar and most Linux docks draw the bitmap as-is.
+Regenerate the checked-in assets with `pwsh -File src-tauri/gen-icons.ps1`
+(or `powershell -ExecutionPolicy Bypass -File src-tauri/gen-icons.ps1` on Windows).
+This uses `cargo tauri icon` and three 1024px SVG masters:
+
+- `src-tauri/icons/app-icon.svg`: full square for store/mobile assets and
+  `source.png`.
+- `src-tauri/icons/app-icon-rounded.svg`: rounded tile for Windows ICO and
+  desktop PNGs, including Linux launchers and the tray.
+- `src-tauri/icons/app-icon-macos.svg`: rounded tile with a 10% transparent
+  margin on each side for the bundled macOS ICNS. Legacy ICNS needs this
+  geometry baked into the bitmap; it is not a layered Icon Composer asset.
+
+macOS 26+ uses the native `Wisp.icon` Icon Composer document, with the same
+light palette and the author's dark palette (`#2DA898` on `#171614`, from
+`app-icon-dark.svg`). The system's icon appearance preference selects the
+variant in both Dock and Finder, including when the app is closed. This is
+independent of Wisp's in-app theme setting. Older macOS versions, Windows,
+and Linux use the light icon.
+
+To follow system appearance, choose **System Settings → Appearance → Icon &
+widget style → Dark → Auto**. **Default** keeps the light icon; **Dark →
+Always** keeps the dark icon. See [Apple's appearance settings guide](https://support.apple.com/guide/mac-help/change-appearance-settings-mchlp1225/mac).
+
+After editing either palette, run `python3 src-tauri/gen-icons-macos.py` on
+macOS with Xcode 26+ selected. It updates the transparent SVG layers, compiles
+`icons/Assets.car`, checks for both native appearances, and records source
+and output hashes in `icons/macos-icon-build.json`. Commit those outputs
+together. The compiled catalog is checked in so normal builds on other
+platforms or older Xcode hosts do not need Icon Composer. The macOS bundle
+places it at `Contents/Resources/Assets.car`; `Info.plist` selects `Wisp` via
+`CFBundleIconName`, while the existing `icon.icns` remains the legacy fallback.
+Native macOS rendering may add system material and lighting to the design.
+
+The in-app and website logos are separate assets. Do not generate desktop
+icons from `ui/logo.svg`. The current mark is the three-wisp symbol; the
+previous helix is kept as `docs/assets/logo_v1.svg` and `ui/logo_v1.svg`.
+
+The full molecular wordmark also comes from **SpicyChicken6** in the same
+[Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154)
+and editable SVG bundle. Thank you for both the wordmark and the desktop
+icon designs. `docs/assets/wordmark-light.svg` and `wordmark-dark.svg` retain
+the original paths and colors, with only the unused canvas trimmed. Both
+are transparent and all lettering is outlined, so they need no font files.
+
+The README files select these assets using a theme-aware `<picture>`.
+The website hero uses the light wordmark on its existing light background.
+Trunk copies the same SVGs into the app bundle for the projects home and
+empty chat welcome area. **Wisp Settings → Appearance → System / Light /
+Dark** selects the in-app variant on every platform; System follows OS
+appearance. This setting is separate from the native macOS desktop icon
+appearance described above. When editing a wordmark, check both app surfaces
+in all three theme modes, including an app theme opposite to the OS theme,
+and check that the projects toolbar still fits a narrow window.
+
+For a manual smoke check, build/install on each target OS and inspect the
+Dock/Finder (macOS), taskbar/shortcut (Windows), or launcher (Linux). Check
+that the three wisps remain legible at small sizes, corners are transparent,
+and the macOS tile has a comparable footprint to neighboring Dock icons.
+On macOS 26+, select light and dark system icon appearances and check both
+Dock and Finder, including with the app closed. `cargo tauri dev` is not a
+packaged application and does not exercise the native asset catalog.
 
 Universal macOS binary (Apple Silicon + Intel):
 
@@ -77,12 +136,17 @@ Eval and the long-lived JSONL RPC protocol:
 | `WISP_PROVIDER`      | CLI API provider: `openai` (default), `openai_responses`, or `anthropic` |
 | `WISP_API_URL`       | API root; defaults to DeepSeek / OpenAI / Anthropic           |
 | `WISP_MODEL`         | Model name                                                    |
+| `WISP_VISION`        | `1`/`true` if the primary model can read images natively (default off) |
+| `WISP_VISION_MODEL`  | Dedicated image-analysis model when the primary model cannot see |
+| `WISP_VISION_PROVIDER` | Vision provider kind; defaults to `WISP_PROVIDER`           |
+| `WISP_VISION_API_URL` | Vision API root; defaults to `WISP_API_URL` or the provider default |
+| `WISP_VISION_API_KEY` | Optional vision key; defaults to `WISP_API_KEY`             |
 | `WISP_MAX_CONTEXT`   | Context budget (default 1,000,000)                            |
 | `WISP_MAX_ITER`      | Max agent iterations per turn (default 100; 0 = unlimited)    |
 | `WISP_SKILLS_PATH`   | Extra `;`/`:`-separated SKILL.md catalog dirs                 |
 | `WISP_KERNEL_WORKER` | Override path to `kernel_worker.py` (bundled by default)      |
 | `WISP_MCP_COMMAND`   | Launch an arbitrary stdio MCP server (full command line)      |
-| `WISP_MCP_PKG`       | Launch a bundled bio-tools server, e.g. `mcp_pubmed`          |
+| `WISP_MCP_PKG`       | Select a native bio package, e.g. `mcp_pubmed`          |
 
 Desktop stores API keys in the OS keyring and model profiles in
 `.wisp/wisp.sqlite`. Custom credentials map a display name to an environment
@@ -93,22 +157,103 @@ Wisp reads `AGENTS.md` from the project root when a new session starts.
 Instructions in **Project Settings → Agent Context** live in `.wisp/WISP.md`
 and take precedence when both exist.
 
-### Bundled bio-tools MCP
+### Native biological tools and custom MCP
 
-`WISP_MCP_PKG=mcp_pubmed` launches `mcp-servers/bio-tools/run_server.py
-mcp_pubmed` inside the uv venv. Install the server's dependencies first:
+Native biological retrieval lives in `crates/wisp-bio/`. `NativeBio` is the
+shared client (HTTP + 设置→凭据 / CLI env). Each domain is a module with
+`catalog()` and `call()`; the native catalog is the only built-in inventory.
+`mcp_bio` selects every implemented domain; `WISP_MCP_PKG=mcp_<domain>` selects
+one. New upstream API keys belong in **设置 → 凭据** (`src-tauri/src/models.rs`
+`CREDENTIALS`) and are read with `NativeBio::credential`.
 
-```bash
-uv pip install mcp requests
-# plus any server-specific deps (httpx, xmltodict, etc.) the package imports
-```
+The PubMed domain is complete. All seven PubMed operations
+(`search_articles`, `get_article_metadata`, `convert_article_ids`,
+`find_related_articles`, `lookup_article_by_citation`, `get_full_text_article`,
+`get_copyright_status`) use independently authored Rust clients in the desktop,
+CLI and ACP MCP bridge. They keep deferred tool discovery and PubMed connector
+controls. Search and metadata use NCBI E-utilities; identifier conversion uses
+the PMC ID Converter; related records use ELink; citation lookup uses ECitMatch;
+OA full text and copyright/access metadata use Europe PMC core plus converter
+embargo fields. The retired PMC OA Web Service is not called. An open-access
+flag is not treated as a reuse grant.
+
+All 23 domains (247 tools) run in Rust, including KEGG, CADD, PanglaoDB and
+Sanger Cell Model Passports. `mcp-servers/bio-tools` and its launcher, copied
+schemas and Tauri resource mapping have been removed. Native tool discovery,
+connector settings and delegated grants do not require a Python environment.
+Python/R remain available for scientific computation; their runtime setup is
+independent of biological retrieval. Python requirements now live in
+`python/requirements-kernel.txt`; the MCP server package is no longer installed.
+
+Startup, session initialization, and CLI startup never create Python virtualenvs
+or install dependencies. The desktop checks executable paths in the background
+and shows the results during first-run model setup, Settings → General → Local environment, and
+Capabilities. Missing Python/R/uv/Node tools are optional setup suggestions,
+not startup errors. Found paths are persisted on the Local execution context;
+existing interpreter overrides survive detection and database reopen. The
+check does not launch executables or validate versions/packages. **Cmd/Ctrl+P →
+Quick setup** reopens the first-run page and refreshes detection
+without resetting models or installing software. Use **Check
+paths again** after installing tools. Windows Store Python aliases and the
+macOS system Python developer-tools stub are excluded from automatic selection.
+
+For analysis or custom Python MCP servers, ask Wisp to load
+`skills/local-env-setup`. The skill prepares only the required environment and
+saves Python/R interpreters through `set_runtime_interpreter` or the existing
+Runtime interpreters dialog. The CLI uses its existing `.wisp/python/.venv`
+when present, otherwise Python on PATH. Already-running REPLs retain their
+interpreter until restarted.
+
+
+`WISP_MCP_COMMAND` still replaces the built-in tools with an explicit external
+stdio server; custom stdio/HTTP MCP connections remain supported. Unknown
+`WISP_MCP_PKG` values produce a configuration diagnostic. NCBI contact/key values
+continue to come from desktop keyring settings or CLI environment variables.
+No credentials are copied to SQLite or bundled with the native clients.
+
+Important data-contract changes after live acceptance:
+
+- BioMart uses the dedicated mart host; query POSTs rejected with 405 retry the
+  documented GET XML form. Ensembl REST explicitly requests JSON.
+- bioRxiv statistics accept object-valued status messages. PubMed citation
+  lookup requests `retmode=xml`. Reactome tokens are decoded and safely encoded
+  as URL path segments instead of rejecting encoded base64 padding.
+- cBioPortal totals are null when no total header is supplied. PubChem CID-only
+  placeholders are reported as missing records.
+- eQTL listing reads the official metadata once per process. Associations use
+  tabix indexes and bounded HTTPS ranges of the official summary files, not the
+  retired REST API. `pos` is a GRCh38 interval; gene-only queries use the current
+  Ensembl TSS ±1 Mb and report that scope. Results may be truncated by the row,
+  compressed-byte or scan limit. A dataset is never downloaded in full.
+- Rfam sequence search uploads a small multipart `sequence_file` to
+  `batch.rfam.org/submit-job` and waits for a completed result, including
+  JSON progress responses returned with HTTP 200.
+- ZINC random sampling uses its dedicated random-job poll URL. Supplier codes
+  are case-sensitive and may occur inside catalog rows. SMILES searches use the
+  enabled public SmallWorld ZINC20 for-sale index and report its name; this is
+  not exhaustive ZINC22 coverage. ID and 3D-tranche lookups still support ZINC22.
+
+See the [native migration design](superpowers/specs/2026-09-06-native-bio-services-design.md)
+for architecture and implementation provenance.
+
+`WISP_MCP_PKG=mcp_pubmed` (or any `mcp_<domain>`) selects the native catalog for
+that package. `mcp_bio` selects every implemented domain. `WISP_MCP_COMMAND`
+still overrides the bundled tools entirely. External Python MCP servers need
+their own environment, prepared through `local-env-setup`.
 
 The agent discovers matching tools with `search_mcp_tools` and calls the
 selected one through `use_mcp_tool`; the full server catalog is never copied
 into every model request.
 
 Desktop users add remote MCP (Notion, Parallel Search, …) under
-**Settings → Connections**. See [basic configuration](basic-configuration.md).
+**Settings → Connections**. Connector detail pages show introductions, expandable
+tool descriptions and input schemas, plus source/documentation links. Native
+introductions are maintained in `crates/wisp-bio/src/domains.json`; their domain
+coverage is checked against `catalog()`. Tool descriptions and schemas come
+from that same dispatch catalog. Custom MCP tools retain the server's description,
+`inputSchema` and optional `outputSchema`; absent metadata is left absent.
+Connector DTOs are shared in `wisp-dto`. Browsing documentation neither invokes
+a native retrieval tool nor changes approvals. See [basic configuration](basic-configuration.md).
 
 ## Repository layout
 
@@ -121,7 +266,8 @@ wisp-science/
 │  ├─ wisp-store/   sqlx SQLite (projects/frames/messages/artifacts/settings) + OS keyring
 │  ├─ wisp-skills/  SKILL.md discovery + search_skills/use_skill progressive loading
 │  ├─ wisp-runtime/ project-scoped Python/R runtime manager + REPL tools
-│  ├─ wisp-mcp/     stdio JSON-RPC MCP client + McpTool adapter (bundled bio-tools)
+│  ├─ wisp-mcp/     stdio/HTTP MCP client + McpTool adapter (custom servers)
+│  ├─ wisp-bio/     Native biological database clients shared by all hosts
 │  ├─ wisp-acp/     ACP v1 stdio client for external coding agents
 │  ├─ wisp-sync/    Encrypted snapshot protocol + self-hosted relay server
 │  ├─ wisp-runs/    Run control plane (run_in_context / monitor_run / harvest)
@@ -131,7 +277,6 @@ wisp-science/
 ├─ python/          kernel_worker.py + mock MCP server (uv-managed)
 ├─ r/               optional system-R kernel worker (requires jsonlite)
 ├─ skills/          Bundled SKILL.md catalog for reusable scientific workflows
-├─ mcp-servers/     Bundled MCP servers (bio-tools: ~80 DB clients)
 └─ seed/            Bundled demo session recordings (ESR1 / GSE153250 ×5)
 ```
 
@@ -193,11 +338,11 @@ wisp-science/
   [`browser-extension/NOTICE.md`](../browser-extension/NOTICE.md).
 - The agent core is based on
   [`w4n9H/mangopi-cli`](https://github.com/w4n9H/mangopi-cli) (Apache-2.0).
-- `skills/` and `mcp-servers/bio-tools/` vendored from the upstream
+- `skills/` vendored from the upstream
   `wisp-science` asset bundle (Apache-2.0).
 - `skills/bear-*` from [bear-research-skills](https://github.com/fei0810/bear-research-skills)
   (CC BY-NC-SA 4.0); requires `scimaster-cli` for live retrieval.
-- `kernels/kernel_worker.py` protocol adapted from the upstream operon kernel
+- `python/kernel_worker.py` protocol adapted from the upstream operon kernel
   worker, with POSIX-only `resource`/`/proc`/`SIGINT` machinery dropped for
   Windows.
 - `docs/assets/trusted-logos/meduniwien.svg` from

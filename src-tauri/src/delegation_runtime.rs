@@ -152,7 +152,7 @@ pub(crate) async fn get_session_delegation_enabled(
     window: tauri::WebviewWindow,
     session_id: String,
 ) -> Result<bool, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     ensure_project_frame(&state.store, &project.id, &session_id).await?;
     Ok(session_delegation_enabled(&state.store, &session_id).await)
 }
@@ -184,7 +184,7 @@ pub(crate) async fn list_agent_workflows(
     window: tauri::WebviewWindow,
     session_id: Option<String>,
 ) -> Result<Vec<AgentWorkflowSnapshot>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let Some(session_id) = session_id else {
         return Ok(vec![]);
     };
@@ -420,12 +420,15 @@ pub(crate) async fn create_dynamic_agent_workflow_draft(
     .await
 }
 
+/// Workflow Studio editor options for the window's bound project.
+/// File → New Window (`home-*`) has no project yet; return an error instead of
+/// panicking, which would exit every open window.
 #[tauri::command]
 pub(crate) async fn get_dynamic_agent_options(
     state: State<'_, crate::AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<dynamic_workflow::DynamicAgentEditorOptions, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let frame_id = state.active_frame(window.label());
     let policy = dynamic_delegation_policy_for_project(
         &state.store,
@@ -592,7 +595,7 @@ pub(crate) async fn get_agent_workflow_result(
     workflow_id: String,
     step_id: String,
 ) -> Result<AgentWorkflowResultDetail, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     load_agent_workflow_result(&state.store, &project.id, &workflow_id, &step_id).await
 }
 
@@ -678,7 +681,7 @@ pub(crate) async fn approve_agent_workflow(
     workflow_id: String,
     expected_version: i64,
 ) -> Result<AgentWorkflowSnapshot, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let current = project_workflow(&state.store, &project.id, &workflow_id).await?;
     require_workflow_delegation(&state.store, &current).await?;
     let automatic = current.mode == "automatic";
@@ -704,7 +707,7 @@ pub(crate) async fn cancel_agent_workflow(
     window: tauri::WebviewWindow,
     workflow_id: String,
 ) -> Result<(), String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let workflow = project_workflow(&state.store, &project.id, &workflow_id).await?;
     if workflow.status != AgentWorkflowStatus::Running {
         return Err("Only a running Agent workflow can be cancelled.".into());
@@ -727,7 +730,7 @@ pub(crate) async fn discard_agent_workflow(
     window: tauri::WebviewWindow,
     workflow_id: String,
 ) -> Result<(), String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let workflow = project_workflow(&state.store, &project.id, &workflow_id).await?;
     // Cancel a running workflow before discarding; deleting mid-flight would
     // orphan the live attempt.
@@ -749,7 +752,7 @@ pub(crate) async fn retry_agent_workflow(
     workflow_id: String,
     budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
 ) -> Result<AgentWorkflowSnapshot, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let snapshot = match budget_overrides.filter(|overrides| !overrides.is_empty()) {
         Some(overrides) => {
             let frame_id = state.active_frame(window.label());
@@ -978,7 +981,7 @@ pub(crate) async fn run_agent_workflow(
     window: tauri::WebviewWindow,
     workflow_id: String,
 ) -> Result<DelegationExecutionResult, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let _project_activity = state.begin_project_activity(&project.id)?;
     execute_agent_workflow(
         &state.store,
@@ -2641,6 +2644,11 @@ impl AgentDelegator for NativeDelegator {
         } else {
             request.spec.prompt_template.clone()
         };
+        system.push_str(&crate::network::package_guidance(
+            &crate::network::load(&self.store)
+                .await
+                .map_err(anyhow::Error::msg)?,
+        ));
         system.push_str(&resource_grant.prompt_section());
         let project_skills = crate::active_skill_index(&self.store, &self.project).await;
         system.push_str(&bound_skill_prompt(&request.spec, &project_skills)?);
@@ -2749,7 +2757,6 @@ impl AgentDelegator for NativeDelegator {
             &runtime_project_id,
             child_scope.scope_key(),
             &child_frame_id,
-            &self.app_data,
             &self.store,
             Some(&resource_grant.runtimes),
             Some(&resource_grant.connectors),
@@ -3066,6 +3073,15 @@ async fn sync_child_execution_contexts(
             .set_session_execution_context_enabled(child_frame_id, context_id, true)
             .await?;
     }
+    if let Some(parent_frame_id) = parent_frame_id {
+        crate::ssh_hosts::copy_session_default_execution_context(
+            store,
+            parent_frame_id,
+            child_frame_id,
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    }
     Ok(())
 }
 
@@ -3265,10 +3281,15 @@ impl AgentDelegator for AcpDelegator {
         sync_child_execution_contexts(&self.store, Some(&parent_frame_id), &child_frame_id).await?;
         let project_skills = crate::active_skill_index(&self.store, &self.project).await;
         let prompt_text = format!(
-            "{}{}{}",
+            "{}{}{}{}",
             delegation_prompt(&request)?,
             resource_grant.prompt_section(),
             bound_skill_prompt(&request.spec, &project_skills)?,
+            crate::network::package_guidance(
+                &crate::network::load(&self.store)
+                    .await
+                    .map_err(anyhow::Error::msg)?
+            ),
         );
         let next_seq = self.store.load_messages(&child_frame_id).await?.len() as i64 + 1;
         self.store
@@ -5903,6 +5924,13 @@ mod tests {
             .set_session_execution_context_enabled("child", "ssh:stale", true)
             .await
             .unwrap();
+        crate::ssh_hosts::persist_session_default_execution_context(
+            &store,
+            "parent",
+            crate::ssh_hosts::SessionDefaultExecutionContext::Remote("ssh:selected".into()),
+        )
+        .await
+        .unwrap();
 
         sync_child_execution_contexts(&store, Some("parent"), "child")
             .await
@@ -5916,6 +5944,10 @@ mod tests {
             .session_execution_context_enabled("child", "ssh:stale")
             .await
             .unwrap());
+        assert_eq!(
+            crate::ssh_hosts::stored_session_default_execution_context(&store, "child").await,
+            crate::ssh_hosts::SessionDefaultExecutionContext::Remote("ssh:selected".into())
+        );
         drop(store);
         std::fs::remove_dir_all(root).ok();
     }

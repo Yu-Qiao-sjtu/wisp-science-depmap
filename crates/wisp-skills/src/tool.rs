@@ -73,18 +73,40 @@ pub struct UseSkillTool {
 /// and tool-driven selection never drift apart.
 pub fn render_skill(skill: &Skill) -> String {
     let mut out = format!("# Skill: {}\n{}\n", skill.name, skill.body);
-    // Skills may ship a `kernel.py` sidecar of python helpers. Wisp has no
-    // host-side auto-injection into the REPL, so the loading instruction IS
-    // the mechanism: one exec in the persistent kernel and the definitions
-    // survive across cells.
-    let kernel = skill.dir.join("kernel.py");
-    if kernel.is_file() {
+    // Root-level runtime sidecars run inside the corresponding persistent
+    // runtime, never as standalone CLI scripts. Rendering only supplies the
+    // loading instruction; it does not execute or auto-inject either file.
+    for (filename, language, tool) in [("runtime.py", "Python", "python"), ("runtime.r", "R", "r")]
+    {
+        let runtime_script = skill.dir.join(filename);
+        if !runtime_script.is_file() {
+            continue;
+        }
+        // JSON string escaping also produces a Python/R string literal,
+        // including Windows separators and paths containing quotes.
+        let path = serde_json::to_string(&runtime_script.to_string_lossy()).unwrap();
+        let code = match tool {
+            "python" => format!(
+                "exec(compile(open({path}, encoding=\"utf-8\").read(), \"runtime.py\", \"exec\"))"
+            ),
+            // The R worker evaluates cells in its own persistent environment.
+            // local = TRUE loads there, keeping helpers visible to inspection
+            // and required_objects checks as well as subsequent cells.
+            _ => format!("source({path}, local = TRUE, encoding = \"UTF-8\")"),
+        };
         out.push_str(&format!(
-            "\n## Python Kernel Sidecar\n\
-             Before calling this skill's python helpers, load them into the persistent \
-             python kernel once (definitions persist across cells; re-run only after a \
-             kernel restart):\n```python\nexec(compile(open(r\"{}\").read(), \"kernel.py\", \"exec\"))\n```\n",
-            kernel.display()
+            "\n## {language} Runtime Sidecar\n\
+             `{filename}` is a special runtime script. Before using its helpers, \
+             execute the following code through the `{tool}` tool in the selected \
+             persistent {language} runtime. Do not launch this file as a standalone \
+             process through shell or run_in_context. Load once per runtime; definitions \
+             and state persist across calls. Load again after a runtime restart or when \
+             switching to a different conversation or execution context.\n\
+             ```{tool}\n{code}\n```\n\
+             If the runtime cannot access this skill path (for example on SSH/WSL), \
+             read the file with the read tool and submit its source as `code` to the \
+             `{tool}` tool in that context. Loading the skill only returns these \
+             instructions; it does not execute the sidecar automatically.\n"
         ));
     }
     let (scripts, refs) = list_resources(skill);
@@ -367,11 +389,10 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
-    // A kernel.py sidecar has no host auto-injection in wisp; the rendered
-    // skill must carry the one-time exec loading instruction with the
-    // sidecar's absolute path.
+    // Both languages are optional and independent. Ordinary scripts and
+    // directories named like sidecars must not trigger runtime guidance.
     #[test]
-    fn render_skill_appends_kernel_sidecar_loading_instruction() {
+    fn render_skill_appends_only_root_runtime_sidecar_loading_instructions() {
         let root = std::env::temp_dir().join(format!(
             "wisp-skill-sidecar-{}-{}",
             std::process::id(),
@@ -380,28 +401,61 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("kernel.py"), "def pdf_pages():\n    pass\n").unwrap();
-        let skill = Skill {
-            name: "pdf-explore".into(),
-            description: "d".into(),
-            tags: vec![],
-            body: "body".into(),
-            dir: root.clone(),
-            declared_version: None,
-            wisp: None,
-        };
-        let rendered = render_skill(&skill);
-        assert!(rendered.contains("## Python Kernel Sidecar"));
-        assert!(rendered.contains(&root.join("kernel.py").display().to_string()));
-        assert!(rendered.contains("exec(compile(open("));
-
-        let plain = Skill {
-            dir: root.join("no-kernel-here"),
-            ..skill
-        };
-        assert!(!render_skill(&plain).contains("Kernel Sidecar"));
-        std::fs::remove_dir_all(&root).ok();
+        for (python, r) in [(false, false), (true, false), (false, true), (true, true)] {
+            let dir = root.join(format!("研究er's skill {python}-{r}"));
+            std::fs::create_dir_all(dir.join("scripts")).unwrap();
+            // Legacy filenames no longer opt into runtime loading.
+            for filename in ["kernel.py", "kernel.r"] {
+                std::fs::write(dir.join(filename), "legacy sidecar sentinel").unwrap();
+            }
+            for filename in ["main.py", "main.r", "runtime.py", "runtime.r"] {
+                std::fs::write(dir.join("scripts").join(filename), "ordinary script").unwrap();
+            }
+            for (filename, present) in [("runtime.py", python), ("runtime.r", r)] {
+                if present {
+                    // Rendering must not try to execute this content.
+                    std::fs::write(dir.join(filename), "sidecar source sentinel").unwrap();
+                } else {
+                    std::fs::create_dir(dir.join(filename)).unwrap();
+                }
+            }
+            let skill = Skill {
+                name: "sidecar-test".into(),
+                description: "d".into(),
+                tags: vec![],
+                body: "body".into(),
+                dir: dir.clone(),
+                declared_version: None,
+                wisp: None,
+            };
+            let rendered = render_skill(&skill);
+            assert_eq!(rendered.contains("## Python Runtime Sidecar"), python);
+            assert_eq!(rendered.contains("## R Runtime Sidecar"), r);
+            assert_eq!(rendered.contains("exec(compile(open("), python);
+            assert_eq!(rendered.contains("local = TRUE"), r);
+            assert!(!rendered.contains(".GlobalEnv"));
+            assert!(rendered.contains("## Scripts"));
+            for filename in ["main.py", "main.r", "runtime.py", "runtime.r"] {
+                assert!(
+                    rendered.contains(&dir.join("scripts").join(filename).display().to_string())
+                );
+            }
+            for (filename, tool, present) in
+                [("runtime.py", "python", python), ("runtime.r", "r", r)]
+            {
+                if present {
+                    let path =
+                        serde_json::to_string(&dir.join(filename).to_string_lossy()).unwrap();
+                    assert!(rendered.contains(&path));
+                    assert!(rendered.contains(&format!("through the `{tool}` tool")));
+                    assert!(rendered.contains("Do not launch this file as a standalone"));
+                    assert!(rendered.contains("read the file with the read tool"));
+                    assert!(rendered.contains("does not execute the sidecar automatically"));
+                }
+            }
+            assert!(!rendered.contains("sidecar source sentinel"));
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub use agent_workflows::{
 };
 pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
+pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
     ExplorationBaselineEntity, ExplorationCheckpoint, ExplorationEffect, ExplorationFamily,
@@ -234,9 +235,7 @@ impl Store {
         }
         Self::migrate(&pool).await?;
         let store = Self { pool };
-        store
-            .upsert_execution_context(&ExecutionContext::new("local", "Local")?)
-            .await?;
+        store.ensure_local_execution_context().await?;
         Ok(store)
     }
 
@@ -2054,6 +2053,14 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.map(|(v,)| v))
+    }
+
+    pub async fn delete_setting(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM settings WHERE key=?")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

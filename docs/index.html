@@ -37,6 +37,7 @@
         <a href="#features" data-i18n="nav.features">功能</a>
         <a href="#usecases" data-i18n="nav.usecases">场景</a>
         <a href="#stack" data-i18n="nav.stack">生态</a>
+        <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
         <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="#faq" data-i18n="nav.faq">FAQ</a>
@@ -56,7 +57,8 @@
   <main id="top">
     <section class="hero">
       <div class="container">
-        <div class="eyebrow" data-i18n="hero.eyebrow">开源 · 本地优先 · Windows / macOS / Linux · v1.6.1</div>
+        <img class="hero-wordmark" src="assets/wordmark-light.svg" alt="Wisp Science" width="520" height="344">
+        <div class="eyebrow" data-i18n="hero.eyebrow">开源 · 本地优先 · Windows / macOS / Linux · v1.10.0</div>
         <h1 data-i18n-html="hero.title">严谨科研的<br>本地 Agent 工作台</h1>
         <p class="lead" data-i18n="hero.lead">
           Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。
@@ -253,16 +255,16 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
         </div>
         <div class="section-head">
           <h2 data-i18n="local.heading">数据留在本地</h2>
-          <p data-i18n="local.lead">Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；Python 环境与 MCP 服务器在首次启动时自动配置。</p>
+          <p data-i18n="local.lead">Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；原生生物工具无需 Python；可选运行环境可在启动后按需配置。</p>
         </div>
         <div class="feature-list">
           <div class="feature-list-item">
             <h4 data-i18n="local.pkgTitle">自包含安装包</h4>
-            <p data-i18n="local.pkgBody">skills、Python、MCP 与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。</p>
+            <p data-i18n="local.pkgBody">skills、原生科研工具、Python/R 内核与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="local.mcpTitle">统一 bio MCP</h4>
-            <p data-i18n="local.mcpBody">默认启动 mcp_bio，约 240 个工具覆盖 PubMed、UniProt、ChEMBL 等 80+ 数据库。</p>
+            <h4 data-i18n="local.mcpTitle">原生科研 MCP</h4>
+            <p data-i18n="local.mcpBody">默认启用进程内 mcp_bio：23 个连接器、247 个工具，覆盖 PubMed、UniProt、ChEMBL 等约 80 个数据库。无需 Python MCP 子进程。</p>
           </div>
           <div class="feature-list-item">
             <h4 data-i18n="local.remoteTitle">远程计算</h4>
@@ -343,7 +345,7 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
             <h3 data-i18n="usecases.litTitle">文献检索与稿件草稿</h3>
             <p data-i18n="usecases.litBody">literature-review、paper-narrative、pdf-explore SKILL 帮助从 PDF 到结构化综述与叙事。</p>
             <ul>
-              <li data-i18n="usecases.litLi1">PubMed / Semantic Scholar MCP 检索</li>
+              <li data-i18n="usecases.litLi1">PubMed / OpenAlex / arXiv MCP 检索</li>
               <li data-i18n="usecases.litLi2">Markdown + LaTeX 实时预览</li>
               <li data-i18n="usecases.litLi3">indication-dossier 适应症档案模板</li>
             </ul>
@@ -395,10 +397,10 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
         </div>
         <div class="section-head">
           <h2 data-i18n="stack.heading">对接你的工具链</h2>
-          <p data-i18n="stack.lead">MCP 协议连接生物数据库与自定义服务器；SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。</p>
+          <p data-i18n="stack.lead">内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。</p>
         </div>
         <div class="stack-grid">
-          <div class="stack-item">bio-tools MCP<span>~240 tools · 80+ DBs</span></div>
+          <div class="stack-item" data-i18n-html="stack.bioItem">mcp_bio<span>247 个工具 · 23 个连接器</span></div>
           <div class="stack-item">SKILL.md<span data-i18n="stack.skill">36 bundled workflows</span></div>
           <div class="stack-item">Python / R<span data-i18n="stack.python">uv-managed venv · isolated R</span></div>
           <div class="stack-item">Filesystem tools<span>read / write / shell</span></div>
@@ -408,7 +410,7 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
           <div class="stack-item">MCP Apps<span>interactive UI from MCP tools</span></div>
         </div>
         <p style="margin-top:32px;text-align:center;">
-          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/tree/main/mcp-servers" data-i18n="stack.browse">浏览 MCP 服务器</a>
+          <a class="btn btn-secondary" href="mcp.html" data-i18n="stack.browse">查看 MCP 工具目录</a>
         </p>
       </div>
     </section>
@@ -492,6 +494,7 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       </a>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
         <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>

@@ -10,7 +10,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use wisp_acp::{
@@ -221,7 +221,7 @@ pub(crate) async fn get_acp_session_agent(
     window: tauri::WebviewWindow,
     frame_id: String,
 ) -> Result<Option<String>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&frame_id)
@@ -251,8 +251,8 @@ pub(crate) async fn get_acp_session_state(
     state: State<'_, AppState>,
     window: tauri::WebviewWindow,
     frame_id: String,
-) -> Result<Option<serde_json::Value>, String> {
-    let project = state.active(window.label());
+) -> Result<Option<wisp_dto::AcpSessionState>, String> {
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&frame_id)
@@ -271,13 +271,20 @@ pub(crate) async fn get_acp_session_state(
     else {
         return Ok(None);
     };
-    Ok(state
+    let modes = state
         .store
         .get_setting(&available_modes_key(&binding.profile_fingerprint))
         .await
         .map_err(|error| error.to_string())?
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .map(|modes| serde_json::json!({ "availableModes": modes })))
+        .map(|modes| serde_json::json!({ "availableModes": modes }));
+    let options =
+        cached_config_options(&state.store, &frame_id, &binding.profile_fingerprint).await?;
+    Ok(Some(wisp_dto::AcpSessionState {
+        frame_id,
+        modes,
+        config_options: options.and_then(|value| value.as_array().cloned()),
+    }))
 }
 
 #[tauri::command]
@@ -555,6 +562,61 @@ fn available_modes_key(profile_fingerprint: &str) -> String {
     format!("acp.available_modes.{profile_fingerprint}")
 }
 
+fn config_options_key(frame_id: &str, fingerprint: &str) -> String {
+    format!("acp.config_options.{frame_id}.{fingerprint}")
+}
+
+async fn cached_config_options(
+    store: &wisp_store::Store,
+    frame_id: &str,
+    fingerprint: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(store
+        .get_setting(&config_options_key(frame_id, fingerprint))
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(serde_json::Value::is_array))
+}
+
+async fn cache_config_options(
+    store: &wisp_store::Store,
+    frame_id: &str,
+    fingerprint: &str,
+    options: &serde_json::Value,
+) -> Result<(), String> {
+    if !options.is_array() {
+        return Ok(());
+    }
+    store
+        .set_setting(
+            &config_options_key(frame_id, fingerprint),
+            &options.to_string(),
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn restore_config_options(
+    store: &wisp_store::Store,
+    frame_id: &str,
+    fingerprint: &str,
+    session: &mut wisp_acp::AcpSessionState,
+) -> Result<(), String> {
+    if let Some(options) = &session.config_options {
+        cache_config_options(
+            store,
+            frame_id,
+            fingerprint,
+            &serde_json::to_value(options).map_err(|error| error.to_string())?,
+        )
+        .await?;
+    } else if let Some(options) = cached_config_options(store, frame_id, fingerprint).await? {
+        session.config_options = serde_json::from_value(options).ok();
+    }
+    Ok(())
+}
+
 async fn runtime_for(
     state: &AppState,
     project: &ActiveProject,
@@ -626,7 +688,7 @@ async fn runtime_for(
             .map_err(|error| error.to_string())?,
     );
     let bridge = vec![mcp_server(state, project, frame_id, None)?];
-    let (session_id, session_state) = if let Some(binding) = &binding {
+    let (session_id, mut session_state) = if let Some(binding) = &binding {
         let id = SessionId::new(binding.agent_session_id.clone());
         match handle
             .resume_session(id.clone(), &cwd, bridge.clone())
@@ -669,6 +731,13 @@ async fn runtime_for(
             )
             .await;
     }
+    restore_config_options(
+        &state.store,
+        frame_id,
+        &profile_fingerprint,
+        &mut session_state,
+    )
+    .await?;
     let runtime = Arc::new(AcpRuntime {
         profile_id: profile.id.clone(),
         fingerprint: profile_fingerprint.clone(),
@@ -992,22 +1061,17 @@ pub(crate) async fn run_acp_internal_turn(
     .await
 }
 
-/// `emit_to` the turn's own window when it has one; internal turns (review
-/// correction, channels) have no window and fall back to a broadcast.
+/// Route ACP UI to windows of this conversation's project. Internal turns
+/// (review, channels) have no originating window, but same-project peers
+/// still need the cards; other projects must not see them.
 fn emit_ask_event(
     app: &AppHandle,
-    window_label: Option<&str>,
+    frame_id: &str,
+    project_id: Option<&str>,
     event: &str,
     payload: serde_json::Value,
 ) {
-    match window_label {
-        Some(label) => {
-            let _ = app.emit_to(label, event, payload);
-        }
-        None => {
-            let _ = app.emit(event, payload);
-        }
-    }
+    crate::emit_to_session_surfaces(app, frame_id, project_id, event, &payload);
 }
 
 /// Surface new pending bridge `ask_user` rows to the UI. `acp_asks` doubles as
@@ -1016,7 +1080,7 @@ fn emit_ask_event(
 async fn surface_pending_asks(
     state: &AppState,
     app: &AppHandle,
-    window_label: Option<&str>,
+    project_id: Option<&str>,
     frame_id: &str,
 ) {
     let pending = state
@@ -1036,11 +1100,12 @@ async fn surface_pending_asks(
             .lock()
             .unwrap()
             .insert(frame_id.to_string());
-        state.device_hub.mark_needs_user(frame_id, None);
+        state.device_hub.mark_needs_user(frame_id, project_id);
         let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap_or_default();
         emit_ask_event(
             app,
-            window_label,
+            frame_id,
+            project_id,
             "ask-user-request",
             serde_json::json!({
                 "frameId": frame_id,
@@ -1056,7 +1121,7 @@ async fn surface_pending_asks(
 async fn settle_expired_asks(
     state: &AppState,
     app: &AppHandle,
-    window_label: Option<&str>,
+    project_id: Option<&str>,
     frame_id: &str,
 ) {
     let expired = state
@@ -1082,7 +1147,8 @@ async fn settle_expired_asks(
     for (request_id, _) in expired {
         emit_ask_event(
             app,
-            window_label,
+            frame_id,
+            project_id,
             "ask-user-resolved",
             serde_json::json!({
                 "frameId": frame_id,
@@ -1123,15 +1189,15 @@ async fn run_acp_turn_with_kind(
     .await;
     // Runs on every exit path, success or error — asks must never outlive
     // their turn as live cards.
-    settle_expired_asks(state, app, window_label, frame_id).await;
-    result
+    settle_expired_asks(state, app, Some(project.id.as_str()), frame_id).await;
+    result.map_err(|error| format!("{}{error}", wisp_dto::ACP_TURN_ERROR_PREFIX))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_acp_turn_inner(
     state: &AppState,
     app: &AppHandle,
-    window_label: Option<&str>,
+    _window_label: Option<&str>,
     project: &ActiveProject,
     frame_id: &str,
     profile_id: Option<&str>,
@@ -1143,9 +1209,12 @@ async fn run_acp_turn_inner(
 ) -> Result<String, String> {
     let runtime = runtime_for(state, project, frame_id, profile_id).await?;
     if let Some(session_state) = runtime.session_state.lock().await.take() {
-        let _ = app.emit(
+        crate::emit_to_session_surfaces(
+            app,
+            frame_id,
+            Some(project.id.as_str()),
             "acp-session-state",
-            serde_json::json!({
+            &serde_json::json!({
                 "frameId": frame_id,
                 "modes": session_state.modes,
                 "configOptions": session_state.config_options,
@@ -1173,19 +1242,21 @@ async fn run_acp_turn_inner(
     }
     let mut next_seq = begin_acp_turn(&state.store, frame_id, message, turn_kind).await?;
     if turn_kind == AcpTurnKind::User {
-        crate::emit_agent_event(
+        crate::emit_agent_event_in(
             app,
             AgentEvent::User {
                 frame_id: frame_id.to_string(),
                 text: message.to_string(),
             },
+            Some(project.id.as_str()),
         );
-        crate::emit_agent_event(
+        crate::emit_agent_event_in(
             app,
             AgentEvent::MessageBoundary {
                 frame_id: frame_id.to_string(),
                 seq: next_seq - 1,
             },
+            Some(project.id.as_str()),
         );
     }
     let prompt = runtime.handle.prompt(runtime.session_id.clone(), content);
@@ -1202,10 +1273,15 @@ async fn run_acp_turn_inner(
         tokio::select! {
             result = &mut prompt => break result.map_err(|error| error.to_string())?,
             _ = ask_tick.tick() => {
-                surface_pending_asks(state, app, window_label, frame_id).await;
+                surface_pending_asks(state, app, Some(project.id.as_str()), frame_id).await;
             }
             event = runtime.handle.next_event() => match event {
                 Some(AcpSessionEvent::Update { kind, payload, .. }) => {
+                    if kind == AcpUpdateKind::ConfigOptions {
+                        if let Some(options) = payload.get("configOptions") {
+                            cache_config_options(&state.store, frame_id, &runtime.fingerprint, options).await?;
+                        }
+                    }
                     if matches!(kind, AcpUpdateKind::AgentMessage | AcpUpdateKind::AgentThought) {
                         if let Some(text) = text_from_payload(&payload) {
                             let target = if kind == AcpUpdateKind::AgentMessage { &mut assistant } else { &mut reasoning };
@@ -1215,7 +1291,7 @@ async fn run_acp_turn_inner(
                             } else {
                                 AgentEvent::Reasoning { frame_id: frame_id.to_string(), delta: text.to_string() }
                             };
-                            crate::emit_agent_event(app, event);
+                            crate::emit_agent_event_in(app, event, Some(project.id.as_str()));
                         }
                     } else {
                         if matches!(kind, AcpUpdateKind::ToolCall | AcpUpdateKind::ToolCallUpdate) {
@@ -1224,11 +1300,17 @@ async fn run_acp_turn_inner(
                         if kind == AcpUpdateKind::Plan {
                             plan = Some(payload.clone());
                         }
-                        let _ = app.emit("acp-session-update", serde_json::json!({
-                            "frameId": frame_id,
-                            "kind": format!("{kind:?}"),
-                            "payload": payload,
-                        }));
+                        crate::emit_to_session_surfaces(
+                            app,
+                            frame_id,
+                            Some(project.id.as_str()),
+                            "acp-session-update",
+                            &serde_json::json!({
+                                "frameId": frame_id,
+                                "kind": format!("{kind:?}"),
+                                "payload": payload,
+                            }),
+                        );
                     }
                 }
                 Some(AcpSessionEvent::Permission(request)) => {
@@ -1252,7 +1334,13 @@ async fn run_acp_turn_inner(
                     state.awaiting_confirm.lock().unwrap().insert(frame_id.to_string());
                     state.device_hub.mark_needs_user(frame_id, Some(&project.id));
                     crate::channels::publish_approval_request(&pending.remote_request);
-                    let _ = app.emit("permission-request", permission_event(frame_id, &request));
+                    crate::emit_to_session_surfaces(
+                        app,
+                        frame_id,
+                        Some(project.id.as_str()),
+                        "permission-request",
+                        &permission_event(frame_id, &request),
+                    );
                 }
                 Some(AcpSessionEvent::Exited { error }) => return Err(error.unwrap_or_else(|| "ACP Agent exited.".into())),
                 None => return Err("ACP Agent event stream closed.".into()),
@@ -1274,24 +1362,32 @@ async fn run_acp_turn_inner(
         };
         match event {
             AcpSessionEvent::Update { kind, payload, .. } => {
+                if kind == AcpUpdateKind::ConfigOptions {
+                    if let Some(options) = payload.get("configOptions") {
+                        cache_config_options(&state.store, frame_id, &runtime.fingerprint, options)
+                            .await?;
+                    }
+                }
                 if let Some(text) = text_from_payload(&payload) {
                     if kind == AcpUpdateKind::AgentMessage {
                         assistant.push_str(text);
-                        crate::emit_agent_event(
+                        crate::emit_agent_event_in(
                             app,
                             AgentEvent::Text {
                                 frame_id: frame_id.to_string(),
                                 delta: text.to_string(),
                             },
+                            Some(project.id.as_str()),
                         );
                     } else if kind == AcpUpdateKind::AgentThought {
                         reasoning.push_str(text);
-                        crate::emit_agent_event(
+                        crate::emit_agent_event_in(
                             app,
                             AgentEvent::Reasoning {
                                 frame_id: frame_id.to_string(),
                                 delta: text.to_string(),
                             },
+                            Some(project.id.as_str()),
                         );
                     }
                 }
@@ -1308,9 +1404,12 @@ async fn run_acp_turn_inner(
                     if kind == AcpUpdateKind::Plan {
                         plan = Some(payload.clone());
                     }
-                    let _ = app.emit(
+                    crate::emit_to_session_surfaces(
+                        app,
+                        frame_id,
+                        Some(project.id.as_str()),
                         "acp-session-update",
-                        serde_json::json!({
+                        &serde_json::json!({
                             "frameId": frame_id,
                             "kind": format!("{kind:?}"),
                             "payload": payload,
@@ -1366,13 +1465,14 @@ async fn run_acp_turn_inner(
     )
     .await;
     if !resources.is_empty() {
-        crate::emit_agent_event(
+        crate::emit_agent_event_in(
             app,
             AgentEvent::Resources {
                 frame_id: frame_id.to_string(),
                 seq: next_seq,
                 resources: resources.iter().map(Into::into).collect(),
             },
+            Some(project.id.as_str()),
         );
     }
     cancel_pending_permissions(state, frame_id, &runtime).await;
@@ -1479,9 +1579,13 @@ async fn respond_acp_permission_inner(
         state.awaiting_confirm.lock().unwrap().remove(&frame_id);
         state.device_hub.resolve_needs_user(&frame_id);
     }
-    let _ = app.emit(
+    let project_id = state.store.frame_project_id(&frame_id).await.ok().flatten();
+    crate::emit_to_session_surfaces(
+        app,
+        &frame_id,
+        project_id.as_deref(),
         "permission-resolved",
-        serde_json::json!({
+        &serde_json::json!({
             "frameId": frame_id,
             "requestId": request_id,
         }),
@@ -1538,7 +1642,7 @@ pub(crate) async fn respond_remote_permission(
 pub(crate) async fn respond_ask_user(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    _window: tauri::WebviewWindow,
     request_id: String,
     answer: String,
 ) -> Result<(), String> {
@@ -1579,10 +1683,15 @@ pub(crate) async fn respond_ask_user(
         state.awaiting_confirm.lock().unwrap().remove(&frame_id);
         state.device_hub.resolve_needs_user(&frame_id);
     }
-    let _ = app.emit_to(
-        window.label(),
+    // Route by the conversation's project, not the answering window's current
+    // binding. The window may have switched projects after the card appeared.
+    let project_id = state.store.frame_project_id(&frame_id).await.ok().flatten();
+    crate::emit_to_session_surfaces(
+        &app,
+        &frame_id,
+        project_id.as_deref(),
         "ask-user-resolved",
-        serde_json::json!({
+        &serde_json::json!({
             "frameId": frame_id,
             "requestId": request_id,
             "expired": false,
@@ -1600,7 +1709,7 @@ pub(crate) async fn set_acp_session_config(
     config_id: String,
     value: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&frame_id)
@@ -1611,13 +1720,7 @@ pub(crate) async fn set_acp_session_config(
     {
         return Err("Session does not belong to the active project.".into());
     }
-    let runtime = state
-        .acp_sessions
-        .lock()
-        .await
-        .get(&frame_id)
-        .cloned()
-        .ok_or_else(|| "ACP session is not active.".to_string())?;
+    let runtime = runtime_for(&state, &project, &frame_id, None).await?;
     let value = serde_json::from_value(value).map_err(|error| error.to_string())?;
     let options = runtime
         .handle
@@ -1625,9 +1728,16 @@ pub(crate) async fn set_acp_session_config(
         .await
         .map_err(|error| error.to_string())?;
     let value = serde_json::to_value(&options).map_err(|error| error.to_string())?;
-    let _ = app.emit(
+    cache_config_options(&state.store, &frame_id, &runtime.fingerprint, &value).await?;
+    if let Some(pending) = runtime.session_state.lock().await.as_mut() {
+        pending.config_options = Some(options);
+    }
+    crate::emit_to_session_surfaces(
+        &app,
+        &frame_id,
+        Some(project.id.as_str()),
         "acp-session-state",
-        serde_json::json!({
+        &serde_json::json!({
             "frameId": frame_id,
             "configOptions": value,
         }),
@@ -1646,7 +1756,7 @@ pub(crate) async fn set_acp_session_mode(
     frame_id: String,
     mode_id: String,
 ) -> Result<String, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     if state
         .store
         .frame_project_id(&frame_id)
@@ -1975,6 +2085,71 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(completed, "review complete");
+    }
+
+    #[tokio::test]
+    async fn config_options_survive_restart_without_crossing_session_or_profile() {
+        let tmp = std::env::temp_dir().join(format!("wisp_acp_configs_{}.sqlite", Uuid::new_v4()));
+        let store = wisp_store::Store::open(&tmp).await.unwrap();
+        let options = serde_json::json!([{ "id": "model", "name": "Model", "type": "select", "currentValue": "fast", "options": [{"value":"fast","name":"Fast"}, {"value":"smart","name":"Smart"}] }]);
+        let mut fresh = wisp_acp::AcpSessionState {
+            modes: None,
+            config_options: Some(serde_json::from_value(options.clone()).unwrap()),
+        };
+        restore_config_options(&store, "a", "profile-a", &mut fresh)
+            .await
+            .unwrap();
+        let mut updated = options.clone();
+        updated[0]["currentValue"] = serde_json::json!("smart");
+        cache_config_options(&store, "a", "profile-a", &updated)
+            .await
+            .unwrap();
+        cache_config_options(&store, "b", "profile-b", &options)
+            .await
+            .unwrap();
+        drop(store);
+        let store = wisp_store::Store::open(&tmp).await.unwrap();
+        let mut resumed = wisp_acp::AcpSessionState {
+            modes: None,
+            config_options: None,
+        };
+        restore_config_options(&store, "a", "profile-a", &mut resumed)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(resumed.config_options.unwrap()).unwrap(),
+            updated
+        );
+        assert_eq!(
+            cached_config_options(&store, "b", "profile-b")
+                .await
+                .unwrap(),
+            Some(options)
+        );
+        assert!(cached_config_options(&store, "a", "profile-b")
+            .await
+            .unwrap()
+            .is_none());
+        let mut cleared = wisp_acp::AcpSessionState {
+            modes: None,
+            config_options: Some(vec![]),
+        };
+        restore_config_options(&store, "a", "profile-a", &mut cleared)
+            .await
+            .unwrap();
+        cache_config_options(&store, "a", "profile-a", &serde_json::Value::Null)
+            .await
+            .unwrap();
+        let mut loaded = wisp_acp::AcpSessionState {
+            modes: None,
+            config_options: None,
+        };
+        restore_config_options(&store, "a", "profile-a", &mut loaded)
+            .await
+            .unwrap();
+        assert_eq!(loaded.config_options, Some(vec![]));
+        drop(store);
+        let _ = std::fs::remove_file(tmp);
     }
 
     #[tokio::test]
