@@ -39,6 +39,20 @@ pub(super) async fn get_research_graph(
 }
 
 #[tauri::command]
+pub(super) async fn get_research_calendar(
+    state: State<'_, AppState>,
+    project_ids: Vec<String>,
+    from: i64,
+    until: i64,
+) -> Result<Vec<wisp_dto::ResearchCalendarProject>, String> {
+    state
+        .store
+        .research_calendar(&project_ids, from, until)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub(super) async fn get_research_journey(
     state: State<'_, AppState>,
     window: tauri::WebviewWindow,

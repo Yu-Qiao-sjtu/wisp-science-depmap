@@ -8,6 +8,15 @@ pub struct ResearchJourney {
     pub truncated: bool,
 }
 
+/// One project's mainline history in the home calendar. A failed project stays
+/// visible as an error instead of making an incomplete calendar look empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchCalendarProject {
+    pub project_id: String,
+    pub history: ResearchJourney,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResearchJourneyEntry {
     pub id: String,

@@ -567,3 +567,26 @@ fn research_journey_contract_preserves_version_and_occurrence_time() {
         source
     );
 }
+
+#[test]
+fn research_calendar_contract_preserves_project_errors_and_truncation() {
+    let backend = vec![
+        wisp_dto::ResearchCalendarProject {
+            project_id: "p".into(),
+            history: wisp_dto::ResearchJourney {
+                entries: vec![],
+                truncated: true,
+            },
+            error: None,
+        },
+        wisp_dto::ResearchCalendarProject {
+            project_id: "missing".into(),
+            error: Some("Project no longer exists".into()),
+            ..Default::default()
+        },
+    ];
+    assert_eq!(
+        roundtrip::<_, Vec<wisp_dto::ResearchCalendarProject>>(&backend),
+        backend
+    );
+}

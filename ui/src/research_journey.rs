@@ -13,17 +13,17 @@ use leptos::*;
 use std::collections::{BTreeMap, HashSet};
 use wasm_bindgen::JsValue;
 
-fn j(loc: Locale, en: &'static str, zh: &'static str) -> &'static str {
+pub(super) fn j(loc: Locale, en: &'static str, zh: &'static str) -> &'static str {
     if loc == Locale::Zh {
         zh
     } else {
         en
     }
 }
-fn date(ts: i64) -> js_sys::Date {
+pub(super) fn date(ts: i64) -> js_sys::Date {
     js_sys::Date::new(&JsValue::from_f64(ts as f64 * 1000.0))
 }
-fn day_key(ts: i64) -> String {
+pub(super) fn day_key(ts: i64) -> String {
     let d = date(ts);
     format!(
         "{:04}-{:02}-{:02}",
@@ -32,26 +32,26 @@ fn day_key(ts: i64) -> String {
         d.get_date()
     )
 }
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     (js_sys::Date::now() / 1000.0) as i64
 }
-fn month_of(ts: i64) -> (i32, u32) {
+pub(super) fn month_of(ts: i64) -> (i32, u32) {
     let d = date(ts);
     (d.get_full_year() as i32, d.get_month())
 }
-fn month_start(month: (i32, u32)) -> i64 {
+pub(super) fn month_start(month: (i32, u32)) -> i64 {
     (js_sys::Date::new_with_year_month_day(month.0 as u32, month.1 as i32, 1).get_time() / 1000.0)
         as i64
 }
-fn shift_month(month: (i32, u32), delta: i32) -> (i32, u32) {
+pub(super) fn shift_month(month: (i32, u32), delta: i32) -> (i32, u32) {
     let n = month.0 * 12 + month.1 as i32 + delta;
     (n.div_euclid(12), n.rem_euclid(12) as u32)
 }
-fn clock(ts: i64) -> String {
+pub(super) fn clock(ts: i64) -> String {
     let d = date(ts);
     format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
 }
-fn category(loc: Locale, kind: &str) -> &'static str {
+pub(super) fn category(loc: Locale, kind: &str) -> &'static str {
     match kind {
         "progress" => j(loc, "Progress", "进展"),
         "finding" => j(loc, "Finding", "发现"),
@@ -77,7 +77,7 @@ fn icon(kind: &str) -> &'static str {
         _ => "plan",
     }
 }
-fn status(loc: Locale, value: &str) -> String {
+pub(super) fn status(loc: Locale, value: &str) -> String {
     match value {
         "submitted" => j(loc, "Submitted", "已提交"),
         "started" => j(loc, "Started", "开始"),
@@ -91,7 +91,7 @@ fn status(loc: Locale, value: &str) -> String {
     }
     .into()
 }
-async fn call<T: serde::de::DeserializeOwned>(
+pub(super) async fn call<T: serde::de::DeserializeOwned>(
     command: &str,
     args: serde_json::Value,
 ) -> Result<T, String> {
@@ -103,7 +103,10 @@ async fn call<T: serde::de::DeserializeOwned>(
     .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))?;
     serde_wasm_bindgen::from_value(value).map_err(|e| e.to_string())
 }
-fn days(entries: &[ResearchJourneyEntry], query: &str) -> Vec<(String, Vec<ResearchJourneyEntry>)> {
+pub(super) fn days(
+    entries: &[ResearchJourneyEntry],
+    query: &str,
+) -> Vec<(String, Vec<ResearchJourneyEntry>)> {
     let query = query.trim().to_lowercase();
     let mut groups = BTreeMap::<String, Vec<ResearchJourneyEntry>>::new();
     for e in entries {
@@ -131,6 +134,7 @@ fn days(entries: &[ResearchJourneyEntry], query: &str) -> Vec<(String, Vec<Resea
 pub(super) fn ResearchJourneyView(
     locale: RwSignal<Locale>,
     project_name: String,
+    #[prop(optional_no_strip)] initial_day: Option<i64>,
     left: Signal<f64>,
     graph: ReadSignal<ResearchGraph>,
     artifact_open: Signal<bool>,
@@ -138,15 +142,15 @@ pub(super) fn ResearchJourneyView(
     on_artifact: Callback<(String, String, String)>,
     on_session: Callback<String>,
 ) -> impl IntoView {
-    let month = create_rw_signal(month_of(now()));
+    let month = create_rw_signal(month_of(initial_day.unwrap_or_else(now)));
     let refresh = create_rw_signal(0u32);
-    let focus_day = create_rw_signal(None::<i64>);
+    let focus_day = create_rw_signal(initial_day);
     let query = create_rw_signal(String::new());
     let graph_tab = create_rw_signal(false);
     let graph_canvas = create_rw_signal(false);
     let selected_edge = create_rw_signal::<Option<ResearchEdge>>(None);
     let selected = create_rw_signal::<Option<ResearchJourneyEntry>>(None);
-    let selected_date = create_rw_signal(day_key(now()));
+    let selected_date = create_rw_signal(day_key(initial_day.unwrap_or_else(now)));
     let note_open = create_rw_signal(false);
     let run_open = create_rw_signal::<Option<String>>(None);
     let history = create_local_resource(
