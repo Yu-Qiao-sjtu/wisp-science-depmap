@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "wisp-depmap-agent"
+type: software
+authors:
+  - name: "wisp-depmap-agent project"
+abstract: >-
+  A local-first AI research workbench for DepMap mutation, expression,
+  and CRISPR gene-dependency analysis.
+repository-code: "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap"
+url: "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap"
+license: AGPL-3.0-only
+keywords:
+  - DepMap
+  - cancer dependency
+  - mutation analysis
+  - CRISPR screening
+  - scientific agent
