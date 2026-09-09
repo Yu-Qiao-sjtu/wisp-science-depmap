@@ -15,6 +15,44 @@ fn visible(alias: &str, entity: &str) -> String {
 }
 
 impl Store {
+    /// Read explicitly requested projects without changing the active project
+    /// or following any project's active exploration branch.
+    pub async fn research_calendar(
+        &self,
+        project_ids: &[String],
+        from: i64,
+        until: i64,
+    ) -> Result<Vec<wisp_dto::ResearchCalendarProject>> {
+        if from >= until || until.saturating_sub(from) > 32 * 86400 {
+            bail!("Research history requires a date range of at most 32 days");
+        }
+        let mut projects = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for id in project_ids {
+            if !seen.insert(id) {
+                continue;
+            }
+            let result = async {
+                if self.get_project(id).await?.is_none() {
+                    bail!("Project no longer exists");
+                }
+                self.research_journey(&StateScope::mainline(id), from, until)
+                    .await
+            }
+            .await;
+            let (history, error) = match result {
+                Ok(history) => (history, None),
+                Err(error) => (ResearchJourney::default(), Some(error.to_string())),
+            };
+            projects.push(wisp_dto::ResearchCalendarProject {
+                project_id: id.clone(),
+                history,
+                error,
+            });
+        }
+        Ok(projects)
+    }
+
     pub async fn research_journey(
         &self,
         scope: &StateScope,
@@ -192,6 +230,57 @@ impl Store {
 mod tests {
     use super::*;
     use crate::{ArtifactVersionDraft, RunRecord};
+
+    #[tokio::test]
+    async fn calendar_reads_requested_mainlines_and_keeps_project_errors_explicit() {
+        let path = std::env::temp_dir().join(format!("calendar-{}.db", uuid::Uuid::new_v4()));
+        let store = Store::open(&path).await.unwrap();
+        for id in ["a", "b", "hidden"] {
+            store.create_project(id, id, "").await.unwrap();
+            store
+                .add_research_journal_entry(
+                    &StateScope::mainline(id),
+                    &ResearchJournalInput {
+                        title: format!("{id} finding"),
+                        body: "Evidence".into(),
+                        category: "finding".into(),
+                        occurred_at: 100,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let ids = vec!["a".into(), "missing".into(), "b".into(), "a".into()];
+        let rows = store.research_calendar(&ids, 0, 86400).await.unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows[0].history,
+            store
+                .research_journey(&StateScope::mainline("a"), 0, 86400)
+                .await
+                .unwrap()
+        );
+        assert_eq!(rows[0].history.entries[0].title, "a finding");
+        assert_eq!(rows[2].history.entries[0].title, "b finding");
+        assert!(rows[1].error.is_some());
+        assert!(rows[1].history.entries.is_empty());
+        assert!(!rows.iter().any(|r| r.project_id == "hidden"));
+        assert!(store.research_calendar(&ids, 100, 100).await.is_err());
+        assert!(store.research_calendar(&[], 0, 33 * 86400).await.is_err());
+        assert!(store
+            .research_calendar(&[], 0, 86400)
+            .await
+            .unwrap()
+            .is_empty());
+        let empty = store
+            .research_calendar(&["a".into()], 101, 86400)
+            .await
+            .unwrap();
+        assert!(empty[0].history.entries.is_empty());
+        assert!(empty[0].error.is_none());
+        store.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
 
     #[tokio::test]
     async fn journey_records_message_days_and_preserves_stated_decision_rationale() {

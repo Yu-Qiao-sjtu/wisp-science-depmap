@@ -9444,6 +9444,24 @@ async fn research_journey_notes_follow_exploration_baseline_and_export() {
         .entries
         .iter()
         .any(|e| e.source_id == private));
+    let calendar = store
+        .research_calendar(&["p".into()], 0, 86400)
+        .await
+        .unwrap();
+    assert_eq!(
+        calendar[0].history,
+        store.research_journey(&main, 0, 86400).await.unwrap()
+    );
+    assert!(!calendar[0]
+        .history
+        .entries
+        .iter()
+        .any(|e| e.source_id == private));
+    assert!(calendar[0]
+        .history
+        .entries
+        .iter()
+        .any(|e| e.source_id == later));
     let archive = path.with_extension("export.db");
     let target_path = path.with_extension("target.db");
     store.export_project_database("p", &archive).await.unwrap();
