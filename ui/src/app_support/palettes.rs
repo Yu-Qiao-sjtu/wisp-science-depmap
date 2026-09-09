@@ -478,6 +478,15 @@ pub(crate) fn ActionPalette(
                 true,
             ),
             (
+                "new-window",
+                "expand",
+                "command.new_window",
+                general.clone(),
+                "",
+                "new window gui 新建 窗口",
+                false,
+            ),
+            (
                 "search",
                 "search",
                 "command.search",
@@ -502,6 +511,15 @@ pub(crate) fn ActionPalette(
                 general.clone(),
                 "shift-h",
                 "privacy recording hide projects recent sessions 隐私 录屏 隐藏 项目 最近会话",
+                false,
+            ),
+            (
+                "setup",
+                "wrench",
+                "command.setup",
+                general.clone(),
+                "",
+                "quick setup onboarding model environment python r uv node 快速 配置 初始化 模型 环境",
                 false,
             ),
             (

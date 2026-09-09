@@ -38,6 +38,9 @@
 
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
+/* Keep the settings footer reachable with large fonts in short windows. */
+.sidebar > .nav { min-height: 0; overflow-y: auto; }
+.sidebar > .side-foot { flex-shrink: 0; }
 .side-btn {
   display: flex; align-items: center; gap: 10px;
   width: 100%; text-align: left;

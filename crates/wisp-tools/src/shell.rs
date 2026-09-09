@@ -69,7 +69,7 @@ fn shell_description() -> String {
     } else {
         "POSIX sh"
     };
-    format!("Execute a shell command via {shell} (60s timeout, 1 MiB combined output limit) and return stdout/stderr. Reach for this only when no dedicated tool fits. Write commands for this OS; avoid cross-shell one-liners and use Python or pixi for package-heavy scientific work.")
+    format!("Execute a shell command via {shell} (60s timeout, 1 MiB combined output limit) and return stdout/stderr. Commands execute in a fresh process; use the selected environment's Python/Rscript or pixi run for scripts. Use dedicated file tools for reading/writing/editing files. Use run_in_context for standalone background, long-running, or remote work; python/r tools provide persistent interpreter state when that suits the task. Write commands for this OS and avoid cross-shell one-liners.")
 }
 
 async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duration) -> ToolResult {
@@ -109,6 +109,7 @@ async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duratio
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     crate::process::hide_console_async(&mut command);
     command.current_dir(env.project_root());
+    command.envs(crate::network::command_proxy_env());
 
     let mut child = match command.spawn() {
         Ok(c) => c,
@@ -363,6 +364,11 @@ mod tests {
             desc.contains("pixi"),
             "scientific env guidance missing: {desc}"
         );
+        assert!(desc.contains("Commands execute in a fresh process"));
+        assert!(!desc.contains("CSV/JSON"));
+        assert!(!desc.contains("report/HTML"));
+        assert!(desc.contains("selected environment's Python/Rscript"));
+        assert!(!desc.contains("only when no dedicated tool fits"));
     }
 
     #[test]

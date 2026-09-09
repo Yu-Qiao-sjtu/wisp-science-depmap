@@ -1,6 +1,7 @@
 //! Project Commands split out of lib.rs; shared state/helpers stay in the crate root.
 
 use super::*;
+use std::collections::HashMap;
 use tauri::Manager;
 
 pub(crate) fn same_workspace_path(left: &Path, right: &Path) -> bool {
@@ -226,11 +227,63 @@ pub(super) async fn set_active_project(
     let root = ap.root.clone();
     state.set_active(label, ap);
     state.set_active_frame(label, None);
-    {
+    remember_window_project(&state.store, label, id).await;
+    // Extra windows must not steal the main window's restore mapping or the
+    // startup workspace display. remember_window_project already skips home-*.
+    if label == "main" {
         state.bootstrap.lock().unwrap().workspace = root.to_string_lossy().into_owned();
+        let _ = state.store.set_setting("active_project_id", id).await;
     }
-    let _ = state.store.set_setting("active_project_id", id).await;
     Ok((name, ws))
+}
+
+const WINDOW_ACTIVE_PROJECTS_KEY: &str = "window_active_projects";
+// Serialize only the small restore-setting read/modify/write operations.
+// Agent turns and project work never acquire this lock.
+static WINDOW_PERSISTENCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn load_window_active_projects(store: &Store) -> HashMap<String, String> {
+    store
+        .get_setting(WINDOW_ACTIVE_PROJECTS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Persist this window's last project. File → New Window views (`home-*`) are
+/// not restored on launch, so they must not overwrite another window's mapping.
+/// Only the `main` window still writes the legacy `active_project_id` fallback.
+async fn remember_window_project(store: &Store, label: &str, id: &str) {
+    if crate::app_state::is_blank_window_label(label) {
+        return;
+    }
+    let _guard = WINDOW_PERSISTENCE_LOCK.lock().await;
+    let mut windows = load_window_active_projects(store).await;
+    windows.insert(label.to_string(), id.to_string());
+    let _ = store
+        .set_setting(
+            WINDOW_ACTIVE_PROJECTS_KEY,
+            &serde_json::to_string(&windows).unwrap_or_default(),
+        )
+        .await;
+}
+
+/// Project the `main` window should restore. Prefers `window_active_projects`
+/// so an extra window opening a different workspace cannot steal main's last
+/// project; falls back to the legacy global `active_project_id`.
+pub(crate) async fn startup_main_project_id(store: &Store) -> String {
+    let windows = load_window_active_projects(store).await;
+    if let Some(id) = windows.get("main") {
+        if store.get_project(id).await.ok().flatten().is_some() {
+            return id.clone();
+        }
+    }
+    match store.get_setting("active_project_id").await.ok().flatten() {
+        Some(id) if store.get_project(&id).await.ok().flatten().is_some() => id,
+        _ => "default".to_string(),
+    }
 }
 
 /// Brand string used when no project is open (home, or a window that has not
@@ -275,7 +328,31 @@ pub(super) async fn persisted_windows(store: &Store) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Preserve a dedicated window's label while restoring its last selected
+/// project, which may differ from the project that originally opened it.
+pub(super) async fn restored_window_projects(store: &Store) -> Vec<(String, String)> {
+    let windows = load_window_active_projects(store).await;
+    let mut restored = Vec::new();
+    for original_id in persisted_windows(store).await {
+        let label = project_window_label(&original_id);
+        let id = windows.get(&label).unwrap_or(&original_id);
+        if store.get_project(id).await.ok().flatten().is_some() {
+            restored.push((label, id.clone()));
+        } else if store
+            .get_project(&original_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            restored.push((label, original_id));
+        }
+    }
+    restored
+}
+
 pub(super) async fn update_persisted_windows(store: &Store, id: &str, present: bool) {
+    let _guard = WINDOW_PERSISTENCE_LOCK.lock().await;
     let mut v = persisted_windows(store).await;
     let had = v.iter().any(|x| x == id);
     if present && !had {
@@ -295,6 +372,24 @@ pub(super) async fn update_persisted_windows(store: &Store, id: &str, present: b
 
 pub(super) fn project_window_label(id: &str) -> String {
     format!("proj-{id}") // project ids are UUIDs or "default" — label-safe
+}
+
+/// File → New Window: a fresh GUI that lands on the Projects home screen and
+/// is not bound to any workspace until the user opens one in that window.
+/// Labels must stay on the `home-*` glob in `capabilities/default.json`, or
+/// the custom Windows title-bar close/minimize/maximize calls are denied.
+pub(super) fn next_blank_window_label() -> String {
+    format!("home-{}", Uuid::new_v4())
+}
+
+pub(super) fn blank_window_url() -> &'static str {
+    "index.html"
+}
+
+/// Offset a new File → New Window from its anchor so the extra GUI is obvious
+/// instead of covering the caller exactly.
+pub(super) fn cascaded_window_position(anchor_pos: (i32, i32), offset: i32) -> (i32, i32) {
+    (anchor_pos.0 + offset, anchor_pos.1 + offset)
 }
 
 /// URL for a dedicated project window. Ids are UUIDs or "default" — no
@@ -333,8 +428,17 @@ pub(super) async fn spawn_project_window(
     session: Option<&str>,
     anchor_label: Option<&str>,
 ) -> Result<String, String> {
-    let label = project_window_label(id);
-    if let Some(w) = app.get_webview_window(&label) {
+    // A dedicated window can switch projects. Look up its current binding
+    // before using a label that still names its original project.
+    let existing = state
+        .session_surface_labels("", Some(id))
+        .into_iter()
+        .find(|label| label.starts_with("proj-") && app.get_webview_window(label).is_some());
+    if let Some(w) = existing
+        .as_deref()
+        .and_then(|label| app.get_webview_window(label))
+    {
+        let label = w.label().to_string();
         let _ = w.set_focus();
         if let Some(sid) = session {
             let _ = app.emit_to(
@@ -345,6 +449,22 @@ pub(super) async fn spawn_project_window(
         }
         return Ok(label);
     }
+    let mut label = project_window_label(id);
+    if app.get_webview_window(&label).is_some() {
+        label = project_window_label(&Uuid::new_v4().to_string());
+    }
+    spawn_project_window_with_label(app, state, &label, id, session, anchor_label).await
+}
+
+pub(super) async fn spawn_project_window_with_label(
+    app: &AppHandle,
+    state: &AppState,
+    label: &str,
+    id: &str,
+    session: Option<&str>,
+    anchor_label: Option<&str>,
+) -> Result<String, String> {
+    let label = label.to_string();
     // Pre-set this window's active project so its first commands resolve correctly
     // even before the window's frontend calls open_project.
     let (name, _) = set_active_project(state, &label, id).await?;
@@ -378,7 +498,8 @@ pub(super) async fn spawn_project_window(
     wire_macos_menu_events(&win);
     let evt_app = app.clone();
     let evt_label = label.clone();
-    let evt_id = id.to_string();
+    let persisted_id = label.strip_prefix("proj-").unwrap_or(id).to_string();
+    let evt_id = persisted_id.clone();
     win.on_window_event(move |ev| {
         if matches!(ev, tauri::WindowEvent::Destroyed) {
             // Drop this window's per-window project context and stop persisting
@@ -394,7 +515,7 @@ pub(super) async fn spawn_project_window(
             });
         }
     });
-    update_persisted_windows(&state.store, id, true).await;
+    update_persisted_windows(&state.store, &persisted_id, true).await;
     Ok(label)
 }
 
@@ -416,6 +537,57 @@ pub(super) async fn open_project_window(
         Some(window.label()),
     )
     .await
+}
+
+/// Open a blank GUI on the Projects home screen. The window has its own label
+/// and no `ActiveProject` until the user opens a workspace in it, so it cannot
+/// read or mutate another window's files, sessions, or runtimes.
+pub(super) async fn spawn_blank_window(
+    app: &AppHandle,
+    anchor_label: Option<&str>,
+) -> Result<String, String> {
+    let label = next_blank_window_label();
+    let url = tauri::WebviewUrl::App(blank_window_url().into());
+    let mut builder = tauri::WebviewWindowBuilder::new(app, &label, url)
+        .title(app_window_title(None))
+        .inner_size(1100.0, 760.0)
+        .resizable(true)
+        .on_navigation(crate::guard_webview_navigation);
+    let anchor = anchor_label
+        .and_then(|label| app.get_webview_window(label))
+        .or_else(|| app.get_webview_window("main"));
+    if let Some(anchor) = anchor {
+        if let Ok(pos) = anchor.outer_position() {
+            let scale = anchor.scale_factor().unwrap_or(1.0);
+            let offset = (36.0 * scale) as i32;
+            let (x, y) = cascaded_window_position((pos.x, pos.y), offset);
+            builder = builder.position(x as f64 / scale, y as f64 / scale);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    let builder = builder.decorations(false).shadow(true);
+    let win = builder.build().map_err(|e| e.to_string())?;
+    crate::windows_snap::install_for_window(&win);
+    #[cfg(target_os = "macos")]
+    wire_macos_menu_events(&win);
+    let evt_app = app.clone();
+    let evt_label = label.clone();
+    win.on_window_event(move |ev| {
+        if matches!(ev, tauri::WindowEvent::Destroyed) {
+            let st = evt_app.state::<AppState>();
+            st.active.write().unwrap().remove(&evt_label);
+            st.active_frame.write().unwrap().remove(&evt_label);
+        }
+    });
+    Ok(label)
+}
+
+#[tauri::command]
+pub(super) async fn open_new_window(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<String, String> {
+    spawn_blank_window(&app, Some(window.label())).await
 }
 
 #[tauri::command]
@@ -447,8 +619,12 @@ pub(super) async fn delete_project(
     // legitimately be deleted while it's still the backend's *active* one
     // (returning to the list is a frontend-only nav — it never told the backend
     // to leave). Delete it, then fall back to the always-present "default"
-    // workspace so `active` never dangles at a deleted project.
-    let was_active = state.active(window.label()).id == id;
+    // workspace so `active` never dangles at a deleted project. An unbound
+    // File → New Window (`home-*`) must not treat `main` as active or panic.
+    let was_active = state
+        .require_active(window.label())
+        .map(|ap| ap.id == id)
+        .unwrap_or(false);
     // Stop the deleted project's own running sessions (gather frame ids before
     // the store cascade removes them); other projects keep running (#52).
     cancel_project_sessions(state.inner(), &id).await;
@@ -586,7 +762,7 @@ async fn settings_project(
 ) -> Result<(String, PathBuf, String, String), String> {
     let id = match requested_id.map(str::trim).filter(|id| !id.is_empty()) {
         Some(id) => id.to_string(),
-        None => state.active(window_label).id,
+        None => state.require_active(window_label)?.id,
     };
     let (name, description, workspace) = state
         .store
@@ -637,7 +813,7 @@ pub(super) async fn get_project_run_retention(
     state: State<'_, AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<ProjectRunRetention, String> {
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     let (run_retention_days, failed_run_retention_days, orphan_file_retention_days) = state
         .store
         .project_run_retention(&ap.id)
@@ -658,7 +834,7 @@ pub(super) async fn set_project_run_retention(
     failed_run_retention_days: Option<i64>,
     orphan_file_retention_days: Option<i64>,
 ) -> Result<ProjectRunRetention, String> {
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     let _project_activity = state.begin_project_activity(&ap.id)?;
     state
         .store
@@ -714,15 +890,16 @@ pub(super) async fn update_project(
     // Home-card configure (`id` is Some) may run while this window is still
     // on the projects landing — do not stamp that window with the renamed
     // project. In-project settings omit `id` and should update this window.
-    // The dedicated `proj-{id}` window, if open, always shows that project.
+    // A dedicated window may now show a different project than its label.
     if id.is_none() {
         apply_app_window_title(&window, Some(name));
     }
-    if let Some(proj_win) = window
-        .app_handle()
-        .get_webview_window(&project_window_label(&project_id))
-    {
-        apply_app_window_title(&proj_win, Some(name));
+    for label in state.session_surface_labels("", Some(&project_id)) {
+        if label.starts_with("proj-") {
+            if let Some(proj_win) = window.app_handle().get_webview_window(&label) {
+                apply_app_window_title(&proj_win, Some(name));
+            }
+        }
     }
     if let Some(default_specialist_id) = default_specialist_id {
         specialists::set_project_default_specialist(
@@ -740,14 +917,16 @@ pub(super) async fn get_project_info(
     state: State<'_, AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<ProjectInfo, String> {
-    Ok(build_project_info(&state, window.label()).await)
+    build_project_info(&state, window.label()).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        app_window_title, read_project_agent_context, same_workspace_path,
-        write_project_agent_context, APP_WINDOW_TITLE,
+        app_window_title, blank_window_url, cascaded_window_position, load_window_active_projects,
+        next_blank_window_label, read_project_agent_context, remember_window_project,
+        restored_window_projects, same_workspace_path, startup_main_project_id,
+        update_persisted_windows, write_project_agent_context, APP_WINDOW_TITLE,
     };
 
     #[test]
@@ -763,6 +942,21 @@ mod tests {
             app_window_title(Some("  fkbp1a  ")),
             "wisp science \u{2014} fkbp1a"
         );
+    }
+
+    #[test]
+    fn blank_window_url_does_not_bind_a_project() {
+        assert_eq!(blank_window_url(), "index.html");
+        assert!(!blank_window_url().contains("project="));
+        let label = next_blank_window_label();
+        assert!(crate::app_state::is_blank_window_label(&label));
+        assert_ne!(label, next_blank_window_label());
+    }
+
+    #[test]
+    fn cascaded_window_position_offsets_from_the_anchor() {
+        assert_eq!(cascaded_window_position((100, 50), 36), (136, 86));
+        assert_eq!(cascaded_window_position((-1600, -50), 36), (-1564, -14));
     }
 
     #[test]
@@ -795,5 +989,151 @@ mod tests {
         assert!(!root.join(".wisp").join("WISP.md").exists());
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn extra_windows_do_not_overwrite_main_last_project() {
+        let path = std::env::temp_dir().join(format!(
+            "wisp_window_projects_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&path).await.unwrap();
+        store
+            .create_project("main-project", "Main", "/ws/main")
+            .await
+            .unwrap();
+        store
+            .create_project("other-project", "Other", "/ws/other")
+            .await
+            .unwrap();
+        let _ = store
+            .set_setting("active_project_id", "main-project")
+            .await
+            .unwrap();
+
+        tokio::join!(
+            remember_window_project(&store, "main", "main-project"),
+            remember_window_project(&store, "home-abc", "other-project"),
+            remember_window_project(&store, "proj-other-project", "other-project"),
+        );
+
+        let windows = load_window_active_projects(&store).await;
+        assert_eq!(
+            windows.get("main").map(String::as_str),
+            Some("main-project")
+        );
+        assert_eq!(
+            windows.get("proj-other-project").map(String::as_str),
+            Some("other-project")
+        );
+        assert!(
+            !windows.contains_key("home-abc"),
+            "blank File → New Window labels must not persist: {windows:?}"
+        );
+        assert_eq!(startup_main_project_id(&store).await, "main-project");
+
+        let _ = store
+            .set_setting("active_project_id", "other-project")
+            .await
+            .unwrap();
+        assert_eq!(
+            startup_main_project_id(&store).await,
+            "main-project",
+            "window_active_projects[main] must beat the legacy global id"
+        );
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn dedicated_windows_restore_switched_projects_after_concurrent_updates() {
+        let path = std::env::temp_dir().join(format!(
+            "wisp_window_restore_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&path).await.unwrap();
+        for id in ["a", "b", "c"] {
+            store
+                .create_project(id, id, &format!("/ws/{id}"))
+                .await
+                .unwrap();
+        }
+        tokio::join!(
+            update_persisted_windows(&store, "a", true),
+            update_persisted_windows(&store, "b", true),
+        );
+        remember_window_project(&store, "proj-a", "c").await;
+        let mut restored = restored_window_projects(&store).await;
+        restored.sort();
+        assert_eq!(
+            restored,
+            vec![("proj-a".into(), "c".into()), ("proj-b".into(), "b".into())]
+        );
+
+        // A deleted last project falls back to the original, and closing one
+        // window must not discard a concurrently opened sibling.
+        store.delete_project("c").await.unwrap();
+        assert!(restored_window_projects(&store)
+            .await
+            .contains(&("proj-a".into(), "a".into())));
+        tokio::join!(
+            update_persisted_windows(&store, "a", false),
+            update_persisted_windows(&store, "new-label", true),
+        );
+        remember_window_project(&store, "proj-new-label", "b").await;
+        let mut restored = restored_window_projects(&store).await;
+        restored.sort();
+        assert_eq!(
+            restored,
+            vec![
+                ("proj-b".into(), "b".into()),
+                ("proj-new-label".into(), "b".into())
+            ]
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn startup_main_project_id_falls_back_to_legacy_then_default() {
+        let path = std::env::temp_dir().join(format!(
+            "wisp_startup_main_project_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&path).await.unwrap();
+        store
+            .create_project("legacy-project", "Legacy", "/ws/legacy")
+            .await
+            .unwrap();
+        store
+            .create_project("gone-project", "Gone", "/ws/gone")
+            .await
+            .unwrap();
+
+        assert_eq!(startup_main_project_id(&store).await, "default");
+
+        let _ = store
+            .set_setting("active_project_id", "legacy-project")
+            .await
+            .unwrap();
+        assert_eq!(startup_main_project_id(&store).await, "legacy-project");
+
+        remember_window_project(&store, "main", "gone-project").await;
+        store.delete_project("gone-project").await.unwrap();
+        assert_eq!(
+            startup_main_project_id(&store).await,
+            "legacy-project",
+            "stale window_active_projects[main] must fall back to the legacy id"
+        );
+
+        let _ = store
+            .set_setting("active_project_id", "missing")
+            .await
+            .unwrap();
+        assert_eq!(startup_main_project_id(&store).await, "default");
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
     }
 }

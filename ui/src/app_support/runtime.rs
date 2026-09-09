@@ -30,6 +30,44 @@ pub(crate) fn refresh_default_execution_context(into: RwSignal<Option<String>>) 
     });
 }
 
+pub(crate) fn refresh_session_default_execution_context(
+    into: RwSignal<Option<String>>,
+    active_session: RwSignal<Option<String>>,
+    session_id: String,
+) {
+    spawn_local(async move {
+        let args = to_value(&serde_json::json!({ "sessionId": session_id.clone() })).unwrap();
+        let Ok(value) = invoke_checked("get_session_default_execution_context", args).await else {
+            return;
+        };
+        let Ok(id) = serde_wasm_bindgen::from_value::<Option<String>>(value) else {
+            return;
+        };
+        if active_session.get_untracked().as_deref() == Some(session_id.as_str())
+            && into.with_untracked(|current| current != &id)
+        {
+            into.set(id);
+        }
+    });
+}
+
+/// Effective omit-`context_id` target for the compute UI.
+/// `Some("local")` is an explicit pin to this machine; missing stored value
+/// follows the live global default.
+pub(crate) fn resolved_session_default_id(
+    stored: Option<&str>,
+    global: Option<&str>,
+) -> Option<String> {
+    match stored.map(str::trim).filter(|id| !id.is_empty()) {
+        Some("local") => None,
+        Some(id) => Some(id.to_string()),
+        None => global
+            .map(str::trim)
+            .filter(|id| is_remote_default_context_id(Some(id)))
+            .map(str::to_string),
+    }
+}
+
 pub(crate) fn refresh_session_execution_contexts(
     into: RwSignal<HashSet<String>>,
     active_session: RwSignal<Option<String>>,
@@ -420,11 +458,12 @@ mod runtime_slot_tests {
     use super::{
         classify_ssh_failure, compute_menu_summary, compute_resource_state_key,
         context_runtime_available, is_ssh_setup_error, mention_compute_entries,
-        remote_analysis_options, runtime_object_matches, session_runtime_groups,
-        session_runtime_strip_view, session_strip_context_ids, ssh_connectivity_gap,
-        ssh_fail_cause_keys, ssh_setup_context_id, ComposerPickerItem, RuntimeSlot, SshFailKind,
+        remote_analysis_options, resolved_session_default_id, runtime_object_matches,
+        runtime_slots, session_runtime_groups, session_runtime_strip_view,
+        session_strip_context_ids, ssh_connectivity_gap, ssh_fail_cause_keys, ssh_setup_context_id,
+        ComposerPickerItem, RuntimeSlot, SshFailKind,
     };
-    use crate::dto::{ExecutionContext, RuntimeObject};
+    use crate::dto::{ExecutionContext, RuntimeInfo, RuntimeKeyDto, RuntimeObject};
     use crate::i18n::Locale;
     use std::collections::HashSet;
 
@@ -661,6 +700,55 @@ mod runtime_slot_tests {
         }
     }
 
+    fn runtime_info(session_id: &str, activity: u64, runtime_id: &str) -> RuntimeInfo {
+        RuntimeInfo {
+            runtime_id: runtime_id.into(),
+            generation: 1,
+            key: RuntimeKeyDto {
+                project_id: "p".into(),
+                context_id: "ssh:gpu".into(),
+                language: "python".into(),
+                scope_key: "mainline".into(),
+                session_id: session_id.into(),
+            },
+            status: "ready".into(),
+            interpreter: Some("/usr/bin/python3".into()),
+            version: Some("3.8.10".into()),
+            process_id: Some(1),
+            started_at_ms: activity,
+            last_activity_at_ms: activity,
+            resident_memory_bytes: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn runtime_slots_collapse_shared_and_session_owned_duplicates() {
+        let contexts = vec![context(
+            "ssh",
+            r#"{"python_executable":"/usr/bin/python3"}"#,
+            Some("ok"),
+        )];
+        let slots = runtime_slots(
+            vec![
+                runtime_info("", 10, "shared"),
+                runtime_info("frame-a", 20, "owned"),
+            ],
+            &contexts,
+            None,
+            &[],
+        );
+        let python = slots
+            .into_iter()
+            .filter(|slot| slot.language == "python" && slot.context_id == "ssh:gpu")
+            .collect::<Vec<_>>();
+        assert_eq!(python.len(), 1);
+        assert_eq!(
+            python[0].info.as_ref().map(|info| info.runtime_id.as_str()),
+            Some("owned")
+        );
+    }
+
     #[test]
     fn session_runtime_groups_keep_local_and_attached_remotes() {
         let contexts = vec![
@@ -764,6 +852,27 @@ mod runtime_slot_tests {
     }
 
     #[test]
+    fn resolved_session_default_id_layers_snapshot_over_global() {
+        assert_eq!(
+            resolved_session_default_id(Some("ssh:cpu"), Some("ssh:gpu")).as_deref(),
+            Some("ssh:cpu")
+        );
+        assert_eq!(
+            resolved_session_default_id(Some("local"), Some("ssh:gpu")),
+            None
+        );
+        assert_eq!(
+            resolved_session_default_id(None, Some("ssh:gpu")).as_deref(),
+            Some("ssh:gpu")
+        );
+        assert_eq!(resolved_session_default_id(None, None), None);
+        assert_eq!(
+            resolved_session_default_id(Some(""), Some("ssh:gpu")).as_deref(),
+            Some("ssh:gpu")
+        );
+    }
+
+    #[test]
     fn remote_analysis_options_skip_local() {
         assert_eq!(
             remote_analysis_options(&[
@@ -825,25 +934,35 @@ pub(crate) fn runtime_slots(
     };
 
     let mut present = HashSet::new();
-    let mut slots = runtimes
-        .into_iter()
-        .map(|info| {
-            present.insert((
-                info.key.project_id.clone(),
-                info.key.context_id.clone(),
-                info.key.language.clone(),
-            ));
-            RuntimeSlot {
-                project_id: info.key.project_id.clone(),
-                project_label: project_label(&info.key.project_id),
-                context_id: info.key.context_id.clone(),
-                context_label: context_label(&info.key.context_id),
-                language: info.key.language.clone(),
-                available: true,
-                info: Some(info),
+    let mut slots: Vec<RuntimeSlot> = Vec::new();
+    for info in runtimes {
+        let triple = (
+            info.key.project_id.clone(),
+            info.key.context_id.clone(),
+            info.key.language.clone(),
+        );
+        present.insert(triple.clone());
+        if let Some(existing) = slots.iter_mut().find(|slot| {
+            slot.project_id == info.key.project_id
+                && slot.context_id == info.key.context_id
+                && slot.language == info.key.language
+                && slot.info.is_some()
+        }) {
+            if runtime_info_outranks(existing.info.as_ref(), &info) {
+                existing.info = Some(info);
             }
-        })
-        .collect::<Vec<_>>();
+            continue;
+        }
+        slots.push(RuntimeSlot {
+            project_id: info.key.project_id.clone(),
+            project_label: project_label(&info.key.project_id),
+            context_id: info.key.context_id.clone(),
+            context_label: context_label(&info.key.context_id),
+            language: info.key.language.clone(),
+            available: true,
+            info: Some(info),
+        });
+    }
 
     if let Some(project) = active_project.as_ref() {
         for context in contexts {
@@ -870,6 +989,21 @@ pub(crate) fn runtime_slots(
             .then_with(|| left.language.cmp(&right.language))
     });
     slots
+}
+
+/// Prefer a conversation-owned Ready worker over a scope-shared duplicate so
+/// the compute panel does not paint two identical Python/R rows (#1100).
+fn runtime_info_outranks(current: Option<&RuntimeInfo>, candidate: &RuntimeInfo) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    let current_owned = !current.key.session_id.is_empty();
+    let candidate_owned = !candidate.key.session_id.is_empty();
+    match (candidate_owned, current_owned) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => candidate.last_activity_at_ms >= current.last_activity_at_ms,
+    }
 }
 
 /// Local is always on the conversation; remotes appear once attached, or when
@@ -973,14 +1107,15 @@ pub(crate) fn remote_analysis_options(contexts: &[ExecutionContext]) -> Vec<(Str
 pub(crate) fn DefaultAnalysisSelect(
     locale: RwSignal<Locale>,
     execution_contexts: RwSignal<Vec<ExecutionContext>>,
-    default_execution_context: RwSignal<Option<String>>,
+    #[prop(into)] default_execution_context: Signal<Option<String>>,
     on_change: Callback<Option<String>>,
     #[prop(into)] test_id: String,
+    #[prop(default = "environments.default_analysis")] label_key: &'static str,
 ) -> impl IntoView {
     view! {
         <select
             data-testid=test_id
-            aria-label=move || t(locale.get(), "environments.default_analysis")
+            aria-label=move || t(locale.get(), label_key)
             on:change=move |ev| {
                 let value = crate::text::dom_value(&ev);
                 on_change.call(if value.trim().is_empty() {
@@ -1972,6 +2107,8 @@ pub(crate) fn RuntimeCard(
     let can_stop = matches!(status.as_str(), "starting" | "ready" | "busy");
     let can_restart = matches!(status.as_str(), "ready" | "busy" | "dead");
     let can_start = status == "missing";
+    let can_dismiss = status == "dead";
+    let dismiss_id = runtime_id.clone();
 
     view! {
         <div class="runtime-card" data-runtime-language=slot.language.clone()
@@ -2010,6 +2147,11 @@ pub(crate) fn RuntimeCard(
             })}
             {last_error.map(|error| view! { <div class="context-error">{error}</div> })}
             <div class="runtime-actions">
+                {can_dismiss.then(|| view! {
+                    <button type="button" class="runtime-dismiss" on:click=move |_| {
+                        invoke_runtime_control("dismiss_runtime", serde_json::json!({ "runtimeId": dismiss_id.clone() }), locale, runtimes);
+                    }>{move || t(locale.get(), "runtime.dismiss")}</button>
+                })}
                 {interpreter_form.map(|form| view! {
                     <button type="button" class="runtime-config"
                         on:click=move |_| runtime_interpreter_form.set(Some(form.clone()))>
@@ -2068,6 +2210,7 @@ pub(crate) fn SessionRuntimeStrip(
     execution_contexts: RwSignal<Vec<ExecutionContext>>,
     session_execution_contexts: RwSignal<HashSet<String>>,
     default_execution_context: RwSignal<Option<String>>,
+    session_default_execution_context: RwSignal<Option<String>>,
     runtimes: RwSignal<Vec<RuntimeInfo>>,
     active_project: RwSignal<Option<ProjectInfo>>,
     projects: RwSignal<Vec<ProjectSummary>>,
@@ -2078,10 +2221,12 @@ pub(crate) fn SessionRuntimeStrip(
     selected_context_id: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let groups = create_memo(move |_| {
-        let attached = session_strip_context_ids(
-            &session_execution_contexts.get(),
+        let resolved = resolved_session_default_id(
+            session_default_execution_context.get().as_deref(),
             default_execution_context.get().as_deref(),
         );
+        let attached =
+            session_strip_context_ids(&session_execution_contexts.get(), resolved.as_deref());
         session_runtime_strip_view(
             runtime_slots(
                 runtimes.get(),

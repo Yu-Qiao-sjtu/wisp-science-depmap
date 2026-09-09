@@ -2,16 +2,20 @@ const WISP_PAGES_I18N = {
   zh: {
     "meta.home.title": "Wisp Science | 开源科学计算 Agent",
     "meta.home.desc":
-      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 36 个内置 SKILL。",
+      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 37 个内置 SKILL。",
     "meta.models.title": "模型配置 | Wisp Science",
     "meta.models.desc": "Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
     "meta.acp.title": "ACP Agent 配置 | Wisp Science",
     "meta.acp.desc":
       "Wisp Science ACP Agent 配置说明：在 Settings → Models → ACP Agents 下接入 Codex / Claude 等本地 ACP v1 agent。",
+    "meta.mcp.title": "科研 MCP | Wisp Science",
+    "meta.mcp.desc":
+      "Wisp Science 内置科研 MCP：进程内 mcp_bio catalog，23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。",
     "nav.aria": "页面导航",
     "nav.features": "功能",
     "nav.usecases": "场景",
     "nav.stack": "生态",
+    "nav.mcp": "MCP",
     "nav.models": "模型配置",
     "nav.acp": "ACP",
     "nav.faq": "FAQ",
@@ -19,7 +23,7 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "下载桌面版",
     "nav.downloadShort": "下载",
     "lang.aria": "语言",
-    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.6.1",
+    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.10.0",
     "hero.title": "严谨科研的<br>本地 Agent 工作台",
     "hero.lead":
       "Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。",
@@ -72,7 +76,7 @@ const WISP_PAGES_I18N = {
       "长驻内核子进程保持变量与 DataFrame 在内存中，且按会话隔离。跨轮次迭代分析无需重复加载数据，并行会话也不会互相覆盖状态。",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# 变量在后续 tool call 中仍然可用\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "36 个内置 SKILL 工作流",
+    "features.skillTitle": "37 个内置 SKILL 工作流",
     "features.skillBody": "从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。",
     "features.skillPre":
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 通过 use_skill 工具按需加载 SKILL.md",
@@ -87,12 +91,13 @@ const WISP_PAGES_I18N = {
     "local.kicker": "Works wherever your data lives",
     "local.heading": "数据留在本地",
     "local.lead":
-      "Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；Python 环境与 MCP 服务器在首次启动时自动配置。",
+      "Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；原生生物工具无需 Python；可选运行环境可在启动后按需配置。",
     "local.pkgTitle": "自包含安装包",
     "local.pkgBody":
-      "skills、Python、MCP 与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。",
-    "local.mcpTitle": "统一 bio MCP",
-    "local.mcpBody": "默认启动 mcp_bio，约 240 个工具覆盖 PubMed、UniProt、ChEMBL 等 80+ 数据库。",
+      "skills、原生科研工具、Python/R 内核与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。",
+    "local.mcpTitle": "原生科研 MCP",
+    "local.mcpBody":
+      "默认启用进程内 mcp_bio：23 个连接器、247 个工具，覆盖 PubMed、UniProt、ChEMBL 等约 80 个数据库。无需 Python MCP 子进程。",
     "local.remoteTitle": "远程计算",
     "local.remoteBody": "SKILL 支持 SSH、WSL 与 GPU 主机；Agent 可编写并提交带实时日志的长 Run。",
     "usecases.kicker": "How researchers use Wisp Science",
@@ -126,7 +131,7 @@ const WISP_PAGES_I18N = {
     "usecases.chemPrompt": "检索靶点 EGFR 的 IC50 数据，筛选 oral bioavailability 较好的候选，并绘制 SAR 热力图。",
     "usecases.litTitle": "文献检索与稿件草稿",
     "usecases.litBody": "literature-review、paper-narrative、pdf-explore SKILL 帮助从 PDF 到结构化综述与叙事。",
-    "usecases.litLi1": "PubMed / Semantic Scholar MCP 检索",
+    "usecases.litLi1": "PubMed / OpenAlex / arXiv MCP 检索",
     "usecases.litLi2": "Markdown + LaTeX 实时预览",
     "usecases.litLi3": "indication-dossier 适应症档案模板",
     "usecases.litPrompt": "基于附件 PDF 写一段 Discussion，附引用列表，并检查数字是否与表格一致。",
@@ -144,17 +149,19 @@ const WISP_PAGES_I18N = {
     "demo.immBody": "肿瘤免疫相关文献整合与假设生成演示。",
     "stack.kicker": "Works with your stack",
     "stack.heading": "对接你的工具链",
-    "stack.lead": "MCP 协议连接生物数据库与自定义服务器；SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
-    "stack.skill": "36 bundled workflows",
+    "stack.lead":
+      "内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
+    "stack.skill": "37 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
-    "stack.browse": "浏览 MCP 服务器",
+    "stack.bioItem": "mcp_bio<span>247 个工具 · 23 个连接器</span>",
+    "stack.browse": "查看 MCP 工具目录",
     "faq.heading": "常见问题",
     "faq.q1": "Wisp Science 是新模型吗？",
     "faq.a1":
       "不是。Wisp Science 是开源桌面/CLI 应用，使用你自备 API Key 对接的任意兼容 LLM。新的是围绕模型的 Agent 循环、工具、MCP 与 Python / R 内核。",
     "faq.q2": "与通用 AI 助手有何不同？",
     "faq.a2":
-      "它能真正执行：读写本地文件、运行 Shell、调用持久 Python / R REPL、通过 MCP 查询 PubMed/UniProt 等数据库，并在 SQLite 中保存完整会话。内置 36 个领域 SKILL，而非仅生成文本。",
+      "它能真正执行：读写本地文件、运行 Shell、调用持久 Python / R REPL、通过 MCP 查询 PubMed/UniProt 等数据库，并在 SQLite 中保存完整会话。内置 37 个领域 SKILL，而非仅生成文本。",
     "faq.q3": "研究数据是否私密？",
     "faq.a3":
       "原始数据与计算在本地进行；会话与 artifact 存于本机 SQLite。发送至 LLM 提供商的仅为 prompt 与 model 响应，遵循你所用 API 的隐私政策。",
@@ -166,14 +173,38 @@ const WISP_PAGES_I18N = {
       "API Key 存放在 macOS 登录钥匙串，条目会绑定写入时应用的代码签名身份。若你先用过未签名的 v0.4.x 填过 Key，那个条目被绑到了旧身份；升级到已签名版本后身份改变，系统便反复要求输入登录密码来重新授权。解决办法：打开「钥匙串访问」，搜索并删除名为 <code>wisp</code> 的条目，重开 wisp 重新填一次 API Key（点一次「始终允许」）即可。",
     "faq.q6": "需要什么前置依赖？",
     "faq.a6":
-      "安装包用户：Windows 需 WebView2（Win10/11 通常已带），macOS 用系统 WebKit，Linux 用 WebKitGTK；都需自备 API Key。可选安装 R（需 jsonlite）以使用持久 r 工具。从源码构建需 Rust、uv、Trunk、Tauri CLI v2（macOS 另需 Xcode 命令行工具）。首次运行会自动创建 Python venv 并安装 MCP 依赖。",
+      "安装包用户：Windows 需 WebView2（Win10/11 通常已带），macOS 用系统 WebKit，Linux 用 WebKitGTK；都需自备 API Key。可选安装 R（需 jsonlite）以使用持久 r 工具。从源码构建需 Rust、Trunk、Tauri CLI v2（macOS 另需 Xcode 命令行工具）。首次配置时会后台检测环境路径并保存到 Local；缺少工具不影响启动，也不会自动安装。需要时可在启动后通过 local-env-setup 配置。",
     "faq.q7": "Wisp Science 是独立项目吗？",
     "faq.a7":
       "是的。我们最初关注过 Claude Science 一类封闭产品，但发现其对部分地区用户不友好、且生态封闭。Wisp Science 由此起步：学习其 Skills 与 MCP 工具选型思路，并以 Rust/Tauri 独立实现本地优先的科研工作台（AGPL-3.0）。Agent 架构、多项目工作流、Run 管理、插件体系、ACP 等核心能力均为自主设计；可对接任意模型提供商，任何人都可使用、研究与改进。",
     "faq.q8": "当前版本稳定吗？",
     "faq.a8":
-      "v1.6.1 是面向本地科研工作流的活跃预览版。核心 Agent、流式、工具、Python / R、MCP、分享导出与桌面 UI 可运行；关键方法与输出仍应人工复核，并以 Release 说明确认当前签名和更新状态。",
+      "v1.10.0 是面向本地科研工作流的活跃预览版。核心 Agent、流式、工具、Python / R、MCP、分享导出与桌面 UI 可运行；关键方法与输出仍应人工复核，并以 Release 说明确认当前签名和更新状态。",
     "footer.copy": "© 2026 Wisp Science · 开源科学计算 Agent",
+    "mcp.title": "科研 MCP",
+    "mcp.lead":
+      "公开生物与化学检索是进程内的原生 catalog（mcp_bio），不是 Python MCP 子进程，也不再附带 ketcher。默认 23 个连接器、247 个工具，覆盖约 80 个上游数据库。Agent 用 search_mcp_tools 发现、use_mcp_tool 调用。",
+    "mcp.wiki": "GitHub Wiki 清单",
+    "mcp.howKicker": "How it works",
+    "mcp.nativeTitle": "进程内 catalog",
+    "mcp.nativeBody":
+      "桌面、CLI 与 ACP bridge 共用 crates/wisp-bio。默认 mcp_bio 挂全部已实现域；WISP_MCP_PKG=mcp_pubmed 可只挂一个域。",
+    "mcp.discoverTitle": "先发现，再调用",
+    "mcp.discoverBody":
+      "完整 schema 不会塞进每一轮提示词。说清数据库或目标即可，不要猜工具名。连接改动对新会话或空闲 Agent 重建生效。",
+    "mcp.customTitle": "自定义 MCP",
+    "mcp.customBody":
+      "设置 → 连接 → Add connection 可加本地命令或远程 URL（含 OAuth）。与这份原生 catalog 分开，密钥只进操作系统钥匙串。",
+    "mcp.notice":
+      "KEGG / CADD / PanglaoDB / Sanger Cell Model Passports 带有学术或快照使用说明。ZINC SmallWorld 是公开 ZINC20 在售索引。PubMed 的开放获取标志不是再利用授权。结果几乎都是有界页，不是全库导出。",
+    "mcp.tocKicker": "23 connectors",
+    "mcp.tocHeading": "连接器一览",
+    "mcp.thConnector": "连接器",
+    "mcp.thPkg": "包名",
+    "mcp.thCount": "工具",
+    "mcp.thUpstream": "上游",
+    "mcp.thTool": "工具",
+    "mcp.thDoes": "做什么",
     "models.lead":
       "Wisp Science 的桌面版使用模型 profile 管理远程 API 后端。每个 profile 可以配置 provider、API URL、模型 ID、高级参数和独立 API key。",
     "models.download": "下载最新版",
@@ -253,17 +284,21 @@ const WISP_PAGES_I18N = {
   en: {
     "meta.home.title": "Wisp Science | Open-source scientific computing agent",
     "meta.home.desc":
-      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 36 bundled SKILLs.",
+      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 37 bundled SKILLs.",
     "meta.models.title": "Model configuration | Wisp Science",
     "meta.models.desc":
       "Wisp Science model setup: OpenAI-compatible, OpenAI Responses, and Anthropic APIs.",
     "meta.acp.title": "ACP agent setup | Wisp Science",
     "meta.acp.desc":
       "Connect local ACP v1 agents such as Codex and Claude under Settings → Models → ACP Agents.",
+    "meta.mcp.title": "Scientific MCP | Wisp Science",
+    "meta.mcp.desc":
+      "Wisp Science ships an in-process mcp_bio catalog: 23 connectors and 247 tools covering PubMed, GEO, UniProt, ChEMBL, and ~80 other databases.",
     "nav.aria": "Page navigation",
     "nav.features": "Features",
     "nav.usecases": "Use cases",
     "nav.stack": "Stack",
+    "nav.mcp": "MCP",
     "nav.models": "Models",
     "nav.acp": "ACP",
     "nav.faq": "FAQ",
@@ -271,7 +306,7 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "Download desktop",
     "nav.downloadShort": "Download",
     "lang.aria": "Language",
-    "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.6.1",
+    "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.10.0",
     "hero.title": "A local agent workbench<br>for rigorous research",
     "hero.lead":
       "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
@@ -324,7 +359,7 @@ const WISP_PAGES_I18N = {
       "Long-lived kernel workers keep variables and DataFrames in memory, isolated per conversation. Iterate across turns without reloading data, and parallel sessions never share state.",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# Variables remain available in later tool calls\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "36 bundled SKILL workflows",
+    "features.skillTitle": "37 bundled SKILL workflows",
     "features.skillBody":
       "Literature review, analysis modules, figures, Python/R environments, and remote SSH compute—ready to load.",
     "features.skillPre":
@@ -341,13 +376,13 @@ const WISP_PAGES_I18N = {
     "local.kicker": "Works wherever your data lives",
     "local.heading": "Keep the data local",
     "local.lead":
-      "Windows (WebView2), macOS (Apple Silicon / Intel, separate builds), and Linux desktops, or a headless CLI. Python and MCP servers configure themselves on first launch.",
+      "Windows (WebView2), macOS (Apple Silicon / Intel, separate builds), and Linux desktops, or a headless CLI. Native biological tools work without Python; optional runtimes can be configured after launch.",
     "local.pkgTitle": "Self-contained installers",
     "local.pkgBody":
-      "Skills, Python, MCP, and demo sessions ship inside Windows MSI/NSIS, macOS dmg, and Linux .deb / AppImage packages. No source tree required.",
-    "local.mcpTitle": "Unified bio MCP",
+      "Skills, native scientific tools, Python/R kernels, and demo sessions ship inside Windows MSI/NSIS, macOS dmg, and Linux .deb / AppImage packages. No source tree required.",
+    "local.mcpTitle": "Native scientific MCP",
     "local.mcpBody":
-      "mcp_bio starts by default: about 240 tools covering PubMed, UniProt, ChEMBL, and 80+ other databases.",
+      "mcp_bio is enabled by default: an in-process catalog of 23 connectors and 247 tools covering PubMed, UniProt, ChEMBL, and ~80 other databases. No Python MCP subprocess.",
     "local.remoteTitle": "Remote compute",
     "local.remoteBody":
       "SKILLs cover SSH, WSL, and GPU hosts. The agent can write and submit long Runs with live logs.",
@@ -387,7 +422,7 @@ const WISP_PAGES_I18N = {
     "usecases.litTitle": "Literature search and manuscript drafts",
     "usecases.litBody":
       "literature-review, paper-narrative, and pdf-explore SKILLs take you from PDFs to structured reviews and narrative.",
-    "usecases.litLi1": "PubMed / Semantic Scholar MCP search",
+    "usecases.litLi1": "PubMed / OpenAlex / arXiv MCP search",
     "usecases.litLi2": "Live Markdown + LaTeX preview",
     "usecases.litLi3": "indication-dossier templates",
     "usecases.litPrompt":
@@ -407,17 +442,18 @@ const WISP_PAGES_I18N = {
     "stack.kicker": "Works with your stack",
     "stack.heading": "Fits the tools you already use",
     "stack.lead":
-      "MCP connects biological databases and custom servers; SKILL.md extends reusable pipelines. The agent treats both as first-class tools.",
-    "stack.skill": "36 bundled workflows",
+      "Built-in mcp_bio queries ~80 scientific databases from an in-process catalog; you can also add custom MCP servers. SKILL.md extends reusable pipelines. The agent treats both as first-class tools.",
+    "stack.skill": "37 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
-    "stack.browse": "Browse MCP servers",
+    "stack.bioItem": "mcp_bio<span>247 tools · 23 connectors</span>",
+    "stack.browse": "Browse the MCP catalog",
     "faq.heading": "Frequently asked questions",
     "faq.q1": "Is Wisp Science a new model?",
     "faq.a1":
       "No. It is an open-source desktop and CLI app that talks to any compatible LLM with the API key you supply. What is new is the agent loop, tools, MCP, and Python / R kernels around that model.",
     "faq.q2": "How is it different from a generic AI assistant?",
     "faq.a2":
-      "It actually executes: read and write local files, run a shell, call persistent Python / R REPLs, query PubMed/UniProt through MCP, and store the full session in SQLite. It ships 34 domain SKILLs instead of only generating text.",
+      "It actually executes: read and write local files, run a shell, call persistent Python / R REPLs, query PubMed/UniProt through MCP, and store the full session in SQLite. It ships 37 domain SKILLs instead of only generating text.",
     "faq.q3": "Does research data stay private?",
     "faq.a3":
       "Raw data and compute stay local; sessions and artifacts live in on-disk SQLite. Only prompts and model responses go to your LLM provider, under that API’s privacy policy.",
@@ -429,14 +465,38 @@ const WISP_PAGES_I18N = {
       "API keys live in the macOS login keychain, bound to the code-signing identity that wrote the item. If you saved a key in unsigned v0.4.x, that item is bound to the old identity; a signed build looks like a different app, so macOS keeps asking you to re-authorize. Fix: open Keychain Access, delete the <code>wisp</code> item, reopen Wisp, paste the key once, and click Always Allow.",
     "faq.q6": "What are the prerequisites?",
     "faq.a6":
-      "Installer users: Windows needs WebView2 (usually present on Windows 10/11), macOS uses system WebKit, Linux uses WebKitGTK; all need your own API key. Optionally install R with jsonlite for the persistent r tool. Building from source needs Rust, uv, Trunk, and Tauri CLI v2 (plus Xcode command-line tools on macOS). First launch creates a Python venv and installs MCP dependencies.",
+      "Installer users: Windows needs WebView2 (usually present on Windows 10/11), macOS uses system WebKit, Linux uses WebKitGTK; all need your own API key. Optionally install R with jsonlite for the persistent r tool. Building from source needs Rust, Trunk, and Tauri CLI v2 (plus Xcode command-line tools on macOS). First-run setup detects executable paths in the background and saves them to Local. Missing tools do not block startup or trigger installs; use local-env-setup after launch when needed.",
     "faq.q7": "Is Wisp Science an independent project?",
     "faq.a7":
       "Yes. We originally looked at closed products such as Claude Science, but they were unfriendly to some regions and locked down. Wisp Science started from that gap: it learned from their Skills and MCP tool choices, then implemented a local-first research workbench in Rust/Tauri (AGPL-3.0). The agent architecture, multi-project workflow, Run manager, plugins, and ACP support are original; it can talk to any model provider, and anyone can use, study, and improve it.",
     "faq.q8": "Is the current release production-stable?",
     "faq.a8":
-      "v1.6.1 is an active preview for local scientific workflows. The core agent, streaming, tools, Python / R, MCP, share export, and desktop UI run; still review critical methods and outputs, and check the release notes for current signing and update status.",
+      "v1.10.0 is an active preview for local scientific workflows. The core agent, streaming, tools, Python / R, MCP, share export, and desktop UI run; still review critical methods and outputs, and check the release notes for current signing and update status.",
     "footer.copy": "© 2026 Wisp Science · Open-source scientific computing agent",
+    "mcp.title": "Scientific MCP",
+    "mcp.lead":
+      "Public biology and chemistry retrieval is an in-process native catalog (mcp_bio)—not a Python MCP subprocess, and there is no bundled ketcher server. Default: 23 connectors, 247 tools, ~80 upstream databases. The agent discovers tools with search_mcp_tools and calls them with use_mcp_tool.",
+    "mcp.wiki": "GitHub Wiki inventory",
+    "mcp.howKicker": "How it works",
+    "mcp.nativeTitle": "In-process catalog",
+    "mcp.nativeBody":
+      "Desktop, CLI, and the ACP bridge share crates/wisp-bio. Default mcp_bio mounts every implemented domain; WISP_MCP_PKG=mcp_pubmed selects one.",
+    "mcp.discoverTitle": "Discover, then call",
+    "mcp.discoverBody":
+      "The full schema is never copied into every model request. Describe the database or the goal; do not guess tool names. Connection changes apply to new sessions or the next idle-agent rebuild.",
+    "mcp.customTitle": "Custom MCP",
+    "mcp.customBody":
+      "Settings → Connections → Add connection accepts a local command or a remote URL (including OAuth). That is separate from this catalog. Secrets stay in the OS keyring.",
+    "mcp.notice":
+      "KEGG, CADD, PanglaoDB, and Sanger Cell Model Passports carry academic or snapshot notices. ZINC SmallWorld is the public ZINC20 for-sale index. A PubMed open-access flag is not a reuse grant. Results are almost always bounded pages, not full-database dumps.",
+    "mcp.tocKicker": "23 connectors",
+    "mcp.tocHeading": "Connector index",
+    "mcp.thConnector": "Connector",
+    "mcp.thPkg": "Package",
+    "mcp.thCount": "Tools",
+    "mcp.thUpstream": "Upstream",
+    "mcp.thTool": "Tool",
+    "mcp.thDoes": "What it does",
     "models.lead":
       "The desktop app manages remote API backends as model profiles. Each profile can set a provider, API URL, model ID, advanced parameters, and its own API key.",
     "models.download": "Download the latest release",

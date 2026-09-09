@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/logo.svg" alt="Wisp Science logo" width="128" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
+  <img src="docs/assets/wordmark-light.svg" alt="Wisp Science" width="360" />
+</picture>
 
 # Wisp Science
 
@@ -88,6 +92,8 @@ Agent 读写项目文件、执行 shell，并按需加载 Skills（`SKILL.md`）
 ## 社区
 
 感谢每一位提 issue、发 PR、以及把 Wisp 用在真实课题上的人。
+特别感谢 [SpicyChicken6](https://github.com/xuzhougeng/wisp-science/discussions/1154)
+设计的分子字标和三重旋涡桌面图标。
 
 <p>
   <a href="https://github.com/Yu-Qiao-sjtu"><img src="https://avatars.githubusercontent.com/u/88706761?v=4&amp;s=96" width="64" height="64" alt="@Yu-Qiao-sjtu" title="@Yu-Qiao-sjtu"></a>

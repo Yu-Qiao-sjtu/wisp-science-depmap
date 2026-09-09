@@ -8,9 +8,57 @@
 
 use serde_json::json;
 
+#[test]
+fn network_settings_support_partial_persisted_configuration() {
+    let settings: wisp_dto::NetworkSettings = serde_json::from_value(json!({
+        "model_proxy_url": "none",
+        "pip_index_url": "https://mirror.test/simple"
+    }))
+    .unwrap();
+    assert!(settings.mcp_proxy_url.is_empty());
+    assert!(settings.command_proxy_url.is_empty());
+    let ui: wisp_dto::NetworkSettings = roundtrip(&settings);
+    assert_eq!(ui, settings);
+}
+
+#[test]
+fn restored_acp_session_state_contract() {
+    let backend = wisp_dto::AcpSessionState {
+        frame_id: "frame-a".into(),
+        modes: Some(json!({"availableModes": [{"id":"plan","name":"Plan"}]})),
+        config_options: Some(vec![json!({"id":"model","currentValue":"smart"})]),
+    };
+    let ui: wisp_dto::AcpSessionState = roundtrip(&backend);
+    assert_eq!(ui.frame_id, "frame-a");
+    assert_eq!(ui.config_options.unwrap()[0]["currentValue"], "smart");
+    assert_eq!(ui.modes.unwrap()["availableModes"][0]["id"], "plan");
+}
+
 fn roundtrip<T: serde::Serialize, D: serde::de::DeserializeOwned>(value: &T) -> D {
     let json = serde_json::to_value(value).expect("backend value must serialize");
     serde_json::from_value(json).expect("UI DTO must accept the backend payload")
+}
+
+#[test]
+fn remote_connector_tool_keeps_server_description_and_schemas() {
+    let backend = wisp_mcp::RemoteTool {
+        name: "example_query".into(),
+        title: None,
+        description: "Search records.\nReturns a bounded page.".into(),
+        input_schema: json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+        output_schema: Some(json!({"type":"object","properties":{"total":{"type":"integer"}}})),
+        meta: None,
+        annotations: None,
+    };
+    let ui: wisp_dto::ConnectorTool = roundtrip(&backend);
+    assert_eq!(ui.description, backend.description);
+    assert_eq!(ui.input_schema, Some(backend.input_schema));
+    assert_eq!(ui.output_schema, backend.output_schema);
+    assert_eq!(ui.mode, "allow");
+    let legacy: wisp_dto::ConnectorTool =
+        serde_json::from_value(json!({"name":"old","mode":"ask"})).unwrap();
+    assert!(legacy.description.is_empty());
+    assert!(legacy.input_schema.is_none());
 }
 
 #[test]
@@ -392,6 +440,34 @@ fn browser_tab_cleanup_prompt_contract() {
     assert_eq!(dto.tabs[0].url, "https://example.com/paper");
     assert_eq!(dto.tabs[0].title, "Paper");
     assert_eq!(dto.tabs[0].initial_url, "https://example.com");
+}
+
+#[test]
+fn browser_needs_human_prompt_contract() {
+    let prompt = wisp_dto::BrowserNeedsHumanPrompt {
+        tabs: vec![wisp_dto::BrowserNeedsHumanTab {
+            session: "shared".into(),
+            tab_id: 12,
+            url: "https://www.sciencedirect.com/science".into(),
+            title: "Just a moment...".into(),
+            reason: "captcha_challenge".into(),
+            frame_id: "frame-1".into(),
+            turn_id: "turn-1".into(),
+        }],
+    };
+    let dto: wisp_dto::BrowserNeedsHumanPrompt = roundtrip(&prompt);
+    assert_eq!(dto.tabs.len(), 1);
+    assert_eq!(dto.tabs[0].session, "shared");
+    assert_eq!(dto.tabs[0].tab_id, 12);
+    assert_eq!(dto.tabs[0].reason, "captcha_challenge");
+    assert_eq!(dto.tabs[0].frame_id, "frame-1");
+    let result = wisp_dto::BrowserNeedsHumanConfirmResult {
+        still_required: dto.tabs.clone(),
+        cleared: Vec::new(),
+    };
+    let dto: wisp_dto::BrowserNeedsHumanConfirmResult = roundtrip(&result);
+    assert_eq!(dto.still_required[0].tab_id, 12);
+    assert!(dto.cleared.is_empty());
 }
 
 #[test]

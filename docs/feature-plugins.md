@@ -86,6 +86,11 @@ rather than its entire workspace.
   installed plugin. Arguments are passed as an argv array, never through a
   shell. Child processes are terminated when their owning agent session is
   released.
+- Plugin MCP processes start from a cleared environment. Wisp copies only a
+  small non-secret allowlist: `PATH`, temp/locale/runtime plumbing, Windows
+  user-profile directories (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`,
+  `HOMEDRIVE`, `HOMEPATH`), and XDG directories when the host already has
+  them. Token variables such as `GH_TOKEN` and `GITHUB_TOKEN` are not copied.
 - Third-party MCP tool names may not replace an existing Wisp tool.
 - MCP Apps receive structured tool input/results in a script-only, opaque-origin
   iframe. Network origins are restricted to the resource's declared CSP. A live

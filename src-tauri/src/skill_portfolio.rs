@@ -120,7 +120,7 @@ pub(crate) async fn plan_skill_portfolio(
         return Err("Choose a planning model.".into());
     }
 
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let frame_id = state.active_frame(window.label());
     let index = active_skill_index(&state.store, &project).await;
     plan_skill_portfolio_inner(

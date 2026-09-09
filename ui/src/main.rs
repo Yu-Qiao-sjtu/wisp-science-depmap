@@ -9,6 +9,7 @@ mod dto;
 mod i18n;
 mod library;
 mod mcp_app;
+mod network_settings;
 mod notebook;
 mod overlays;
 mod pet;
@@ -19,6 +20,7 @@ mod runtime_views;
 mod session_modals;
 mod settings_view;
 mod sidebar;
+mod skill_detail;
 mod text;
 mod trajectory;
 mod window_titlebar;
@@ -27,7 +29,8 @@ use agent_workflows::{
     agent_workflows_panel, refresh_agent_resources, refresh_agent_workflows, AgentPanelState,
 };
 use app_overlays::{
-    advance_browser_tab_cleanup, present_browser_tab_cleanup, BrowserTabCleanupOverlay,
+    advance_browser_tab_cleanup, present_browser_needs_human, present_browser_tab_cleanup,
+    BrowserNeedsHumanOverlay, BrowserNeedsHumanOverlayState, BrowserTabCleanupOverlay,
     BrowserTabCleanupOverlayState, ContextRecoveryOverlay, ContextRecoveryOverlayState,
     ExternalLinkConfirm, ProjectExportPrompt, ProjectExportPromptState, ProjectTransferOverlay,
     ProjectTransferOverlayState, SshConnectivityOverlay, SshConnectivityOverlayState,
@@ -1042,6 +1045,9 @@ fn App() -> impl IntoView {
     let browser_tab_cleanup_selected = create_rw_signal(HashSet::<(String, i64)>::new());
     let browser_tab_cleanup_busy = create_rw_signal(false);
     let browser_tab_cleanup_error = create_rw_signal(None::<String>);
+    let browser_needs_human = create_rw_signal(None::<BrowserNeedsHumanPrompt>);
+    let browser_needs_human_busy = create_rw_signal(false);
+    let browser_needs_human_error = create_rw_signal(None::<String>);
     // "不再提醒更新" opt-out; loaded on startup, mirrored by the settings toggle.
     let update_check_enabled = create_rw_signal(true);
     // Set when a send fails because no API key is configured, so the status bar
@@ -1157,6 +1163,7 @@ fn App() -> impl IntoView {
     let drop_target = create_rw_signal::<Option<String>>(None);
     let session_execution_contexts = create_rw_signal::<HashSet<String>>(HashSet::new());
     let default_execution_context = create_rw_signal::<Option<String>>(None);
+    let session_default_execution_context = create_rw_signal::<Option<String>>(None);
     create_effect(move |_| {
         let Some(session_id) = active_session.get() else {
             return;
@@ -1203,12 +1210,24 @@ fn App() -> impl IntoView {
             if !session_execution_contexts.get_untracked().is_empty() {
                 session_execution_contexts.set(HashSet::new());
             }
+            if session_default_execution_context.get_untracked().is_some() {
+                session_default_execution_context.set(None);
+            }
             return;
         };
         if !session_execution_contexts.get_untracked().is_empty() {
             session_execution_contexts.set(HashSet::new());
         }
-        refresh_session_execution_contexts(session_execution_contexts, active_session, session_id);
+        refresh_session_execution_contexts(
+            session_execution_contexts,
+            active_session,
+            session_id.clone(),
+        );
+        refresh_session_default_execution_context(
+            session_default_execution_context,
+            active_session,
+            session_id,
+        );
     });
     create_effect(move |_| {
         let Some(session_id) = active_session.get() else {
@@ -1263,7 +1282,9 @@ fn App() -> impl IntoView {
         let Some(session_id) = active_session.get() else {
             return;
         };
-        if acp_session_modes.with_untracked(|all| all.contains_key(&session_id)) {
+        if acp_session_modes.with_untracked(|all| all.contains_key(&session_id))
+            && acp_session_configs.with_untracked(|all| all.contains_key(&session_id))
+        {
             return;
         }
         spawn_local(async move {
@@ -1271,14 +1292,20 @@ fn App() -> impl IntoView {
             let Ok(value) = invoke_checked("get_acp_session_state", args).await else {
                 return;
             };
-            let Ok(Some(modes)) =
-                serde_wasm_bindgen::from_value::<Option<serde_json::Value>>(value)
+            let Ok(Some(state)) = serde_wasm_bindgen::from_value::<Option<AcpSessionState>>(value)
             else {
                 return;
             };
-            acp_session_modes.update(|all| {
-                all.entry(session_id).or_insert(modes);
-            });
+            if let Some(modes) = state.modes {
+                acp_session_modes.update(|all| {
+                    all.entry(session_id.clone()).or_insert(modes);
+                });
+            }
+            if let Some(options) = state.config_options {
+                acp_session_configs.update(|all| {
+                    all.entry(session_id).or_insert(options);
+                });
+            }
         });
     });
 
@@ -1545,7 +1572,12 @@ fn App() -> impl IntoView {
     });
     let agent_panel = AgentPanelState::new(active_session);
     let workflow_studio_state = AgentPanelState::new(active_session);
-    refresh_agent_resources(workflow_studio_state, specialists);
+    create_effect(move |_| {
+        if project_info.get().is_none() {
+            return;
+        }
+        refresh_agent_resources(workflow_studio_state, specialists);
+    });
     let file_source = create_rw_signal("local".to_string());
     let file_query = create_rw_signal(String::new());
     let file_cwd = create_rw_signal(".".to_string());
@@ -2343,7 +2375,7 @@ fn App() -> impl IntoView {
         }
     });
 
-    // The native shell publishes the result of its one-time Python setup after
+    // The native shell publishes optional local executable discovery after
     // the UI is already interactive. Keep the capabilities view in sync without
     // polling or delaying the first window.
     {
@@ -2368,8 +2400,10 @@ fn App() -> impl IntoView {
         attach_chat_autoscroll();
     });
 
-    // Wire the agent event stream once. Every event carries the session frame
-    // id; route transcript mutations to `items` (active session) or the
+    // Wire the agent event stream once, on this native window only. Process-level
+    // listen() still receives emit_to aimed at another project window, so two
+    // workspaces would share one live stream. Every event carries the session
+    // frame id; route transcript mutations to `items` (active session) or the
     // `transcripts` cache (background session) so parallel conversations don't
     // interleave in the view.
     let items_cb = items;
@@ -3347,9 +3381,9 @@ fn App() -> impl IntoView {
     let agent_js = cb.as_ref().unchecked_ref::<js_sys::Function>().clone();
     std::mem::forget(cb);
     // wasm-bindgen only runs an async extern's JS body when the returned
-    // future is polled, so we must await `listen` (not fire-and-forget it).
+    // future is polled, so we must await `listen_current_window`.
     spawn_local(async move {
-        let _ = listen("agent", &agent_js).await;
+        let _ = listen_current_window("agent", &agent_js).await;
     });
 
     // Confirm handler: render an inline approval card in the session thread
@@ -3422,7 +3456,7 @@ fn App() -> impl IntoView {
         .clone();
     std::mem::forget(confirm_cb);
     spawn_local(async move {
-        let _ = listen("confirm-request", &confirm_js).await;
+        let _ = listen_current_window("confirm-request", &confirm_js).await;
     });
 
     let browser_cleanup_pending = browser_tab_cleanup;
@@ -3446,24 +3480,68 @@ fn App() -> impl IntoView {
         .clone();
     std::mem::forget(browser_cleanup_cb);
     spawn_local(async move {
-        let _ = listen("browser-tab-cleanup", &browser_cleanup_js).await;
-        if let Ok(value) =
-            invoke_checked("list_pending_browser_tab_cleanups", JsValue::UNDEFINED).await
-        {
-            if let Ok(prompts) =
-                serde_wasm_bindgen::from_value::<Vec<BrowserTabCleanupPrompt>>(value)
+        let _ = listen_current_window("browser-tab-cleanup", &browser_cleanup_js).await;
+    });
+    let browser_human_pending = browser_needs_human;
+    let browser_human_error = browser_needs_human_error;
+    let browser_human_cb = Closure::wrap(Box::new(move |payload: JsValue| {
+        if let Ok(prompt) = serde_wasm_bindgen::from_value::<BrowserNeedsHumanPrompt>(payload) {
+            present_browser_needs_human(browser_human_pending, browser_human_error, prompt);
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    let browser_human_js = browser_human_cb
+        .as_ref()
+        .unchecked_ref::<js_sys::Function>()
+        .clone();
+    std::mem::forget(browser_human_cb);
+    spawn_local(async move {
+        let _ = listen_current_window("browser-needs-human", &browser_human_js).await;
+    });
+    let browser_project = create_memo(move |_| project_info.get().map(|project| project.id));
+    create_effect(move |_| {
+        let project_id = browser_project.get();
+        browser_tab_cleanup.set(None);
+        browser_tab_cleanup_queue.set(Vec::new());
+        browser_tab_cleanup_selected.set(HashSet::new());
+        browser_tab_cleanup_error.set(None);
+        browser_tab_cleanup_busy.set(false);
+        browser_needs_human.set(None);
+        browser_needs_human_error.set(None);
+        browser_needs_human_busy.set(false);
+        let Some(project_id) = project_id else { return };
+        spawn_local(async move {
+            if let Ok(value) =
+                invoke_checked("list_pending_browser_tab_cleanups", JsValue::UNDEFINED).await
             {
-                for prompt in prompts {
-                    present_browser_tab_cleanup(
-                        browser_cleanup_pending,
-                        browser_cleanup_queue,
-                        browser_cleanup_selected,
-                        browser_cleanup_error,
-                        prompt,
-                    );
+                if browser_project.get_untracked().as_ref() != Some(&project_id) {
+                    return;
+                }
+                if let Ok(prompts) =
+                    serde_wasm_bindgen::from_value::<Vec<BrowserTabCleanupPrompt>>(value)
+                {
+                    for prompt in prompts {
+                        present_browser_tab_cleanup(
+                            browser_cleanup_pending,
+                            browser_cleanup_queue,
+                            browser_cleanup_selected,
+                            browser_cleanup_error,
+                            prompt,
+                        );
+                    }
                 }
             }
-        }
+            if let Ok(value) =
+                invoke_checked("list_pending_browser_needs_human", JsValue::UNDEFINED).await
+            {
+                if browser_project.get_untracked().as_ref() != Some(&project_id) {
+                    return;
+                }
+                if let Ok(prompt) = serde_wasm_bindgen::from_value::<BrowserNeedsHumanPrompt>(value)
+                {
+                    present_browser_needs_human(browser_human_pending, browser_human_error, prompt);
+                }
+            }
+        });
     });
     let acp_permission_items = items;
     let acp_permission_active = active_session;
@@ -3508,7 +3586,7 @@ fn App() -> impl IntoView {
         .clone();
     acp_permission_cb.forget();
     spawn_local(async move {
-        let _ = listen("permission-request", &acp_permission_js).await;
+        let _ = listen_current_window("permission-request", &acp_permission_js).await;
     });
 
     let acp_update_buf = delta_buf.clone();
@@ -3615,7 +3693,7 @@ fn App() -> impl IntoView {
         .clone();
     acp_update_cb.forget();
     spawn_local(async move {
-        let _ = listen("acp-session-update", &acp_update_js).await;
+        let _ = listen_current_window("acp-session-update", &acp_update_js).await;
     });
 
     let project_transfer_cb = Closure::wrap(Box::new(move |payload: JsValue| {
@@ -3655,7 +3733,7 @@ fn App() -> impl IntoView {
         .clone();
     acp_state_cb.forget();
     spawn_local(async move {
-        let _ = listen("acp-session-state", &acp_state_js).await;
+        let _ = listen_current_window("acp-session-state", &acp_state_js).await;
     });
 
     let acp_resolved_cb = Closure::wrap(Box::new(move |payload: JsValue| {
@@ -3681,7 +3759,7 @@ fn App() -> impl IntoView {
         .clone();
     acp_resolved_cb.forget();
     spawn_local(async move {
-        let _ = listen("permission-resolved", &acp_resolved_js).await;
+        let _ = listen_current_window("permission-resolved", &acp_resolved_js).await;
     });
 
     // ACP `ask_user`: the bridge parks the agent's question until the user
@@ -3713,7 +3791,7 @@ fn App() -> impl IntoView {
         .clone();
     ask_user_cb.forget();
     spawn_local(async move {
-        let _ = listen("ask-user-request", &ask_user_js).await;
+        let _ = listen_current_window("ask-user-request", &ask_user_js).await;
     });
 
     let ask_resolved_cb = Closure::wrap(Box::new(move |payload: JsValue| {
@@ -3746,7 +3824,7 @@ fn App() -> impl IntoView {
         .clone();
     ask_resolved_cb.forget();
     spawn_local(async move {
-        let _ = listen("ask-user-resolved", &ask_resolved_js).await;
+        let _ = listen_current_window("ask-user-resolved", &ask_resolved_js).await;
     });
 
     let stop = move |_| {
@@ -3982,6 +4060,11 @@ fn App() -> impl IntoView {
                     });
                 }
                 pending_service_tier.set(None);
+            }
+            // Keep the selection even if ACP startup fails before its binding
+            // exists. The new frame id was not available in the model picker.
+            if let Some(agent_id) = &agent_id {
+                provisional_acp_selection.set(Some((id.clone(), agent_id.clone())));
             }
             // Mark the turn pending before touching active_session so the
             // session→ACP lookup effect does not clear a just-selected agent
@@ -5204,7 +5287,10 @@ fn App() -> impl IntoView {
             "plugins" => refresh_plugins(),
             "connections" => refresh_conns(),
             "credentials" => refresh_credentials(),
-            "permissions" => refresh_approval_grants(),
+            "permissions" => {
+                refresh_conns();
+                refresh_approval_grants();
+            }
             _ => {}
         }
     };
@@ -6737,7 +6823,7 @@ fn App() -> impl IntoView {
     });
     let dismiss_onboard = move |_| dismiss_onboarding.call(());
 
-    // Onboarding step 0: save the entered key as DeepSeek models (flash as
+    // Onboarding model step: save the entered key as DeepSeek models (flash as
     // the default, pro for heavier work), reusing the same `save_model`
     // command as Settings. Blank key = skip.
     // ponytail: onboarding is DeepSeek-only; other providers go through Settings › Models.
@@ -7361,6 +7447,11 @@ fn App() -> impl IntoView {
                         }
                         if active_session.get_untracked().as_deref() == Some(session_id.as_str()) {
                             session_execution_contexts.set(ids.into_iter().collect());
+                            refresh_session_default_execution_context(
+                                session_default_execution_context,
+                                active_session,
+                                session_id.clone(),
+                            );
                         }
                         // First enable of a server in this project: ask where
                         // uploads, run workdirs, and retrieved results go.
@@ -7444,9 +7535,55 @@ fn App() -> impl IntoView {
                     let Ok(saved) = serde_wasm_bindgen::from_value::<Option<String>>(value) else {
                         return;
                     };
-                    default_execution_context.set(saved.clone());
-                    // Make the new default usable in the current session right away.
-                    if let Some(id) = saved {
+                    default_execution_context.set(saved);
+                }
+                Err(error) => {
+                    let message = localize_backend(locale.get_untracked(), &js_error_text(error));
+                    show_toast(&message);
+                }
+            }
+        });
+    });
+
+    let set_session_default_compute_resource = Callback::new(move |context_id: Option<String>| {
+        if demo_mode.get_untracked() {
+            return;
+        }
+        spawn_local(async move {
+            let (session_id, created) = match active_session.get_untracked() {
+                Some(session_id) => (session_id, false),
+                None => match invoke_new_session().await {
+                    Ok(session_id) => (session_id, true),
+                    Err(error) => {
+                        show_toast(&send_failed(locale.get_untracked(), &error));
+                        return;
+                    }
+                },
+            };
+            let args = to_value(&serde_json::json!({
+                "sessionId": session_id.clone(),
+                "contextId": context_id,
+            }))
+            .unwrap();
+            match invoke_checked("set_session_default_execution_context", args).await {
+                Ok(value) => {
+                    let Ok(saved) = serde_wasm_bindgen::from_value::<Option<String>>(value) else {
+                        return;
+                    };
+                    if created && active_session.get_untracked().is_none() {
+                        active_session.set(Some(session_id.clone()));
+                        items.set(vec![]);
+                        refresh_session_history();
+                    }
+                    if active_session.get_untracked().as_deref() == Some(session_id.as_str()) {
+                        session_default_execution_context.set(saved.clone());
+                        refresh_session_execution_contexts(
+                            session_execution_contexts,
+                            active_session,
+                            session_id,
+                        );
+                    }
+                    if let Some(id) = saved.filter(|id| id != "local") {
                         apply_session_compute_resource.call((id, true));
                     }
                 }
@@ -7543,6 +7680,14 @@ fn App() -> impl IntoView {
         });
     }
     refresh_execution_contexts(execution_contexts);
+    create_effect(move |_| {
+        if bootstrap
+            .get()
+            .is_some_and(|status| status.local_environment.is_some())
+        {
+            refresh_execution_contexts(execution_contexts);
+        }
+    });
     refresh_default_execution_context(default_execution_context);
     // Auto-register installed WSL distributions so they show up as checkable
     // rows in the compute menu. No-op on non-Windows and (via a registry guard
@@ -8293,6 +8438,14 @@ fn App() -> impl IntoView {
             external_link_confirm.set(None);
             return;
         }
+        if browser_needs_human.get().is_some() {
+            ev.prevent_default();
+            if !browser_needs_human_busy.get() {
+                browser_needs_human.set(None);
+                browser_needs_human_error.set(None);
+            }
+            return;
+        }
         if browser_tab_cleanup.get().is_some() {
             ev.prevent_default();
             if !browser_tab_cleanup_busy.get() {
@@ -8388,6 +8541,15 @@ fn App() -> impl IntoView {
         if command_palette_open.get() {
             ev.prevent_default();
             command_palette_open.set(false);
+            return;
+        }
+        if show_onboarding.get() {
+            ev.prevent_default();
+            if onboard_step.get() > 0 {
+                onboard_step.update(|s| *s = s.saturating_sub(1));
+            } else {
+                dismiss_onboarding.call(());
+            }
             return;
         }
         if scratch_open.get() {
@@ -8488,15 +8650,6 @@ fn App() -> impl IntoView {
         if show_settings.get() && !settings_busy.get() {
             ev.prevent_default();
             show_settings.set(false);
-            return;
-        }
-        if show_onboarding.get() {
-            ev.prevent_default();
-            if onboard_step.get() > 0 {
-                onboard_step.update(|s| *s = s.saturating_sub(1));
-            } else {
-                dismiss_onboarding.call(());
-            }
             return;
         }
         if show_library.get() {
@@ -9642,6 +9795,11 @@ fn App() -> impl IntoView {
                 }
             }
             "scratch" => open_scratch.call(()),
+            "new-window" => {
+                spawn_local(async move {
+                    let _ = invoke("open_new_window", JsValue::UNDEFINED).await;
+                });
+            }
             "search" => command_palette_open.set(true),
             "commands" => action_palette_open.set(true),
             "projects" => show_projects.set(true),
@@ -9649,6 +9807,21 @@ fn App() -> impl IntoView {
             "settings" => {
                 show_settings.set(true);
                 settings_section.set("models".into());
+            }
+            "setup" => {
+                onboard_key.set(String::new());
+                onboard_step.set(0);
+                show_onboarding.set(true);
+                spawn_local(async move {
+                    if let Ok(value) =
+                        invoke_checked("detect_local_environment", JsValue::UNDEFINED).await
+                    {
+                        if let Ok(status) = serde_wasm_bindgen::from_value::<BootstrapStatus>(value)
+                        {
+                            bootstrap.set(Some(status));
+                        }
+                    }
+                });
             }
             "privacy-mode" => privacy_mode_modal_open.set(true),
             "import-codex" => {
@@ -9776,6 +9949,7 @@ fn App() -> impl IntoView {
                 other => {
                     if let Some(action) = match other {
                         "new" => Some("new"),
+                        "new-window" => Some("new-window"),
                         "search" => Some("search"),
                         "commands" => Some("commands"),
                         "projects" => Some("projects"),
@@ -9810,7 +9984,7 @@ fn App() -> impl IntoView {
             .clone();
         native_menu_cb.forget();
         spawn_local(async move {
-            let _ = listen("native-menu-action", &native_menu_js).await;
+            let _ = listen_current_window("native-menu-action", &native_menu_js).await;
         });
     }
     let palette_project_id = Signal::derive(move || project_info.get().map(|p| p.id));
@@ -10048,9 +10222,13 @@ fn App() -> impl IntoView {
                     return;
                 };
                 browser_tab_cleanup_busy.set(true);
+                let project_id = browser_project.get_untracked();
                 spawn_local(async move {
                     let arg = to_value(&serde_json::json!({ "turnId": prompt.turn_id })).unwrap();
                     let _ = invoke_checked("dismiss_browser_tab_cleanup", arg).await;
+                    if browser_project.get_untracked() != project_id {
+                        return;
+                    }
                     advance_browser_tab_cleanup(
                         browser_tab_cleanup,
                         browser_tab_cleanup_queue,
@@ -10068,12 +10246,17 @@ fn App() -> impl IntoView {
                     return;
                 };
                 browser_tab_cleanup_busy.set(true);
+                let project_id = browser_project.get_untracked();
                 spawn_local(async move {
                     let arg = to_value(&serde_json::json!({
                         "turnId": prompt.turn_id,
                         "tabs": tabs,
                     })).unwrap();
-                    match invoke_checked("confirm_browser_tab_cleanup", arg).await {
+                    let result = invoke_checked("confirm_browser_tab_cleanup", arg).await;
+                    if browser_project.get_untracked() != project_id {
+                        return;
+                    }
+                    match result {
                         Ok(_) => advance_browser_tab_cleanup(
                             browser_tab_cleanup,
                             browser_tab_cleanup_queue,
@@ -10084,6 +10267,96 @@ fn App() -> impl IntoView {
                         Err(err) => {
                             browser_tab_cleanup_busy.set(false);
                             browser_tab_cleanup_error.set(Some(js_error_text(err)));
+                        }
+                    }
+                });
+            })
+        />
+        <BrowserNeedsHumanOverlay
+            state=BrowserNeedsHumanOverlayState {
+                locale,
+                pending: browser_needs_human,
+                busy: browser_needs_human_busy,
+                error: browser_needs_human_error,
+            }
+            on_later=Callback::new(move |_| {
+                if browser_needs_human_busy.get_untracked() {
+                    return;
+                }
+                browser_needs_human.set(None);
+                browser_needs_human_error.set(None);
+            })
+            on_show=Callback::new(move |tab: BrowserNeedsHumanTab| {
+                if browser_needs_human_busy.get_untracked() {
+                    return;
+                }
+                spawn_local(async move {
+                    let arg = to_value(&serde_json::json!({
+                        "session": tab.session,
+                        "tabId": tab.tab_id,
+                    })).unwrap();
+                    let _ = invoke_checked("focus_browser_needs_human", arg).await;
+                });
+            })
+            on_done=Callback::new(move |tabs: Vec<BrowserNeedsHumanTab>| {
+                if browser_needs_human_busy.get_untracked() {
+                    return;
+                }
+                browser_needs_human_busy.set(true);
+                browser_needs_human_error.set(None);
+                let continue_message = t(locale.get_untracked(), "browser.needs_human.continue");
+                let still_message = t(locale.get_untracked(), "browser.needs_human.still");
+                let fail_message = t(locale.get_untracked(), "browser.needs_human.error");
+                let fallback_session = active_session.get_untracked();
+                let project_id = browser_project.get_untracked();
+                spawn_local(async move {
+                    let arg = to_value(&serde_json::json!({ "tabs": tabs })).unwrap();
+                    match invoke_checked("confirm_browser_needs_human", arg).await {
+                        Ok(value) => {
+                            let result = serde_wasm_bindgen::from_value::<BrowserNeedsHumanConfirmResult>(value)
+                                .unwrap_or_default();
+                            let current_project = browser_project.get_untracked() == project_id;
+                            if current_project {
+                                browser_needs_human_busy.set(false);
+                            }
+                            if result.still_required.is_empty() {
+                                let frame_id = result
+                                    .cleared
+                                    .first()
+                                    .map(|tab| tab.frame_id.clone())
+                                    .filter(|id| !id.is_empty())
+                                    .or(fallback_session);
+                                if current_project {
+                                    browser_needs_human.set(None);
+                                    browser_needs_human_error.set(None);
+                                }
+                                if let Some(session_id) = frame_id {
+                                    let args = to_value(&SendMessageArgs {
+                                        session_id: Some(session_id),
+                                        message: continue_message,
+                                        attachments: vec![],
+                                        references: vec![],
+                                        resume: false,
+                                        acp_agent_id: None,
+                                        guide: None,
+                                        replace: None,
+                                    }).unwrap();
+                                    let _ = invoke_checked("send_message", args).await;
+                                }
+                            } else if current_project {
+                                present_browser_needs_human(
+                                    browser_needs_human,
+                                    browser_needs_human_error,
+                                    BrowserNeedsHumanPrompt { tabs: result.still_required },
+                                );
+                                browser_needs_human_error.set(Some(still_message));
+                            }
+                        }
+                        Err(_) => {
+                            if browser_project.get_untracked() == project_id {
+                                browser_needs_human_busy.set(false);
+                                browser_needs_human_error.set(Some(fail_message));
+                            }
                         }
                     }
                 });
@@ -11256,7 +11529,7 @@ fn App() -> impl IntoView {
                     })}
                     {move || items.with(|l| l.is_empty()).then(|| view! {
                         <div class="empty">
-                            <span class="empty-logo"></span>
+                            <span class="empty-logo brand-wordmark" role="img" aria-label="Wisp Science"></span>
                             <h1>{move || empty_title(locale.get(), empty_title_idx.get())}</h1>
                             <p>{move || empty_subtitle(locale.get(), empty_subtitle_idx.get())}</p>
                         </div>
@@ -12342,6 +12615,7 @@ fn App() -> impl IntoView {
                         execution_contexts=execution_contexts
                         session_execution_contexts=session_execution_contexts
                         default_execution_context=default_execution_context
+                        session_default_execution_context=session_default_execution_context
                         runtimes=runtime_infos
                         active_project=project_info
                         projects=proj_list
@@ -12772,9 +13046,11 @@ fn App() -> impl IntoView {
                                 class:active=move || agent_menu_open.get()
                                 class:has-resource=move || {
                                     !session_execution_contexts.get().is_empty()
-                                        || is_remote_default_context_id(
+                                        || resolved_session_default_id(
+                                            session_default_execution_context.get().as_deref(),
                                             default_execution_context.get().as_deref(),
                                         )
+                                        .is_some()
                                 }
                                 title=move || t(locale.get(), "composer.agent_options")
                                 aria-label=move || t(locale.get(), "composer.agent_options")
@@ -13073,7 +13349,10 @@ fn App() -> impl IntoView {
                                         }>
                                         <span>{move || t(locale.get(), "composer.compute")}</span>
                                         <span class="agent-menu-value">{move || {
-                                            let default_id = default_execution_context.get();
+                                            let default_id = resolved_session_default_id(
+                                                session_default_execution_context.get().as_deref(),
+                                                default_execution_context.get().as_deref(),
+                                            );
                                             let label = default_id.as_ref().map(|id| {
                                                 compute_default_label(id, &execution_contexts.get())
                                             });
@@ -13175,13 +13454,19 @@ fn App() -> impl IntoView {
                                             <p class="compute-menu-hint">{move || t(locale.get(), "compute.menu_hint")}</p>
                                             <div class="compute-default-field">
                                                 <label>
-                                                    <span>{move || t(locale.get(), "environments.default_analysis")}</span>
+                                                    <span>{move || t(locale.get(), "compute.session_default")}</span>
                                                     <DefaultAnalysisSelect
                                                         locale=locale
                                                         execution_contexts=execution_contexts
-                                                        default_execution_context=default_execution_context
-                                                        on_change=set_default_compute_resource
+                                                        default_execution_context=Signal::derive(move || {
+                                                            resolved_session_default_id(
+                                                                session_default_execution_context.get().as_deref(),
+                                                                default_execution_context.get().as_deref(),
+                                                            )
+                                                        })
+                                                        on_change=set_session_default_compute_resource
                                                         test_id="compute-default-analysis".to_string()
+                                                        label_key="compute.session_default"
                                                     />
                                                 </label>
                                             </div>
@@ -13203,7 +13488,12 @@ fn App() -> impl IntoView {
                                                     let context_id = format!("ssh:{}", host.alias);
                                                     let enabled = session_execution_contexts.get().contains(&context_id);
                                                     let is_analysis_default =
-                                                        default_execution_context.get().as_deref() == Some(context_id.as_str());
+                                                        resolved_session_default_id(
+                                                            session_default_execution_context.get().as_deref(),
+                                                            default_execution_context.get().as_deref(),
+                                                        )
+                                                        .as_deref()
+                                                            == Some(context_id.as_str());
                                                     let toggle_id = context_id.clone();
                                                     let default_id = context_id.clone();
                                                     view! {
@@ -13230,7 +13520,7 @@ fn App() -> impl IntoView {
                                                                 title=move || t(locale.get(), if is_analysis_default { "compute.clear_default" } else { "compute.set_default" })
                                                                 aria-label=move || t(locale.get(), if is_analysis_default { "compute.clear_default" } else { "compute.set_default" })
                                                                 on:click=move |_| {
-                                                                    set_default_compute_resource.call(if is_analysis_default { None } else { Some(default_id.clone()) });
+                                                                    set_session_default_compute_resource.call(if is_analysis_default { None } else { Some(default_id.clone()) });
                                                                 }>
                                                                 {compose_icon("star")}
                                                             </button>
@@ -13246,7 +13536,12 @@ fn App() -> impl IntoView {
                                                     let context_id = ctx.id.clone();
                                                     let enabled = session_execution_contexts.get().contains(&context_id);
                                                     let is_analysis_default =
-                                                        default_execution_context.get().as_deref() == Some(context_id.as_str());
+                                                        resolved_session_default_id(
+                                                            session_default_execution_context.get().as_deref(),
+                                                            default_execution_context.get().as_deref(),
+                                                        )
+                                                        .as_deref()
+                                                            == Some(context_id.as_str());
                                                     let toggle_id = context_id.clone();
                                                     let default_id = context_id.clone();
                                                     let name = if ctx.label.trim().is_empty() { ctx.id.clone() } else { ctx.label.clone() };
@@ -13281,7 +13576,7 @@ fn App() -> impl IntoView {
                                                                 title=move || t(locale.get(), if is_analysis_default { "compute.clear_default" } else { "compute.set_default" })
                                                                 aria-label=move || t(locale.get(), if is_analysis_default { "compute.clear_default" } else { "compute.set_default" })
                                                                 on:click=move |_| {
-                                                                    set_default_compute_resource.call(if is_analysis_default { None } else { Some(default_id.clone()) });
+                                                                    set_session_default_compute_resource.call(if is_analysis_default { None } else { Some(default_id.clone()) });
                                                                 }>
                                                                 {compose_icon("star")}
                                                             </button>
@@ -15924,6 +16219,7 @@ fn App() -> impl IntoView {
             }
         })}
         <SettingsView
+            external_link_confirm=external_link_confirm
             state=SettingsViewState {
                 locale, theme_mode, light_palette, dark_palette, ui_font_size, code_font_size, ui_font_family, code_font_family, selection_popup_enabled, send_with_modifier, custom_css, update_check_enabled, show_settings, settings_section, open_conn_key, channels_open, connectors, model_form, model_catalog_limits,
                 conn_form, memory_selected, specialist_form, settings, bootstrap, settings_message,
@@ -16146,7 +16442,7 @@ fn App() -> impl IntoView {
             start_env_setup=Callback::new(start_env_setup)
         />
         <OnboardingOverlay
-            locale=locale show_onboarding=show_onboarding onboard_step=onboard_step
+            locale=locale bootstrap=bootstrap show_onboarding=show_onboarding onboard_step=onboard_step
             onboard_key=onboard_key
             save_onboard_key=save_onboard_key
             dismiss_onboard=Callback::new(dismiss_onboard)

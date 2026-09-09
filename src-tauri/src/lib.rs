@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
@@ -83,6 +84,7 @@ mod resource_leases;
 mod resource_refs;
 mod review;
 pub(crate) use wisp_runs as run_context;
+mod network;
 mod runtime_commands;
 mod runtime_config_tool;
 mod runtime_launcher;
@@ -269,6 +271,35 @@ enum AgentEvent {
     },
 }
 
+impl AgentEvent {
+    fn frame_id(&self) -> &str {
+        match self {
+            Self::User { frame_id, .. }
+            | Self::MessageBoundary { frame_id, .. }
+            | Self::Resources { frame_id, .. }
+            | Self::Text { frame_id, .. }
+            | Self::Reasoning { frame_id, .. }
+            | Self::ToolCall { frame_id, .. }
+            | Self::ToolResult { frame_id, .. }
+            | Self::ToolPresentation { frame_id, .. }
+            | Self::Usage { frame_id, .. }
+            | Self::Compaction { frame_id, .. }
+            | Self::CompactionStarted { frame_id, .. }
+            | Self::ContextWarning { frame_id, .. }
+            | Self::Diff { frame_id, .. }
+            | Self::FileChanged { frame_id, .. }
+            | Self::Stdout { frame_id, .. }
+            | Self::Done { frame_id, .. }
+            | Self::Error { frame_id, .. }
+            | Self::DelegationCompleted { frame_id, .. }
+            | Self::ReviewStarted { frame_id, .. }
+            | Self::ReviewFailed { frame_id, .. }
+            | Self::Review { frame_id, .. }
+            | Self::CorrectionStarted { frame_id, .. } => frame_id,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct ConfirmRequest {
     /// Opaque, one-shot capability used by text-only remote approval surfaces.
@@ -296,8 +327,14 @@ impl ConfirmRequest {
     }
 }
 
-fn emit_confirm_request(app: &AppHandle, request: &ConfirmRequest) {
-    let _ = app.emit("confirm-request", request.clone());
+fn emit_confirm_request(app: &AppHandle, request: &ConfirmRequest, project_id: Option<&str>) {
+    emit_to_session_surfaces(
+        app,
+        &request.frame_id,
+        project_id,
+        "confirm-request",
+        request,
+    );
     channels::publish_approval_request(request);
 }
 
@@ -334,7 +371,7 @@ async fn request_image_resize_confirmation(
         .unwrap()
         .insert(frame_id.to_string());
     state.device_hub.mark_needs_user(frame_id, Some(project_id));
-    emit_confirm_request(app, &request);
+    emit_confirm_request(app, &request, Some(project_id));
     let approved = receive_confirm_decision(rx).await.approved();
     state.confirms.lock().unwrap().remove(frame_id);
     state.awaiting_confirm.lock().unwrap().remove(frame_id);
@@ -479,7 +516,6 @@ fn approval_grant_key(message: &str) -> Option<ApprovalGrantKey> {
 }
 
 pub(crate) const BUNDLED_DEV_MCP_CONNECTOR_ID: &str = "dev-mcp";
-pub(crate) const BUNDLED_BIO_MCP_CONNECTOR_ID: &str = "mcp_bio";
 
 /// Always-allow key for an MCP App `tools/call`. Empty connector ids are
 /// refused so bundled sources cannot share a `_:{tool}` grant.
@@ -674,9 +710,9 @@ struct McpConnection {
 
 // ── Connectors (multi-level) + per-tool approval ────────────────────────────
 //
-// The bundled `mcp_bio` aggregate serves ~247 tools; `mcp_bio/domains.json`
-// (domain slug -> tool names) partitions them into 23 "connectors". That file
-// is the static connector↔tool map — no server launch needed to build the tree.
+// The native catalog partitions biological tools into domain connectors.
+// Settings and dispatch share this inventory; no resource file or Python
+// server is needed to build the connector tree.
 // User `McpConnection`s are extra "custom" connectors (their tools aren't
 // statically known, so per-tool approval only applies to the bundled ones).
 
@@ -744,10 +780,10 @@ impl Scope {
 }
 
 /// Live approval policy read by `TauriOutput::approval_mode` on every tool call.
-/// `tool_connector` is static (built once from `domains.json`); `tools`/`skip`/
+/// `tool_connector` is static (built once from the native catalog); `tools`/`skip`/
 /// `scope` mirror the persisted settings and are refreshed by the approval
 /// commands.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ApprovalPolicy {
     /// Global scope layered over the per-tool modes below.
     scope: Scope,
@@ -757,6 +793,48 @@ struct ApprovalPolicy {
     skip: HashSet<String>,
     /// Tool name -> bundled connector (domain slug), for resolving `skip`.
     tool_connector: HashMap<String, String>,
+}
+
+/// Process-wide defaults plus per-project overlays written from a window that
+/// already has a workspace open. Running turns read the overlay for their
+/// `project_id`, so changing approvals in project A does not rewrite project B.
+#[derive(Clone, Default)]
+struct LiveApprovals {
+    default: ApprovalPolicy,
+    by_project: HashMap<String, ApprovalPolicy>,
+}
+
+impl LiveApprovals {
+    fn for_project(&self, project_id: &str) -> &ApprovalPolicy {
+        self.by_project.get(project_id).unwrap_or(&self.default)
+    }
+}
+
+/// Returned by approval overlay setters when the invoking window has no bound
+/// project. Must stay exact: tests and the UI match on this string.
+const BLANK_WINDOW_NO_PROJECT: &str = "Open a project in this window before running that action.";
+
+/// Project bound to this window only. Unlike [`AppState::require_active`], this
+/// never falls back to `main` — writing an overlay (or the unprefixed global keys)
+/// from an unbound window would leak into every project that still inherits
+/// the default.
+fn bound_window_project_id(state: &AppState, label: &str) -> Result<String, String> {
+    state
+        .active
+        .read()
+        .unwrap()
+        .get(label)
+        .map(|project| project.id.clone())
+        .ok_or_else(|| BLANK_WINDOW_NO_PROJECT.to_string())
+}
+
+fn window_bound_project_id(state: &AppState, label: &str) -> Option<String> {
+    state
+        .active
+        .read()
+        .unwrap()
+        .get(label)
+        .map(|project| project.id.clone())
 }
 
 impl ApprovalPolicy {
@@ -791,33 +869,26 @@ impl ApprovalPolicy {
     }
 }
 
-/// One bundled bio-tools connector (a domain from `mcp_bio/domains.json`).
+/// One built-in biological connector from the native catalog.
 #[derive(Clone)]
 struct BioDomain {
     slug: String,
-    name: String,
     tools: Vec<String>,
 }
 
-/// Read the static `mcp_bio/domains.json` connector map. Empty if the bundle is
-/// absent (dev checkouts without the vendored bio-tools).
+/// Built-in domain inventory comes from the same native catalog as dispatch.
 fn bio_domains() -> Vec<BioDomain> {
-    let Some(dir) = wisp_paths::bio_tools_dir() else {
-        return vec![];
-    };
-    let path = dir.join("lib").join("mcp_bio").join("domains.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return vec![];
-    };
-    let Ok(map) = serde_json::from_str::<BTreeMap<String, Vec<String>>>(&text) else {
-        return vec![];
-    };
+    let mut map = BTreeMap::<String, Vec<String>>::new();
+    for (domain, schema) in wisp_bio::catalog() {
+        map.entry(domain.into())
+            .or_default()
+            .push(schema.function.name);
+    }
+    for tools in map.values_mut() {
+        tools.sort();
+    }
     map.into_iter()
-        .map(|(slug, tools)| BioDomain {
-            name: domain_display_name(&slug),
-            slug,
-            tools,
-        })
+        .map(|(slug, tools)| BioDomain { slug, tools })
         .collect()
 }
 
@@ -1789,7 +1860,8 @@ async fn persist_and_emit_terminal_event(
         Ok(mut seq) => append_ui_event(&state.store, frame_id, &mut seq, event.clone()).await,
         Err(error) => tracing::warn!("load terminal UI event sequence failed: {error}"),
     }
-    emit_agent_event(app, event);
+    let project_id = state.store.frame_project_id(frame_id).await.ok().flatten();
+    emit_agent_event_in(app, event, project_id.as_deref());
 }
 
 /// Keep the raw terminal records intact for support bundles. Historical
@@ -2005,6 +2077,26 @@ async fn clear_idle_agents(state: &AppState) {
     }
 }
 
+fn invalidate_idle_agents_owned(
+    sessions: &HashMap<String, Arc<SessionRuntime>>,
+    owned: &HashSet<String>,
+) {
+    for (frame_id, runtime) in sessions {
+        if owned.contains(frame_id) {
+            runtime.invalidate_cached_agent();
+        }
+    }
+}
+
+async fn clear_idle_agents_for_project(state: &AppState, project_id: &str) {
+    let owned: HashSet<String> = match state.store.list_sessions(project_id).await {
+        Ok(rows) => rows.into_iter().map(|(id, ..)| id).collect(),
+        Err(_) => return,
+    };
+    let sessions = state.sessions.lock().await;
+    invalidate_idle_agents_owned(&sessions, &owned);
+}
+
 async fn clear_session_agent(state: &AppState, frame_id: &str) {
     let runtime = state.sessions.lock().await.get(frame_id).cloned();
     if let Some(runtime) = runtime {
@@ -2088,25 +2180,7 @@ const fn default_notifications_enabled() -> bool {
     true
 }
 
-#[derive(Serialize, Clone)]
-struct BootstrapStatus {
-    skills_loaded: usize,
-    python_ok: bool,
-    python_initializing: bool,
-    mcp_catalog: usize,
-    uv_ok: bool,
-    node_ok: bool,
-    npm_ok: bool,
-    sci_ok: bool,
-    pixi_ok: bool,
-    app_version: String,
-    os: String,
-    arch: String,
-    workspace: String,
-    /// Launch timings for bug reports; see `StartupReport`.
-    startup: String,
-    errors: Vec<String>,
-}
+use wisp_dto::BootstrapStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NotificationWindowSelection {
@@ -2194,6 +2268,81 @@ fn select_notification_window(
         .or(fallback_main)
         .or(fallback_any)
         .map(|label| selection(label, false))
+}
+
+/// Windows that should receive live session UI (agent stream, approvals).
+///
+/// Every window currently bound to the session's project sees the stream, so two
+/// views of the same workspace stay in sync. A window bound to a different
+/// project never does — unlike desktop notifications, live UI must not fall
+/// back onto a foreign workspace. Unbound File → New Window views and `pet`
+/// are excluded here; the pet overlay is added at emit time.
+fn session_surface_window_labels(
+    _origin: Option<&str>,
+    frame_id: &str,
+    project_id: Option<&str>,
+    active_projects: &HashMap<String, String>,
+    active_frames: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut labels = if let Some(project_id) = project_id {
+        active_projects
+            .iter()
+            .filter(|(label, active_project)| {
+                label.as_str() != "pet" && active_project.as_str() == project_id
+            })
+            .map(|(label, _)| label.clone())
+            .collect::<Vec<_>>()
+    } else {
+        // Unknown owner: only windows already viewing this conversation.
+        // Never broadcast to `main` or to the origin's current (possibly
+        // foreign) project.
+        active_frames
+            .iter()
+            .filter(|(label, viewed)| viewed.as_str() == frame_id && label.as_str() != "pet")
+            .map(|(label, _)| label.clone())
+            .collect::<Vec<_>>()
+    };
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+/// Emit a live session event only to windows of that conversation's project.
+///
+/// `channels` / device-hub publishers stay process-wide; this helper is the
+/// GUI fan-out. The desktop pet listens for agent/approval activity, so it is
+/// included unless the caller is a window-local overlay such as browser-tab
+/// cleanup.
+pub(crate) fn emit_to_session_surfaces<T: Clone + Serialize>(
+    app: &AppHandle,
+    frame_id: &str,
+    project_id: Option<&str>,
+    event: &str,
+    payload: &T,
+) {
+    emit_to_session_surfaces_filtered(app, frame_id, project_id, event, payload, true);
+}
+
+pub(crate) fn emit_to_session_surfaces_filtered<T: Clone + Serialize>(
+    app: &AppHandle,
+    frame_id: &str,
+    project_id: Option<&str>,
+    event: &str,
+    payload: &T,
+    include_pet: bool,
+) {
+    let state = app.state::<AppState>();
+    let mut labels = state.session_surface_labels(frame_id, project_id);
+    if include_pet {
+        // The pet overlay is Windows-only; emit_to is a no-op if that window
+        // does not exist on this platform.
+        labels.push("pet".to_string());
+    }
+    labels.sort();
+    labels.dedup();
+    for label in labels {
+        let _ = app.emit_to(&label, event, payload.clone());
+    }
 }
 
 #[tauri::command]
@@ -2438,7 +2587,7 @@ async fn request_mcp_app_tool_confirmation(
         .unwrap()
         .insert(frame_id.to_string());
     state.device_hub.mark_needs_user(frame_id, Some(project_id));
-    emit_confirm_request(app, &request);
+    emit_confirm_request(app, &request, Some(project_id));
     let decision = receive_confirm_decision(rx).await;
     state.confirms.lock().unwrap().remove(frame_id);
     state.awaiting_confirm.lock().unwrap().remove(frame_id);
@@ -2505,6 +2654,7 @@ async fn call_mcp_app_tool(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| MCP_APP_STALE_INSTANCE_ERROR.to_string())?;
+    ensure_project_live_approvals(&state, &project_id).await;
     // Plan mode and frozen-project gates match agent tool calls: read-only
     // tools stay available, everything else refuses.
     if plan_mode::session_plan_mode(&state.store, &frame_id).await
@@ -2517,7 +2667,7 @@ async fn call_mcp_app_tool(
     let host_approval = state
         .approvals
         .read()
-        .map(|policy| policy.mode_for(&name))
+        .map(|live| live.for_project(&project_id).mode_for(&name))
         .unwrap_or(wisp_tools::Approval::Allow);
     let full_permission = state
         .full_permission_sessions
@@ -2755,7 +2905,7 @@ struct TauriOutput {
     confirms: ConfirmMap,
     awaiting_confirm: Arc<StdMutex<HashSet<String>>>,
     /// Shared live approval policy (see `AppState::approvals`).
-    approvals: Arc<StdRwLock<ApprovalPolicy>>,
+    approvals: Arc<StdRwLock<LiveApprovals>>,
     /// Built-in plan mode for this session, read once per turn. ACP-bound
     /// frames never set it — their plan mode lives on the agent side.
     plan_mode: bool,
@@ -2811,10 +2961,14 @@ impl TauriOutput {
         match &self.live_events {
             Some(tx) => {
                 if let Err(send_error) = tx.send(event) {
-                    emit_agent_event_to_surfaces(&self.app, send_error.0);
+                    emit_agent_event_to_surfaces_in(
+                        &self.app,
+                        send_error.0,
+                        Some(&self.project_id),
+                    );
                 }
             }
-            None => emit_agent_event_to_surfaces(&self.app, event),
+            None => emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id)),
         }
     }
 
@@ -2855,7 +3009,7 @@ impl TauriOutput {
             .insert(self.frame_id.clone());
         self.device_hub
             .mark_needs_user(&self.frame_id, Some(&self.project_id));
-        emit_confirm_request(&self.app, &request);
+        emit_confirm_request(&self.app, &request, Some(&self.project_id));
 
         // There is deliberately no timeout: lack of approval must never be
         // converted into a denial that lets the same agent turn continue.
@@ -2904,18 +3058,19 @@ impl TauriOutput {
     }
 }
 
-fn emit_agent_event_to_surfaces(app: &AppHandle, event: AgentEvent) {
+fn emit_agent_event_to_surfaces_in(app: &AppHandle, event: AgentEvent, project_id: Option<&str>) {
     if !matches!(event, AgentEvent::ToolPresentation { .. }) {
         channels::publish_agent_event(&event);
     }
-    let _ = app.emit("agent", event);
+    let frame_id = event.frame_id().to_string();
+    emit_to_session_surfaces(app, &frame_id, project_id, "agent", &event);
 }
 
-fn emit_agent_event(app: &AppHandle, event: AgentEvent) {
+pub(crate) fn emit_agent_event_in(app: &AppHandle, event: AgentEvent, project_id: Option<&str>) {
     app.state::<AppState>()
         .device_hub
-        .apply_agent_event(&event, None);
-    emit_agent_event_to_surfaces(app, event);
+        .apply_agent_event(&event, project_id);
+    emit_agent_event_to_surfaces_in(app, event, project_id);
 }
 
 fn should_persist_ui_event(event: &AgentEvent) -> bool {
@@ -3098,7 +3253,7 @@ impl Output for TauriOutput {
     fn approval_mode(&self, tool: &str) -> wisp_tools::Approval {
         self.approvals
             .read()
-            .map(|p| p.mode_for(tool))
+            .map(|live| live.for_project(&self.project_id).mode_for(tool))
             .unwrap_or(wisp_tools::Approval::Allow)
     }
     fn restrict_read_paths_to_project(&self) -> bool {
@@ -3164,7 +3319,12 @@ impl Output for TauriOutput {
         if self.force_ask_mutations {
             return false;
         }
-        self.full_permission() || self.approvals.read().map(|p| p.full()).unwrap_or(false)
+        self.full_permission()
+            || self
+                .approvals
+                .read()
+                .map(|live| live.for_project(&self.project_id).full())
+                .unwrap_or(false)
     }
     fn force_ask_mutations(&self) -> bool {
         self.force_ask_mutations
@@ -3207,6 +3367,9 @@ impl Output for TauriOutput {
     }
     fn frame_id(&self) -> Option<&str> {
         Some(self.frame_id.as_str())
+    }
+    fn project_id(&self) -> Option<&str> {
+        Some(self.project_id.as_str())
     }
     fn preflight_local_execution(&self, source: &str) -> Result<(), String> {
         match &self.exploration_isolation {
@@ -3304,6 +3467,7 @@ struct MacMenuLabels {
     help: &'static str,
     theme: &'static str,
     new_session: &'static str,
+    new_window: &'static str,
     projects: &'static str,
     files: &'static str,
     export_current_project: &'static str,
@@ -3347,6 +3511,7 @@ fn mac_menu_labels(locale: AppMenuLocale) -> MacMenuLabels {
             help: "帮助",
             theme: "主题",
             new_session: "新建会话",
+            new_window: "新建窗口",
             projects: "项目",
             files: "文件",
             export_current_project: "导出当前项目",
@@ -3386,6 +3551,7 @@ fn mac_menu_labels(locale: AppMenuLocale) -> MacMenuLabels {
             help: "Help",
             theme: "Theme",
             new_session: "New Session",
+            new_window: "New Window",
             projects: "Projects",
             files: "Files",
             export_current_project: "Export Current Project",
@@ -3428,10 +3594,14 @@ fn build_menu_item(
     builder.build(app)
 }
 
-#[cfg(target_os = "macos")]
-fn mac_menu_action(id: &str) -> Option<&'static str> {
+#[cfg(any(target_os = "macos", test))]
+fn mac_menu_action(id: &str, focused: bool) -> Option<&'static str> {
+    if !focused {
+        return None;
+    }
     match id {
         "action.new" => Some("new"),
+        "action.new-window" => Some("new-window"),
         "action.projects" => Some("projects"),
         "action.files" => Some("files"),
         "action.export-current-project" => Some("export-current-project"),
@@ -3463,8 +3633,11 @@ fn mac_menu_action(id: &str) -> Option<&'static str> {
 #[cfg(target_os = "macos")]
 fn wire_macos_menu_events(window: &tauri::WebviewWindow) {
     window.on_menu_event(|window, event| {
-        if let Some(action) = mac_menu_action(event.id().as_ref()) {
-            let _ = window.emit(NATIVE_MENU_ACTION_EVENT, action.to_string());
+        // Tauri invokes every window's menu handler for each native action.
+        if let Some(action) =
+            mac_menu_action(event.id().as_ref(), window.is_focused().unwrap_or(false))
+        {
+            let _ = window.emit_to(window.label(), NATIVE_MENU_ACTION_EVENT, action.to_string());
         }
     });
 }
@@ -3510,6 +3683,10 @@ fn install_macos_app_menu(app: &AppHandle, locale_tag: &str) -> Result<(), Strin
     let file_menu = SubmenuBuilder::new(app, labels.file)
         .item(
             &build_menu_item(app, "action.new", labels.new_session, Some("CmdOrCtrl+N"))
+                .map_err(|error| error.to_string())?,
+        )
+        .item(
+            &build_menu_item(app, "action.new-window", labels.new_window, None)
                 .map_err(|error| error.to_string())?,
         )
         .item(
@@ -4128,6 +4305,28 @@ async fn load_json_setting<T: serde::de::DeserializeOwned + Default>(
         .unwrap_or_default()
 }
 
+async fn load_json_setting_for_project<T: serde::de::DeserializeOwned + Default>(
+    store: &Store,
+    key: &str,
+    project_id: Option<&str>,
+) -> T {
+    if let Some(id) = project_id.filter(|id| !id.is_empty()) {
+        let specific = format!("{key}:{id}");
+        if let Some(raw) = store.get_setting(&specific).await.ok().flatten() {
+            if let Ok(value) = serde_json::from_str(&raw) {
+                return value;
+            }
+        }
+    }
+    load_json_setting(store, key).await
+}
+
+/// Overlay key for a bound project. Setters pass a resolved project id so they
+/// cannot write the unprefixed global default (`approval_scope`, …).
+fn project_setting_key(key: &str, project_id: &str) -> String {
+    format!("{key}:{project_id}")
+}
+
 async fn save_json_setting<T: Serialize>(store: &Store, key: &str, val: &T) -> Result<(), String> {
     let json = serde_json::to_string(val).map_err(|e| format!("{e}"))?;
     store
@@ -4146,13 +4345,11 @@ async fn load_disabled_connectors(store: &Store) -> HashSet<String> {
 }
 
 /// Persisted per-tool approvals (tool name -> "ask"/"deny"; "allow" omitted).
-async fn load_tool_approvals(store: &Store) -> HashMap<String, String> {
-    load_json_setting(store, "tool_approvals").await
-}
-
-/// Persisted global approval scope ("full" | "auto" | "ask"; default "ask").
-async fn load_approval_scope(store: &Store) -> Scope {
-    Scope::parse(&load_json_setting::<String>(store, "approval_scope").await)
+async fn load_tool_approvals_for(
+    store: &Store,
+    project_id: Option<&str>,
+) -> HashMap<String, String> {
+    load_json_setting_for_project(store, "tool_approvals", project_id).await
 }
 
 async fn load_approval_grants(store: &Store) -> ApprovalGrants {
@@ -4163,15 +4360,85 @@ async fn save_approval_grants(store: &Store, grants: &ApprovalGrants) -> Result<
     save_json_setting(store, "approval_grants", &grants.persisted()).await
 }
 
+/// Persisted approval scope ("full" | "auto" | "ask"; default "ask").
+async fn load_approval_scope_for(store: &Store, project_id: Option<&str>) -> Scope {
+    Scope::parse(
+        &load_json_setting_for_project::<String>(store, "approval_scope", project_id).await,
+    )
+}
+
 /// Connector keys with "Skip approvals" on.
-async fn load_skip_connectors(store: &Store) -> HashSet<String> {
-    load_json_setting::<Vec<String>>(store, "skip_approval_connectors")
+async fn load_skip_connectors_for(store: &Store, project_id: Option<&str>) -> HashSet<String> {
+    load_json_setting_for_project::<Vec<String>>(store, "skip_approval_connectors", project_id)
         .await
         .into_iter()
         .collect()
 }
 
-/// tool name -> bundled connector (domain slug). Static; built from domains.json.
+/// Persist overlay setters refuse to write until the window has a bound
+/// project. Returning `project_id` lets the caller refresh only that overlay.
+async fn persist_approval_scope_overlay(
+    store: &Store,
+    project_id: Result<String, String>,
+    scope: &str,
+) -> Result<String, String> {
+    let project_id = project_id?;
+    save_json_setting(
+        store,
+        &project_setting_key("approval_scope", &project_id),
+        &Scope::parse(scope).as_str(),
+    )
+    .await?;
+    Ok(project_id)
+}
+
+async fn persist_tool_approval_overlay(
+    store: &Store,
+    project_id: Result<String, String>,
+    tool: String,
+    mode: String,
+) -> Result<String, String> {
+    let project_id = project_id?;
+    let mut approvals = load_tool_approvals_for(store, Some(&project_id)).await;
+    // Store only overrides; "allow" is the default, so drop it to stay compact.
+    if ApprovalMode::parse(&mode) == ApprovalMode::Allow {
+        approvals.remove(&tool);
+    } else {
+        approvals.insert(tool, ApprovalMode::parse(&mode).as_str().into());
+    }
+    save_json_setting(
+        store,
+        &project_setting_key("tool_approvals", &project_id),
+        &approvals,
+    )
+    .await?;
+    Ok(project_id)
+}
+
+async fn persist_skip_connectors_overlay(
+    store: &Store,
+    project_id: Result<String, String>,
+    key: String,
+    enabled: bool,
+) -> Result<String, String> {
+    let project_id = project_id?;
+    let mut skip = load_skip_connectors_for(store, Some(&project_id)).await;
+    if enabled {
+        skip.insert(key);
+    } else {
+        skip.remove(&key);
+    }
+    let list: Vec<String> = skip.into_iter().collect();
+    save_json_setting(
+        store,
+        &project_setting_key("skip_approval_connectors", &project_id),
+        &list,
+    )
+    .await?;
+    Ok(project_id)
+}
+
+/// tool name -> bundled connector (domain slug). Built from the native catalog.
 fn build_tool_connector_map() -> HashMap<String, String> {
     let mut m = HashMap::new();
     for d in bio_domains() {
@@ -4184,25 +4451,72 @@ fn build_tool_connector_map() -> HashMap<String, String> {
 
 /// Snapshot the persisted approval state into a fresh `ApprovalPolicy`.
 async fn build_approval_policy(store: &Store) -> ApprovalPolicy {
+    build_approval_policy_for(store, None).await
+}
+
+async fn build_approval_policy_for(store: &Store, project_id: Option<&str>) -> ApprovalPolicy {
     ApprovalPolicy {
-        scope: load_approval_scope(store).await,
-        tools: load_tool_approvals(store)
+        scope: load_approval_scope_for(store, project_id).await,
+        tools: load_tool_approvals_for(store, project_id)
             .await
             .into_iter()
             .map(|(k, v)| (k, ApprovalMode::parse(&v)))
             .collect(),
-        skip: load_skip_connectors(store).await,
+        skip: load_skip_connectors_for(store, project_id).await,
         tool_connector: build_tool_connector_map(),
     }
 }
 
+async fn project_has_approval_overlay(store: &Store, project_id: &str) -> bool {
+    for key in [
+        "approval_scope",
+        "tool_approvals",
+        "skip_approval_connectors",
+    ] {
+        if store
+            .get_setting(&format!("{key}:{project_id}"))
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Reload the live approval policy after a settings change so running sessions
 /// see it on their next tool call (approval is enforced live, not per session).
+/// `None` reloads the process-wide default (unprefixed keys). Kept for
+/// global-default writers (connector enable/disable stays process-wide).
+#[allow(dead_code)]
 async fn refresh_approval_policy(state: &AppState) {
-    let policy = build_approval_policy(&state.store).await;
-    if let Ok(mut guard) = state.approvals.write() {
-        *guard = policy;
+    refresh_approval_policy_for(state, None).await;
+}
+
+async fn refresh_approval_policy_for(state: &AppState, project_id: Option<&str>) {
+    let policy = build_approval_policy_for(&state.store, project_id).await;
+    if let Ok(mut live) = state.approvals.write() {
+        match project_id.filter(|id| !id.is_empty()) {
+            Some(id) => {
+                live.by_project.insert(id.to_string(), policy);
+            }
+            None => live.default = policy,
+        }
     }
+}
+
+async fn ensure_project_live_approvals(state: &AppState, project_id: &str) {
+    let already = state
+        .approvals
+        .read()
+        .map(|live| live.by_project.contains_key(project_id))
+        .unwrap_or(false);
+    if already || !project_has_approval_overlay(&state.store, project_id).await {
+        return;
+    }
+    refresh_approval_policy_for(state, Some(project_id)).await;
 }
 
 async fn load_memory_enabled(store: &Store) -> bool {
@@ -4385,13 +4699,21 @@ async fn connect_mcp(conn: &McpConnection) -> anyhow::Result<wisp_mcp::McpClient
                     cmd.current_dir(dir);
                 }
             }
+            cmd.envs(wisp_tools::network::proxy_env(&network::mcp_proxy()));
             wisp_tools::process::hide_console_async(&mut cmd);
             wisp_mcp::McpClient::launch_with_command(cmd).await
         }
         McpTransport::Http { url, auth, .. } => {
             let headers = mcp_secrets::hydrate_headers(conn);
             match auth {
-                McpHttpAuth::None => wisp_mcp::McpClient::connect_http(url, &headers).await,
+                McpHttpAuth::None => {
+                    wisp_mcp::McpClient::connect_http_with_proxy(
+                        url,
+                        &headers,
+                        &network::mcp_proxy(),
+                    )
+                    .await
+                }
                 McpHttpAuth::OAuth => mcp_oauth::connect(&conn.id, url, &headers).await,
             }
         }
@@ -4414,7 +4736,7 @@ fn default_model(provider: &str) -> &'static str {
     }
 }
 
-/// Process-wide LLM proxy override, mirroring the `proxy_url` setting. A
+/// Process-wide LLM proxy override, mirroring NetworkSettings.model_proxy_url. A
 /// global (like the env vars it replaces) so every provider construction site
 /// picks it up without threading store access through each caller. Loaded at
 /// startup, updated on settings save.
@@ -4615,7 +4937,7 @@ fn r_kernel_worker_path() -> PathBuf {
     wisp_runtime::resolve_bundled_script(&configured)
 }
 
-/// Wire language runtimes, bundled bio-tools MCP, and user-configured MCP
+/// Wire language runtimes, native bio tools, and user-configured MCP
 /// connections into a freshly built tool registry.
 #[derive(Default)]
 struct ToolWiringResult {
@@ -4634,7 +4956,6 @@ async fn wire_runtimes_and_mcp(
     project_id: &str,
     scope_key: &str,
     frame_id: &str,
-    app_data: &std::path::Path,
     store: &Store,
     runtime_allow: Option<&HashSet<String>>,
     connector_allow: Option<&HashSet<String>>,
@@ -4661,25 +4982,6 @@ async fn wire_runtimes_and_mcp(
     }
 
     let disabled = load_disabled_connectors(store).await;
-    let domains = bio_domains();
-    let bio_granted = domains.iter().any(|domain| {
-        !disabled.contains(&domain.slug)
-            && connector_allow.is_none_or(|allow| allow.contains(&domain.slug))
-    });
-    let needs_python_env = runtime_granted("python") || bio_granted;
-    let py_env = if needs_python_env {
-        // Venv only: `ensure` would block the turn on a multi-minute wheel
-        // download (#477). The startup bootstrap installs deps in background.
-        match wisp_runtime::PythonEnv::ensure_venv(app_data) {
-            Ok(env) => Some(env),
-            Err(e) => {
-                result.errors.push(format!("Python environment: {e}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     let service_env = models::service_env();
     let worker_path = kernel_worker_path();
@@ -4728,9 +5030,8 @@ async fn wire_runtimes_and_mcp(
         ));
     }
 
-    // Bundled bio-tools. Per-connector (domain) enable is the only gate now:
-    // the `WISP_MCP_COMMAND` dev override always applies; otherwise mcp_bio
-    // launches unless every domain is disabled.
+    // Native bio domains obey connector settings and grants. The explicit
+    // WISP_MCP_COMMAND override selects an external MCP server instead.
     if let Ok(cmdline) = std::env::var("WISP_MCP_COMMAND") {
         if connector_allow.is_some_and(|allow| !allow.contains("dev-mcp")) {
             return finish_custom_mcp_wiring(result, registry, store, project_id, connector_allow)
@@ -4764,44 +5065,87 @@ async fn wire_runtimes_and_mcp(
                 Err(e) => result.errors.push(format!("MCP command: {e}")),
             }
         }
-    } else if let Some(env) = &py_env {
+    } else {
         let pkg = std::env::var("WISP_MCP_PKG").unwrap_or_else(|_| "mcp_bio".into());
-        // mcp_bio serves all 247 tools; drop disabled domains' tools at
-        // registration. Skip the launch entirely if every domain is off.
-        let blocked = |slug: &str| {
-            disabled.contains(slug) || connector_allow.is_some_and(|allow| !allow.contains(slug))
-        };
-        let all_off = if connector_allow.is_some() {
-            domains.is_empty() || domains.iter().all(|domain| blocked(&domain.slug))
-        } else {
-            !domains.is_empty() && domains.iter().all(|domain| blocked(&domain.slug))
-        };
-        let skip: HashSet<String> = domains
-            .iter()
-            .filter(|d| blocked(&d.slug))
-            .flat_map(|d| d.tools.iter().cloned())
-            .collect();
-        if !all_off {
-            match wisp_mcp::McpClient::launch_bio_tools(&env.python(), &pkg, &service_env).await {
+        let native_selected = wisp_bio::selected_by_package(&pkg);
+        if native_selected {
+            match wisp_bio::NativeBio::with_proxy(&service_env, &network::mcp_proxy()) {
                 Ok(client) => {
-                    match register_mcp_filtered(
-                        registry,
-                        std::sync::Arc::new(client),
-                        BUNDLED_BIO_MCP_CONNECTOR_ID,
-                        &skip,
-                    )
-                    .await
-                    {
-                        Ok(names) => result.added_tools.extend(names),
-                        Err(error) => result.errors.push(error),
+                    for tool in wisp_bio::tools_for_package(std::sync::Arc::new(client), &pkg) {
+                        let domain = wisp_bio::domain_for_tool(tool.name()).unwrap_or_default();
+                        if disabled.contains(domain)
+                            || connector_allow.is_some_and(|allow| !allow.contains(domain))
+                        {
+                            continue;
+                        }
+                        if registry.get(tool.name()).is_some() {
+                            result
+                                .errors
+                                .push(format!("tool name collision: {}", tool.name()));
+                        } else {
+                            result.added_tools.push(tool.name().into());
+                            registry.add(tool);
+                        }
                     }
                 }
-                Err(e) => result.errors.push(format!("MCP {pkg}: {e}")),
+                Err(error) => result.errors.push(format!("Native bio: {error}")),
             }
+        }
+        if !native_selected {
+            result
+                .errors
+                .push(format!("Unknown native bio package: {pkg}"));
         }
     }
 
     finish_custom_mcp_wiring(result, registry, store, project_id, connector_allow).await
+}
+
+/// Host environment keys copied into a plugin MCP child after `env_clear()`.
+/// Keep this a non-secret allowlist: runtime plumbing plus user-config
+/// directories. Do not add `GH_TOKEN`, `GITHUB_TOKEN`, or other secrets.
+const PLUGIN_MCP_ENV_PASSTHROUGH: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "PATHEXT",
+    "COMSPEC",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+];
+
+fn plugin_mcp_passthrough_env_from<F>(mut lookup: F) -> Vec<(OsString, OsString)>
+where
+    F: FnMut(&str) -> Option<OsString>,
+{
+    PLUGIN_MCP_ENV_PASSTHROUGH
+        .iter()
+        .filter_map(|&key| lookup(key).map(|value| (OsString::from(key), value)))
+        .collect()
+}
+
+fn plugin_mcp_passthrough_env() -> Vec<(OsString, OsString)> {
+    plugin_mcp_passthrough_env_from(|key| std::env::var_os(key))
 }
 
 async fn connect_plugin_mcp(
@@ -4812,30 +5156,15 @@ async fn connect_plugin_mcp(
         .args(&launch.args)
         .current_dir(&launch.cwd)
         .env_clear();
-    // Preserve only the small platform environment needed by common runtimes.
-    // Package-declared variables are added below; no shell is involved.
-    const PASSTHROUGH: &[&str] = &[
-        "PATH",
-        "HOME",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "LANG",
-        "LC_ALL",
-        "SYSTEMROOT",
-        "SYSTEMDRIVE",
-        "PATHEXT",
-        "COMSPEC",
-    ];
-    for key in PASSTHROUGH {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
+    // Preserve only the small platform environment needed by common runtimes
+    // and user-config directories. Package-declared variables are added below;
+    // no shell is involved, and host token variables are not copied.
+    command.envs(plugin_mcp_passthrough_env());
     command
         .envs(&launch.env)
         .env("WISP_PLUGIN_ROOT", &launch.install_root)
         .env("CLAUDE_PLUGIN_ROOT", &launch.install_root);
+    command.envs(wisp_tools::network::proxy_env(&network::mcp_proxy()));
     wisp_tools::process::hide_console_async(&mut command);
     wisp_mcp::McpClient::launch_with_command(command).await
 }
@@ -4955,34 +5284,6 @@ async fn register_mcp_with_approval(
     connector_id: &str,
     require_approval: bool,
 ) -> Result<Vec<String>, String> {
-    register_mcp_filtered_with_approval(
-        registry,
-        client,
-        connector_id,
-        &HashSet::new(),
-        require_approval,
-    )
-    .await
-}
-
-/// Like `register_mcp`, but skips any tool whose name is in `skip` (used to drop
-/// disabled bio-tools domains from the shared `mcp_bio` aggregate).
-async fn register_mcp_filtered(
-    registry: &mut wisp_tools::Registry,
-    client: std::sync::Arc<wisp_mcp::McpClient>,
-    connector_id: &str,
-    skip: &HashSet<String>,
-) -> Result<Vec<String>, String> {
-    register_mcp_filtered_with_approval(registry, client, connector_id, skip, false).await
-}
-
-async fn register_mcp_filtered_with_approval(
-    registry: &mut wisp_tools::Registry,
-    client: std::sync::Arc<wisp_mcp::McpClient>,
-    connector_id: &str,
-    skip: &HashSet<String>,
-    require_approval: bool,
-) -> Result<Vec<String>, String> {
     if connector_id.trim().is_empty() {
         tracing::warn!(
             "registering MCP tools with an empty connector_id; Always-allow grants will not be offered"
@@ -4992,24 +5293,15 @@ async fn register_mcp_filtered_with_approval(
         Ok(tools) => {
             let collisions: Vec<_> = tools
                 .iter()
-                .filter(|tool| {
-                    tool.visible_to_model()
-                        && !skip.contains(&tool.name)
-                        && registry.get(&tool.name).is_some()
-                })
+                .filter(|tool| tool.visible_to_model() && registry.get(&tool.name).is_some())
                 .map(|tool| tool.name.clone())
                 .collect();
             if !collisions.is_empty() {
                 return Err(format!("tool name collision: {}", collisions.join(", ")));
             }
-            // Shared catalog for App bridges: skipped (disabled-domain) tools
-            // stay out so an App cannot call a connector the user turned off.
-            let catalog = std::sync::Arc::new(
-                tools
-                    .into_iter()
-                    .filter(|tool| !skip.contains(&tool.name))
-                    .collect::<Vec<_>>(),
-            );
+            // Keep UI-only tools available to App bridges; model visibility is
+            // checked below when adding tools to the agent registry.
+            let catalog = std::sync::Arc::new(tools);
             let mut names = Vec::new();
             for t in catalog.iter() {
                 if !t.visible_to_model() {
@@ -5053,6 +5345,7 @@ async fn create_session_frame(store: &Store, project_id: &str) -> Result<String,
         .create_frame(&id, project_id, "OPERON", &model_id)
         .await
         .map_err(|e| format!("{e}"))?;
+    ssh_hosts::snapshot_session_default_from_global(store, &id).await?;
     specialists::inherit_project_default_specialist(store, project_id, &id).await?;
     Ok(id)
 }
@@ -5541,13 +5834,19 @@ async fn persist_review(
     }
 }
 
-fn emit_review(app: &AppHandle, frame_id: &str, report: review::ReviewReport) {
-    emit_agent_event(
+fn emit_review(
+    app: &AppHandle,
+    frame_id: &str,
+    report: review::ReviewReport,
+    project_id: Option<&str>,
+) {
+    emit_agent_event_in(
         app,
         AgentEvent::Review {
             frame_id: frame_id.to_string(),
             report,
         },
+        project_id,
     );
 }
 
@@ -5591,7 +5890,7 @@ async fn automatic_review(
         }
         Ok(mut report) => {
             persist_review(&state.store, frame_id, agent.ctx.messages.len(), &report).await;
-            emit_review(app, frame_id, report.clone());
+            emit_review(app, frame_id, report.clone(), Some(&output.project_id));
             if report.has_findings() {
                 agent.ctx.inject_user(review::correction_prompt(&report));
                 output.emit(AgentEvent::CorrectionStarted {
@@ -5626,7 +5925,7 @@ async fn automatic_review(
                     }
                 }
                 persist_review(&state.store, frame_id, agent.ctx.messages.len(), &report).await;
-                emit_review(app, frame_id, report);
+                emit_review(app, frame_id, report, Some(&output.project_id));
             }
         }
     }
@@ -5659,26 +5958,28 @@ async fn automatic_review_acp(
         return;
     }
 
-    emit_agent_event(
+    emit_agent_event_in(
         app,
         AgentEvent::ReviewStarted {
             frame_id: frame_id.to_string(),
         },
+        Some(project.id.as_str()),
     );
     match generate_review(state, frame_id, &msgs, Some(cancel)).await {
         Err(error) => {
             tracing::warn!("automatic ACP review failed for {frame_id}: {error}");
-            emit_agent_event(
+            emit_agent_event_in(
                 app,
                 AgentEvent::ReviewFailed {
                     frame_id: frame_id.to_string(),
                     message: error,
                 },
+                Some(project.id.as_str()),
             );
         }
         Ok(mut report) => {
             persist_review(&state.store, frame_id, msgs.len(), &report).await;
-            emit_review(app, frame_id, report.clone());
+            emit_review(app, frame_id, report.clone(), Some(project.id.as_str()));
             if report.has_findings() {
                 let model = match state.store.get_acp_session(frame_id).await {
                     Ok(Some(binding)) => {
@@ -5688,12 +5989,13 @@ async fn automatic_review_acp(
                     }
                     _ => "ACP Agent".into(),
                 };
-                emit_agent_event(
+                emit_agent_event_in(
                     app,
                     AgentEvent::CorrectionStarted {
                         frame_id: frame_id.to_string(),
                         model,
                     },
+                    Some(project.id.as_str()),
                 );
                 let correction_prompt = review::correction_prompt(&report);
                 let correction =
@@ -5701,12 +6003,13 @@ async fn automatic_review_acp(
                         .await;
                 if let Err(error) = correction {
                     tracing::warn!("automatic ACP correction failed for {frame_id}: {error}");
-                    emit_agent_event(
+                    emit_agent_event_in(
                         app,
                         AgentEvent::ReviewFailed {
                             frame_id: frame_id.to_string(),
                             message: format!("correction turn failed: {error}"),
                         },
+                        Some(project.id.as_str()),
                     );
                     report.set_status("unaddressed");
                 } else {
@@ -5720,12 +6023,13 @@ async fn automatic_review_acp(
                                     tracing::warn!(
                                     "automatic ACP follow-up review failed for {frame_id}: {error}"
                                 );
-                                    emit_agent_event(
+                                    emit_agent_event_in(
                                         app,
                                         AgentEvent::ReviewFailed {
                                             frame_id: frame_id.to_string(),
                                             message: format!("follow-up review failed: {error}"),
                                         },
+                                        Some(project.id.as_str()),
                                     );
                                     report.set_status("unaddressed");
                                 }
@@ -5735,12 +6039,13 @@ async fn automatic_review_acp(
                             tracing::warn!(
                                 "load corrected ACP transcript failed for {frame_id}: {error}"
                             );
-                            emit_agent_event(
+                            emit_agent_event_in(
                                 app,
                                 AgentEvent::ReviewFailed {
                                     frame_id: frame_id.to_string(),
                                     message: format!("load corrected transcript failed: {error}"),
                                 },
+                                Some(project.id.as_str()),
                             );
                             report.set_status("unaddressed");
                         }
@@ -5753,7 +6058,7 @@ async fn automatic_review_acp(
                     .map(|messages| messages.len())
                     .unwrap_or(msgs.len());
                 persist_review(&state.store, frame_id, message_count, &report).await;
-                emit_review(app, frame_id, report);
+                emit_review(app, frame_id, report, Some(project.id.as_str()));
             }
         }
     }
@@ -5783,7 +6088,7 @@ async fn test_reviewer_backend(
     }
     reviewer.instructions = review::REVIEWER_RUBRIC.to_string();
 
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let _project_activity = state.begin_project_activity(&project.id)?;
     let session_acp_profile_id = match state.active_frame(window.label()) {
         Some(frame_id) => state
@@ -5870,32 +6175,35 @@ async fn review_session(
         {
             return Err("Nothing to review yet.".into());
         }
-        emit_agent_event(
+        emit_agent_event_in(
             &app,
             AgentEvent::ReviewStarted {
                 frame_id: frame_id.clone(),
             },
+            Some(project_id.as_str()),
         );
         let report = match generate_review(&state, &frame_id, &msgs, None).await {
             Ok(report) => report,
             Err(error) => {
-                emit_agent_event(
+                emit_agent_event_in(
                     &app,
                     AgentEvent::ReviewFailed {
                         frame_id: frame_id.clone(),
                         message: error.clone(),
                     },
+                    Some(project_id.as_str()),
                 );
                 return Err(error);
             }
         };
         persist_review(&state.store, &frame_id, msgs.len(), &report).await;
-        emit_agent_event(
+        emit_agent_event_in(
             &app,
             AgentEvent::Review {
                 frame_id: frame_id.clone(),
                 report,
             },
+            Some(project_id.as_str()),
         );
         Ok(())
     }
@@ -6007,7 +6315,7 @@ async fn side_chat(
             .await
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "Session project was not found.".to_string())?,
-        None => state.active(window.label()).id,
+        None => state.require_active(window.label())?.id,
     };
     let _project_activity = state.begin_project_activity(&project_id)?;
     let Some(ref frame_id) = frame_id else {
@@ -6060,7 +6368,7 @@ async fn side_chat(
     // ACP side chat: one-shot, read-only answer from the selected ACP Agent,
     // running in the active project root. Never touches the main thread.
     let answer = if let Some(agent_id) = acp_agent_id.as_deref().filter(|id| !id.is_empty()) {
-        let cwd = state.active(window.label()).root;
+        let cwd = state.require_active(window.label())?.root;
         acp::acp_side_chat_once(&state, &cwd, agent_id, &prompt).await?
     } else {
         http_llm?
@@ -6100,24 +6408,13 @@ async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::P
     Ok(wisp_llm::build(cfg))
 }
 
-fn mcp_lib_dir(_root: &std::path::Path) -> Option<PathBuf> {
-    wisp_paths::bio_tools_dir().map(|d| d.join("lib"))
-}
-
-fn list_mcp_servers(root: &std::path::Path) -> Vec<String> {
-    let Some(lib) = mcp_lib_dir(root) else {
-        return vec![];
-    };
-    let mut out = vec![];
-    if let Ok(rd) = std::fs::read_dir(&lib) {
-        for ent in rd.flatten() {
-            let name = ent.file_name().to_string_lossy().into_owned();
-            if name.starts_with("mcp_") && ent.path().join("server.py").is_file() {
-                out.push(name);
-            }
-        }
-    }
+fn list_mcp_servers(_root: &std::path::Path) -> Vec<String> {
+    let mut out = wisp_bio::catalog()
+        .into_iter()
+        .map(|(domain, _)| wisp_bio::package_name(domain))
+        .collect::<Vec<_>>();
     out.sort();
+    out.dedup();
     out
 }
 
@@ -6155,8 +6452,8 @@ fn list_memory_files(memory: &MemoryManager) -> Vec<MemoryFile> {
         .collect()
 }
 
-async fn build_project_info(state: &AppState, label: &str) -> ProjectInfo {
-    let ap = state.active(label);
+async fn build_project_info(state: &AppState, label: &str) -> Result<ProjectInfo, String> {
+    let ap = state.require_active(label)?;
     let (_, _, _, api_key) = load_settings(&state.store).await;
     let mcp = list_mcp_servers(&ap.root);
     // Prefer the user-set project name (Project Settings) over the folder name.
@@ -6177,7 +6474,7 @@ async fn build_project_info(state: &AppState, label: &str) -> ProjectInfo {
     } else {
         db_name
     };
-    ProjectInfo {
+    Ok(ProjectInfo {
         id: ap.id.clone(),
         name,
         root: ap.root.to_string_lossy().into_owned(),
@@ -6185,7 +6482,7 @@ async fn build_project_info(state: &AppState, label: &str) -> ProjectInfo {
         mcp_server_count: mcp.len(),
         memory_file_count: count_memory_files(&ap.memory),
         has_api_key: !api_key.is_empty(),
-    }
+    })
 }
 
 /// Tell the webview whether we're in dev (keep native context menu / DevTools).
@@ -6578,10 +6875,17 @@ fn spawn_deferred_startup(
         // "main" window is built in `run()` so it can carry an `on_navigation`
         // guard; these are the extra per-project ones. A project that was
         // since deleted simply fails to spawn.
-        for id in project_commands::persisted_windows(&store).await {
+        for (label, id) in project_commands::restored_window_projects(&store).await {
             let state = app.state::<AppState>();
-            let _ =
-                project_commands::spawn_project_window(&app, state.inner(), &id, None, None).await;
+            let _ = project_commands::spawn_project_window_with_label(
+                &app,
+                state.inner(),
+                &label,
+                &id,
+                None,
+                None,
+            )
+            .await;
         }
         let ms = started.elapsed().as_millis();
         update_startup_report(|report| report.deferred_ms = Some(ms));
@@ -6771,10 +7075,7 @@ pub fn run() {
                     .create_project("default", "Workspace", &legacy_ws)
                     .await
                     .ok();
-                let active_id = match store.get_setting("active_project_id").await.ok().flatten() {
-                    Some(id) if store.get_project(&id).await.ok().flatten().is_some() => id,
-                    _ => "default".to_string(),
-                };
+                let active_id = project_commands::startup_main_project_id(&store).await;
                 let (_, dir) = store
                     .get_project(&active_id)
                     .await
@@ -6797,21 +7098,20 @@ pub fn run() {
             );
             let root = ensure_writable(root, &app_data);
 
-            set_llm_proxy(
-                &tauri::async_runtime::block_on(store.get_setting("proxy_url"))
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-            );
+            network::apply(&tauri::async_runtime::block_on(network::load(&store))
+                .unwrap_or_default());
 
             let skills = Arc::new(startup.record("skills", || load_skill_index(&root)));
             let memory = Arc::new(MemoryManager::new(&root));
             let bootstrap = StdMutex::new(startup.record("tool_probe", || {
                 app_commands::initial_bootstrap(&root, skills.all().len())
             }));
-            let approvals = Arc::new(StdRwLock::new(startup.record("approvals", || {
-                tauri::async_runtime::block_on(build_approval_policy(&store))
-            })));
+            let approvals = Arc::new(StdRwLock::new(LiveApprovals {
+                default: startup.record("approvals", || {
+                    tauri::async_runtime::block_on(build_approval_policy(&store))
+                }),
+                by_project: HashMap::new(),
+            }));
             let approval_grants = Arc::new(StdMutex::new(startup.record("approval_grants", || {
                 tauri::async_runtime::block_on(load_approval_grants(&store))
             })));
@@ -6825,6 +7125,8 @@ pub fn run() {
                     store.clone(),
                 ))
             });
+            let (needs_human_tx, mut needs_human_rx) = tokio::sync::mpsc::unbounded_channel();
+            tauri::async_runtime::block_on(browser_bridge.set_needs_human_sink(needs_human_tx));
             let device_hub = Arc::new(device_hub::DeviceHub::default());
             let device_bridge = Arc::new(device_bridge::DeviceBridge::new(
                 device_hub.clone(),
@@ -6870,6 +7172,14 @@ pub fn run() {
                 scratch: std::sync::RwLock::new(HashMap::new()),
             };
             app.manage(state);
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Some(tabs) = needs_human_rx.recv().await {
+                        browser_bridge::emit_browser_needs_human(&handle, &tabs).await;
+                    }
+                });
+            }
             app.manage(app_updates::PendingAppUpdate::default());
             app.manage(terminal_sessions::TerminalManager::new());
             app.manage(channels::ChannelManager::new());
@@ -6887,7 +7197,7 @@ pub fn run() {
                     device_bridge::autostart(handle).await;
                 });
             }
-            app_commands::start_python_bootstrap(app.handle());
+            app_commands::start_environment_detection(app.handle());
             set_dev_flag(app.handle());
             #[cfg(target_os = "windows")]
             {
@@ -7011,6 +7321,8 @@ pub fn run() {
             ssh_hosts::set_session_execution_context_enabled,
             ssh_hosts::set_default_execution_context,
             ssh_hosts::get_default_execution_context,
+            ssh_hosts::set_session_default_execution_context,
+            ssh_hosts::get_session_default_execution_context,
             ssh_hosts::add_ssh_host,
             ssh_hosts::test_ssh_connection,
             ssh_hosts::remove_ssh_host,
@@ -7047,6 +7359,7 @@ pub fn run() {
             runtime_commands::execute_runtime_script,
             runtime_commands::start_runtime,
             runtime_commands::stop_runtime,
+            runtime_commands::dismiss_runtime,
             runtime_commands::restart_runtime,
             runtime_commands::list_runs,
             runtime_commands::get_run_detail,
@@ -7106,6 +7419,7 @@ pub fn run() {
             project_commands::create_project,
             project_commands::open_project,
             project_commands::open_project_window,
+            project_commands::open_new_window,
             project_commands::delete_project,
             project_commands::get_project_settings,
             project_commands::update_project,
@@ -7126,6 +7440,8 @@ pub fn run() {
             turn_undo::preview_turn_undo,
             turn_undo::undo_turn,
             skill_commands::list_skills,
+            skill_commands::list_skill_files,
+            skill_commands::read_skill_file,
             skill_commands::reload_skills,
             skill_commands::set_skill_tags,
             skill_commands::set_skills_enabled,
@@ -7157,6 +7473,11 @@ pub fn run() {
             browser_bridge::list_pending_browser_tab_cleanups,
             browser_bridge::confirm_browser_tab_cleanup,
             browser_bridge::dismiss_browser_tab_cleanup,
+            browser_bridge::list_pending_browser_needs_human,
+            browser_bridge::confirm_browser_needs_human,
+            browser_bridge::focus_browser_needs_human,
+            network::get_network_settings,
+            network::set_network_settings,
             settings_commands::get_settings,
             settings_commands::set_settings,
             configure::get_appearance_prefs,
@@ -7246,6 +7567,8 @@ pub fn run() {
             app_commands::get_onboarding_state,
             app_commands::dismiss_onboarding,
             app_commands::get_bootstrap_status,
+            app_commands::detect_local_environment,
+            app_commands::save_local_environment_paths,
             app_updates::check_for_updates,
             app_updates::download_update,
             app_updates::install_update,

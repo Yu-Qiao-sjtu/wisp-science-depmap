@@ -1519,12 +1519,16 @@ pub(crate) fn render_item(
                 .to_string();
             let copy = msg.clone();
             let hint_src = msg.clone();
+            let can_resume = can_modify && !msg.starts_with(crate::dto::ACP_TURN_ERROR_PREFIX);
             view! {
                 <div class="finding err">
                     <div class="finding-head">
+                        <div class="finding-summary">
                         <span class="finding-tag">{move || format!("● {}", t(locale.get(), "chat.error"))}</span>
                         <span class="finding-title">{msg}</span>
-                        {can_modify.then(|| view! {
+                        </div>
+                        <div class="finding-actions">
+                        {can_resume.then(|| view! {
                             <button type="button" class="tool-btn"
                                 disabled=move || busy.get()
                                 on:click=move |_| on_resume.call(ui_index)>
@@ -1536,6 +1540,7 @@ pub(crate) fn render_item(
                             on:click=move |_| copy_text(copy.clone())>
                             {move || t(locale.get(), "msg.copy")}
                         </button>
+                        </div>
                     </div>
                     {move || i18n::api_error_hint(locale.get(), &hint_src).map(|hint| view! {
                         <div class="finding-body">{hint}</div>

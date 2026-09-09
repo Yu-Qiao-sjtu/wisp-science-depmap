@@ -1,0 +1,17 @@
+{
+  "toolchain": "Xcode 26.6\nBuild version 17F113",
+  "appearances": [
+    "ISAppearanceTintable",
+    "NSAppearanceNameAqua",
+    "NSAppearanceNameDarkAqua"
+  ],
+  "sha256": {
+    "gen-icons-macos.py": "f0894d24b7769310323d22500e0c211ab19b993938b9df365bc49f9da230fc4c",
+    "icons/app-icon.svg": "90570c8bd02dc9c358f45903d8d45eab014b202b7affe74188bf39ae45a738d0",
+    "icons/app-icon-dark.svg": "655a968c09a1501d94546bcf3d92d8cea5ff8b012407ea5a9f541b053e32723a",
+    "icons/Wisp.icon/icon.json": "090b3ef74f3c169228312fda0be9cae36072d5222ce86e9bf0c5af06fa3bb0a6",
+    "icons/Wisp.icon/Assets/wisp-dark.svg": "8792edcb61fc02041f2702445a48ca93dc89867722f9d14ab21085c54d040af8",
+    "icons/Wisp.icon/Assets/wisp-light.svg": "eed967b3e840d15e3ab909a5c667fe30e5291c7eeb56707c87e1ae416f88d557",
+    "icons/Assets.car": "fd339b7ea5a9c6c52519e2123cff39353f9306d77a9fc21e779a9a274432349a"
+  }
+}

@@ -4,6 +4,14 @@ Wisp can run an external coding agent through the [Agent Client Protocol](https:
 
 ACP Agents are **not** HTTP model profiles. Settings → Models configures API providers for the built-in Wisp agent. ACP configures a separate local process that owns its own session, tools, and auth.
 
+Each conversation retains its own agent binding when switching sessions or
+restarting Wisp. Model/reasoning configuration options are cached per conversation
+and launch-profile fingerprint, including subsequent agent option updates. When
+an agent omits options from load/resume, Wisp restores the last received list;
+an explicitly empty list clears it. Restored controls work before the first
+message by resuming the bound agent when a setting is changed. Older sessions
+without a saved list must receive options once before Wisp can cache them.
+
 ## Prerequisites
 
 1. Install Node.js (needed for the official npm ACP adapters).
@@ -118,6 +126,15 @@ npm install -g @agentclientprotocol/claude-agent-acp
 - Permission cards show the exact options the agent returns; choose one to continue.
 - If the agent advertises session config options (model, mode, …), open the compact ACP model menu beside Send to adjust them.
 - Stop cancels the active ACP turn for the bound session.
+- ACP startup, authentication, disconnect, and resume/load failures stop the
+  request. The error card retains the original error and explicitly says Wisp
+  did not fall back to an HTTP model. It offers no native transcript **Resume**
+  action: check the ACP connection/login and send the message again. To use an
+  HTTP model, start a new conversation and select it explicitly; HTTP API usage
+  may incur separate charges. A legacy HTTP value in `frames.model` does not
+  override an existing `acp_sessions` binding.
+- When the first send creates the conversation, a startup failure before ACP
+  binds it keeps the selected ACP Agent in the picker for the next send.
 - After restart, Wisp reconnects only when the same profile fingerprint and project path still match and the agent supports resume/load. Editing Command/Arguments creates a new fingerprint; start a fresh session.
 
 Wisp injects its scientific MCP bridge into the ACP session, so the external
