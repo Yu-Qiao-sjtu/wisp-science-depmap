@@ -7251,18 +7251,17 @@ fn App() -> impl IntoView {
     let run_clock = create_rw_signal(now_secs());
     // The transfer tray needs the shared clock only while the active session
     // has an active or briefly lingering transfer. Once the last card expires,
-    // this effect reruns with `clock_active = false` and drops its run_clock
+    // this effect finds no visible transfers and drops its run_clock
     // dependency; historical progress records then stay idle between run-list
     // updates instead of rebuilding the tray every second.
+    let transfer_tray_collapsed = create_rw_signal(false);
     let transfer_tray_clock_active = create_rw_signal(false);
     let transfer_tray_now = create_rw_signal(run_clock.get_untracked());
     create_effect(move |_| {
-        let clock_active = transfer_tray_clock_active.get();
-        let now = if clock_active {
-            run_clock.get()
-        } else {
-            run_clock.get_untracked()
-        };
+        // Decide from the records before subscribing to the clock. Reading a
+        // false flag and then setting it true inside this same effect does not
+        // rerun the effect in Leptos, leaving silent transfers without ticks.
+        let now = run_clock.get_untracked();
         let has_visible_transfer = active_session.get().is_some_and(|session_id| {
             run_records.with(|records| {
                 records.iter().any(|run| {
@@ -7273,10 +7272,13 @@ fn App() -> impl IntoView {
                 })
             })
         });
+        let now = if has_visible_transfer {
+            run_clock.get()
+        } else {
+            now
+        };
         transfer_tray_now.set(now);
-        if clock_active != has_visible_transfer {
-            transfer_tray_clock_active.set(has_visible_transfer);
-        }
+        transfer_tray_clock_active.set(has_visible_transfer);
     });
     let show_add_host = create_rw_signal(false);
     let host_alias = create_rw_signal(String::new());
@@ -8764,6 +8766,12 @@ fn App() -> impl IntoView {
         if conversation_outline_open.get() {
             ev.prevent_default();
             conversation_outline_open.set(false);
+            return;
+        }
+
+        if transfer_tray_clock_active.get() && !transfer_tray_collapsed.get() {
+            ev.prevent_default();
+            transfer_tray_collapsed.set(true);
             return;
         }
 
@@ -12271,8 +12279,18 @@ fn App() -> impl IntoView {
                         .collect::<Vec<_>>()
                 });
                 (!transfers.is_empty()).then(|| view! {
-                    <div class="transfer-tray" aria-live="polite">
-                        {transfers.into_iter().map(|(run, progress)| {
+                    <div class="transfer-tray" class:collapsed=transfer_tray_collapsed.get()>
+                        {if transfer_tray_collapsed.get() {
+                            view! {
+                                <button type="button" class="transfer-summary"
+                                    aria-label=t(locale.get(), "transfer.expand") aria-expanded="false"
+                                    on:click=move |_| transfer_tray_collapsed.set(false)>
+                                    {compose_icon("sync")}
+                                    <span>{tf(locale.get(), "transfer.count", &[("n", &transfers.len().to_string())])}</span>
+                                    {compose_icon("expand")}
+                                </button>
+                            }.into_view()
+                        } else { transfers.into_iter().map(|(run, progress)| {
                             let run_id = run.id.clone();
                             let cancellable = matches!(
                                 run.status.as_str(),
@@ -12285,16 +12303,25 @@ fn App() -> impl IntoView {
                             };
                             let direction = progress.direction.clone();
                             let icon = match direction.as_str() {
-                                "download" => "↓",
-                                "relay" => "↔",
-                                _ => "↑",
+                                "download" => "download",
+                                "relay" => "sync",
+                                _ => "upload",
                             };
                             view! {
                                 <section class="transfer-card" data-run-id=run.id>
                                     <div class="transfer-card-head">
-                                        <span class="transfer-card-icon">{icon}</span>
-                                        <strong>{run.title}</strong>
-                                        <span>{run.context_id}</span>
+                                        <span class="transfer-card-icon" aria-hidden="true">{compose_icon(icon)}</span>
+                                        <strong title=run.context_id>{run.title}</strong>
+                                        <span class="transfer-elapsed">{tf(locale.get(), "transfer.elapsed", &[("time", &transfer_duration(
+                                            run.ended_at.filter(|_| !cancellable).unwrap_or(now)
+                                                .saturating_sub(run.started_at.unwrap_or(run.created_at)).max(0) as u64
+                                        ))])}</span>
+                                        <button type="button" class="icon-btn transfer-collapse"
+                                            title=t(locale.get(), "transfer.collapse")
+                                            aria-label=t(locale.get(), "transfer.collapse") aria-expanded="true"
+                                            on:click=move |_| transfer_tray_collapsed.set(true)>
+                                            {compose_icon("chevron-down")}
+                                        </button>
                                         {cancellable.then(|| {
                                             let tip = cancel_label.clone();
                                             view! {
@@ -12315,7 +12342,7 @@ fn App() -> impl IntoView {
                                     {run_progress_meter(progress, locale.get())}
                                 </section>
                             }
-                        }).collect_view()}
+                        }).collect_view()}}
                     </div>
                 })
             })}
