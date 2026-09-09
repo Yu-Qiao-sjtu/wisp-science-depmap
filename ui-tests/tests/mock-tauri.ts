@@ -1710,6 +1710,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       checksum: binding.source_kind === "artifact_version" ? "b".repeat(64) : null,
       capture_timing: binding.source_kind === "artifact_version" ? "late" : null,
       producing_run_id: binding.source_kind === "artifact_version" ? "run-kinase-001" : binding.source_id,
+      producing_run_title: "Kinase screen QC",
+      input_labels: ["counts.csv", "sample_metadata.csv"],
+      code_labels: ["analysis.py"],
       run_input_count: 2,
       run_output_count: 1,
       code_snapshot_count: 1,
@@ -1778,6 +1781,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "get_research_graph":
             return researchGraph;
+          case "list_publication_sources": {
+            const category = arg("kind");
+            const sources = category === "messages" ? [{kind:"message_span",id:"message-7",title:"Root cap review",detail:"assistant",text:"A水稻🌱结果",frame_id:"publication-session",message_seq:7}]
+              : category === "runs" ? [{kind:"run",id:"run-kinase-001",title:"Kinase analysis",detail:"succeeded",text:null,frame_id:null,message_seq:null}]
+              : [{kind:"artifact_version",id:"artifact-version-original-v3",title:"figure2b.png",detail:"3",text:null,frame_id:null,message_seq:null}];
+            return {sources: String(arg("query") ?? "") === "missing" ? [] : sources,has_more:false};
+          }
+          case "check_publication_revision":
+            return {frozen:false,revision:publicationRevision(),readiness:publicationReadiness()};
           case "get_publication_workspace":
             return publicationWorkspace();
           case "create_publication_workspace":

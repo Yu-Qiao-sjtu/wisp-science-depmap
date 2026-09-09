@@ -54,6 +54,7 @@ pub(super) fn Sidebar(
     open_research_graph: Callback<web_sys::MouseEvent>,
     research_journey_open: ReadSignal<bool>,
     open_publication_workspace: Callback<web_sys::MouseEvent>,
+    publication_open: ReadSignal<bool>,
     open_library: Callback<web_sys::MouseEvent>,
     load_demo: Callback<DemoInfo>,
     open_demo_actions: Callback<(web_sys::MouseEvent, String, String)>,
@@ -210,7 +211,7 @@ pub(super) fn Sidebar(
                     <button class="side-btn" title=move || t(locale.get(), "sidebar.new_folder") on:click=move |ev| new_folder.call(ev)>{compose_icon("folder-plus")}{move || t(locale.get(), "sidebar.new_folder")}</button>
                     <button class="side-btn" title=move || t(locale.get(), "sidebar.files") on:click=move |ev| open_files.call(ev)>{compose_icon("doc")}{move || t(locale.get(), "sidebar.files")}</button>
                     <button class="side-btn" class:active=move ||research_journey_open.get() title=move || t(locale.get(), "sidebar.graph") on:click=move |ev| open_research_graph.call(ev)>{compose_icon("research-trail")}{move || t(locale.get(), "sidebar.graph")}</button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.publication") on:click=move |ev| open_publication_workspace.call(ev)>{compose_icon("book")}{move || t(locale.get(), "sidebar.publication")}</button>
+                    <button class="side-btn" class:active=move || publication_open.get() aria-current=move || publication_open.get().then_some("page") title=move || t(locale.get(), "sidebar.publication") on:click=move |ev| open_publication_workspace.call(ev)>{compose_icon("book")}{move || t(locale.get(), "sidebar.publication")}</button>
                     <button class="side-btn" title=move || t(locale.get(), "sidebar.library") on:click=move |ev| open_library.call(ev)>{compose_icon("star")}{move || t(locale.get(), "sidebar.library")}</button>
                 </nav>
             })}

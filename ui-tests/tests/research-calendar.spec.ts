@@ -68,7 +68,11 @@ test("opens the selected project and date; normal sidebar entry resets date scop
   await expect(journey.locator(".journey-day")).toHaveAttribute("data-day","2026-09-08");
   await page.keyboard.press("Escape");
   await expect(journey).toHaveCount(0);
+  await page.locator(".sidebar").getByRole("button",{name:"Publication",exact:true}).click();
+  const publication=page.getByTestId("publication-workspace");
+  await expect(publication).toBeVisible();
   await page.locator(".sidebar").getByRole("button",{name:"Research journey",exact:true}).click();
+  await expect(publication).toHaveCount(0);
   await expect(journey.locator(".journey-day")).toHaveCount(3);
 });
 
