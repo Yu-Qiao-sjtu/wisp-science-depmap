@@ -85,21 +85,12 @@ test("Pages i18n dictionaries cover every data-i18n key and stay in sync", () =>
 });
 
 for (const readme of ["README.md", "README_zh.md"]) {
-  test(`${readme} wordmark selects a readable asset for each color scheme`, async ({ page }) => {
-    await page.route("https://wordmark.test/**", (route) => route.fulfill({
-      contentType: "image/svg+xml",
-      body: readRepositoryFile(new URL(route.request().url()).pathname.slice(1)),
-    }));
-    const picture = readRepositoryFile(readme).match(/<picture>[\s\S]*?<\/picture>/)?.[0];
-    expect(picture).toBeTruthy();
-    await page.setContent(`<base href="https://wordmark.test/">${picture}`);
-    const logo = page.getByRole("img", { name: "Wisp Science", exact: true });
-    for (const mode of ["light", "dark"] as const) {
-      await page.emulateMedia({ colorScheme: mode });
-      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.currentSrc))
-        .toContain(`wordmark-${mode}.svg`);
-      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
-    }
+  test(`${readme} uses the wisp-depmap-agent project identity`, () => {
+    const content = readRepositoryFile(readme);
+    expect(content).toContain("# wisp-depmap-agent");
+    expect(content).toContain("Yu-Qiao-sjtu/wisp-science-depmap");
+    expect(content).not.toContain("<picture>");
+    expect(content).not.toContain('alt="Wisp Science"');
   });
 }
 
