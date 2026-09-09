@@ -2552,6 +2552,21 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "delete_folder":
           case "move_session":
             return null;
+          case "list_workspace_projects": {
+            const mode = new URL(location.href).searchParams.get("mockWorkspaceProjects");
+            if (mode === "error") throw new Error("Workspace lookup failed");
+            if (mode === "malformed") return null;
+            if (!mode) return [];
+            const rows = [
+              { id: "P37", name: "Same project name", session_count: 9 },
+              { id: "P15", name: "Same project name", session_count: 31 },
+              { id: "P14", name: "Same project name", session_count: 2 },
+              { id: "P19", name: "Same project name", session_count: 3 },
+            ];
+            return (mode === "single" ? rows.slice(0, 1) : rows).map(row => ({
+              ...row, workspace_dir: String(arg("workspaceDir")), updated_at: 1,
+            }));
+          }
           case "list_projects":
             return [
               ...(new URL(location.href).searchParams.get("mockCalendar") === "dense" ? Array.from({length:32}, (_, index) => ({id:`calendar-project-${index}`,name:["跨物种单细胞图谱", "水稻基因组", "转录组分析", "长期研究项目与文献证据整理"][index % 4] + ` ${index + 1}`,workspace_dir:`/mock/calendar-${index}`,session_count:0,updated_at:0,running_count:0,needs_you_count:0,sync_configured:false,last_synced_at:null})) : []),
@@ -6121,6 +6136,7 @@ export function parallelMock(): void {
             id: s.id, project_id: "default", title: s.title, ts: s.ts,
             status: "complete",
           }));
+          case "list_workspace_projects": return [];
           case "pick_directory": return "/mock/root/new-project";
           case "pick_executable_file": return "/mock/picked/Rscript";
           case "open_project":
