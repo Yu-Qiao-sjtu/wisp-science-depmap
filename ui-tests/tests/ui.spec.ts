@@ -9785,7 +9785,7 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator(".cred-help-trigger")).toHaveCount(5);
+  await expect(page.locator(".cred-help-trigger")).toHaveCount(0);
   await expect(page.locator("[data-credential-service]")).toHaveCount(5);
   await page.locator('[data-credential-service="openalex"]').click();
   await expect(page.locator(".cred-help-trigger")).toHaveCount(1);
@@ -9863,6 +9863,7 @@ test("credentials settings include SCIMaster and save its key", async ({ page })
 test("DepMap server token is stored through the credential boundary", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
+  await page.locator('[data-credential-service="depmap"]').click();
   const field = page.locator("label", { hasText: "DepMap server token" });
   await expect(field).toContainText("Not configured");
   await field.locator("input").fill("depmap-token-123");
