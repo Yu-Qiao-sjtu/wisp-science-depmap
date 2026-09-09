@@ -1,6 +1,8 @@
 //! Home-level calendar over the same recorded, mainline events as each project.
 use crate::app_support::compose_icon;
-use crate::dto::{ProjectSummary, ProjectTransferProgress, ResearchCalendarProject};
+use crate::dto::{
+    ProjectSummary, ProjectTransferProgress, ResearchCalendarProject, ResearchJourneyEntry,
+};
 use crate::i18n::Locale;
 use crate::research_journey::{
     call, category, clock, date, day_key, days, j, month_of, month_start, now, shift_month, status,
@@ -153,7 +155,6 @@ pub(crate) fn ResearchCalendar(
                                     cells
                                 }}
                             </div>
-                            <div class="calendar-legend">{move ||projects.get().into_iter().filter(|p|included(&p.id)).map(|p|view!{<span style=color(&p.id)><i class="calendar-dot"></i>{p.name}</span>}).collect_view()}</div>
                         </div>
                         <aside class="calendar-details" data-testid="home-calendar-details" aria-live="polite">
                             <h3>{move ||day_key(selected.get())}{move ||(selected.get()==day_start(now())).then(||j(locale.get()," · Today"," · 今天"))}</h3>
@@ -174,19 +175,11 @@ pub(crate) fn ResearchCalendar(
                                 let active=groups.iter().filter(|g|!g.2.is_empty()).count();
                                 let partial=has_errors||groups.iter().any(|g|g.4);
                                 view!{<p class="calendar-detail-meta">{format!("{}{} · {} {}",if partial{j(loc,"Loaded: ","已读取：")}else{""},if loc==Locale::Zh{format!("{active} 个项目")}else{format!("{active} projects")},count,j(loc,"records","条记录"))}</p>
-                                    {groups.into_iter().map(|(id,name,entries,error,truncated)|{
-                                        let open_id=id.clone();let locked=id.clone();
-                                        view!{<section class="calendar-record-group" style=color(&id) data-project-id=id>
-                                            <button type="button" class="calendar-project-link" aria-label=format!("{} · {}",name,j(loc,"Research journey","研究历程")) disabled=move ||project_transfer.get().is_some_and(|t|t.is_exporting_project(&locked)) on:click=move |_|on_open_journey.call((open_id.clone(),selected.get_untracked()))><span class="calendar-dot"></span><span>{name}</span>{compose_icon("external-link")}</button>
-                                            {error.map(|e|view!{<p class="calendar-error" role="alert">{e}</p>})}
-                                            {truncated.then(||view!{<p class="calendar-notice">{j(loc,"Latest 2,000 events shown; more records exist on this day.","当前展示当天最近 2,000 条活动，还有更多记录。")}</p>})}
-                                            {entries.into_iter().rev().map(|e|{
-                                                let label=format!("{}{}{}",category(loc,&e.kind),if e.kind=="run"{format!(" · {}",status(loc,&e.status))}else{String::new()},if e.manual{j(loc," · Manual"," · 手动")}else{""});
-                                                let title=if let Some(v)=e.version_number{format!("{} · v{v}",e.title)}else{e.title};
-                                                view!{<article class="calendar-record"><div class="calendar-record-meta"><time>{clock(e.occurred_at)}</time><span class:calendar-error=e.status=="failed"||e.status=="lost">{label}</span></div><p>{title}</p></article>}
-                                            }).collect_view()}
-                                        </section>}
-                                    }).collect_view()}
+                                    <div class="calendar-record-groups" aria-label=j(loc,"Project records","各项目记录")>
+                                        {groups.into_iter().map(|(id,name,entries,error,truncated)|view!{
+                                            <CalendarProjectRecords locale=locale id=id name=name entries=entries error=error truncated=truncated day=selected.get() on_open_journey=on_open_journey project_transfer=project_transfer/>
+                                        }).collect_view()}
+                                    </div>
                                 }.into_view()
                             }}
                         </aside>
@@ -203,5 +196,67 @@ pub(crate) fn ResearchCalendar(
                 </div>
             </div>
         </section>
+    }
+}
+
+const RECORD_PAGE_SIZE: usize = 8;
+
+/// Each project owns its disclosure and pagination so a dense day does not
+/// push every other project's summary out of reach.
+#[component]
+fn CalendarProjectRecords(
+    locale: RwSignal<Locale>,
+    id: String,
+    name: String,
+    mut entries: Vec<ResearchJourneyEntry>,
+    error: Option<String>,
+    truncated: bool,
+    day: i64,
+    on_open_journey: Callback<(String, i64)>,
+    project_transfer: ReadSignal<Option<ProjectTransferProgress>>,
+) -> impl IntoView {
+    entries.sort_by(|a, b| {
+        b.occurred_at
+            .cmp(&a.occurred_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    let total = entries.len();
+    let entries = store_value(entries);
+    let limit = create_rw_signal(RECORD_PAGE_SIZE);
+    let collapsed = create_rw_signal(false);
+    let loc = locale.get_untracked();
+    let controls = format!("calendar-records-{id}");
+    let open_id = id.clone();
+    let locked = id.clone();
+    view! {
+        <section class="calendar-record-group" style=color(&id) data-project-id=id>
+            <header class="calendar-project-header">
+                <button type="button" class="calendar-group-toggle" aria-expanded=move ||(!collapsed.get()).to_string() aria-controls=controls.clone() on:click=move |_|collapsed.update(|v|*v=!*v)>
+                    <span class="calendar-disclosure" class:collapsed=move ||collapsed.get()>{compose_icon("chevron-down")}</span><span class="calendar-dot"></span><span class="calendar-project-name">{name.clone()}</span><span class="calendar-project-count">{format!("{total} {}",j(loc,"records","条"))}</span>
+                </button>
+                <button type="button" class="calendar-project-link" aria-label=format!("{} · {}",name,j(loc,"Research journey","研究历程")) title=j(loc,"Open research journey","打开研究历程") disabled=move ||project_transfer.get().is_some_and(|t|t.is_exporting_project(&locked)) on:click=move |_|on_open_journey.call((open_id.clone(),day))>{compose_icon("external-link")}</button>
+            </header>
+            {error.map(|e|view!{<p class="calendar-error" role="alert">{e}</p>})}
+            {truncated.then(||view!{<p class="calendar-notice">{j(loc,"Latest 2,000 events shown; more records exist on this day.","当前展示当天最近 2,000 条活动，还有更多记录。")}</p>})}
+            <div id=controls hidden=move ||collapsed.get()>
+                {move ||entries.with_value(|rows|rows.iter().take(limit.get()).cloned().map(|e|{
+                    let label=format!("{}{}{}",category(loc,&e.kind),if e.kind=="run"{format!(" · {}",status(loc,&e.status))}else{String::new()},if e.manual{j(loc," · Manual"," · 手动")}else{""});
+                    let title=if let Some(v)=e.version_number{format!("{} · v{v}",e.title)}else{e.title};
+                    view!{<article class="calendar-record" data-record-id=e.id><div class="calendar-record-meta"><time>{clock(e.occurred_at)}</time><span class:calendar-error=e.status=="failed"||e.status=="lost">{label}</span></div><CalendarRecordTitle title=title locale=locale/></article>}
+                }).collect_view())}
+                {move ||(total>limit.get()).then(||view!{<button type="button" class="calendar-show-more" on:click=move |_|limit.update(|n|*n=(*n+RECORD_PAGE_SIZE).min(total))>{format!("{} ({})",j(loc,"Show earlier records","显示更早记录"),total-limit.get())}</button>})}
+                {move ||(limit.get()>RECORD_PAGE_SIZE).then(||view!{<button type="button" class="calendar-show-more" on:click=move |_|limit.set(RECORD_PAGE_SIZE)>{j(loc,"Show fewer records","收起更多记录")}</button>})}
+            </div>
+        </section>
+    }
+}
+
+#[component]
+fn CalendarRecordTitle(title: String, locale: RwSignal<Locale>) -> impl IntoView {
+    let long = title.chars().count() > 64;
+    let expanded = create_rw_signal(false);
+    view! {
+        <p class="calendar-record-title" class:clamped=move ||long&&!expanded.get()>{title}</p>
+        {long.then(||view!{<button type="button" class="calendar-expand-title" aria-expanded=move ||expanded.get().to_string() on:click=move |_|expanded.update(|v|*v=!*v)>{move ||if expanded.get(){j(locale.get(),"Collapse text","收起全文")}else{j(locale.get(),"Show full text","展开全文")}}</button>})}
     }
 }

@@ -1752,8 +1752,11 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const ids = plain(arg("projectIds")) as string[];
             const delay = Number((window as any).__calendarDelay ?? 0);
             const extra = [journeyEntry("other-finding", "finding", "Other project finding", 0, {manual:true}), journeyEntry("other-yesterday", "run", "Other project run failed", 1, {status:"failed"})];
+            const dense = Array.from({length:38}, (_, index) => journeyEntry(`dense-${index}`, index === 37 ? "session" : "run",
+              index === 37 ? "请整理水稻根尖单细胞图谱研究的分析进展，核对所有样本的质控结果、细胞类型注释与文献证据，并详细记录后续验证方案。".repeat(5) : `核对文献证据与样本注释 · ${index + 1}`,
+              0, {occurred_at:journeyTime(0,9,index), status:index === 36 ? "failed" : "succeeded"}));
             const result = ids.map(id => ({project_id:id,
-              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000},
+              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : mode === "dense" ? (id === "default" ? dense : []) : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000},
               error: mode === "partial" && id === "other" ? "Project temporarily unavailable" : null,
             }));
             for (const row of result) if(row.error) row.history.entries=[];
@@ -2551,6 +2554,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             return null;
           case "list_projects":
             return [
+              ...(new URL(location.href).searchParams.get("mockCalendar") === "dense" ? Array.from({length:32}, (_, index) => ({id:`calendar-project-${index}`,name:["跨物种单细胞图谱", "水稻基因组", "转录组分析", "长期研究项目与文献证据整理"][index % 4] + ` ${index + 1}`,workspace_dir:`/mock/calendar-${index}`,session_count:0,updated_at:0,running_count:0,needs_you_count:0,sync_configured:false,last_synced_at:null})) : []),
               { id: "default", name: projectNames.default ?? project.name, workspace_dir: project.root, session_count: 0, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("default"), last_synced_at: syncedProjects.has("default") ? Math.floor(Date.now() / 1000) : null },
               { id: "other", name: projectNames.other ?? "Other project", workspace_dir: "/mock/other", session_count: 1, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("other"), last_synced_at: syncedProjects.has("other") ? Math.floor(Date.now() / 1000) : null },
             ];

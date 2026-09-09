@@ -206,3 +206,81 @@ test("a home-owned dialog above the calendar closes before the calendar", async 
   await expect(calendar).toHaveCount(0);
   await context.close();
 });
+
+test("dense days disclose earlier records and full text without losing project navigation", async ({ page }) => {
+  await page.setViewportSize({width:1920,height:1080});
+  const calendar=await open(page,"?mockCalendar=dense");
+  const group=calendar.locator('.calendar-record-group[data-project-id="default"]');
+  await expect(page.getByTestId("home-calendar-details")).toContainText("2 projects · 39 records");
+  await expect(group.locator(".calendar-project-count")).toHaveText("38 records");
+  await expect(group.locator(".calendar-record")).toHaveCount(8);
+  await expect(group.locator(".calendar-record").first()).toHaveAttribute("data-record-id","dense-37");
+  const title=group.locator(".calendar-record-title").first();
+  expect(await title.evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+  await group.getByRole("button",{name:"Show full text",exact:true}).click();
+  expect(await title.evaluate(el=>el.scrollHeight<=el.clientHeight+1)).toBe(true);
+  await group.getByRole("button",{name:"Collapse text",exact:true}).click();
+  for (const count of [16,24,32,38]) {
+    await group.getByRole("button",{name:/Show earlier records/}).click();
+    await expect(group.locator(".calendar-record")).toHaveCount(count);
+  }
+  await expect(group.locator(".calendar-record").last()).toHaveAttribute("data-record-id","dense-0");
+  await expect(group.getByRole("button",{name:/Show earlier records/})).toHaveCount(0);
+  await group.getByRole("button",{name:"Show fewer records",exact:true}).click();
+  await expect(group.locator(".calendar-record")).toHaveCount(8);
+  await group.locator(".calendar-group-toggle").click();
+  await expect(group.locator(".calendar-group-toggle")).toHaveAttribute("aria-expanded","false");
+  await expect(group.locator(".calendar-record").first()).toBeHidden();
+  await expect(group.locator(".calendar-project-link")).toBeVisible();
+  await group.locator(".calendar-group-toggle").click();
+  await group.getByRole("button",{name:/Show earlier records/}).click();
+  await calendar.getByRole("button",{name:"2026-09-08",exact:true}).click();
+  await expect(group).toHaveCount(0);
+  await calendar.getByRole("button",{name:"Today",exact:true}).click();
+  await expect(group.locator(".calendar-record")).toHaveCount(8);
+  await calendar.locator('.calendar-projects [data-project-id="other"]').click();
+  await expect(group).toHaveCount(0);
+  await calendar.getByRole("button",{name:"All projects",exact:true}).click();
+  await expect(group.locator(".calendar-record")).toHaveCount(8);
+  await group.locator(".calendar-group-toggle").click();
+  await group.locator(".calendar-project-link").click();
+  await expect(page.getByTestId("research-journey").locator(".journey-day")).toHaveAttribute("data-day","2026-09-09");
+});
+
+test("dense desktop panels fit the viewport and scroll independently", async ({ page }, testInfo) => {
+  await page.setViewportSize({width:1920,height:1080});
+  const calendar=await open(page,"?mockCalendar=dense&mockLocale=zh");
+  const shell=page.locator(".home-calendar-page");
+  for (const [width,height] of [[1920,1080],[2560,1440],[3840,2160]]) {
+    await page.setViewportSize({width,height});
+    expect(await shell.evaluate(el=>el.scrollHeight<=el.clientHeight+1 && el.scrollWidth<=el.clientWidth)).toBe(true);
+    expect((await calendar.boundingBox())!.width).toBeGreaterThan(1600);
+    expect((await calendar.boundingBox())!.height).toBeLessThanOrEqual(1440);
+    expect((await page.getByTestId("home-calendar-details").boundingBox())!.width).toBeGreaterThan(500);
+    await page.screenshot({path:testInfo.outputPath(`dense-${width}.png`)});
+  }
+  await page.setViewportSize({width:1920,height:1080});
+  const grid=calendar.locator(".calendar-grid");
+  const before=await grid.boundingBox();
+  const heading=await calendar.locator(".calendar-details > h3").boundingBox();
+  const scroll=calendar.locator(".calendar-record-groups");
+  await scroll.evaluate(el=>{el.scrollTop=200;});
+  expect(await scroll.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  expect(await grid.boundingBox()).toEqual(before);
+  expect(await calendar.locator(".calendar-details > h3").boundingBox()).toEqual(heading);
+  await calendar.locator(".calendar-projects").evaluate(el=>{el.scrollTop=300;});
+  expect(await calendar.locator(".calendar-projects").evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  expect(await grid.boundingBox()).toEqual(before);
+  await page.evaluate(()=>document.documentElement.setAttribute("data-theme","dark"));
+  await page.screenshot({path:testInfo.outputPath("dense-dark.png")});
+  for (const size of [{width:1440,height:650},{width:390,height:844}]) {
+    await page.setViewportSize(size);
+    expect(await shell.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+    await calendar.getByRole("button",{name:"2026-09-09",exact:true}).scrollIntoViewIfNeeded();
+    await expect(calendar.getByRole("button",{name:"2026-09-09",exact:true})).toBeInViewport();
+    await calendar.locator('.calendar-record-group[data-project-id="other"]').scrollIntoViewIfNeeded();
+    await expect(calendar.locator('.calendar-record-group[data-project-id="other"]')).toBeInViewport();
+    expect(await shell.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+  }
+  await page.screenshot({path:testInfo.outputPath("dense-mobile.png")});
+});
