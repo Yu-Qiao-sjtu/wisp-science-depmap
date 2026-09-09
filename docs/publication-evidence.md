@@ -16,6 +16,14 @@ Exact IDs and verification metadata remain available under **Version and
 verification details**. Version history opens the actual stored revision;
 creating a new revision retains the historical evidence of its parent.
 
+The page uses the available project-pane width on large displays. The manuscript
+outline stays compact while evidence expands into two or three columns on wider
+panes. New-paper guidance and its form sit side by side when space permits;
+editing forms retain a readable width. Source lists and text previews also use
+taller windows. Layout breakpoints follow the pane width, so resizing the sidebar
+or using a narrower window returns the page to stacked layouts without changing
+evidence order or selection.
+
 A Publication contains ordered
 manuscript items (Section, Claim, Figure, Table, Methods, and Supplement) and
 one or more revisions. Draft revisions can be edited. Frozen and Published
