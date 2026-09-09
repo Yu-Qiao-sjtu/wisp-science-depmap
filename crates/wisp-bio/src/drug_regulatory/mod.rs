@@ -831,9 +831,19 @@ fn yyyymmdd(value: &str) -> Result<String> {
     if compact.len() != 8 || !compact.bytes().all(|b| b.is_ascii_digit()) {
         bail!("dates must be YYYY-MM-DD or YYYYMMDD");
     }
+    let year: u32 = compact[0..4].parse().unwrap_or(0);
     let month: u32 = compact[4..6].parse().unwrap_or(0);
     let day: u32 = compact[6..8].parse().unwrap_or(0);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if year == 0 || day == 0 || day > max_day {
         bail!("dates must be a real calendar day");
     }
     Ok(compact)
