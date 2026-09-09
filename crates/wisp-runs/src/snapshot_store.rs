@@ -197,9 +197,8 @@ fn reject_project_symlinks(project_root: &Path, source: &Path) -> Result<(), Str
     // input paths use `/private/var`. Compare against the physical root so a
     // path that is genuinely inside the project is not rejected.
     let logical_root = project_root;
-    let project_root = logical_root
-        .canonicalize()
-        .unwrap_or_else(|_| logical_root.to_path_buf());
+    let project_root =
+        dunce::canonicalize(logical_root).unwrap_or_else(|_| logical_root.to_path_buf());
     let source = if source.is_absolute() {
         source
             .strip_prefix(logical_root)
