@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：服务器配置和命令行">
+  <title>服务器配置和命令行 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-servers-cli" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" lang="zh-CN" id="wisp-science-servers-cli" aria-labelledby="article-title">
+<header><h1 id="article-title">Wisp Science基础入门：服务器配置和命令行</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-i18n="tutorials.source">查看原文</a></header>
+<p>做科研时，文件和计算往往不在同一台电脑上：日常在笔记本里读文献，数据放在实验室服务器，分析需要远程的 Python、R 或 GPU。切换机器时，最容易弄混的是“我现在在哪台机器上”和“这条路径属于哪里”。</p>
+<p>Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍应用里的终端与独立 Wisp 命令行。</p>
+<blockquote>
+<p>本文配图来自实际前端，服务器、GPU 信息和终端状态使用演示数据。示例主机 <code>gpu.example.org</code> 不能当作真实服务器连接；截图不代表已经访问了某台远程主机。</p>
+</blockquote>
+<p><strong>先分清三个入口，避免把它们当成同一件事。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>入口</th>
+<th>谁来操作</th>
+<th>适合做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>对话中的计算环境</td>
+<td>你描述任务，Wisp 在指定环境调用工具</td>
+<td>读取远程数据、运行分析、提交结构化任务</td>
+</tr>
+<tr>
+<td>Wisp 内的交互终端</td>
+<td>你输入命令，终端直接执行</td>
+<td>检查目录、调试环境、查看程序输出</td>
+</tr>
+<tr>
+<td>独立 <code>wisp-science</code> CLI</td>
+<td>在系统终端中与 Wisp 对话或发起单次任务</td>
+<td>不打开桌面窗口，在当前目录使用 Agent</td>
+</tr>
+</tbody>
+</table></div>
+<p>服务器配置解决“Wisp 可以使用哪台机器”，终端解决“我要亲自输入什么命令”，独立 CLI 则是另一种使用 Wisp 的入口。</p>
+<p><strong>添加服务器前，先准备连接信息。</strong></p>
+<p>向管理员确认主机地址、账号、SSH 端口和认证方式。如果需要 VPN、跳板机或特定 SSH 配置，也先按实验室要求准备好。</p>
+<p>一个示例对应关系是：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>信息</th>
+<th>示例</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>名称／别名</td>
+<td><code>gpu-lab</code></td>
+<td>在 Wisp 中识别服务器的名称</td>
+</tr>
+<tr>
+<td>主机地址</td>
+<td><code>gpu.example.org</code></td>
+<td>换成管理员提供的真实地址</td>
+</tr>
+<tr>
+<td>用户</td>
+<td><code>researcher</code></td>
+<td>远程账号，不一定与本机用户名相同</td>
+</tr>
+<tr>
+<td>端口</td>
+<td><code>22</code></td>
+<td>以服务器实际配置为准</td>
+</tr>
+<tr>
+<td>私钥文件</td>
+<td><code>~/.ssh/id_ed25519</code></td>
+<td>填本机文件路径，不粘贴私钥正文</td>
+</tr>
+</tbody>
+</table></div>
+<p>如果你已经能在系统终端通过 <code>ssh</code> 登录，会更容易确认这些字段。首次出现主机密钥提示时，按管理员提供的指纹核对；不要把关闭主机校验作为常规配置步骤。</p>
+<p><strong>进入设置，把服务器登记为一个环境。</strong></p>
+<p>打开 <strong>设置 → 环境 → 添加 SSH 主机</strong>，填写连接信息。认证方式按服务器要求选择“密钥 / agent”或密码。</p>
+<p><img src="../assets/tutorials/servers/01-add-ssh.png" alt="添加 SSH 主机：填写别名、地址、用户、认证路径和给 Agent 的说明" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 1：这里的地址与账号都是教学占位值。“给 Agent 的说明”适合记录使用约定，不适合保存密码或密钥。</em></p>
+<p>“给 Agent 的说明”可以写成一段具体规则：</p>
+<blockquote>
+<p>这台服务器用于本项目分析。运行前先确认远程目录；大型原始数据保留在服务器。耗时计算按管理员要求提交到调度器，记录脚本、参数、任务编号和结果路径，不在登录节点长时间计算。</p>
+</blockquote>
+<p>点击 <strong>测试连接</strong>，确认成功后添加。回到环境列表，再使用 <strong>探测环境</strong> 检查操作系统、Python、R、GPU 和调度器等信息。</p>
+<p>“能登录”和“分析环境已准备好”是两项检查。测试连接通过后，如果探测不到 Python 或 R，先确认解释器是否安装、是否在远程 PATH 中。需要指定位置时，使用 <strong>配置运行时解释器</strong> 填写远端可执行文件路径。</p>
+<p>已经维护 <code>~/.ssh/config</code> 时，也可以使用导入入口登记其中的主机，再逐台测试与探测。密钥文件内容不会被复制进 Wisp 的 SQLite；密码类敏感值走系统密钥环。</p>
+<p><strong>把环境加入当前会话，再说明数据在哪里。</strong></p>
+<p>回到对话，打开输入框左下角 <strong>Agent 选项 → 计算环境</strong>，将目标服务器加入当前会话。右侧 <strong>环境</strong> 面板也提供附加服务器的入口。</p>
+<p><img src="../assets/tutorials/servers/02-context.png" alt="计算环境菜单：把远程主机加入当前会话，并检查默认分析环境" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 2：示例中的 <code>gpu-server</code> 是预置演示主机。服务器是否加入本会话，与它是否被选作默认分析环境，是两个需要分别检查的状态。</em></p>
+<p>默认环境有两层：</p>
+<ul>
+<li><strong>设置 → 环境</strong> 中的全局默认，为新对话提供起点。</li>
+<li>当前对话的 <strong>计算环境</strong> 菜单，可以单独指定这段对话的默认环境。</li>
+</ul>
+<p>修改全局默认不会改写已经创建的对话。刚开始使用时，在任务里明确写出服务器名称和远程路径，比仅依赖默认值更容易核对：</p>
+<blockquote>
+<p>请在已附加的 gpu-lab 上检查 /data/project-a/counts.csv 是否存在，报告文件大小和前五行。先告诉我实际使用的执行环境，不下载完整文件，也不修改它。</p>
+</blockquote>
+<p>这里的 <code>/data/project-a/counts.csv</code> 是远程路径。本机项目中的 <code>data/counts.csv</code> 不会因为附加了服务器就自动变成同一个文件。需要传输时，明确源机器、源路径和目标位置；大数据也可以一直保留在远端，只取回小型结果或元数据。</p>
+<p><strong>想亲自检查目录，可以打开交互终端。</strong></p>
+<p>打开右侧 <strong>环境</strong> 面板，在目标环境卡片上点击 <strong>打开终端</strong>。终端会显示在会话下方，标签上可以看到它对应的环境。</p>
+<p><img src="../assets/tutorials/servers/03-terminal.png" alt="远程终端停靠在会话下方：先核对环境标签，再输入命令" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 3：终端与对话保留在同一个窗口中。这里的“terminal ready”来自测试替身，用于展示位置，不代表真实 SSH 登录结果。</em></p>
+<p>在 Linux/macOS 或远程 Linux shell 中，可以先执行只读检查：</p>
+<pre><code class="language-bash">hostname
+pwd
+ls -lh
+</code></pre>
+<p>它们分别帮助确认机器名称、当前目录和目录内容。SSH 终端初始位置通常是远程用户的主目录，不是本机项目目录；需要分析项目文件时，先进入对应的远程目录。</p>
+<p>Windows 本地终端默认使用 PowerShell，可以用：</p>
+<pre><code class="language-powershell">hostname
+Get-Location
+Get-ChildItem
+</code></pre>
+<p>一个环境可以打开多个终端标签。切换标签或折叠终端面板，会保留运行中的终端；关闭某个标签会终止对应终端进程。终端标签和滚动记录不会随应用重启恢复，也不作为项目同步内容保存。</p>
+<p><strong>耗时计算，要留下可以继续检查的任务记录。</strong></p>
+<p>交互终端适合调试，但一项需要跑几小时的分析，还需要状态、取消入口、日志和产物位置。可以让 Wisp 使用结构化 Run 管理任务，而不是在普通 shell 调用里一直等待：</p>
+<blockquote>
+<p>请先检查 gpu-lab 上的运行环境，并为 analysis/run_qc.py 准备运行方案。列出输入路径、输出目录和资源要求，等我确认后，通过结构化 Run 提交；如果这台机器要求使用调度器，请遵守它的提交方式，并记录任务编号。</p>
+</blockquote>
+<p>只有环境和任务方式都匹配时再提交。登记了一台 GPU 主机，并不意味着每个脚本会自动使用 GPU；附加服务器也不会自动把任意命令转换成调度器作业。</p>
+<p>需要复盘时，结合 Run 状态、日志、输出文件和<a href="wisp-science-trajectory.html">轨迹</a>判断结果。仅有终端中的“命令已发送”不能证明计算成功结束。</p>
+<p><strong>独立 Wisp CLI，从当前目录开始工作。</strong></p>
+<p>如果已经构建或安装了独立 CLI，并且 <code>wisp-science</code> 在 PATH 中，可以在项目目录运行它。桌面应用已安装，不一定意味着这个命令已经加入了系统 PATH。</p>
+<p>CLI 使用环境变量配置模型，不会自动把桌面密钥环里的配置变成终端环境变量。以兼容接口为例，先把下面的占位内容换成自己的实际信息。</p>
+<p>macOS / Linux：</p>
+<pre><code class="language-bash">export WISP_PROVIDER=&quot;openai&quot;
+export WISP_API_URL=&quot;https://your-api.example.com&quot;
+export WISP_MODEL=&quot;your-model-id&quot;
+read -s WISP_API_KEY
+export WISP_API_KEY
+wisp-science
+</code></pre>
+<p>执行 <code>read -s WISP_API_KEY</code> 后，在终端输入密钥并回车，输入不会回显。示例中的 URL 和模型 ID 都是占位值；不要原样用于连接。</p>
+<p>Windows PowerShell：</p>
+<pre><code class="language-powershell">$env:WISP_PROVIDER = &quot;openai&quot;
+$env:WISP_API_URL = &quot;https://your-api.example.com&quot;
+$env:WISP_MODEL = &quot;your-model-id&quot;
+$credential = Get-Credential -UserName &quot;api&quot; -Message &quot;在密码字段输入 API Key&quot;
+$env:WISP_API_KEY = $credential.GetNetworkCredential().Password
+wisp-science
+</code></pre>
+<p><code>WISP_PROVIDER</code> 可按服务协议选择 <code>openai</code>、<code>openai_responses</code> 或 <code>anthropic</code>。在交互模式中，输入自然语言任务；<code>/help</code> 查看帮助，<code>/new</code> 开始新会话，<code>/compact</code> 压缩上下文，<code>/quit</code> 退出。</p>
+<p>需要单次执行时，可以在项目目录运行：</p>
+<pre><code class="language-bash">wisp-science run &quot;只读列出当前项目的顶层文件，并说明可能的数据、脚本和结果目录&quot;
+wisp-science run --output jsonl &quot;只读检查 data/example.csv 的列名和缺失值&quot;
+</code></pre>
+<p><code>jsonl</code> 按行输出结构化事件，适合接入日志或脚本。它仍然会调用实际模型；命令能启动，并不代表示例路径存在或分析必然成功。</p>
+<p>源码开发者可在仓库根目录使用 <code>cargo run -p wisp-cli -- run &quot;任务&quot;</code>。这种写法默认以当前仓库目录为工作区；要分析另一个目录中的项目，先构建 CLI，再到目标项目目录运行可执行文件。构建和更多参数见<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">开发文档</a>。</p>
+<p><strong>遇到问题，先确认机器，再确认命令。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SSH 连接失败</td>
+<td>地址、端口、账号、VPN／跳板机与认证方式</td>
+</tr>
+<tr>
+<td>系统终端能登录，Wisp 探测失败</td>
+<td>远程登录脚本、受限 shell，以及非交互命令能否执行</td>
+</tr>
+<tr>
+<td>已添加服务器，对话用的还是本机</td>
+<td>是否加入当前会话、当前会话的默认环境与任务指定是否一致</td>
+</tr>
+<tr>
+<td>文件不存在</td>
+<td>路径属于本机还是远程；终端当前目录是否正确</td>
+</tr>
+<tr>
+<td>Python／R 找不到包</td>
+<td>实际调用的是哪个解释器，包是否装在同一环境</td>
+</tr>
+<tr>
+<td><code>wisp-science</code> 命令不存在</td>
+<td>是否已构建／安装独立 CLI，PATH 是否包含可执行文件目录</td>
+</tr>
+<tr>
+<td>CLI 缺少模型密钥</td>
+<td>环境变量是否在当前终端会话中设置，是否误以为它会继承桌面配置</td>
+</tr>
+</tbody>
+</table></div>
+<p>第一次练习可以只完成四件事：测试连接、探测环境、把服务器加入对话、检查一个小文件。确认每一步都能说清“在哪台机器、读哪个路径、得到什么结果”，再开始真正的计算任务。</p>
+<blockquote>
+<p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>、<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/terminal-sessions.md">交互终端说明</a>和 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">CLI 开发文档</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。</p>
+</blockquote>
+
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-browser.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">浏览器使用</strong></a><a class="tutorial-next" href="wisp-science-transfer.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">导入、导出与分享</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-servers-cli" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

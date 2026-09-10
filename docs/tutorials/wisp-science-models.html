@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：模型配置">
+  <title>模型配置 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-models" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" lang="zh-CN" id="wisp-science-models" aria-labelledby="article-title">
+<header><h1 id="article-title">Wisp Science基础入门：模型配置</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-i18n="tutorials.source">查看原文</a></header>
+<p>第一次打开 Wisp Science，很多人会停在同一个地方：我已经有一个 AI 账号了，为什么还要填写 API 地址和密钥？模型名称该填什么？保存后，又怎样知道这次对话真的用上了它？</p>
+<p>Wisp Science 把科研工作区与模型接入分开管理。你可以保留同一个项目中的文件和分析记录，再按需要选择能够访问的模型。这篇文章从第一次接入讲起，先完成一个能正常回答的小任务，再认识图片能力和会话切换。</p>
+<blockquote>
+<p>本文配图来自 Wisp Science 实际前端，使用演示配置和教学会话。图中的模型列表不代表推荐顺序，也不表示已经验证了某个账号的访问权限；请以自己的服务商提供的配置为准。</p>
+</blockquote>
+<p><strong>先分清三件事：Wisp、模型服务和 API 密钥。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>组成部分</th>
+<th>负责什么</th>
+<th>你需要准备什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wisp Science</td>
+<td>管理项目、组织对话与工具调用、保存工作记录</td>
+<td>安装应用并打开一个项目</td>
+</tr>
+<tr>
+<td>模型服务</td>
+<td>接收请求，生成回答或工具调用</td>
+<td>可访问的服务地址、支持的协议和模型 ID</td>
+</tr>
+<tr>
+<td>API 密钥</td>
+<td>让服务商识别这次请求使用的账号或额度</td>
+<td>服务商控制台提供的 API Key</td>
+</tr>
+</tbody>
+</table></div>
+<p>网页登录账号、聊天订阅和 API 使用权限可能采用不同的开通方式。能在某个网站聊天，并不一定意味着已经有可供 Wisp 使用的 API 密钥。开始前，先确认你拿到的是 API 接入信息。</p>
+<p>如果实验室提供统一网关，也可以使用管理员给出的地址、模型 ID 和密钥。不要把网页聊天地址填进 API 地址栏。</p>
+<p><strong>打开模型设置，先看自己是否已有可用配置。</strong></p>
+<p>进入 <strong>设置 → 模型</strong>。这里可以查看已有模型，也可以点击 <strong>添加 API 接入</strong>。首次引导中的模型配置是另一个起点；跳过引导后，仍可以随时回到这里补充。</p>
+<p><img src="../assets/tutorials/models/01-overview.png" alt="模型设置列表：查看已配置模型与添加 API 接入入口" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 1：先检查已有模型。显示名称便于自己区分用途，实际调用仍依赖模型 ID、协议和地址。</em></p>
+<p>这个页面也有 <strong>ACP Agents</strong> 分类，用来接入外部 Agent 进程。本文先介绍 Wisp 内置 Agent 使用的 HTTP API 模型。手里拿到的是命令行启动命令时，应查看 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/acp-agents.md">ACP 配置说明</a>。</p>
+<p><strong>添加 API 接入，先填写共用信息，再添加模型。</strong></p>
+<p>点击 <strong>添加 API 接入</strong>，先填写服务商给出的 <strong>Base URL</strong> 和 <strong>API 密钥</strong>，然后在下方填写这把密钥可以调用的模型。一组接入可以添加多个模型，每个模型分别选择协议、模型 ID 和能力。</p>
+<p><img src="../assets/tutorials/models/02-api-access.png" alt="添加 API 接入：上方填写共用地址与密钥，下方配置具体模型" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 2：同一次添加中的模型共用地址和密钥。截图仅演示字段位置，密钥没有填写。自动建议的模型也要与自己的账号权限核对。</em></p>
+<p>首次接入时，优先把下面几项填准确：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>字段</th>
+<th>怎样填写</th>
+<th>容易混淆的地方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Base URL</td>
+<td>服务商提供的 API 基础地址</td>
+<td>通常不要自行追加 <code>/v1/chat/completions</code> 等完整接口路径</td>
+</tr>
+<tr>
+<td>API 密钥</td>
+<td>服务商控制台生成的密钥</td>
+<td>不要填写网页登录密码</td>
+</tr>
+<tr>
+<td>协议</td>
+<td>按服务商说明选择 OpenAI 兼容、OpenAI Responses 或 Anthropic</td>
+<td>“OpenAI 兼容”是一种接口格式，也可由其他服务商提供</td>
+</tr>
+<tr>
+<td>模型 ID</td>
+<td>服务实际接受的精确名称</td>
+<td>显示名称可以自定义，模型 ID 不能随意起名</td>
+</tr>
+<tr>
+<td>显示名称</td>
+<td>便于识别的名称，例如“实验室主模型”</td>
+<td>不会改变实际调用的模型</td>
+</tr>
+<tr>
+<td>端点后缀</td>
+<td>服务商明确要求的额外路径</td>
+<td>一般先留空，不要把完整接口路径反复拼接</td>
+</tr>
+</tbody>
+</table></div>
+<p>如果不确定协议和地址是否配套，把这两个字段一起与服务商文档核对。不要一遇到报错就轮流追加 <code>/v1</code>、<code>/responses</code> 和 <code>/messages</code>。</p>
+<p>首次使用这组地址时，需要提供有效密钥。已经为相同 Base URL 保存过密钥时，留空可以复用已有密钥；粘贴另一把密钥，可以为新的模型组建立独立接入。同一个模型使用不同账号时，建议设置不同显示名称，便于在对话中识别。</p>
+<p>Wisp 把 API 密钥放在操作系统密钥环中。截图、项目笔记和发给同事的配置说明里，只保留地址、协议和模型 ID，不要附上真实密钥。</p>
+<p>填写完成后，点击 <strong>验证</strong>，再按结果核对配置；验证成功后仍需点击 <strong>保存</strong>。以后也可以打开已保存模型的编辑页重新验证。验证通过说明对应检查成功，具体的工具调用或图片任务仍需要各自试用。</p>
+<p><strong>输出长度和上下文窗口，先使用有依据的数值。</strong></p>
+<p>接入保存后，点击模型列表中的具体模型，可以在编辑页调整输出长度、上下文窗口和推理等设置。</p>
+<p>“最大输出 tokens”约束一次回答最多生成多少内容；“上下文窗口”描述模型能够处理的输入与输出总范围。它们不是填得越大，模型能力就越强。</p>
+<p>Wisp 对内置模型目录能够精确识别的模型，会带出已记录的上限。目录没有识别到自定义别名或网关模型时，需要按服务商说明填写。最大输出超出已知上限时，保存会提示错误；上下文窗口超过已知上限时会被收回上限。</p>
+<p>推理强度、Fast 模式等选项也依赖模型和服务商支持。第一次接入可以保留默认，先确认普通对话成功，再根据实际任务调整。Fast 模式可能影响额度消耗，开启前查看所用服务的说明。</p>
+<p><strong>回到对话，明确选择这次要用的模型。</strong></p>
+<p>打开一个新会话，在输入框附近的模型选择器中选择刚保存的模型。</p>
+<p><img src="../assets/tutorials/models/03-picker.png" alt="会话中的模型选择器：选择当前对话使用的模型" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 3：这里决定当前会话使用的模型。已有消息的会话切换模型时，会出现确认提示；设置中的默认模型用于新会话。</em></p>
+<p>先发送一条不依赖网络和科研工具的小问题：</p>
+<blockquote>
+<p>请用三句话解释 CSV 文件是什么，再给出一个两行数据的 CSV 示例。此次不需要读取文件或访问网页。</p>
+</blockquote>
+<p>这样比较容易区分“模型是否能回答”和“外部工具是否配置成功”。收到正常回答后，再尝试读取自己项目中的一个小文件。</p>
+<p>不要只问“你是什么模型”来验证配置。模型在自然语言中的自我描述不能替代实际配置记录；应检查选择器显示的模型，并结合该轮的<a href="wisp-science-trajectory.html">轨迹与用量记录</a>核对。</p>
+<p>已有内容的会话切换模型，会影响这个会话后续的请求；一轮已经发出的请求仍使用启动时的配置，新配置从后续轮次生效。</p>
+<p><strong>需要读图时，再检查图片输入和图片分析角色。</strong></p>
+<p>科研任务经常包含显微图片、截图或统计图。模型能回答文字，不代表它能接收图片。</p>
+<ul>
+<li>使用支持视觉输入的聊天模型时，勾选 <strong>支持图片输入</strong>。</li>
+<li>希望它也为非视觉主模型解释图片时，再指定 <strong>用于图片分析</strong>。</li>
+<li>“用于图片生成”是另一个角色，负责产出图像，不能代替图片分析配置。</li>
+</ul>
+<p>可以上传一张没有敏感信息、标注清晰的简单图，发送：</p>
+<blockquote>
+<p>请只描述这张图中能看见的坐标轴、图例和变化趋势。看不清的文字请明确说明，不要补写实验条件，也不要推断因果关系。</p>
+</blockquote>
+<p>先验证可见信息，再进入具体科研判断。如果选择的主模型不能读图，也没有可用的图片分析模型，先补齐配置，再重试。</p>
+<p><strong>遇到报错，先从出错的位置排查。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>401 / 403</td>
+<td>密钥是否有效、API 权限是否开通、账号能否访问该模型</td>
+</tr>
+<tr>
+<td>404 或返回网页内容</td>
+<td>Base URL、协议与模型 ID 是否正确；是否误填了服务首页</td>
+</tr>
+<tr>
+<td>超时或连接失败</td>
+<td>网络连通性，以及 <strong>设置 → 常规 → 网络</strong> 中的模型 API 代理</td>
+</tr>
+<tr>
+<td>验证通过，某个任务仍失败</td>
+<td>该模型是否支持任务所需的工具调用、图片输入或输出长度</td>
+</tr>
+<tr>
+<td>上下文超限</td>
+<td>尝试 <code>/compact</code>，或开新会话并说明需要延续的任务</td>
+</tr>
+<tr>
+<td>回答中途截断</td>
+<td>核对最大输出设置，必要时使用“继续执行”或缩小本次任务</td>
+</tr>
+</tbody>
+</table></div>
+<p>第一次配置的目标可以很小：保存一组接入，在新会话中选择它，得到一条完整回答。这个环节跑通后，再接着学习 <a href="wisp-science-mcp.html">MCP</a>、<a href="wisp-science-skills.html">Skills</a> 和<a href="wisp-science-browser.html">浏览器使用</a>，就更容易判断后续问题出现在哪一层。</p>
+<blockquote>
+<p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md">Wisp 模型配置文档</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例提示词不代表已经执行的模型请求。</p>
+</blockquote>
+
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-next" href="wisp-science-browser.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">浏览器使用</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-models" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

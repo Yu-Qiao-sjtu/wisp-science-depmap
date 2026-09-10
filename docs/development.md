@@ -6,11 +6,14 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 
 ## GitHub Pages tutorials
 
-The website's [tutorial page](tutorials.html) publishes the full articles from
-`docs/wechat/*.md`, including tables, code examples, and trajectory screenshots.
+The website's [tutorial directory](tutorials.html) links to one independent page
+per article under `docs/tutorials/`, generated from `docs/wechat/*.md` with full
+tables, code examples, and screenshots. The directory contains only compact cards.
 The navigation and page introduction support Chinese and English; article text
-stays in its original Chinese. Tutorial links jump to the matching article on the
-page, and other Markdown documentation links open the repository source.
+stays in its original Chinese. Article links open the corresponding tutorial
+page; other Markdown documentation links open the repository source. Each article
+offers a return link at the top and bottom and previous/next navigation. Returning
+to the directory restores the matching card via its stable anchor.
 
 After editing or adding an article, regenerate the checked-in page:
 
@@ -24,13 +27,16 @@ python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
 Each article must start with a level-one title. `READING_ORDER` in the generator
 puts the four introductory tutorials first, followed by MCP, Skills, and
 trajectories; other articles are appended alphabetically. Filenames determine
-stable article anchors. Edit the page shell outside the generated
+stable article URLs and directory card anchors. Edit the page shell outside the generated
 markers in `docs/tutorials.html`; edit article content in `docs/wechat`.
-The Pages workflow also regenerates the page before uploading it.
+The Pages workflow regenerates both the directory and article pages before
+uploading them. Do not hand-edit the generated files under `docs/tutorials/`.
 
 For a manual smoke check, serve `docs` with `python3 -m http.server --directory docs
 8080`. Open the homepage, follow Tutorials in the header or footer, and check all
-directory links, the Skills code example, and the tutorial screenshots.
+directory links, the Skills code example, and the tutorial screenshots. Each
+card should open only its own article. Check both return links, previous/next
+navigation, browser Back, and refreshing an article's direct URL.
 Repeat at a narrow mobile width and switch to English; the surrounding navigation
 should translate while the Chinese articles remain visible.
 

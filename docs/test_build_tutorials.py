@@ -8,6 +8,8 @@ import build_tutorials
 
 
 class TutorialBuildTests(unittest.TestCase):
+    DIRECTORY = (build_tutorials.DOCS / "tutorials.html").read_text(encoding="utf-8")
+
     def test_articles_keep_examples_and_rebase_links_and_images(self):
         with tempfile.TemporaryDirectory() as directory:
             docs = Path(directory)
@@ -22,23 +24,38 @@ class TutorialBuildTests(unittest.TestCase):
             )
             (docs / "wechat/second.md").write_text('# Second tutorial\n\nAnother article.\n', encoding="utf-8")
             with patch.object(build_tutorials, "DOCS", docs):
-                html = build_tutorials.render_tutorials()
-            self.assertIn('href="#second">Next</a>', html)
+                pages = build_tutorials.render_tutorials(self.DIRECTORY)
+                html = pages["tutorials/first.html"]
+            self.assertIn('href="second.html">Next</a>', html)
             self.assertIn('href="' + build_tutorials.REPOSITORY + 'reference.md"', html)
             self.assertIn('href="https://example.com/help"', html)
-            self.assertIn('src="assets/demo.png" alt="Screenshot" loading="lazy"', html)
+            self.assertIn('src="../assets/demo.png" alt="Screenshot" loading="lazy"', html)
             self.assertIn('<th>Input</th>', html)
             self.assertIn('<td>B</td>', html)
             self.assertIn('# Example title\n[Next](second.md)', html)
             self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', html)
-            self.assertNotIn('<script>', html)
             self.assertIn('The final paragraph is included.', html)
-            self.assertIn('Another article.', html)
+            self.assertNotIn('Another article.', html)
+            self.assertIn('Another article.', pages['tutorials/second.html'])
+            self.assertNotIn('The final paragraph is included.', pages['tutorials.html'])
+            self.assertIn('href="tutorials/first.html"', pages['tutorials.html'])
+            self.assertIn('href="../tutorials.html#first"', html)
 
     def test_checked_in_page_matches_all_markdown_sources(self):
-        page = (build_tutorials.DOCS / "tutorials.html").read_text(encoding="utf-8")
-        generated = page.split(build_tutorials.START)[1].split(build_tutorials.END)[0]
-        self.assertEqual(generated.strip(), build_tutorials.render_tutorials())
+        for name, expected in build_tutorials.render_tutorials().items():
+            with self.subTest(page=name):
+                self.assertEqual((build_tutorials.DOCS / name).read_text(encoding="utf-8"), expected)
+
+    def test_sibling_navigation_follows_reading_order(self):
+        pages = build_tutorials.render_tutorials()
+        first = pages["tutorials/wisp-science-models.html"]
+        last = pages["tutorials/wisp-science-trajectory.html"]
+        self.assertNotIn('class="tutorial-previous"', first)
+        self.assertIn('class="tutorial-next" href="wisp-science-browser.html"', first)
+        self.assertNotIn('class="tutorial-next"', last)
+        self.assertIn('class="tutorial-previous" href="wisp-science-skills.html"', last)
+        self.assertIn('<title>模型配置 · 教程 | Wisp Science</title>', first)
+        self.assertIn('src="../assets/i18n.js"', first)
 
     def test_article_links_and_screenshots_exist(self):
         parser = build_tutorials.MarkdownIt("commonmark")

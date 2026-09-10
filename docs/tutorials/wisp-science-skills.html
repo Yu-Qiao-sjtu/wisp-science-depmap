@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：Skills">
+  <title>Skills · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-skills" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" lang="zh-CN" id="wisp-science-skills" aria-labelledby="article-title">
+<header><h1 id="article-title">Wisp Science基础入门：Skills</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-skills.md" data-i18n="tutorials.source">查看原文</a></header>
+<p>使用 AI 做科研时，有些要求需要反复强调：查文献要核验来源，画图要保留原始数据，整理实验结果要记录参数，写阅读笔记要区分作者结论和自己的判断。</p>
+<p>如果每次都从头描述这些要求，很容易漏掉细节。我们可以把一套经过实践的工作方法整理成 Skill，让 Wisp Science 在遇到相应任务时读取并使用。</p>
+<p>上一篇介绍了 <a href="wisp-science-mcp.html">MCP</a>，这一篇介绍 Skills：它是什么，如何在 Wisp 中使用，以及怎样把自己的科研习惯保存成可复用的技能。</p>
+<p><strong>先认识 Skill：把工作方法写成 AI 可以读取的操作指南。</strong></p>
+<p>Skill 可以理解为一个围绕具体任务组织的“工作方法包”。它以 <code>SKILL.md</code> 为核心，描述适用场景、执行步骤和交付要求，也可以附带脚本、参考资料与模板。这种将专业知识和工作流程打包的方式，采用了 Agent Skills 开放格式。<a href="https://agentskills.io/home">Agent Skills 官方介绍</a></p>
+<p>比如，一个文献调研 Skill 可以规定：</p>
+<ul>
+<li>先明确研究问题、物种和时间范围。</li>
+<li>使用可用的检索工具查找文献，并核验引用。</li>
+<li>比较支持与反对证据，说明研究之间的差异。</li>
+<li>围绕问题组织结论，保留来源链接和不确定性。</li>
+</ul>
+<p>以后处理类似任务时，Wisp 就可以读取这份指南，把相同的检查步骤应用到新的研究问题上。</p>
+<p>Skill 的作用是为 Agent 提供可复用的方法和材料。最终效果仍取决于模型的执行、可用工具、输入数据，以及这份指南是否写得具体。</p>
+<p><strong>把 Skills 和 MCP 放到同一个任务中，就容易理解它们各自的作用。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>组成部分</th>
+<th>在“调研植物单细胞研究”中的作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>你的任务描述</td>
+<td>指定研究主题、范围，以及希望得到的结果</td>
+</tr>
+<tr>
+<td>Skill</td>
+<td>指导如何检索、筛选、核验和组织证据</td>
+</tr>
+<tr>
+<td>MCP 工具</td>
+<td>查询文献数据库，返回论文记录与来源</td>
+</tr>
+<tr>
+<td>Wisp 的其他工具</td>
+<td>读取文件、运行分析、保存笔记和图表</td>
+</tr>
+</tbody>
+</table></div>
+<p>例如，<code>literature-review</code> 技能可以指导文献检索与综合，PubMed 相关工具负责取得论文记录，文件工具负责保存最终笔记。</p>
+<p>一个 Skill 也可以只处理你已经提供的材料，例如按照实验室模板整理阅读笔记。是否需要 MCP、Python、R 或外部服务，由具体工作流程决定。</p>
+<p><strong>第一次使用，先从 Wisp 已有的技能中找一个熟悉的任务。</strong></p>
+<p>进入 <strong>设置 → 技能</strong>，可以查看技能名称、来源、标签和启用状态，并通过搜索与标签筛选缩小范围。</p>
+<p>点击某个技能，会进入详情页。这里能看到技能介绍和源目录，也可以浏览技能包里的文件：<code>SKILL.md</code> 可以看渲染后的正文，切换到“源码”还能看到文件开头的元数据；脚本等文本资源可以只读查看。</p>
+<p>浏览文件时不会执行脚本。尚未启用的技能也可以先查看，再决定是否使用。相关界面与发现规则见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/skills.md">Wisp Skills 文档</a>。</p>
+<p>例如，Wisp 内置的这些技能分别对应不同科研任务：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>技能名称</th>
+<th>适合做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>literature-review</code></td>
+<td>检索、核验和综合科研文献，比较证据与研究空白</td>
+</tr>
+<tr>
+<td><code>public-data-access</code></td>
+<td>规划公开数据获取，记录文件、来源与校验信息</td>
+</tr>
+<tr>
+<td><code>figure-style</code></td>
+<td>检查科研图表的数据表达、标注与可读性</td>
+</tr>
+<tr>
+<td><code>paper-narrative</code></td>
+<td>组织论文中图表、论点和叙事之间的关系</td>
+</tr>
+</tbody>
+</table></div>
+<p>初次尝试时，可以选一个与你当前任务直接相关的技能，先看它的说明，再用一份熟悉的材料验证结果。</p>
+<p><strong>使用技能有两种常见方式：描述任务，或者手动附加。</strong></p>
+<p>你可以直接在对话中提出需求，让 Wisp 根据任务发现相关技能。例如：</p>
+<blockquote>
+<p>请帮我调研植物根尖单细胞图谱研究。先查找适合文献调研的技能，再按其流程工作。重点比较研究对象、实验方法和主要发现，并给出可核验的文献链接。</p>
+</blockquote>
+<p>Wisp 内置 Agent 可以通过 <code>search_skills</code> 查找技能，再通过 <code>use_skill</code> 读取完整说明。你通常不需要输入这些工具名，只要说清楚工作目标。</p>
+<p>如果已经知道要用哪个技能，可以在消息输入框输入 <code>/</code>，打开“命令、技能与工作流”选择器。继续输入名称筛选，点击目标，或使用方向键和 Enter 选中它。技能会作为引用附加到下一条消息。</p>
+<p>例如，选中 <code>figure-style</code> 后，再发送：</p>
+<blockquote>
+<p>请根据我附加的数据绘制各处理组的结果图。按所选技能检查坐标轴、单位、样本量、颜色和标注，保留数据点，并把图和绘图脚本保存到项目中。</p>
+</blockquote>
+<p>手动附加只约束这一轮，不会永久改写项目配置。技能在设置中“已启用”，表示它可供使用；希望某一轮明确采用它时，可以手动附加或在任务中写出名称。</p>
+<p><strong>导入别人分享的 Skill，可以直接通过界面完成。</strong></p>
+<p>进入 <strong>设置 → 技能 → 添加技能</strong>，根据拿到的内容选择：</p>
+<ol>
+<li><strong>添加 SKILL.md 或 ZIP</strong>：适合单文件技能，或完整打包的技能。</li>
+<li><strong>添加文件夹</strong>：选择包含 <code>SKILL.md</code> 的完整技能文件夹。</li>
+</ol>
+<p>ZIP 可以直接包含 <code>SKILL.md</code>，也可以在最外层包一层技能目录。一次导入一个技能包即可。</p>
+<p>一个带辅助材料的技能，可能长这样：</p>
+<pre><code class="language-text">lab-paper-note/
+  SKILL.md
+  references/
+    reading-checklist.md
+  assets/
+    note-template.md
+  scripts/
+    check_note.py
+</code></pre>
+<p>其中，<code>SKILL.md</code> 是入口；其余文件按需要提供。如果技能正文引用了模板或脚本，分享和导入时应保留整个文件夹，确保相对路径仍然有效。</p>
+<p>通过“添加技能”安装或更新的是 <strong>全局技能</strong>，供多个项目发现。如果一套流程只属于当前项目，可以将它放到项目目录下：</p>
+<pre><code class="language-text">&lt;项目目录&gt;/.wisp/skills/lab-paper-note/SKILL.md
+</code></pre>
+<p>然后点击 <strong>重新加载技能</strong>。Wisp 会重新扫描，空闲会话的 Agent 在下一轮使用更新后的索引，无需重启应用。新发现的技能默认启用；你此前手动关闭的技能会保持关闭。</p>
+<p>插件附带的技能由对应插件管理，启停或删除应前往插件页。需要维护自己的版本时，使用一个独立名称，例如 <code>lab-paper-note</code>，便于区分来源；Wisp 的同名技能有固定优先级，内置同名技能优先。</p>
+<p><strong>想创建自己的 Skill，可以从一份不需要代码的阅读笔记规范开始。</strong></p>
+<p>假设实验室希望每篇论文都按同样的方式记录：研究问题、材料方法、关键结果、证据位置，以及对当前课题的启发。</p>
+<p>新建文件夹 <code>lab-paper-note</code>，在其中创建 <code>SKILL.md</code>，写入下面的内容：</p>
+<pre><code class="language-markdown">---
+name: lab-paper-note
+description: 按实验室模板整理已提供论文的阅读笔记。用于论文精读、组会准备和研究方法比较，保留证据位置并区分作者结论与读者判断。
+---
+
+# 实验室论文阅读笔记
+
+根据用户提供的论文 PDF、正文或摘录整理笔记。
+
+1. 确认可读取的材料范围。只拿到摘要或摘录时，在笔记开头说明。
+2. 记录已提供的标题、作者、年份和 DOI；缺失信息标记为未提供。
+3. 按研究问题、材料与方法、关键结果、局限性、对当前课题的启发展开。
+4. 为关键结果标注材料中可核对的页码、章节或图表编号。
+   材料没有定位信息时，引用对应的短句并注明来自用户摘录。
+5. 分开表述作者报告的结果与读者提出的推测。
+6. 在用户指定的位置保存 Markdown 笔记，并报告文件路径。
+   未指定位置时使用 notes/papers/ 下的新文件，避免覆盖已有笔记。
+
+完成前检查：每个关键结果是否有来源位置，是否补写了材料中没有的信息，
+是否明确指出材料范围和无法判断的问题。
+</code></pre>
+<p>文件开头两条 <code>---</code> 之间是 YAML 元数据。<code>name</code> 用来标识技能，<code>description</code> 告诉 Agent 它能做什么、什么时候适用；后面的 Markdown 正文写具体执行方法。这个示例只需要这两个基础字段。<a href="https://agentskills.io/specification">Agent Skills 格式说明</a></p>
+<p>导入后，手动附加 <code>lab-paper-note</code>，再附上一篇论文或一段摘录，发送：</p>
+<blockquote>
+<p>请按所选技能整理我附加的材料，把阅读笔记保存到 notes/papers/ 中。如果材料不足以判断完整方法或结论，请明确标注。</p>
+</blockquote>
+<p>验证时，拿原文对照三个地方：关键结果是否准确、证据位置是否可找到、模型是否把自己的推测写成了论文结论。发现遗漏后，就把对应的检查要求补进 <code>SKILL.md</code>，重新加载再试。</p>
+<p>一个适合长期使用的 Skill，通常是在这些小范围验证中逐步完善的。</p>
+<p><strong>已经完成过的好流程，也可以从对话里提炼出来。</strong></p>
+<p>当你与 Wisp 完成了一次比较满意的分析、绘图或文献整理，可以在输入框使用 <code>/save-as-skill</code>。</p>
+<p>这个命令会把“提炼本次会话为技能”的提示词填入输入框。你可以补充范围和保存位置，再发送；它本身不会立即把整段对话保存成技能。</p>
+<p>例如，补充为：</p>
+<blockquote>
+<p>请把本次整理论文阅读笔记的流程提炼为可复用技能，命名为 lab-paper-note，保存到当前项目的 .wisp/skills/lab-paper-note/。保留我们确认过的输出模板和核验步骤，把本次论文标题、文件路径和课题名称改为需要用户提供的输入。完成后告诉我如何重新加载和试用。</p>
+</blockquote>
+<p>提炼后的文件值得再读一遍：是否写清了适用场景，是否混入一次性的结果，是否依赖某台电脑的绝对路径，以及换一份输入后能否继续使用。</p>
+<p><strong>带脚本的技能，还需要对应的执行环境。</strong></p>
+<p>有些 Skill 会附带 Python 或 R 辅助代码。导入技能后，实际使用这些代码仍需要所选环境具有相应解释器和依赖包；访问外部服务时，也可能需要配置网络或凭据。</p>
+<p>Wisp 对技能根目录中的 <code>runtime.py</code> 和 <code>runtime.r</code> 有专门约定：它们用于把辅助函数加载到持久 Python/R 解释器，方便后续步骤复用内存中的对象。浏览技能或读取说明不会自动执行这些文件；Agent 会在需要使用辅助函数时按加载指导操作。</p>
+<p>普通 <code>scripts/</code> 目录中的脚本按技能正文说明运行。远程 SSH/WSL 环境也要确认脚本和相关资源可访问，不能假定本机的技能路径在远端同样存在。初次编写自己的技能时，像上面的阅读笔记示例一样，只提供清晰的文字流程就可以开始。</p>
+<p><strong>遇到问题，可以先检查技能是否被发现，再检查执行条件。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>导入后找不到技能</td>
+<td>文件名是否为 <code>SKILL.md</code>、元数据是否完整、文件夹或 ZIP 层级是否正确</td>
+</tr>
+<tr>
+<td>修改后仍像在使用旧规则</td>
+<td>是否点击了“重新加载技能”；是否存在同名且优先级更高的技能</td>
+</tr>
+<tr>
+<td>技能已启用，对话中却未使用</td>
+<td>手动通过 <code>/</code> 附加，或明确写出技能名称；说明具体任务目标</td>
+</tr>
+<tr>
+<td>找到技能，但脚本或模板报错</td>
+<td>是否导入了完整技能包；依赖和文件路径是否在所选环境中可用</td>
+</tr>
+<tr>
+<td>结果没有按模板输出</td>
+<td>检查模板要求是否具体，并用一份小材料验证实际输出</td>
+</tr>
+<tr>
+<td>技能要求使用某个数据库，但检索失败</td>
+<td>检查对应 MCP 连接、服务凭据和网络，并查看实际调用错误</td>
+</tr>
+</tbody>
+</table></div>
+<p>可以从实验室最常重复的一项小工作开始：一份阅读笔记、一张图的检查，或者一次数据整理。把已经明确的方法写进 Skill，再用新的材料验证和修订，你就会逐渐积累起一套符合自己研究习惯的工作流程。</p>
+<blockquote>
+<p>本文依据撰写时的 Wisp Science 项目文档与技能实现整理。不同版本的界面文字可能略有差异；示例用于说明配置和使用方法，不代表已经执行的科研任务。</p>
+</blockquote>
+
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-mcp.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">MCP</strong></a><a class="tutorial-next" href="wisp-science-trajectory.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">轨迹</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-skills" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

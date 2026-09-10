@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：导入、导出与分享">
+  <title>导入、导出与分享 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-transfer" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" lang="zh-CN" id="wisp-science-transfer" aria-labelledby="article-title">
+<header><h1 id="article-title">Wisp Science基础入门：导入、导出与分享</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-transfer.md" data-i18n="tutorials.source">查看原文</a></header>
+<p>一项分析做完后，经常会遇到三个不同的需求：换台电脑继续整个项目，把某一次对话交给同事，或者只把一段结果发到组会群里。</p>
+<p>Wisp Science 为这些需求提供了不同入口。选对导出范围，后续导入和阅读会方便很多。这篇文章按“整个项目 → 单个会话 → 部分消息”的顺序介绍，并说明每种方式能带走什么。</p>
+<blockquote>
+<p>本文配图来自实际前端，使用演示项目和教学会话。表格中的数字、项目路径与联系人均为示例，不代表真实实验结果或已完成的迁移。</p>
+</blockquote>
+<p><strong>先决定要交付什么，再选择导出方式。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>需求</th>
+<th>选择什么</th>
+<th>接收方怎样使用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>换电脑继续整个项目</td>
+<td>项目 ZIP</td>
+<td>在 Wisp 的“导入项目”中恢复</td>
+</tr>
+<tr>
+<td>只交接一段完整会话及可导出的关联产物</td>
+<td>会话 ZIP</td>
+<td>在目标项目中使用“导入会话归档”</td>
+</tr>
+<tr>
+<td>展示会话中的几条消息</td>
+<td>分享为 PNG 长图或 HTML</td>
+<td>用图片查看器或浏览器阅读</td>
+</tr>
+<tr>
+<td>检查完整执行过程</td>
+<td>轨迹导出 HTML</td>
+<td>阅读调用、结果、耗时和用量记录</td>
+</tr>
+</tbody>
+</table></div>
+<p>项目 ZIP 和会话 ZIP 虽然扩展名相同，内容格式和导入入口不同。分享 HTML 与轨迹 HTML 也是阅读材料，不能当作会话归档导回 Wisp 继续对话。</p>
+<p><strong>导出整个项目，适合迁移和完整交接。</strong></p>
+<p>先等当前项目的活动对话和任务结束。然后在项目卡片上点击 <strong>导出项目</strong>，也可以打开项目后使用 <strong>文件 → 导出当前项目</strong>。</p>
+<p><img src="../assets/tutorials/transfer/02-project-export.png" alt="项目导出说明：选择导出 ZIP，准备包含文件与项目记录的迁移包" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 1：只要普通文件时，可以自行复制项目文件夹；需要一起带走 Wisp 中的会话和项目记录时，选择完整 ZIP。</em></p>
+<p>选择 <strong>导出 ZIP</strong> 和保存位置后，右下角会显示处理阶段、文件数量、大小和当前路径。等待导出完成，再复制生成的 ZIP。</p>
+<p>导出期间，源项目会临时只读；其他项目仍可使用。不要把尚未完成或仍为空的目标文件发给接收方。</p>
+<p>项目包包括工作区里的普通文件，以及项目拥有的会话、产物、Run、计划、溯源和研究图谱记录。它不会一并携带：</p>
+<ul>
+<li>模型 API 密钥、其他密钥环秘密和全局模型配置。</li>
+<li>这台电脑的 SSH／WSL 环境配置。</li>
+<li>外部 ACP Agent 正在运行的进程状态。</li>
+<li>远程引用背后的整份服务器数据。</li>
+</ul>
+<p>因此，接收方恢复项目后，仍需要配置自己的模型和服务器。远程路径可以作为引用保留，但不会因为 ZIP 导入就自动获得访问权限。</p>
+<p><strong>导入整个项目，先区分 ZIP 与普通文件夹。</strong></p>
+<p>在项目首页点击 <strong>导入项目</strong>，可以看到不同的导入方式。</p>
+<p><img src="../assets/tutorials/transfer/01-project-import.png" alt="导入项目的三种方式：打开现有文件夹、导入 ZIP 和恢复工作区会话" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 2：已经复制到本机的文件夹，可以原地打开；Wisp 导出的完整项目 ZIP，应走 ZIP 导入入口。工作区会话恢复是另一种应急方式。</em></p>
+<p>迁移完整项目时：</p>
+<ol>
+<li>选择 <strong>导入 ZIP 压缩包</strong>，打开 Wisp 导出的项目 ZIP。</li>
+<li>选择本机父目录，Wisp 会在其中创建项目目录。</li>
+<li>等待右下角导入进度完成，再从项目页打开。</li>
+<li>核对会话、脚本、图表和关键数据路径，再配置目标机器需要的模型与环境。</li>
+</ol>
+<p>如果手里只是普通文件夹，选择 <strong>原地打开文件夹</strong>。它登记的是这个现有位置，不会复制一份新工作区；只复制文件夹，也不能恢复仅存于另一台设备数据库中的完整会话记录。</p>
+<p>当原来的应用数据库和完整项目包都丢失，但工作区还在时，才考虑 <strong>从工作区恢复会话</strong>。它尝试读取工作区保存过的历史快照，并不是每条普通对话都一定能找回。</p>
+<p>同一台设备重复导入相同项目 ID 会被拒绝，不会自动合并两个项目。需要经常切换设备时，可以进一步了解<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/project-sync.zh-CN.md">手动项目同步</a>。</p>
+<p><strong>只交接一个会话，在会话列表里导出。</strong></p>
+<p>打开项目，在左侧找到目标会话。右键点击会话，或打开它的会话操作菜单，选择 <strong>导出会话</strong>。</p>
+<p><img src="../assets/tutorials/transfer/03-session-export.png" alt="会话操作菜单中的导出会话入口" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 3：入口属于左侧会话条目。右键点击正文的一段普通文字，不会打开同一个会话导出菜单。</em></p>
+<p>选择保存位置后，会得到会话 ZIP。包中包含消息记录、便于阅读的 Markdown 文本、工具调用记录，以及能够收集到的关联产物和相应信息。</p>
+<p>这里导出的是会话记录及其关联文件，不能把它当作整个项目的压缩包。某个文件只在正文中被提到、实际位于远程，或者已经从本机删除时，不要默认它的内容一定被打包。</p>
+<p>准备交接分析时，可以先要求 Wisp 列一份清单：</p>
+<blockquote>
+<p>请根据这段会话整理交接清单，列出实际读取的输入文件、生成的脚本和结果文件，以及仍需另行提供的数据。每项标明本地或远程路径；不能确认存在的文件请明确标注。</p>
+</blockquote>
+<p>再把清单与导出包核对。需要交付项目中的其他输入文件时，另外提供这些材料，或改用完整项目导出。</p>
+<p><strong>导入会话归档，要先打开接收它的项目。</strong></p>
+<p>进入目标项目，打开 <strong>编辑 → 导入会话归档</strong>。也可以按 <strong>Ctrl+P</strong>（macOS 为 <strong>Cmd+P</strong>），搜索“导入会话归档”。</p>
+<p><img src="../assets/tutorials/transfer/04-session-import.png" alt="命令面板中搜索导入会话归档，随后选择会话 ZIP" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 4：这条命令将会话导入当前项目。选择的是“导出会话”生成的 ZIP，不是项目 ZIP 或分享 HTML。</em></p>
+<p>选择 ZIP 后，首次导入的会话会归入 <code>imported</code> 分组。打开它，核对消息是否完整，再检查关联产物能否读取。</p>
+<p>产物的原相对路径安全且没有冲突时，会尽量恢复到相应位置。遇到路径冲突等情况，可能改放到 <code>imports/&lt;会话标识&gt;/</code> 下；无法恢复的文件会被报告。导入后应查看实际位置，不要照着旧消息里的绝对路径直接运行。</p>
+<p>单会话导入主要恢复消息与可提取的产物，不会重建所有项目级记录，也不会把归档中的执行溯源自动变成目标数据库里的运行记录。它同样不会恢复正在运行的 Python／R 内存、SSH 终端或 ACP 进程。</p>
+<p>重复导入同一来源会话时，可能更新已有导入记录，或显示跳过；这不是双向合并工具。两边都继续了不同内容时，先保留各自备份，再决定怎样交接。</p>
+<p><strong>只分享部分内容，打开“分享为长图”。</strong></p>
+<p>如果只是向同事展示一次解释、一个结果表或几轮讨论，可以使用会话顶部的分享按钮，也可以在输入框发送 <code>/share</code>。</p>
+<p><img src="../assets/tutorials/transfer/05-share.png" alt="分享窗口：选择需要的消息，输入打码关键词，选择 PNG 或 HTML 格式" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 5：示例只保留前两条消息，并将“李老师”设为打码关键词。被取消勾选的后续讨论不进入这次分享。</em></p>
+<p>操作顺序可以是：</p>
+<ol>
+<li>勾选要分享的消息，取消不需要的部分。</li>
+<li>在打码关键词中填写姓名、内部项目代号等需要替换的文字，检查预览。</li>
+<li>选择 <strong>PNG</strong> 或 <strong>HTML</strong>。</li>
+<li>PNG 可调整图片宽度；HTML 保存为网页文件。</li>
+<li>导出后，用相应查看器打开，确认文字、表格和公式是否清晰。</li>
+</ol>
+<p>这个选择以“消息”为单位，不是任意圈选一句话。用户消息和助手回复默认选中，思考内容默认不选；工具调用和用量记录不作为普通分享消息列出。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>格式</th>
+<th>适合什么场景</th>
+<th>使用前检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PNG 长图</td>
+<td>发到群聊、插入组会材料</td>
+<td>长度是否合适，小字是否清楚</td>
+</tr>
+<tr>
+<td>HTML 网页</td>
+<td>用浏览器阅读较长讨论或结果表</td>
+<td>文件能否打开，外部链接与图片是否仍可访问</td>
+</tr>
+</tbody>
+</table></div>
+<p>关键词打码作用于这次分享副本，不会修改原会话。它按填写的文字替换，不能自动识别所有敏感信息，也不会替你擦除嵌入截图里的文字；导出后仍要检查一次。</p>
+<p>点击导出只是保存文件，不会自动上传到公众号、群聊或其他平台。需要发送时，由你选择接收方。</p>
+<p><strong>分享结果和保留过程，可以一起做。</strong></p>
+<p>给同事看结论时，可以导出几条关键消息；需要一起排查错误时，再补充<a href="wisp-science-trajectory.html">轨迹 HTML</a>。如果对方要在 Wisp 中继续分析，则提供会话 ZIP 或项目 ZIP，并补齐输入文件和环境信息。</p>
+<p>第一次练习，可以在一个小型练习项目里建立两轮对话，分别尝试：导出项目、导出并导入一段会话、只分享其中一问一答。核对三种文件的打开方式后，再用于正式交接。</p>
+<p><strong>遇到问题，先核对归档类型与实际范围。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ZIP 导入提示格式不对</td>
+<td>项目 ZIP 是否误用了会话导入入口，或反过来</td>
+</tr>
+<tr>
+<td>复制文件夹后找不到会话</td>
+<td>是否只复制了文件，没有迁移数据库中的项目记录</td>
+</tr>
+<tr>
+<td>导入后某个文件打不开</td>
+<td>是否原本是远程引用、包内缺失，或因冲突改到了 <code>imports/</code></td>
+</tr>
+<tr>
+<td>导入后不能继续运行</td>
+<td>目标机器的模型、解释器、依赖和服务器是否重新配置</td>
+</tr>
+<tr>
+<td>想把分享 HTML 导回会话</td>
+<td>HTML 用于阅读；继续对话需要会话 ZIP</td>
+</tr>
+<tr>
+<td>分享里没有工具调用细节</td>
+<td>改用轨迹 HTML 检查执行过程</td>
+</tr>
+<tr>
+<td>导出图太长或文字太小</td>
+<td>减少选中消息，或调整宽度；长内容可以选 HTML</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p>项目迁移规则参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/project-transfer.md">Wisp 项目导出与导入</a>，分享入口见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例提示词不代表已经执行的文件检查。</p>
+</blockquote>
+
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-servers-cli.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">服务器配置和命令行</strong></a><a class="tutorial-next" href="wisp-science-mcp.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">MCP</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-transfer" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

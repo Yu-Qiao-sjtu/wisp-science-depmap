@@ -1,10 +1,12 @@
-"""Render the tutorial page from docs/wechat; run with --check to detect drift."""
+"""Render the tutorial directory and article pages; --check detects generated drift."""
 
 import argparse
+import posixpath
+import re
 import struct
 from html import escape
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from markdown_it import MarkdownIt
 
@@ -27,16 +29,38 @@ def article_id(path):
 def rewrite_url(value, source, articles):
     if urlsplit(value).scheme or value.startswith(("//", "#")):
         return value
-    resolved = urljoin(source.relative_to(DOCS).as_posix(), value)
-    target = DOCS / urlsplit(resolved).path
+    resolved = urlsplit(urljoin(source.relative_to(DOCS).as_posix(), value))
+    target = DOCS / resolved.path
     if target in articles:
-        return "#" + article_id(target)
-    if target.suffix == ".md":
-        return REPOSITORY + resolved
-    return resolved
+        path = article_id(target) + ".html"
+    elif target.suffix == ".md":
+        return REPOSITORY + urlunsplit(resolved)
+    else:
+        path = posixpath.relpath(resolved.path, "tutorials")
+    return urlunsplit(("", "", path, resolved.query, resolved.fragment))
 
 
-def render_tutorials():
+def article_shell(directory):
+    """Reuse the directory's site header/footer, with paths relative to articles."""
+    head = directory.split("  <main>", 1)[0]
+    footer = directory.split("  </main>", 1)[1]
+
+    def rebase(match):
+        attribute, value = match.groups()
+        if not urlsplit(value).scheme and not value.startswith(("//", "#")):
+            value = "../" + value
+        return f'{attribute}="{value}"'
+
+    head, footer = [re.sub(r'(href|src)="([^"]+)"', rebase, part) for part in (head, footer)]
+    head = head.replace("tutorial-index", "tutorial-detail")
+    head = head.replace('data-page="tutorials"', 'data-page="tutorial-article"')
+    head = head.replace('aria-current="page"', 'aria-current="location"')
+    return head, footer
+
+
+def render_tutorials(directory=None):
+    if directory is None:
+        directory = (DOCS / "tutorials.html").read_text(encoding="utf-8")
     articles = sorted((DOCS / "wechat").glob("*.md"), key=lambda path: (
         READING_ORDER.index(path.stem) if path.stem in READING_ORDER else len(READING_ORDER),
         path.name,
@@ -44,12 +68,16 @@ def render_tutorials():
     if not articles:
         raise ValueError("No tutorials found in docs/wechat")
     parser = MarkdownIt("commonmark", {"html": False}).enable("table")
-    cards, bodies = [], []
+    cards, entries = [], []
     for number, source in enumerate(articles, 1):
         tokens = parser.parse(source.read_text(encoding="utf-8"))
-        if tokens[0].type != "heading_open" or tokens[0].tag != "h1":
+        if not tokens or tokens[0].type != "heading_open" or tokens[0].tag != "h1":
             raise ValueError(f"{source.name} must begin with a title")
-        title = escape(tokens[1].content)
+        raw_title = tokens[1].content
+        title = escape(raw_title)
+        category, separator, short_title = raw_title.partition("：")
+        short_title = escape(short_title if separator else raw_title)
+        category = escape(category.replace("Wisp Science", "").strip() if separator else "教程")
         anchor = article_id(source)
         tokens = tokens[3:]
         # Rewrite parsed links/images only; code examples remain verbatim.
@@ -60,9 +88,8 @@ def render_tutorials():
                     child.attrSet(attribute, rewrite_url(child.attrGet(attribute), source, articles))
                 if child.type == "image":
                     child.attrSet("loading", "lazy")
-                    # Reserve screenshot space before lazy loading, so directory
-                    # jumps remain aligned when earlier images enter view.
-                    image_path = DOCS / urlsplit(child.attrGet("src")).path
+                    # Reserve screenshot space before lazy loading.
+                    image_path = (DOCS / "tutorials" / urlsplit(child.attrGet("src")).path).resolve()
                     if image_path.is_file() and image_path.suffix.lower() == ".png":
                         with image_path.open("rb") as image_file:
                             header = image_file.read(24)
@@ -77,34 +104,60 @@ def render_tutorials():
                             '<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格">'
                             '<table class="doc-table doc-table-compact">')
         body = body.replace("</table>", "</table></div>")
-        cards.append(f'<a class="tutorial-card" href="#{anchor}">'
-                     f'<span class="eyebrow">{number:02d}</span><h2>{title}</h2></a>')
-        bodies.append(
-            f'<article class="tutorial-article" id="{anchor}" aria-labelledby="{anchor}-title">\n'
-            f'<header><h2 id="{anchor}-title">{title}</h2>\n'
-            f'<a href="{REPOSITORY}wechat/{source.name}" data-i18n="tutorials.source">查看原文</a>'
-            f'</header>\n{body}\n'
-            '<a class="tutorial-back" href="#tutorial-list" data-i18n="tutorials.back">返回教程目录</a>\n'
-            '</article>'
+        cards.append(
+            f'<a class="tutorial-card" id="{anchor}" href="tutorials/{anchor}.html">'
+            f'<span class="tutorial-card-meta"><span class="tutorial-number">{number:02d}</span>'
+            f'<span>{category}</span></span><h2>{short_title}</h2>'
+            '<span class="tutorial-read" data-i18n="tutorials.read">阅读教程</span></a>'
         )
-    return ('<div class="tutorial-cards" lang="zh-CN">\n' + "\n".join(cards) + '</div>\n'
-            '<div class="tutorial-articles" lang="zh-CN">\n' + "\n".join(bodies) + '</div>')
+        entries.append((anchor, title, short_title, source, body))
+
+    before, rest = directory.split(START)
+    _, after = rest.split(END)
+    pages = {"tutorials.html": before + START + '\n<div class="tutorial-cards" lang="zh-CN">\n'
+             + "\n".join(cards) + "\n</div>\n" + END + after}
+    head, footer = article_shell(directory)
+    for index, (anchor, title, short_title, source, body) in enumerate(entries):
+        article_head = re.sub(r"<title>.*?</title>", lambda _: f"<title>{short_title} · 教程 | Wisp Science</title>", head)
+        article_head = re.sub(r'<meta name="description" content="[^"]*">',
+                              lambda _: f'<meta name="description" content="{title}">', article_head)
+        back = (f'<a class="tutorial-back" href="../tutorials.html#{anchor}" '
+                'data-i18n="tutorials.back">返回教程目录</a>')
+        siblings = []
+        for offset, key, label in [(-1, "previous", "上一篇"), (1, "next", "下一篇")]:
+            target = index + offset
+            if 0 <= target < len(entries):
+                sibling_id, _, sibling_title, _, _ = entries[target]
+                siblings.append(f'<a class="tutorial-{key}" href="{sibling_id}.html">'
+                                f'<span data-i18n="tutorials.{key}">{label}</span>'
+                                f'<strong lang="zh-CN">{sibling_title}</strong></a>')
+        pages[f"tutorials/{anchor}.html"] = (
+            article_head + '  <main class="tutorial-reader container">\n'
+            f'<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav">{back}</nav>\n'
+            f'<article class="tutorial-article" lang="zh-CN" id="{anchor}" aria-labelledby="article-title">\n'
+            f'<header><h1 id="article-title">{title}</h1>\n'
+            f'<a href="{REPOSITORY}wechat/{source.name}" data-i18n="tutorials.source">查看原文</a></header>\n'
+            f'{body}\n</article>\n'
+            '<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination">'
+            + "".join(siblings) + f'</nav>\n<div class="tutorial-reader-back">{back}</div>\n'
+            '  </main>' + footer
+        )
+    return pages
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    page = DOCS / "tutorials.html"
-    original = page.read_text(encoding="utf-8")
-    before, rest = original.split(START)
-    _, after = rest.split(END)
-    updated = before + START + "\n" + render_tutorials() + "\n" + END + after
-    if args.check:
-        if updated != original:
-            raise SystemExit("Tutorials are out of date; run python3 docs/build_tutorials.py")
-    else:
-        page.write_text(updated, encoding="utf-8")
+    pages = render_tutorials()
+    for name, updated in pages.items():
+        page = DOCS / name
+        if args.check:
+            if not page.exists() or page.read_text(encoding="utf-8") != updated:
+                raise SystemExit(f"{name} is out of date; run python3 docs/build_tutorials.py")
+        else:
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(updated, encoding="utf-8")
 
 
 if __name__ == "__main__":
