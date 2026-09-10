@@ -4079,6 +4079,44 @@ test("side chat answers in a temporary side panel and can switch model", async (
   });
 });
 
+test("side chat composer matches the main input and keeps long drafts contained", async ({ page }, testInfo) => {
+  await enterApp(page);
+  await composer(page).fill("Check analysis progress");
+  await page.getByRole("button", { name: "Message options" }).click();
+  await page.getByRole("button", { name: "Side chat" }).click();
+  const panel = page.locator(".rightpane");
+  const input = panel.getByPlaceholder("Follow up…");
+  const frame = panel.locator(".sidechat-composer-inner");
+  await expect(frame).toBeVisible();
+  await expect(input).toHaveCSS("resize", "none");
+  await expect(input).toHaveCSS("border-top-width", "0px");
+  await expect(input).toHaveCSS("font-family", await composer(page).evaluate(el => getComputedStyle(el).fontFamily));
+  await expect(frame).toHaveCSS("border-radius", await page.locator(".composer-inner").evaluate(el => getComputedStyle(el).borderRadius));
+  await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+
+  // Escape must dismiss the menu immediately, while keeping the side panel open.
+  await panel.locator(".sidechat-model-btn").click();
+  await expect(panel.locator(".sidechat-model-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel.locator(".sidechat-model-menu")).toHaveCount(0);
+  await expect(frame).toBeVisible();
+
+  await input.fill(Array.from({ length: 30 }, (_, i) => `Analysis step ${i}`).join("\n"));
+  await expect.poll(() => input.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect((await input.boundingBox())!.height).toBeLessThanOrEqual(180);
+  await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+  await input.fill("Follow-up draft");
+  await expect.poll(async () => (await input.boundingBox())!.height).toBeLessThan(80);
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("Follow-up draft\n");
+  await page.setViewportSize({ width: 960, height: 720 });
+  expect(await frame.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("side-chat-composer.png") });
+  await input.press("Enter");
+  await expect(panel.getByText("Side answer: Follow-up draft")).toBeVisible();
+  await expect(input).toHaveValue("");
+});
+
 test("side chat reports when the frozen conversation has no evidence", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("NO_EVIDENCE_TEST");
