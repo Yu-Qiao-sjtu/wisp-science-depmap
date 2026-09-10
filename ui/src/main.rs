@@ -1553,6 +1553,17 @@ fn App() -> impl IntoView {
     let home_dialog_open = create_rw_signal(false);
     let calendar_journey_request = create_rw_signal(None::<(String, i64)>);
     let journey_initial_day = create_rw_signal(None::<i64>);
+    // Every home navigation path must dispose the project journey. Also watch
+    // its open flag while at home: a delayed calendar drill-down can set it
+    // after the user has already left the project.
+    create_effect(move |_| {
+        if show_projects.get() {
+            if show_research_graph.get() {
+                show_research_graph.set(false);
+            }
+            journey_initial_day.set(None);
+        }
+    });
     let show_publication_workspace = create_rw_signal(false);
     let publication_binding_source = create_rw_signal::<Option<PublicationEvidenceSource>>(None);
     create_effect(move |previous: Option<Option<String>>| {
@@ -10412,7 +10423,7 @@ fn App() -> impl IntoView {
                 can_insert=Signal::derive(move || !show_projects.get())
             />
         })}
-        {move || show_research_graph.get().then(|| view! {
+        {move || (!show_projects.get() && show_research_graph.get()).then(|| view! {
             <ResearchJourneyView
                 locale=locale
                 project_name=project_info.get().map(|p|p.name.clone()).unwrap_or_default()

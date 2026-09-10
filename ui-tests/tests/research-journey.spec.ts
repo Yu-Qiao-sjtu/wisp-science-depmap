@@ -17,6 +17,40 @@ async function open(page: Page, query = "") {
   await expect(page.getByTestId("research-journey")).toBeVisible();
 }
 
+for (const route of ["sidebar", "command palette"]) {
+  test(`returning home through the ${route} closes the research journey`, async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, "platform", { get: () => "Win32" }));
+    await open(page);
+    const journey = page.getByTestId("research-journey");
+    await journey.getByTestId("journey-calendar").getByRole("button", { name: "2026-09-08", exact: true }).click();
+    if (route === "sidebar") {
+      await page.getByRole("button", { name: "Back to projects", exact: true }).click();
+    } else {
+      await page.keyboard.press("Control+p");
+      const input = page.locator("#action-palette-input");
+      await input.fill("Open projects");
+      await expect(page.locator(".action-palette-row.active")).toContainText("Open projects");
+      await input.press("Enter");
+    }
+    await expect(page.locator(".projects-screen")).toBeVisible();
+    await expect(journey).toHaveCount(0);
+    // Demo entry bypasses the normal project-switch reset. A hidden but still
+    // true journey flag must not revive the old project's page here.
+    await page.locator(".proj-example").click();
+    await expect(page.locator(".projects-screen")).toHaveCount(0);
+    await expect(journey).toHaveCount(0);
+    await page.getByRole("button", { name: "Back to projects", exact: true }).click();
+    await page.locator(".proj-card-main").first().click();
+    await expect(journey).toHaveCount(0);
+    await page.locator(".sidebar").getByRole("button", { name: "Research journey", exact: true }).click();
+    await expect(journey).toBeVisible();
+    await expect(journey.locator(".journey-day")).toHaveCount(3);
+    await page.keyboard.press("Escape");
+    await expect(journey).toHaveCount(0);
+    await expect(page.locator("#composer-input")).toBeVisible();
+  });
+}
+
 for (const platform of ["Windows NT 10.0; Win64; x64", "Macintosh; Intel Mac OS X 10_15_7"]) {
   test(`research journey respects the title bar on ${platform}`, async ({ browser }) => {
     const context = await browser.newContext({ userAgent: `Mozilla/5.0 (${platform}) AppleWebKit/537.36 Chrome/136 Safari/537.36` });

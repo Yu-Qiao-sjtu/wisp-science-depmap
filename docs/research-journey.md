@@ -12,6 +12,12 @@
 
 Escape 每次只关闭最上层：产物查看器、补充记录或运行详情、关系详情，最后返回原工作区。也可以通过右上角关闭按钮返回。
 
+通过侧栏「返回项目」或命令面板「打开项目列表」回到首页时，研究历程会随项目视图一起关闭。再次进入项目后，可从侧栏重新打开研究历程，默认查看本月；旧的日期筛选和局部面板不会带回。即使从首页研究日历进入项目的请求尚未完成，先返回首页后，延迟结果也不会重新打开研究历程。
+
+Returning to Projects from the sidebar or command palette closes the project’s
+research journey. Reopening it starts in the current month. A delayed calendar
+drill-down response cannot reopen the journey after you have returned home.
+
 Windows 下研究历程位于集成标题栏下方，菜单和窗口控制按钮保持可用；使用原生标题栏的平台不额外留白。按日时间线和右侧来源栏、以及关系图列表不预留常驻滚动槽，滚动条叠在内容上、悬停时才显现，避免两条系统滚动条把版面切开。运行记录使用宽版弹窗，分区显示状态、运行环境、本地起止时间、退出码、执行命令及标准输出/标准错误的日志尾部。长命令和日志自动换行，内容在弹窗内滚动，关闭按钮始终可见；未记录的字段和空日志显示明确提示。
 
 ## 首页研究日历 / Home research calendar
