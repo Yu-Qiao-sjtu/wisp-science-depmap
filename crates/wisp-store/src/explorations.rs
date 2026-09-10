@@ -143,6 +143,8 @@ pub struct ExplorationCheckpoint {
     pub source_message_seq: i64,
     pub source_frame_head_seq: i64,
     pub source_ui_event_seq: i64,
+    /// Live transcript head at creation, distinct from the inherited prefix.
+    pub source_ui_event_head_seq: i64,
     pub source_family_generation: i64,
     pub source_state_generation: i64,
     pub workspace_snapshot_id: String,
@@ -457,6 +459,28 @@ impl Store {
         .await?)
     }
 
+    /// Visual transcript prefix ending immediately before the next user turn.
+    pub async fn frame_ui_event_head_after_turn(
+        &self,
+        frame_id: &str,
+        turn_index: i64,
+    ) -> Result<i64> {
+        if turn_index < 0 {
+            anyhow::bail!("Invalid conversation turn index");
+        }
+        Ok(sqlx::query_scalar(
+            "SELECT COALESCE(MAX(seq),0) FROM session_ui_events WHERE frame_id=? AND seq < COALESCE((\
+                SELECT seq FROM session_ui_events WHERE frame_id=? \
+                AND json_extract(event_json,'$.kind')='User' ORDER BY seq LIMIT 1 OFFSET ?\
+            ),9223372036854775807)",
+        )
+        .bind(frame_id)
+        .bind(frame_id)
+        .bind(turn_index + 1)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
     pub async fn clone_exploration_frame(
         &self,
         source_frame_id: &str,
@@ -724,7 +748,9 @@ impl Store {
                 .bind(&checkpoint.source_frame_id)
                 .fetch_one(&self.pool)
                 .await?;
-        if checkpoint.source_message_seq != checkpoint.source_frame_head_seq {
+        if checkpoint.source_message_seq > checkpoint.source_frame_head_seq
+            || checkpoint.source_ui_event_seq > checkpoint.source_ui_event_head_seq
+        {
             anyhow::bail!("Exploration checkpoint message boundaries disagree");
         }
         let historical_generation: Option<i64> = sqlx::query_scalar(
@@ -739,6 +765,14 @@ impl Store {
         .await?;
         if checkpoint.source_frame_head_seq != actual_head && historical_generation.is_none() {
             anyhow::bail!("Exploration checkpoint history has no matching project state revision");
+        }
+        if historical_generation.is_none()
+            && checkpoint.source_ui_event_head_seq
+                != self
+                    .frame_ui_event_head(&checkpoint.source_frame_id)
+                    .await?
+        {
+            anyhow::bail!("Exploration source transcript changed before checkpoint creation");
         }
         let generation = match historical_generation {
             Some(generation) => generation,
@@ -771,10 +805,10 @@ impl Store {
         sqlx::query(
             "INSERT INTO exploration_checkpoints(\
                id,family_id,project_id,source_frame_id,source_message_seq,source_frame_head_seq,\
-               source_ui_event_seq,source_family_generation,source_state_generation,\
+               source_ui_event_seq,source_ui_event_head_seq,source_family_generation,source_state_generation,\
                workspace_snapshot_id,context_archive_id,guard_hash,entity_hash,\
                isolation_summary_json,created_at\
-             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&checkpoint.id)
         .bind(&checkpoint.family_id)
@@ -783,6 +817,7 @@ impl Store {
         .bind(checkpoint.source_message_seq)
         .bind(checkpoint.source_frame_head_seq)
         .bind(checkpoint.source_ui_event_seq)
+        .bind(checkpoint.source_ui_event_head_seq)
         .bind(checkpoint.source_family_generation)
         .bind(checkpoint.source_state_generation)
         .bind(&checkpoint.workspace_snapshot_id)
@@ -802,7 +837,7 @@ impl Store {
     ) -> Result<Option<ExplorationCheckpoint>> {
         let row = sqlx::query(
             "SELECT id,family_id,project_id,source_frame_id,source_message_seq,\
-                    source_frame_head_seq,source_ui_event_seq,source_family_generation,\
+                    source_frame_head_seq,source_ui_event_seq,source_ui_event_head_seq,source_family_generation,\
                     source_state_generation,workspace_snapshot_id,context_archive_id,guard_hash,\
                     entity_hash,isolation_summary_json,created_at \
              FROM exploration_checkpoints WHERE id=?",
@@ -822,7 +857,7 @@ impl Store {
     ) -> Result<Option<ExplorationCheckpoint>> {
         let row = sqlx::query(
             "SELECT id,family_id,project_id,source_frame_id,source_message_seq,\
-                    source_frame_head_seq,source_ui_event_seq,source_family_generation,\
+                    source_frame_head_seq,source_ui_event_seq,source_ui_event_head_seq,source_family_generation,\
                     source_state_generation,workspace_snapshot_id,context_archive_id,guard_hash,\
                     entity_hash,isolation_summary_json,created_at \
              FROM exploration_checkpoints \
@@ -847,7 +882,7 @@ impl Store {
         let row = sqlx::query(
             "SELECT checkpoint.id,checkpoint.family_id,checkpoint.project_id,\
                     checkpoint.source_frame_id,checkpoint.source_message_seq,\
-                    checkpoint.source_frame_head_seq,checkpoint.source_ui_event_seq,\
+                    checkpoint.source_frame_head_seq,checkpoint.source_ui_event_seq,checkpoint.source_ui_event_head_seq,\
                     checkpoint.source_family_generation,checkpoint.source_state_generation,\
                     checkpoint.workspace_snapshot_id,checkpoint.context_archive_id,\
                     checkpoint.guard_hash,checkpoint.entity_hash,\
@@ -1696,8 +1731,8 @@ impl Store {
             "SELECT promotion.exploration_id,promotion.status,exploration.frame_id,\
                     exploration.status AS exploration_status,checkpoint.project_id,\
                     checkpoint.family_id,checkpoint.source_frame_id,\
-                    checkpoint.source_frame_head_seq,checkpoint.source_ui_event_seq,\
-                    checkpoint.source_family_generation \
+                    checkpoint.source_frame_head_seq,checkpoint.source_ui_event_seq,checkpoint.source_ui_event_head_seq,\
+                    checkpoint.source_message_seq,checkpoint.source_family_generation \
              FROM exploration_promotions promotion \
              JOIN explorations exploration ON exploration.id=promotion.exploration_id \
              JOIN exploration_checkpoints checkpoint ON checkpoint.id=exploration.checkpoint_id \
@@ -1716,6 +1751,8 @@ impl Store {
         let source_frame_id: String = row.try_get("source_frame_id")?;
         let source_frame_head_seq: i64 = row.try_get("source_frame_head_seq")?;
         let source_ui_event_seq: i64 = row.try_get("source_ui_event_seq")?;
+        let source_ui_event_head_seq: i64 = row.try_get("source_ui_event_head_seq")?;
+        let source_message_seq: i64 = row.try_get("source_message_seq")?;
         let source_family_generation: i64 = row.try_get("source_family_generation")?;
         if promotion_status != ExplorationPromotionStatus::FilesApplied.as_str()
             || exploration_status != ExplorationStatus::Promoting.as_str()
@@ -1746,6 +1783,8 @@ impl Store {
             &frame_id,
             &source_frame_id,
             source_frame_head_seq,
+            source_ui_event_head_seq,
+            source_message_seq,
             source_ui_event_seq,
             now,
         )
@@ -1852,6 +1891,8 @@ async fn merge_selected_exploration_into_mainline_in_tx(
     source_frame_id: &str,
     source_message_head: i64,
     source_ui_event_head: i64,
+    inherited_message_head: i64,
+    inherited_ui_event_head: i64,
     now: i64,
 ) -> Result<()> {
     let current_message_head: i64 =
@@ -1873,43 +1914,37 @@ async fn merge_selected_exploration_into_mainline_in_tx(
     // clone owns an independent copy of the checkpoint prefix, so moving the
     // whole frame would duplicate history. Only rows beyond the immutable
     // checkpoint belong to the selected exploration's result.
-    for (statement, boundary) in [
-        (
-            "UPDATE session_reviews SET frame_id=? WHERE frame_id=? AND message_seq>?",
-            source_message_head,
-        ),
-        (
-            "UPDATE message_resource_links SET frame_id=? WHERE frame_id=? AND message_seq>?",
-            source_message_head,
-        ),
-        (
-            "UPDATE turn_file_undo SET frame_id=?,\
-                 reversible=CASE WHEN before_snapshot_path IS NULL THEN reversible ELSE 0 END,\
-                 reason=CASE WHEN before_snapshot_path IS NULL THEN reason \
-                    ELSE 'Exploration was merged; its isolated undo snapshot was discarded' END \
-             WHERE frame_id=? AND user_message_seq>?",
-            source_message_head,
-        ),
-        (
-            "UPDATE messages SET frame_id=? WHERE frame_id=? AND seq>?",
-            source_message_head,
-        ),
+    let message_offset = source_message_head - inherited_message_head;
+    for statement in [
+        "UPDATE session_reviews SET frame_id=?,message_seq=message_seq+? WHERE frame_id=? AND message_seq>?",
+        "UPDATE message_resource_links SET frame_id=?,message_seq=message_seq+? WHERE frame_id=? AND message_seq>?",
+        "UPDATE turn_file_undo SET frame_id=?,user_message_seq=user_message_seq+?,\
+             reversible=CASE WHEN before_snapshot_path IS NULL THEN reversible ELSE 0 END,\
+             reason=CASE WHEN before_snapshot_path IS NULL THEN reason \
+                ELSE 'Exploration was merged; its isolated undo snapshot was discarded' END \
+         WHERE frame_id=? AND user_message_seq>?",
+        "UPDATE messages SET frame_id=?,seq=seq+? WHERE frame_id=? AND seq>?",
     ] {
         sqlx::query(statement)
             .bind(source_frame_id)
+            .bind(message_offset)
             .bind(exploration_frame_id)
-            .bind(boundary)
+            .bind(inherited_message_head)
             .execute(&mut **tx)
             .await?;
     }
     sqlx::query(
-        "UPDATE session_ui_events SET frame_id=?,event_json=json_set(event_json,'$.frame_id',?) \
+        "UPDATE session_ui_events SET frame_id=?,seq=seq+?,\
+         event_json=json_set(CASE WHEN json_extract(event_json,'$.kind') IN ('MessageBoundary','Resources') AND json_extract(event_json,'$.seq')>0 \
+             THEN json_set(event_json,'$.seq',json_extract(event_json,'$.seq')+?) ELSE event_json END,'$.frame_id',?) \
          WHERE frame_id=? AND seq>?",
     )
     .bind(source_frame_id)
+    .bind(source_ui_event_head - inherited_ui_event_head)
+    .bind(message_offset)
     .bind(source_frame_id)
     .bind(exploration_frame_id)
-    .bind(source_ui_event_head)
+    .bind(inherited_ui_event_head)
     .execute(&mut **tx)
     .await?;
 
@@ -2440,6 +2475,7 @@ fn validate_checkpoint(checkpoint: &ExplorationCheckpoint) -> Result<()> {
     if checkpoint.source_message_seq <= 0
         || checkpoint.source_frame_head_seq <= 0
         || checkpoint.source_ui_event_seq < 0
+        || checkpoint.source_ui_event_head_seq < 0
         || checkpoint.source_family_generation < 0
         || checkpoint.source_state_generation < 0
     {
@@ -2583,6 +2619,7 @@ fn exploration_checkpoint_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Explo
         source_message_seq: row.try_get("source_message_seq")?,
         source_frame_head_seq: row.try_get("source_frame_head_seq")?,
         source_ui_event_seq: row.try_get("source_ui_event_seq")?,
+        source_ui_event_head_seq: row.try_get("source_ui_event_head_seq")?,
         source_family_generation: row.try_get("source_family_generation")?,
         source_state_generation: row.try_get("source_state_generation")?,
         workspace_snapshot_id: row.try_get("workspace_snapshot_id")?,

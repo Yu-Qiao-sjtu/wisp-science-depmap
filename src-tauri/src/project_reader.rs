@@ -1154,6 +1154,7 @@ mod tests {
                 source_message_seq: 2,
                 source_frame_head_seq: 2,
                 source_ui_event_seq: 0,
+                source_ui_event_head_seq: 0,
                 source_family_generation: 0,
                 source_state_generation: 0,
                 workspace_snapshot_id: "snapshot".into(),
