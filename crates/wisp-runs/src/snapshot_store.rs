@@ -38,6 +38,9 @@ pub fn capture_file(
     };
     reject_project_symlinks(project_root, source)?;
     let metadata = std::fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("artifact snapshots do not follow symlinks".into());
+    }
     if !metadata.is_file() {
         return Err(format!("'{}' is not a regular file", source.display()));
     }
@@ -200,16 +203,23 @@ fn verify_blob(path: &Path, expected_checksum: &str, expected_size: u64) -> Resu
 fn reject_project_symlinks(project_root: &Path, source: &Path) -> Result<(), String> {
     // macOS exposes the temporary directory through `/var` while canonical
     // input paths use `/private/var`. Compare against the physical root so a
-    // path that is genuinely inside the project is not rejected.
+    // path that is genuinely inside the project is not rejected. dunce avoids
+    // Windows `\\?\` prefixes that would fail strip_prefix.
+    let logical_root = project_root;
     let project_root =
-        dunce::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-    let source_path = if source.is_absolute() {
-        source.to_path_buf()
+        dunce::canonicalize(logical_root).unwrap_or_else(|_| logical_root.to_path_buf());
+    // Walk the requested path. Canonicalizing the leaf first would follow a
+    // source symlink and treat its target as a regular in-project file.
+    let source = if source.is_absolute() {
+        source
+            .strip_prefix(logical_root)
+            .or_else(|_| source.strip_prefix(&project_root))
+            .map(|relative| project_root.join(relative))
+            .unwrap_or_else(|_| source.to_path_buf())
     } else {
         project_root.join(source)
     };
-    let canonical_source = dunce::canonicalize(&source_path).map_err(|error| error.to_string())?;
-    let relative = canonical_source
+    let relative = source
         .strip_prefix(&project_root)
         .map_err(|_| "artifact path is outside project root".to_string())?;
     let mut current = project_root;
@@ -303,7 +313,7 @@ mod tests {
 
         let error =
             capture_file(&root, &root.join("link.txt"), SnapshotPolicy::Always).unwrap_err();
-        assert!(error.contains("symlink"));
+        assert!(error.contains("symlink"), "{error}");
 
         let _ = std::fs::remove_dir_all(root);
     }
