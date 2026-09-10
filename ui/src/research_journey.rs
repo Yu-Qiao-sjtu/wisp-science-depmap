@@ -7,7 +7,7 @@ use crate::dto::{
     ResearchJourneySource, RunRecord,
 };
 use crate::i18n::{t, Locale};
-use crate::text::{file_kind, parse_csv_line};
+use crate::text::{file_kind, parse_csv_line, unique_dom_id};
 use crate::window_capture_escape;
 use leptos::*;
 use std::collections::{BTreeMap, HashSet};
@@ -447,16 +447,19 @@ fn JourneyOutput(
     let kind = file_kind(&entry.title).unwrap_or("text");
     let path = format!("artifact-version:{}", entry.source_id);
     let discarded = entry.source_discarded;
+    let dom_id = unique_dom_id("journey-output");
+    let owner_id = dom_id.clone();
     let preview = create_local_resource(
         || (),
         move |_| {
             let path = path.clone();
+            let owner_id = owner_id.clone();
             async move {
                 if discarded {
                     return None;
                 }
                 if kind == "image" {
-                    media_thumbnail_url(&path)
+                    media_thumbnail_url(&path, &owner_id)
                         .await
                         .as_string()
                         .map(|s| (true, s))
@@ -472,7 +475,7 @@ fn JourneyOutput(
             }
         },
     );
-    view! {<button type="button" class="journey-output" class:selected=move || selected.get().is_some_and(|e|e.id==id) on:click=move |_|on_select.call(output.clone()) aria-label=entry.title.clone()>
+    view! {<button type="button" class="journey-output" id=dom_id class:selected=move || selected.get().is_some_and(|e|e.id==id) on:click=move |_|on_select.call(output.clone()) aria-label=entry.title.clone()>
         <div class="journey-output-preview">{move ||match preview.get().flatten(){
             Some((true,url))=>view!{<img src=url alt="" loading="lazy"/>}.into_view(),
             Some((false,text)) if kind=="csv" => {

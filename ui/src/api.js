@@ -47,6 +47,7 @@ export function start_ui_health() {
       else parkedApps += 1;
     }
     const snapshot = { ...uiHealth, activeApps, parkedApps,
+      mediaBlobUrls, mediaBlobBytes, mediaOwners: mediaOwners.size,
       dragOverlays: document.querySelectorAll(".drag-overlay").length };
     // Counters are cumulative and bounded: a once-per-minute backend log cannot
     // miss a brief error or message burst between its sampled heartbeats.
@@ -1388,16 +1389,138 @@ function normalizeRawBytes(value) {
   throw new Error("Binary preview command returned an unsupported payload");
 }
 
-// Chat media (generated images/videos, attachment thumbnails, inline resource
-// images) used to inline as base64 data URLs — a 64 MB video became ~85 MB of
-// string per card, and repeated loads under row remounts pushed the WebView
-// renderer toward OOM (#dead-window). Instead, bytes are fetched through the
-// same preview command family and handed to the browser as a blob object URL:
-// decoded once by the media stack, shareable across cards with one entry per
-// path, and revocable when evicted.
-const MEDIA_URL_CACHE_LIMIT = 64;
-const mediaUrlCache = new Map(); // path -> { url, mime }
-const thumbnailJobs = new Map(); // path -> Promise<string | null>
+// Cache slots, in-flight conversions and mounted DOM owners each hold a
+// reference. Eviction releases its reference; only the last release revokes
+// the URL, so a visible video or a small thumbnail sharing its source survives.
+const mediaUrlCache = { entries: new Map(), bytes: 0, limit: 64, maxBytes: 64 * 1024 * 1024 };
+const thumbnailCache = { entries: new Map(), bytes: 0, limit: 128, maxBytes: 16 * 1024 * 1024 };
+const mediaJobs = new Map();
+const thumbnailJobs = new Map();
+const mediaOwners = new Map(); // Element -> Map<slot, entry>; actual DOM lifetime, not reactive owner lifetime
+let mediaOwnerObserver;
+let mediaSweepTimer;
+let mediaBlobUrls = 0;
+let mediaBlobBytes = 0;
+
+function createMediaEntry(blob) {
+  const entry = { url: URL.createObjectURL(blob), bytes: blob.size, refs: 1 };
+  mediaBlobUrls += 1;
+  mediaBlobBytes += entry.bytes;
+  return entry;
+}
+
+function retainMedia(entry) {
+  entry.refs += 1;
+  return entry;
+}
+
+function releaseMedia(entry) {
+  if (--entry.refs !== 0) return;
+  URL.revokeObjectURL(entry.url);
+  mediaBlobUrls -= 1;
+  mediaBlobBytes -= entry.bytes;
+}
+
+function cacheMedia(cache, key, entry) {
+  if (cache.entries.has(key)) cache.entries.delete(key);
+  else {
+    retainMedia(entry);
+    cache.bytes += entry.bytes;
+  }
+  cache.entries.set(key, entry);
+  while (cache.entries.size > cache.limit || cache.bytes > cache.maxBytes) {
+    const oldest = cache.entries.keys().next().value;
+    const removed = cache.entries.get(oldest);
+    cache.entries.delete(oldest);
+    cache.bytes -= removed.bytes;
+    releaseMedia(removed);
+  }
+}
+
+// Each caller receives one reference, including concurrent callers. The job
+// keeps its own reference until every waiter has acquired its result, even if
+// other loads evict that result from the cache in the meantime.
+async function acquireMedia(cache, jobs, key, produce) {
+  const cached = cache.entries.get(key);
+  if (cached) {
+    retainMedia(cached);
+    cacheMedia(cache, key, cached);
+    return cached;
+  }
+  let job = jobs.get(key);
+  if (!job) {
+    job = { promise: produce(), waiters: 0 };
+    jobs.set(key, job);
+  }
+  job.waiters += 1;
+  let entry;
+  try {
+    entry = await job.promise;
+    if (!entry) return null; // failures are retryable and occupy no cache slot
+    retainMedia(entry);
+    cacheMedia(cache, key, entry);
+    return entry;
+  } finally {
+    if (--job.waiters === 0) {
+      jobs.delete(key);
+      if (entry) releaseMedia(entry);
+    }
+  }
+}
+
+function sweepMediaOwners() {
+  mediaSweepTimer = undefined;
+  for (const [owner, entries] of mediaOwners) {
+    if (owner.isConnected) continue;
+    mediaOwners.delete(owner);
+    for (const entry of entries.values()) releaseMedia(entry);
+  }
+  if (!mediaOwners.size) {
+    mediaOwnerObserver?.disconnect();
+    mediaOwnerObserver = undefined;
+  }
+}
+
+async function ownedMediaUrl(path, ownerId, kind, acquire) {
+  // A CSR resource may start just before its view is inserted. Yield once;
+  // never keep loading for a card which has already left the document.
+  let owner = document.getElementById(ownerId);
+  if (!owner) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    owner = document.getElementById(ownerId);
+  }
+  if (!owner) return null;
+  const slot = `${kind}:${path}`;
+  const existing = mediaOwners.get(owner)?.get(slot);
+  if (existing) return existing.url;
+  let entry;
+  try { entry = await acquire(String(path || "")); }
+  catch { return null; }
+  if (!entry) return null;
+  if (!owner.isConnected) {
+    releaseMedia(entry);
+    return null;
+  }
+  let entries = mediaOwners.get(owner);
+  if (!entries) mediaOwners.set(owner, entries = new Map());
+  const previous = entries.get(slot);
+  if (previous) {
+    releaseMedia(entry);
+    return previous.url;
+  }
+  entries.set(slot, entry); // transfer the caller's reference to the DOM owner
+  if (!mediaOwnerObserver) {
+    mediaOwnerObserver = new MutationObserver((records) => {
+      if (mediaSweepTimer === undefined && records.some((record) => record.removedNodes.length)) {
+        // Coalesce streaming mutations; a node moved within the document keeps
+        // its lease. No full-document media scan or permanent polling timer.
+        mediaSweepTimer = setTimeout(sweepMediaOwners, 0);
+      }
+    });
+    mediaOwnerObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  return entry.url;
+}
 
 function mediaBytesCommand(path) {
   // Mirrors `previewBytes`'s command selection for the four path spellings.
@@ -1424,108 +1547,61 @@ function mediaBytesCommand(path) {
   return { command: "read_file_bytes", args: { path } };
 }
 
-export async function media_url(path) {
-  const key = String(path || "");
-  if (!key) return null;
-  const hit = mediaUrlCache.get(key);
-  if (hit) {
-    // Refresh insertion order so eviction is LRU.
-    mediaUrlCache.delete(key);
-    mediaUrlCache.set(key, hit);
-    return hit.url;
-  }
-  const { command, args } = mediaBytesCommand(key);
-  // One shot rather than invoke: a missing file must surface as null (the
-  // callers paint their fallback), not a console error.
-  const core = tauriCore();
-  if (!core) return null;
-  let bytes;
-  try {
-    bytes = normalizeRawBytes(await core.invoke(command, args));
-  } catch (_) {
-    return null;
-  }
-  const mime = blobMime(bytes);
-  const entry = { url: URL.createObjectURL(new Blob([bytes], { type: mime })), mime };
-  mediaUrlCache.set(key, entry);
-  if (mediaUrlCache.size > MEDIA_URL_CACHE_LIMIT) {
-    // Drop the lookup only. The URL may still be an <img>/<video> src
-    // (and media_thumbnail_url reuses it when the image is already small).
-    const oldest = mediaUrlCache.keys().next().value;
-    mediaUrlCache.delete(oldest);
-  }
-  return entry.url;
+function acquireFullMedia(key) {
+  return acquireMedia(mediaUrlCache, mediaJobs, key, async () => {
+    if (!key || !tauriCore()) return null;
+    const { command, args } = mediaBytesCommand(key);
+    const bytes = normalizeRawBytes(await tauriCore().invoke(command, args));
+    return createMediaEntry(new Blob([bytes], { type: blobMime(bytes) }));
+  });
 }
 
-// Thumbnails for attachment/artifact cards: a small canvas re-encode instead
-// of the full-resolution object URL, so a 20-message history of pasted photos
-// does not keep 20 decoded full-size bitmaps alive.
+/** The unique owner element must remain mounted for the returned URL's use. */
+export function media_url(path, ownerId) {
+  return ownedMediaUrl(path, ownerId, "full", acquireFullMedia);
+}
+
 const THUMB_MAX_EDGE = 384;
-// path -> downscaled blob URL. Kept (never revoked alongside the media cache)
-// because a thumbnail URL handed to the DOM must stay valid for the DOM's
-// lifetime; the thumbs are ≤384px re-encodes, so a bounded count of them is
-// the cheap side of the trade.
-const THUMB_CACHE_LIMIT = 128;
-const thumbnailCache = new Map();
 
-export async function media_thumbnail_url(path) {
-  const key = String(path || "");
-  if (!key) return null;
-  const cached = thumbnailCache.get(key);
-  if (cached !== undefined) return cached;
-  const pending = thumbnailJobs.get(key);
-  if (pending) return pending;
-  const job = (async () => {
-    const url = await media_url(key);
-    if (!url) {
-      thumbnailCache.set(key, null);
-      return null;
-    }
-    let thumb;
+export function media_thumbnail_url(path, ownerId) {
+  return ownedMediaUrl(path, ownerId, "thumb", (key) => acquireMedia(thumbnailCache, thumbnailJobs, key, async () => {
+    const source = await acquireFullMedia(key);
+    if (!source) return null;
     try {
-      thumb = await downscaleToPngBlobUrl(url, THUMB_MAX_EDGE);
-    } catch (_) {
-      thumb = url; // non-decodable or huge image: show it as-is
+      const blob = await downscaleToPngBlob(source.url, THUMB_MAX_EDGE);
+      if (blob) return createMediaEntry(blob);
+      return retainMedia(source); // small images and decode failures share the source
+    } finally {
+      releaseMedia(source);
     }
-    thumbnailCache.set(key, thumb);
-    if (thumbnailCache.size > THUMB_CACHE_LIMIT) {
-      // Drop the oldest entry's cache slot only; its URL may still be in the
-      // DOM, so revoking here would blank a live thumbnail.
-      const oldest = thumbnailCache.keys().next().value;
-      thumbnailCache.delete(oldest);
-    }
-    return thumb;
-  })();
-  thumbnailJobs.set(key, job.finally(() => thumbnailJobs.delete(key)));
-  return job;
+  }));
 }
 
-function downscaleToPngBlobUrl(url, maxEdge) {
-  return new Promise((resolve, reject) => {
+function downscaleToPngBlob(url, maxEdge) {
+  return new Promise((resolve) => {
     const img = new Image();
+    const finish = (blob) => {
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute("src");
+      resolve(blob);
+    };
     img.onload = () => {
       try {
         const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-        if (scale >= 1) {
-          resolve(url); // already small enough; reuse the media URL
-          return;
-        }
+        if (scale >= 1) { finish(null); return; }
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
         canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
         canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((blob) => {
-          if (!blob) {
-            resolve(url);
-            return;
-          }
-          resolve(URL.createObjectURL(blob));
+          canvas.width = 0;
+          canvas.height = 0;
+          finish(blob);
         }, "image/png");
-      } catch (err) {
-        reject(err);
-      }
+      } catch { finish(null); }
     };
-    img.onerror = () => reject(new Error("image decode failed"));
+    img.onerror = () => finish(null);
     img.src = url;
   });
 }
