@@ -593,7 +593,8 @@ fn research_calendar_contract_preserves_project_errors_and_truncation() {
 #[test]
 fn renderer_health_accepts_partial_numeric_snapshots() {
     let snapshot: wisp_dto::UiHealthSnapshot = serde_json::from_value(serde_json::json!({
-        "timerLagMs": 850, "activeApps": 1, "parkedApps": 2, "scriptErrors": 3
+        "timerLagMs": 850, "activeApps": 1, "parkedApps": 2, "scriptErrors": 3,
+        "mediaBlobUrls": 42, "mediaBlobBytes": 5_000_000_000_u64, "mediaOwners": 12
     }))
     .unwrap();
     assert_eq!(snapshot.timer_lag_ms, 850);
@@ -601,6 +602,15 @@ fn renderer_health_accepts_partial_numeric_snapshots() {
     assert_eq!(snapshot.parked_apps, 2);
     assert_eq!(snapshot.script_errors, 3);
     assert_eq!(snapshot.app_messages, 0);
+    assert_eq!(snapshot.media_blob_urls, 42);
+    assert_eq!(snapshot.media_blob_bytes, 5_000_000_000);
+    assert_eq!(snapshot.media_owners, 12);
+    assert_eq!(
+        serde_json::from_value::<wisp_dto::UiHealthSnapshot>(serde_json::json!({}))
+            .unwrap()
+            .media_blob_urls,
+        0
+    );
     let encoded = serde_json::to_value(snapshot).unwrap();
     assert_eq!(encoded["timerLagMs"], 850);
     assert!(

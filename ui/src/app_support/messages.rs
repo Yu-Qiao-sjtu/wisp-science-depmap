@@ -301,14 +301,19 @@ pub(crate) fn ImageGenerationCard(
     on_file: Callback<ModalArtifact>,
 ) -> impl IntoView {
     let locale = use_locale();
+    let dom_id = unique_dom_id("generated-media");
     let source = create_rw_signal(None::<String>);
     let preview_failed = create_rw_signal(false);
     if ok == Some(true) {
         let load_path = path.clone();
+        let owner_id = dom_id.clone();
         spawn_local(async move {
             // Full-resolution blob object URL from the shared cache — a data
             // URL here meant ~1.33x the file size as a string in the DOM.
-            match crate::bindings::media_url(&load_path).await.as_string() {
+            match crate::bindings::media_url(&load_path, &owner_id)
+                .await
+                .as_string()
+            {
                 Some(url) => {
                     let _ = source.try_set(Some(url));
                 }
@@ -338,6 +343,7 @@ pub(crate) fn ImageGenerationCard(
     view! {
         <article
             class="image-generation-card"
+            id=dom_id
             data-testid="image-generation-card"
             data-status=status
             data-path=path
@@ -415,15 +421,20 @@ pub(crate) fn ImageGenerationCard(
 #[component]
 pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String) -> impl IntoView {
     let locale = use_locale();
+    let dom_id = unique_dom_id("generated-media");
     let source = create_rw_signal(None::<String>);
     let preview_failed = create_rw_signal(false);
     if ok == Some(true) {
         let load_path = path.clone();
+        let owner_id = dom_id.clone();
         spawn_local(async move {
             // Blob object URL streamed by the browser's media stack. A 64 MB
             // MP4 inlined as base64 was ~85 MB of string in the DOM — the
             // worst offender of the renderer OOM reports.
-            match crate::bindings::media_url(&load_path).await.as_string() {
+            match crate::bindings::media_url(&load_path, &owner_id)
+                .await
+                .as_string()
+            {
                 Some(url) => {
                     let _ = source.try_set(Some(url));
                 }
@@ -451,6 +462,7 @@ pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String
     view! {
         <article
             class="video-generation-card"
+            id=dom_id
             data-testid="video-generation-card"
             data-status=status
             data-path=path
@@ -516,18 +528,21 @@ pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String
 #[component]
 pub(crate) fn AttachmentThumbnail(path: String, alt: String) -> impl IntoView {
     let source = create_rw_signal(None::<String>);
+    let dom_id = unique_dom_id("attachment-thumb");
+    let owner_id = dom_id.clone();
     let path_for_effect = path;
     create_effect(move |_| {
         let path = path_for_effect.clone();
+        let owner_id = owner_id.clone();
         spawn_local(async move {
-            let url = crate::bindings::media_thumbnail_url(&path)
+            let url = crate::bindings::media_thumbnail_url(&path, &owner_id)
                 .await
                 .as_string();
             let _ = source.try_set(url);
         });
     });
     view! {
-        <span class="attachment-thumbnail">
+        <span class="attachment-thumbnail" id=dom_id>
             {move || source.get().map_or_else(
                 || view! { <span class="attachment-thumbnail-placeholder">{compose_icon("image")}</span> }.into_view(),
                 |src| view! { <img src=src alt=alt.clone() /> }.into_view(),
@@ -554,7 +569,7 @@ fn ArtifactThumb(path: Option<String>, kind: &'static str) -> impl IntoView {
         // the artifact:/version:/ssh:// spellings `load_file_content` does.
         let dom_id_for_load = dom_id.clone();
         spawn_local(async move {
-            let url = crate::bindings::media_thumbnail_url(&path)
+            let url = crate::bindings::media_thumbnail_url(&path, &dom_id_for_load)
                 .await
                 .as_string();
             let Some(url) = url else { return };
@@ -961,7 +976,7 @@ pub(crate) fn AssistantMessage(
                 // repeated mounts of the same image reuse one blob instead of
                 // re-fetching and re-inlining its base64.
                 let path = format!("artifact-version:{version_id}");
-                let Some(url) = crate::bindings::media_url(&path).await.as_string() else {
+                let Some(url) = crate::bindings::media_url(&path, &dom_id).await.as_string() else {
                     continue;
                 };
                 let selector = format!(r#"#{dom_id} [data-resource-id="{}"]"#, resource.id);

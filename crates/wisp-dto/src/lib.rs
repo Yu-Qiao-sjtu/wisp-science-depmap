@@ -28,6 +28,9 @@ pub struct UiHealthSnapshot {
     pub parked_apps: u32,
     pub app_messages: u32,
     pub drag_overlays: u32,
+    pub media_blob_urls: u32,
+    pub media_blob_bytes: u64,
+    pub media_owners: u32,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]

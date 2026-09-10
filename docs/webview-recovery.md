@@ -37,7 +37,10 @@ label and reload success/error. The heartbeat carries numeric diagnostics:
 - maximum visible-page timer delay and longest observed long task;
 - cumulative long-task, script-error and unhandled-rejection counts;
 - active and parked MCP App counts, cumulative incoming App messages;
-- current drag-overlay count.
+- current drag-overlay count;
+- live host media Blob URL count, encoded Blob bytes and mounted media-owner
+  count (`mediaBlobUrls`, `mediaBlobBytes`, `mediaOwners`). These exclude MCP
+  iframe images, decoded bitmaps, JS/WASM heaps and GPU allocations.
 
 Cumulative counters and maxima are bounded and reset with the document. No
 conversation text, plugin arguments, image data, URLs or error messages from
@@ -46,14 +49,39 @@ timer does **not** prove that clicks work: healthy heartbeats with a stuck UI
 call for checking overlays, pointer targeting and script failures. A native
 reload request being accepted also does not prove that navigation completed.
 
+## Long-running media sessions
+
+Host chat images, videos, attachment thumbnails and research-journal previews
+release their Blob URLs after both their mounted DOM owners and cache entries
+let go of them. Full-media cache retention is limited to 64 entries / 64 MiB;
+thumbnail retention is limited to 128 entries / 16 MiB. Mounted cards and
+in-flight decodes can exceed those cache budgets. Small thumbnails share their
+source URL safely, concurrent loads share work, and failed reads can be retried.
+These limits apply to encoded Blobs, not total renderer memory.
+
+This fixes a confirmed leak found during the #1179 follow-up: the previous
+caches deleted lookup entries without revoking Blob URLs, retaining media until
+the document was unloaded. It does **not** establish that this leak caused the
+reported Windows stall after approximately five hours. An idle window without
+media churn may have a different cause. The existing watchdog still handles
+heartbeat loss; there is no periodic forced reload of a healthy window.
+
 ## Validation
 
 Run the focused browser workload from `ui-tests`:
 
 ```powershell
 $env:UI_TEST_PORT="1432"
-npx playwright test tests/webview-health.spec.ts tests/long-session-stress.spec.ts tests/chat-responsive.spec.ts --workers=1
+npx playwright test tests/media-lifetime.spec.ts tests/webview-health.spec.ts tests/long-session-stress.spec.ts tests/chat-responsive.spec.ts --workers=1
 ```
+
+The media workload cycles through 600 thumbnail loads, checks live Blob counts
+after eviction, tests byte limits with large media, and covers shared URLs,
+concurrent reads and cards removed while loading. It is an accelerated
+lifecycle regression, not a five-hour WebView2 soak test. With 800×600 SVG
+fixtures, the original implementation retained 400 / 800 / 1200 Blob URLs
+after successive batches of 200 loads. The regression now checks that each
+batch returns to 192 (64 source URLs plus 128 downscaled thumbnail URLs).
 
 The mock workload combines a paginated long transcript, two simultaneous
 session streams, and two App instances with 96 local thumbnail cards each.
@@ -81,6 +109,14 @@ Manual Windows check: open two project windows, focus the second, then use the
 tray's stop and reload entries. Check the target label in the log, the first
 window's unchanged state, and existing Run records. For a stopped heartbeat,
 check that another window's healthy heartbeat cannot suppress target recovery.
+
+For the five-hour Windows report, record the installed Wisp and WebView2
+versions and compare `webview health` samples before and near the stall while
+repeating the actual workload for at least six hours. Track host Blob counts
+alongside the renderer's memory in Task Manager. Also compare an idle session.
+If it stalls, record whether tray **Reload last active window** restores input
+and whether the last heartbeats continued; this distinguishes page liveness
+from input/compositor failures. Check that existing backend Runs continue.
 
 ## Scope and follow-up
 

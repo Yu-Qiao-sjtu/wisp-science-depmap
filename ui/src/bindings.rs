@@ -67,12 +67,13 @@ extern "C" {
     pub(crate) fn pasted_image_count(event: JsValue) -> usize;
     /// Chat media as a cached blob object URL (never a base64 data URL) —
     /// `null` when the file cannot be read, so callers paint their fallback.
+    /// `owner_id` is a unique mounted element that owns the URL until removal.
     #[wasm_bindgen(js_name = media_url)]
-    pub(crate) async fn media_url(path: &str) -> JsValue;
+    pub(crate) async fn media_url(path: &str, owner_id: &str) -> JsValue;
     /// Small canvas-downscaled variant of [`media_url`] for thumbnail-sized
     /// cards, so long histories do not keep full-size decoded bitmaps alive.
     #[wasm_bindgen(js_name = media_thumbnail_url)]
-    pub(crate) async fn media_thumbnail_url(path: &str) -> JsValue;
+    pub(crate) async fn media_thumbnail_url(path: &str, owner_id: &str) -> JsValue;
     #[wasm_bindgen(js_name = drag_has_files)]
     pub(crate) fn drag_has_files(event: JsValue) -> bool;
     #[wasm_bindgen(js_name = set_drag_copy)]
