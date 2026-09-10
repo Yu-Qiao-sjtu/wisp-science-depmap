@@ -4,6 +4,50 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 [basic configuration](basic-configuration.md). For HTTP model profiles see
 [model configuration](model-configuration.md).
 
+## GitHub Pages tutorials
+
+The website's [tutorial page](tutorials.html) publishes the full articles from
+`docs/wechat/*.md`, including tables, code examples, and trajectory screenshots.
+The navigation and page introduction support Chinese and English; article text
+stays in its original Chinese. Tutorial links jump to the matching article on the
+page, and other Markdown documentation links open the repository source.
+
+After editing or adding an article, regenerate the checked-in page:
+
+```bash
+python3 -m pip install -r docs/requirements-pages.txt
+python3 docs/build_tutorials.py
+python3 docs/build_tutorials.py --check
+python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
+```
+
+Each article must start with a level-one title. `READING_ORDER` in the generator
+puts the four introductory tutorials first, followed by MCP, Skills, and
+trajectories; other articles are appended alphabetically. Filenames determine
+stable article anchors. Edit the page shell outside the generated
+markers in `docs/tutorials.html`; edit article content in `docs/wechat`.
+The Pages workflow also regenerates the page before uploading it.
+
+For a manual smoke check, serve `docs` with `python3 -m http.server --directory docs
+8080`. Open the homepage, follow Tutorials in the header or footer, and check all
+directory links, the Skills code example, and the tutorial screenshots.
+Repeat at a narrow mobile width and switch to English; the surrounding navigation
+should translate while the Chinese articles remain visible.
+
+The four introductory articles use real frontend screenshots with mocked Tauri
+data. Regenerate them without API keys, real servers, or live browser access:
+
+```bash
+cd ui-tests
+WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-screenshots.spec.ts
+```
+
+The capture tests normally write to Playwright's output directory; only the
+explicit environment variable updates the published assets. Their demo account,
+host, terminal output, and conversation data are labeled as examples in the
+articles. The Chrome extension installation image is reused from the basic
+configuration guide.
+
 ## Build from source
 
 Prerequisites:

@@ -72,7 +72,7 @@ test("Pages i18n dictionaries cover every data-i18n key and stay in sync", () =>
   const enKeys = Object.keys(i18n.en).sort();
   expect(zhKeys).toEqual(enKeys);
 
-  for (const page of ["index.html", "model-configuration.html", "acp-agents.html"]) {
+  for (const page of ["index.html", "mcp.html", "model-configuration.html", "acp-agents.html", "tutorials.html"]) {
     const html = readRepositoryFile(`docs/${page}`);
     expect(html).toContain('class="lang-switch"');
     expect(html).toContain("assets/i18n.js");
@@ -82,6 +82,85 @@ test("Pages i18n dictionaries cover every data-i18n key and stay in sync", () =>
     const missing = [...used].filter((key) => !i18n.zh[key]).sort();
     expect(missing, page).toEqual([]);
   }
+});
+
+test("tutorials publish every WeChat article with working links, examples, and images", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== "https://tutorials.test") return route.abort();
+    // Exercise the project subpath used by GitHub Pages, without network access.
+    const file = resolve(repositoryRoot, "docs", url.pathname.replace(/^\/wisp-science\//, "") || "index.html");
+    return existsSync(file) ? route.fulfill({ path: file }) : route.abort();
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("https://tutorials.test/wisp-science/index.html");
+  await page.locator('.nav-links a[href="tutorials.html"]').click();
+  await expect(page).toHaveTitle("教程 | Wisp Science");
+  const sources = readdirSync(resolve(repositoryRoot, "docs/wechat")).filter((name) => name.endsWith(".md"));
+  await expect(page.locator(".tutorial-article")).toHaveCount(sources.length);
+  for (const name of sources) {
+    const id = name.replace(/\.md$/, "");
+    const title = readRepositoryFile(`docs/wechat/${name}`).split("\n")[0].replace(/^# /, "");
+    await page.locator(`.tutorial-card[href="#${id}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`#${id}$`));
+    await expect(page.locator(`#${id} h2`)).toHaveText(title);
+    await expect(page.locator(`#${id} h2`)).toBeInViewport();
+  }
+  await page.locator('#wisp-science-trajectory p a[href="#wisp-science-skills"]').click();
+  await expect(page.locator("#wisp-science-skills h2")).toBeInViewport();
+  await expect(page.locator("#wisp-science-skills pre").filter({ hasText: "name: lab-paper-note" }))
+    .toContainText("# 实验室论文阅读笔记");
+  await expect(page.locator(".tutorial-article table").first()).toBeAttached();
+  for (const img of await page.locator(".tutorial-article img").all()) {
+    await img.scrollIntoViewIfNeeded();
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+  }
+  await expect(page.getByRole("link", { name: "Wisp 轨迹文档", exact: true }))
+    .toHaveAttribute("href", "https://github.com/xuzhougeng/wisp-science/blob/main/docs/trajectory-view.md");
+  for (const width of [1440, 1280, 1120, 1101, 1100, 980, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const lang of ["en", "zh"]) {
+      await page.locator(`button[data-lang="${lang}"]`).click();
+      await expect(page).toHaveTitle(lang === "en" ? "Tutorials | Wisp Science" : "教程 | Wisp Science");
+      await expect(page.locator(".tutorial-language")).toHaveText(lang === "en"
+        ? "These tutorials are currently available in Chinese." : "以下教程正文为中文。");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const links = page.locator(".nav-links");
+      if (await links.isVisible()) {
+        const brand = (await page.locator(".site-nav .brand").boundingBox())!;
+        const firstLink = (await links.locator("a").first().boundingBox())!;
+        const lastLink = (await links.locator("a").last().boundingBox())!;
+        const controls = (await page.locator(".nav-cta").boundingBox())!;
+        expect(firstLink.x).toBeGreaterThanOrEqual(brand.x + brand.width);
+        expect(lastLink.x + lastLink.width).toBeLessThanOrEqual(controls.x);
+      }
+      await expect(page.locator('.tutorial-articles[lang="zh-CN"]')).toBeVisible();
+    }
+  }
+  await page.locator(".tutorial-back").last().click();
+  await expect(page.locator(".tutorial-card").first()).toBeInViewport();
+  await page.screenshot({ path: test.info().outputPath("tutorials-mobile.png"), fullPage: false });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.screenshot({ path: test.info().outputPath("tutorials-desktop.png"), fullPage: false });
+});
+
+test("tutorial content and mobile footer entry work without JavaScript", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== "https://tutorials.test") return route.abort();
+    const file = resolve(repositoryRoot, "docs", url.pathname.slice(1) || "index.html");
+    return existsSync(file) ? route.fulfill({ path: file }) : route.abort();
+  });
+  await page.goto("https://tutorials.test/index.html");
+  await page.locator('.footer-links a[href="tutorials.html"]').click();
+  await page.locator('.tutorial-card[href="#wisp-science-skills"]').click();
+  await expect(page.locator("#wisp-science-skills h2")).toBeInViewport();
+  await expect(page.locator("#wisp-science-skills")).toContainText("重新加载技能");
+  await context.close();
 });
 
 for (const readme of ["README.md", "README_zh.md"]) {
