@@ -3892,7 +3892,7 @@ fn App() -> impl IntoView {
         );
         let reference_args = refs
             .iter()
-            .map(ComposerReferenceChip::arg)
+            .filter_map(ComposerReferenceChip::arg)
             .collect::<Vec<_>>();
         // An @-referenced server turns itself on for the session backend-side;
         // re-read the enabled set afterwards so the sidebar toggles agree.
@@ -3902,11 +3902,7 @@ fn App() -> impl IntoView {
                 ComposerReferenceArg::Context { .. } | ComposerReferenceArg::Runtime { .. }
             )
         });
-        if message.trim().is_empty()
-            && paths.is_empty()
-            && reference_args.is_empty()
-            && quotes.is_empty()
-        {
+        if message.trim().is_empty() && paths.is_empty() && refs.is_empty() && quotes.is_empty() {
             return;
         }
         let active = active_session.get();
@@ -4296,6 +4292,25 @@ fn App() -> impl IntoView {
     };
 
     let on_send = move |ev: web_sys::KeyboardEvent| {
+        if (ev.ctrl_key() || ev.meta_key())
+            && !ev.alt_key()
+            && !ev.shift_key()
+            && ev.key().eq_ignore_ascii_case("v")
+            && !ev.repeat()
+            && !uploading.get_untracked()
+        {
+            let session = active_session.get_untracked();
+            spawn_local(async move {
+                match bindings::clipboard_file_paths(JsValue::NULL).await {
+                    Ok(value) if active_session.get_untracked() == session => {
+                        attach_clipboard_paths(composer_references, value);
+                    }
+                    Err(error) => status.set(js_error_text(error)),
+                    _ => {}
+                }
+            });
+        }
+
         // While an IME is composing (e.g. Chinese pinyin), Enter confirms the
         // candidate, so let the IME handle every key and never send/navigate
         // mid-composition (#108; keyCode-229 quirk in ime_composing).
@@ -5018,13 +5033,42 @@ fn App() -> impl IntoView {
         if uploading.get() {
             return;
         }
-        let event: JsValue = ev.clone().into();
+        let event = bindings::clipboard_paste_snapshot(ev.clone().into());
         let count = pasted_image_count(event.clone());
-        if count == 0 {
+        if count == 0 && !bindings::paste_has_files(event.clone()) {
             return;
         }
         ev.prevent_default();
-        upload_from_paste(attachments, uploading, event, count);
+        let session = active_session.get_untracked();
+        uploading.set(true);
+        spawn_local(async move {
+            let result = bindings::clipboard_file_paths(event.clone()).await;
+            uploading.set(false);
+            if active_session.get_untracked() != session {
+                return;
+            }
+            match result {
+                Ok(value) => {
+                    let paths: Vec<String> =
+                        serde_wasm_bindgen::from_value(value).unwrap_or_default();
+                    if paths.is_empty() {
+                        if count > 0 {
+                            upload_from_paste(attachments, uploading, event, count);
+                        }
+                    } else {
+                        composer_references.update(|items| {
+                            for path in paths {
+                                let chip = ComposerReferenceChip::FilePath { path };
+                                if !items.iter().any(|item| item.key() == chip.key()) {
+                                    items.push(chip);
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(error) => status.set(js_error_text(error)),
+            }
+        });
     };
 
     let composer_blocked = move || {
@@ -12770,6 +12814,7 @@ fn App() -> impl IntoView {
                                 let label = reference.label();
                                 let kind = reference.kind();
                                 let (icon, meta_key) = match kind {
+                                    "file-path" => ("doc", "attachment.file_path"),
                                     "skill" => ("skill", "attachment.skill"),
                                     "session" => ("chat", "attachment.session"),
                                     "project" => ("folder", "attachment.project"),
@@ -12779,7 +12824,7 @@ fn App() -> impl IntoView {
                                 };
                                 view! {
                                     <div class=format!("composer-attachment-row composer-reference-card {kind}")
-                                        data-reference-kind=kind title=label.clone()>
+                                        data-reference-kind=kind title=match &reference { ComposerReferenceChip::FilePath { path } => path.clone(), _ => label.clone() }>
                                         <span class="composer-attachment-icon">{compose_icon(icon)}</span>
                                         <span class="composer-attachment-copy">
                                             <span class="composer-attachment ready">{label}</span>

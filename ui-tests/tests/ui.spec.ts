@@ -6001,6 +6001,65 @@ test("Files uploads local paths to the selected SSH folder", async ({ page }) =>
   await expect(page.locator("#copy-toast")).toContainText("Uploading 1 item");
 });
 
+for (const shortcut of ["Control+v", "Meta+v"]) {
+  test(`copied system files paste as removable path context without upload (${shortcut})`, async ({ page }) => {
+    await enterApp(page);
+    const paths = [String.raw`C:\研究 数据\mcp.html`, String.raw`C:\研究 数据\photo.png`];
+    await page.evaluate(paths => { (window as any).__clipboardFilePaths = paths; }, paths);
+    // Windows can deliver only keydown when CF_HDROP is on the clipboard.
+    // Dispatch the shortcut without pasting the test machine's real clipboard:
+    // parallel clipboard tests may have written unrelated text there.
+    await composer(page).evaluate((el, shortcut) => {
+      el.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "v", code: "KeyV", bubbles: true, cancelable: true,
+        ctrlKey: shortcut === "Control+v", metaKey: shortcut === "Meta+v",
+      }));
+    }, shortcut);
+    const cards = page.locator('[data-reference-kind="file-path"]');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.first()).toHaveAttribute("title", paths[0]);
+    await expect(cards.first()).toContainText("mcp.html");
+    await expect(cards.locator("img")).toHaveCount(0);
+    // Some WebViews also expose an image paste event for a copied image file.
+    await composer(page).evaluate(el => {
+      const data = new DataTransfer();
+      data.items.add(new File(["image"], "photo.png", { type: "image/png" }));
+      el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+    });
+    await expect(cards).toHaveCount(2);
+    await cards.first().getByRole("button").click();
+    await expect(cards).toHaveCount(1);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+      message: `Referenced local file paths (not imported): ${JSON.stringify(paths[1])}`,
+      attachments: [], references: [],
+    });
+    await expect.poll(() => page.evaluate(() =>
+      ((window as any).__skillInvokeLog ?? []).filter((c: any) => c.cmd === "upload_file").length
+    )).toBe(0);
+    await expect(cards).toHaveCount(0);
+  });
+
+}
+
+test("file URI paste decodes paths while ordinary text paste stays native", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).evaluate(el => {
+    const data = new DataTransfer();
+    data.setData("text/uri-list", "# file reference\r\nfile:///home/alice/my%20data.csv\r\nhttps://example.com");
+    el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+  await expect(page.locator('[data-reference-kind="file-path"]')).toHaveAttribute("title", "/home/alice/my data.csv");
+  expect(await composer(page).evaluate(el => {
+    const data = new DataTransfer();
+    data.setData("text/plain", "plain text");
+    data.setData("text/uri-list", "https://example.com");
+    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+    el.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(false);
+});
+
 test("pasted image attaches to the composer", async ({ page }) => {
   await enterApp(page);
   await composer(page).evaluate((el) => {

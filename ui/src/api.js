@@ -1177,7 +1177,48 @@ function pastedImageName(file, index) {
   return `pasted_image_${stamp}_${index + 1}.${ext}`;
 }
 
+export function paste_has_files(event) {
+  if (event?.pasteSnapshot) return event.hasFiles;
+  const data = event?.clipboardData;
+  return Array.from(data?.types || []).includes("Files")
+    || /^file:\/\//m.test(data?.getData("text/uri-list") || "");
+}
+
+// Snapshot while the event's data store is readable, before waiting on IPC.
+export function clipboard_paste_snapshot(event) {
+  return {
+    pasteSnapshot: true,
+    hasFiles: paste_has_files(event),
+    fileUris: event?.clipboardData?.getData("text/uri-list") || "",
+    images: pastedImageFiles(event),
+  };
+}
+
+// Share the native read between keydown (WebView2 may emit no paste event for
+// CF_HDROP) and paste. Never retain clipboard paths beyond the current gesture.
+let clipboardRead = null;
+export async function clipboard_file_paths(event) {
+  const uris = event?.fileUris ?? event?.clipboardData?.getData("text/uri-list") ?? "";
+  if (!event || !clipboardRead) {
+    const read = tauriCore()?.invoke("read_clipboard_file_paths", {}) ?? Promise.resolve([]);
+    clipboardRead = read;
+    setTimeout(() => { if (clipboardRead === read) clipboardRead = null; }, 100);
+  }
+  const nativePaths = await clipboardRead;
+  if (Array.isArray(nativePaths) && nativePaths.length) return nativePaths;
+  return uris.split(/\r?\n/).filter(line => line.startsWith("file://")).flatMap(line => {
+    try {
+      const url = new URL(line);
+      let path = decodeURIComponent(url.pathname);
+      if (url.hostname && url.hostname !== "localhost") path = `//${url.hostname}${path}`;
+      else if (/^\/[a-z]:\//i.test(path)) path = path.slice(1);
+      return [path];
+    } catch { return []; }
+  });
+}
+
 function pastedImageFiles(event) {
+  if (event?.pasteSnapshot) return event.images;
   const data = event?.clipboardData;
   if (!data) return [];
   const items = Array.from(data.items || []);
