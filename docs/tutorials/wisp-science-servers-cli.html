@@ -62,11 +62,11 @@
 <header><h1 id="article-title">Wisp Science基础入门：服务器环境配置</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-i18n="tutorials.source">查看原文</a></header>
 <p>做科研时，文件和计算往往不在同一台电脑上：日常在笔记本里读文献，数据放在实验室服务器，分析需要远程的 Python、R 或 GPU。切换机器时，最容易弄混的是“我现在在哪台机器上”和“这条路径属于哪里”。</p>
-<p>Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍应用里的终端与独立 Wisp 命令行。</p>
+<p>Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍怎样为会话选择计算环境，以及使用应用里的交互终端。</p>
 <blockquote>
 <p>本文配图来自实际前端，服务器、GPU 信息和终端状态使用演示数据。示例主机 <code>gpu.example.org</code> 不能当作真实服务器连接；截图不代表已经访问了某台远程主机。</p>
 </blockquote>
-<p><strong>先分清三个入口，避免把它们当成同一件事。</strong></p>
+<p><strong>先分清两个入口，避免把它们当成同一件事。</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
 <thead>
 <tr>
@@ -86,14 +86,9 @@
 <td>你输入命令，终端直接执行</td>
 <td>检查目录、调试环境、查看程序输出</td>
 </tr>
-<tr>
-<td>独立 <code>wisp-science</code> CLI</td>
-<td>在系统终端中与 Wisp 对话或发起单次任务</td>
-<td>不打开桌面窗口，在当前目录使用 Agent</td>
-</tr>
 </tbody>
 </table></div>
-<p>服务器配置解决“Wisp 可以使用哪台机器”，终端解决“我要亲自输入什么命令”，独立 CLI 则是另一种使用 Wisp 的入口。</p>
+<p>服务器配置解决“Wisp 可以使用哪台机器”，交互终端让你亲自输入命令。希望在系统终端中直接使用 Wisp Agent，可以继续阅读 <a href="wisp-science-cli.html">Wisp Science进阶</a>。</p>
 <p><strong>添加服务器前，先准备连接信息。</strong></p>
 <p>向管理员确认主机地址、账号、SSH 端口和认证方式。如果需要 VPN、跳板机或特定 SSH 配置，也先按实验室要求准备好。</p>
 <p>一个示例对应关系是：</p>
@@ -182,33 +177,6 @@ Get-ChildItem
 </blockquote>
 <p>只有环境和任务方式都匹配时再提交。登记了一台 GPU 主机，并不意味着每个脚本会自动使用 GPU；附加服务器也不会自动把任意命令转换成调度器作业。</p>
 <p>需要复盘时，结合 Run 状态、日志、输出文件和<a href="wisp-science-trajectory.html">轨迹</a>判断结果。仅有终端中的“命令已发送”不能证明计算成功结束。</p>
-<p><strong>Wisp Science进阶</strong></p>
-<p>如果已经构建或安装了独立 CLI，并且 <code>wisp-science</code> 在 PATH 中，可以在项目目录运行它。桌面应用已安装，不一定意味着这个命令已经加入了系统 PATH。</p>
-<p>CLI 使用环境变量配置模型，不会自动把桌面密钥环里的配置变成终端环境变量。以兼容接口为例，先把下面的占位内容换成自己的实际信息。</p>
-<p>macOS / Linux：</p>
-<pre><code class="language-bash">export WISP_PROVIDER=&quot;openai&quot;
-export WISP_API_URL=&quot;https://your-api.example.com&quot;
-export WISP_MODEL=&quot;your-model-id&quot;
-read -s WISP_API_KEY
-export WISP_API_KEY
-wisp-science
-</code></pre>
-<p>执行 <code>read -s WISP_API_KEY</code> 后，在终端输入密钥并回车，输入不会回显。示例中的 URL 和模型 ID 都是占位值；不要原样用于连接。</p>
-<p>Windows PowerShell：</p>
-<pre><code class="language-powershell">$env:WISP_PROVIDER = &quot;openai&quot;
-$env:WISP_API_URL = &quot;https://your-api.example.com&quot;
-$env:WISP_MODEL = &quot;your-model-id&quot;
-$credential = Get-Credential -UserName &quot;api&quot; -Message &quot;在密码字段输入 API Key&quot;
-$env:WISP_API_KEY = $credential.GetNetworkCredential().Password
-wisp-science
-</code></pre>
-<p><code>WISP_PROVIDER</code> 可按服务协议选择 <code>openai</code>、<code>openai_responses</code> 或 <code>anthropic</code>。在交互模式中，输入自然语言任务；<code>/help</code> 查看帮助，<code>/new</code> 开始新会话，<code>/compact</code> 压缩上下文，<code>/quit</code> 退出。</p>
-<p>需要单次执行时，可以在项目目录运行：</p>
-<pre><code class="language-bash">wisp-science run &quot;只读列出当前项目的顶层文件，并说明可能的数据、脚本和结果目录&quot;
-wisp-science run --output jsonl &quot;只读检查 data/example.csv 的列名和缺失值&quot;
-</code></pre>
-<p><code>jsonl</code> 按行输出结构化事件，适合接入日志或脚本。它仍然会调用实际模型；命令能启动，并不代表示例路径存在或分析必然成功。</p>
-<p>源码开发者可在仓库根目录使用 <code>cargo run -p wisp-cli -- run &quot;任务&quot;</code>。这种写法默认以当前仓库目录为工作区；要分析另一个目录中的项目，先构建 CLI，再到目标项目目录运行可执行文件。构建和更多参数见<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">开发文档</a>。</p>
 <p><strong>遇到问题，先确认机器，再确认命令。</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
 <thead>
@@ -238,19 +206,11 @@ wisp-science run --output jsonl &quot;只读检查 data/example.csv 的列名和
 <td>Python／R 找不到包</td>
 <td>实际调用的是哪个解释器，包是否装在同一环境</td>
 </tr>
-<tr>
-<td><code>wisp-science</code> 命令不存在</td>
-<td>是否已构建／安装独立 CLI，PATH 是否包含可执行文件目录</td>
-</tr>
-<tr>
-<td>CLI 缺少模型密钥</td>
-<td>环境变量是否在当前终端会话中设置，是否误以为它会继承桌面配置</td>
-</tr>
 </tbody>
 </table></div>
 <p>第一次练习可以只完成四件事：测试连接、探测环境、把服务器加入对话、检查一个小文件。确认每一步都能说清“在哪台机器、读哪个路径、得到什么结果”，再开始真正的计算任务。</p>
 <blockquote>
-<p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>、<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/terminal-sessions.md">交互终端说明</a>和 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">CLI 开发文档</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。</p>
+<p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>和<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/terminal-sessions.md">交互终端说明</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。</p>
 </blockquote>
 
 </article>

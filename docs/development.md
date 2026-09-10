@@ -25,8 +25,8 @@ python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
 ```
 
 Each article must start with a level-one title. `READING_ORDER` in the generator
-puts the four introductory tutorials first, followed by MCP, Skills, and
-trajectories; other articles are appended alphabetically. Filenames determine
+puts the four introductory tutorials first, followed by MCP, Skills, trajectories,
+and the standalone advanced CLI tutorial; other articles are appended alphabetically. Filenames determine
 stable article URLs and directory card anchors. Edit the page shell outside the generated
 markers in `docs/tutorials.html`; edit article content in `docs/wechat`.
 The Pages workflow regenerates both the directory and article pages before

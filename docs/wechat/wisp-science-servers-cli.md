@@ -2,19 +2,18 @@
 
 做科研时，文件和计算往往不在同一台电脑上：日常在笔记本里读文献，数据放在实验室服务器，分析需要远程的 Python、R 或 GPU。切换机器时，最容易弄混的是“我现在在哪台机器上”和“这条路径属于哪里”。
 
-Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍应用里的终端与独立 Wisp 命令行。
+Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍怎样为会话选择计算环境，以及使用应用里的交互终端。
 
 > 本文配图来自实际前端，服务器、GPU 信息和终端状态使用演示数据。示例主机 `gpu.example.org` 不能当作真实服务器连接；截图不代表已经访问了某台远程主机。
 
-**先分清三个入口，避免把它们当成同一件事。**
+**先分清两个入口，避免把它们当成同一件事。**
 
 | 入口 | 谁来操作 | 适合做什么 |
 | --- | --- | --- |
 | 对话中的计算环境 | 你描述任务，Wisp 在指定环境调用工具 | 读取远程数据、运行分析、提交结构化任务 |
 | Wisp 内的交互终端 | 你输入命令，终端直接执行 | 检查目录、调试环境、查看程序输出 |
-| 独立 `wisp-science` CLI | 在系统终端中与 Wisp 对话或发起单次任务 | 不打开桌面窗口，在当前目录使用 Agent |
 
-服务器配置解决“Wisp 可以使用哪台机器”，终端解决“我要亲自输入什么命令”，独立 CLI 则是另一种使用 Wisp 的入口。
+服务器配置解决“Wisp 可以使用哪台机器”，交互终端让你亲自输入命令。希望在系统终端中直接使用 Wisp Agent，可以继续阅读 [Wisp Science进阶](wisp-science-cli.md)。
 
 **添加服务器前，先准备连接信息。**
 
@@ -107,49 +106,6 @@ Get-ChildItem
 
 需要复盘时，结合 Run 状态、日志、输出文件和[轨迹](wisp-science-trajectory.md)判断结果。仅有终端中的“命令已发送”不能证明计算成功结束。
 
-**Wisp Science进阶**
-
-如果已经构建或安装了独立 CLI，并且 `wisp-science` 在 PATH 中，可以在项目目录运行它。桌面应用已安装，不一定意味着这个命令已经加入了系统 PATH。
-
-CLI 使用环境变量配置模型，不会自动把桌面密钥环里的配置变成终端环境变量。以兼容接口为例，先把下面的占位内容换成自己的实际信息。
-
-macOS / Linux：
-
-```bash
-export WISP_PROVIDER="openai"
-export WISP_API_URL="https://your-api.example.com"
-export WISP_MODEL="your-model-id"
-read -s WISP_API_KEY
-export WISP_API_KEY
-wisp-science
-```
-
-执行 `read -s WISP_API_KEY` 后，在终端输入密钥并回车，输入不会回显。示例中的 URL 和模型 ID 都是占位值；不要原样用于连接。
-
-Windows PowerShell：
-
-```powershell
-$env:WISP_PROVIDER = "openai"
-$env:WISP_API_URL = "https://your-api.example.com"
-$env:WISP_MODEL = "your-model-id"
-$credential = Get-Credential -UserName "api" -Message "在密码字段输入 API Key"
-$env:WISP_API_KEY = $credential.GetNetworkCredential().Password
-wisp-science
-```
-
-`WISP_PROVIDER` 可按服务协议选择 `openai`、`openai_responses` 或 `anthropic`。在交互模式中，输入自然语言任务；`/help` 查看帮助，`/new` 开始新会话，`/compact` 压缩上下文，`/quit` 退出。
-
-需要单次执行时，可以在项目目录运行：
-
-```bash
-wisp-science run "只读列出当前项目的顶层文件，并说明可能的数据、脚本和结果目录"
-wisp-science run --output jsonl "只读检查 data/example.csv 的列名和缺失值"
-```
-
-`jsonl` 按行输出结构化事件，适合接入日志或脚本。它仍然会调用实际模型；命令能启动，并不代表示例路径存在或分析必然成功。
-
-源码开发者可在仓库根目录使用 `cargo run -p wisp-cli -- run "任务"`。这种写法默认以当前仓库目录为工作区；要分析另一个目录中的项目，先构建 CLI，再到目标项目目录运行可执行文件。构建和更多参数见[开发文档](../development.md)。
-
 **遇到问题，先确认机器，再确认命令。**
 
 | 现象 | 优先检查 |
@@ -159,9 +115,7 @@ wisp-science run --output jsonl "只读检查 data/example.csv 的列名和缺�
 | 已添加服务器，对话用的还是本机 | 是否加入当前会话、当前会话的默认环境与任务指定是否一致 |
 | 文件不存在 | 路径属于本机还是远程；终端当前目录是否正确 |
 | Python／R 找不到包 | 实际调用的是哪个解释器，包是否装在同一环境 |
-| `wisp-science` 命令不存在 | 是否已构建／安装独立 CLI，PATH 是否包含可执行文件目录 |
-| CLI 缺少模型密钥 | 环境变量是否在当前终端会话中设置，是否误以为它会继承桌面配置 |
 
 第一次练习可以只完成四件事：测试连接、探测环境、把服务器加入对话、检查一个小文件。确认每一步都能说清“在哪台机器、读哪个路径、得到什么结果”，再开始真正的计算任务。
 
-> 功能细节参见 [Wisp 基础配置](../basic-configuration.md)、[交互终端说明](../terminal-sessions.md)和 [CLI 开发文档](../development.md)。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。
+> 功能细节参见 [Wisp 基础配置](../basic-configuration.md)和[交互终端说明](../terminal-sessions.md)。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。

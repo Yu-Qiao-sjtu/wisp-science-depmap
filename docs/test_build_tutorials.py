@@ -49,13 +49,26 @@ class TutorialBuildTests(unittest.TestCase):
     def test_sibling_navigation_follows_reading_order(self):
         pages = build_tutorials.render_tutorials()
         first = pages["tutorials/wisp-science-models.html"]
-        last = pages["tutorials/wisp-science-trajectory.html"]
+        last = pages["tutorials/wisp-science-cli.html"]
         self.assertNotIn('class="tutorial-previous"', first)
         self.assertIn('class="tutorial-next" href="wisp-science-browser.html"', first)
         self.assertNotIn('class="tutorial-next"', last)
-        self.assertIn('class="tutorial-previous" href="wisp-science-skills.html"', last)
+        self.assertIn('class="tutorial-previous" href="wisp-science-trajectory.html"', last)
         self.assertIn('<title>模型配置 · 教程 | Wisp Science</title>', first)
         self.assertIn('src="../assets/i18n.js"', first)
+
+    def test_cli_is_a_separate_tutorial_from_server_setup(self):
+        pages = build_tutorials.render_tutorials()
+        cli = pages["tutorials/wisp-science-cli.html"]
+        server = pages["tutorials/wisp-science-servers-cli.html"]
+        self.assertIn('<h1 id="article-title">Wisp Science进阶</h1>', cli)
+        self.assertIn('WISP_API_KEY', cli)
+        self.assertIn('wisp-science run --output jsonl', cli)
+        self.assertIn('Get-Credential', cli)
+        self.assertNotIn('WISP_API_KEY', server)
+        self.assertNotIn('wisp-science run --output jsonl', server)
+        self.assertIn('href="wisp-science-cli.html"', server)
+        self.assertIn('href="tutorials/wisp-science-cli.html"', pages["tutorials.html"])
 
     def test_article_links_and_screenshots_exist(self):
         parser = build_tutorials.MarkdownIt("commonmark")

@@ -18,7 +18,7 @@ REPOSITORY = "https://github.com/xuzhougeng/wisp-science/blob/main/docs/"
 READING_ORDER = [
     "wisp-science-models", "wisp-science-browser", "wisp-science-servers-cli",
     "wisp-science-transfer", "wisp-science-mcp", "wisp-science-skills",
-    "wisp-science-trajectory",
+    "wisp-science-trajectory", "wisp-science-cli",
 ]
 
 

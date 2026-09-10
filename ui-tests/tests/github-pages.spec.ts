@@ -162,8 +162,10 @@ test("article links, previous and next navigation, and browser back stay within 
   await expect(page.locator("h1")).toContainText("浏览器使用");
   await page.locator(".tutorial-previous").click();
   await expect(page.locator("h1")).toContainText("模型配置");
-  await page.goto("https://tutorials.test/wisp-science/tutorials/wisp-science-trajectory.html");
+  await page.goto("https://tutorials.test/wisp-science/tutorials/wisp-science-cli.html");
   await expect(page.locator(".tutorial-next")).toHaveCount(0);
+  await expect(page.locator("h1")).toHaveText("Wisp Science进阶");
+  await page.locator(".tutorial-previous").click();
   await page.locator('.tutorial-article p a[href="wisp-science-skills.html"]').click();
   await expect(page.locator("h1")).toContainText("Skills");
   await expect(page.locator("pre").filter({ hasText: "name: lab-paper-note" })).toContainText("# 实验室论文阅读笔记");
