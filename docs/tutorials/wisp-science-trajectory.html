@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="轨迹 · 教程 | Wisp Science" data-title-en="Trajectories · Tutorials | Wisp Science" data-desc-zh="Wisp Science使用技巧：轨迹" data-desc-en="Wisp Science Tips: Trajectories">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -39,9 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
       </nav>
@@ -58,9 +56,11 @@
 
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-trajectory" data-i18n="tutorials.back">返回教程目录</a></nav>
-<article class="tutorial-article" lang="zh-CN" id="wisp-science-trajectory" aria-labelledby="article-title">
-<header><h1 id="article-title">Wisp Science使用技巧：轨迹</h1>
-<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-i18n="tutorials.source">查看原文</a></header>
+<article class="tutorial-article" id="wisp-science-trajectory" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science使用技巧：轨迹" data-text-en="Wisp Science Tips: Trajectories">Wisp Science使用技巧：轨迹</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-trajectory.md" data-i18n="tutorials.source">查看原文</a></header>
+<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
+<div class="tutorial-body lang-zh" lang="zh-CN">
 <p>让 AI 帮忙分析一份数据，最后收到一句“分析完成”，往往还不够。我们还想知道：它读的是哪个文件？执行了什么代码？绘图失败时，报错来自哪里？过几天再回头看，能不能找回当时的操作过程？</p>
 <p>Wisp Science 的 <strong>轨迹</strong> 功能，就是用来查看这些过程的。它把一段对话中的用户输入、助手回复、工具调用和模型用量按顺序组织起来，让你可以从结果往前追，找到具体做过的那一步。</p>
 <p>前两篇介绍了 <a href="wisp-science-mcp.html">MCP</a> 和 <a href="wisp-science-skills.html">Skills</a>。这一篇介绍如何打开轨迹、读懂记录，以及怎样用它核对分析和排查问题。</p>
@@ -192,9 +192,140 @@
 <blockquote>
 <p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/trajectory-view.md">Wisp 轨迹文档</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异。</p>
 </blockquote>
-
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>When an AI finishes an analysis, “Done” is often not enough. Which file did it read? What code did it execute? Where did plotting fail? Can you return to the process a few days later?</p>
+<p>Wisp Science's <strong>Trajectory</strong> view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.</p>
+<p>The previous tutorials covered <a href="wisp-science-mcp.html">MCP</a> and <a href="wisp-science-skills.html">Skills</a>. Here we explain how to open a trajectory, read its records, verify an analysis, and investigate failures.</p>
+<blockquote>
+<p>Screenshots show the real frontend in Chinese with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.</p>
+</blockquote>
+<p><strong>Expand the execution process of a task.</strong></p>
+<p>Suppose you ask Wisp to inspect differential-expression results and draw a volcano plot. It may read the table, check column names, handle missing values, and run plotting code. A failure may lead to further checks and retries.</p>
+<p>The trajectory groups these records by <strong>turn</strong>. Your message starts a turn containing the records produced while Wisp responds.</p>
+<p><img src="../assets/trajectory/01-overview.png" alt="Trajectory overview with the timeline and events grouped by turn" loading="lazy" width="1860" height="1206" /></p>
+<p><em>Figure 1: The demonstration has two turns: inspect the table, then try plotting. Closing the details panel provides more room for the event list.</em></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Record</th>
+<th>Meaning</th>
+<th>What to verify</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>USER</td>
+<td>Your request</td>
+<td>Named files and conditions</td>
+</tr>
+<tr>
+<td>ASSISTANT</td>
+<td>Model responses</td>
+<td>Interpretation and proposed next steps</td>
+</tr>
+<tr>
+<td>TOOL</td>
+<td>A call and its returned result</td>
+<td>Actual parameters, code, output, and errors</td>
+</tr>
+<tr>
+<td>USAGE</td>
+<td>Usage for a model call</td>
+<td>Input, output, and cached tokens</td>
+</tr>
+</tbody>
+</table></div>
+<p>A model can call several tools and make several requests within one turn. Multiple tool and usage rows are normal. Narrow lists use compact icons; wider lists also show text labels.</p>
+<p><strong>Open a trajectory without extra setup.</strong></p>
+<p>Inside a conversation, click <strong>Trajectory</strong> in the top toolbar, between Share and the inbox bell. You can also send <code>/trajectory</code> in the message box.</p>
+<p>For a first inspection, wait for a small task to finish so the request and execution are easier to match. An empty session shows an empty-trajectory state.</p>
+<p>The window has four main areas:</p>
+<ul>
+<li><strong>Top timeline:</strong> input, model, and tool activity, with duration, turn, or call scales.</li>
+<li><strong>Left event list:</strong> steps grouped by turn, durations for completed calls, and failures highlighted in red.</li>
+<li><strong>Right details:</strong> content of the selected record.</li>
+<li><strong>Bottom statistics:</strong> conversation totals for turns, steps, model/tool time, and token usage.</li>
+</ul>
+<p>Selecting a timeline segment locates its event in the list. Close the right details panel for a wider list, then select a record to reopen it. Escape or the window's top-right close button returns to the conversation.</p>
+<p><strong>First use: verify files and parameters.</strong></p>
+<p>The demonstration begins with:</p>
+<blockquote>
+<p>Check the column names and missing values in results/differential_expression.csv.</p>
+</blockquote>
+<p>Wisp calls Python to read the table. Select that tool record and open <strong>Preview</strong> to inspect parameters and results.</p>
+<p><img src="../assets/trajectory/02-tool-details.png" alt="Tool preview showing the file-reading code, column names, and missing-value counts" loading="lazy" width="1860" height="1206" /></p>
+<p><em>Figure 2: Select a Python call on the left and inspect its submitted code and returned content on the right. Longer details can be scrolled.</em></p>
+<p>Compare the request with the operation: correct file path, chosen columns, any filtering, and whether the output supports the assistant's description.</p>
+<p>The sample table has <code>gene</code>, <code>log2FoldChange</code>, and <code>padj</code>; <code>padj</code> contains 128 missing values. Later, check that plotting code handles them and uses the correct effect-size column.</p>
+<p>The same approach works for literature searches: compare actual query terms and returned records with the assistant's paper list. For a Skill, look for calls showing that its instructions were read.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Details tab</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Summary</td>
+<td>Origin, status, duration, and a short preview; usage events also show model and token information</td>
+</tr>
+<tr>
+<td>Preview</td>
+<td>Full message or complete tool parameters and results</td>
+</tr>
+<tr>
+<td>Raw</td>
+<td>Event JSON for checking individual fields</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>Original message, tool arguments, or usage-source content</td>
+</tr>
+</tbody>
+</table></div>
+<p>For common checks, Summary followed by Preview is usually sufficient.</p>
+<p><strong>Second use: locate a failure.</strong></p>
+<p>The second demonstration turn requests a volcano plot, but the code uses <code>log2fc</code> where the table has <code>log2FoldChange</code>. The tool returns <code>KeyError: 'log2fc'</code>.</p>
+<p>Select the red tool record to see the failing code and result together. Search events for <code>log2fc</code> to narrow a long list.</p>
+<p><img src="../assets/trajectory/03-search-error.png" alt="Searching log2fc locates the failed plotting call and its KeyError" loading="lazy" width="1860" height="1206" /></p>
+<p><em>Figure 3: Search matches both summaries and detailed content. Here, the code referenced a column that did not exist.</em></p>
+<p>Return to the conversation with a specific correction:</p>
+<blockquote>
+<p>The plotting call used log2fc, but the table has log2FoldChange. Confirm the column names, correct the code, rerun it, and explain how missing and zero values are handled. If successful, report the figure and script locations.</p>
+</blockquote>
+<p>After retrying, inspect the new calls to confirm success, implementation of the correction, and expected output.</p>
+<p>Use actual errors for other troubleshooting too: check paths for missing files, environments for dependencies, and returned messages for retrieval failures. Searching a filename, tool name, or error keyword is usually easier than rereading the whole conversation.</p>
+<p><strong>Third use: understand time and usage.</strong></p>
+<p>A task may take a long time without failing. The timeline and statistics help distinguish model-response time from tool execution and locate individual calls.</p>
+<p><img src="../assets/trajectory/04-usage.png" alt="Usage event showing the model, input/output tokens, and caching information" loading="lazy" width="1860" height="1206" /></p>
+<p><em>Figure 4: The right side shows usage for the selected model call; the bottom summarizes the session. Numbers are for demonstration.</em></p>
+<p>Tokens are a unit used to measure model input and output. Usage records include input, output, and cache information. Summary statistics include model/tool time, output speed, and cache-hit measures.</p>
+<p>These help review the effects of long documents, retries, or repeated calls. Actual cost depends on provider pricing and cannot be inferred from one token total alone.</p>
+<p>An active trajectory shows live records, then refreshes from saved records after the task ends. Older conversations may lack timing or usage fields. Missing data does not mean zero time or zero usage.</p>
+<p><strong>Export HTML for records or collaborative review.</strong></p>
+<p>Click the download icon, <strong>Export HTML</strong>, at the top right and choose a destination. The result is a standalone HTML file readable in a browser.</p>
+<p>It includes the session identifier, model, summary statistics, timeline, user inputs, replies, tool parameters/results, states, durations, and usage. Archive it with analysis notes or give a colleague context for a result or error.</p>
+<p>Two details matter:</p>
+<ul>
+<li><strong>Search does not narrow the export.</strong> Filtering the view to <code>log2fc</code> still exports the entire saved trajectory.</li>
+<li><strong>Exports use saved records.</strong> Live, unsaved content may be absent while a task is running. Wait for completion when you need a full record.</li>
+</ul>
+<p>A trajectory supports inspection and traceability. Reproducing an analysis also needs input data or sources, scripts, parameters, and the environment. HTML does not bundle all those files or automatically rerun the task. Review complete inputs, paths, and tool results before sharing them.</p>
+<p><strong>Practice with a familiar small table.</strong></p>
+<p>Prepare a CSV in your project and replace the path below with its location:</p>
+<blockquote>
+<p>Check data/example.csv and report the row count, column names, and missing values per column. Do not change the original file. If reading fails, report the actual error.</p>
+</blockquote>
+<p>Open the trajectory afterward, find the read operation, and compare its parameters and results with the final answer in Preview. Try searching the filename and exporting HTML.</p>
+<p>This can become part of daily analysis: verify evidence behind results, inspect errors, retain the process, and return later with a usable record.</p>
+<blockquote>
+<p>See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/trajectory-view.md">Trajectory View</a> for details. This tutorial reflects the implementation when written; interface labels may vary by version.</p>
+</blockquote>
+</div>
 </article>
-<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-skills.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">Skills</strong></a><a class="tutorial-next" href="wisp-science-cli.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">Wisp Science进阶</strong></a></nav>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-skills.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="Skills" data-text-en="Skills">Skills</strong></a><a class="tutorial-next" href="wisp-science-cli.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="Wisp Science进阶" data-text-en="Wisp Science Advanced">Wisp Science进阶</strong></a></nav>
 <div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-trajectory" data-i18n="tutorials.back">返回教程目录</a></div>
   </main>
 
@@ -207,9 +338,7 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
         <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>

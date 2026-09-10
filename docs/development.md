@@ -7,10 +7,11 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 ## GitHub Pages tutorials
 
 The website's [tutorial directory](tutorials.html) links to one independent page
-per article under `docs/tutorials/`, generated from `docs/wechat/*.md` with full
-tables, code examples, and screenshots. The directory contains only compact cards.
-The navigation and page introduction support Chinese and English; article text
-stays in its original Chinese. Article links open the corresponding tutorial
+per article under `docs/tutorials/`, generated from `docs/wechat/*.md` and matching
+English translations in `docs/wechat/en/`. The directory contains only compact
+cards. The language switch changes titles, complete article text, captions,
+examples, source links, and previous/next navigation. Screenshots currently show
+the Chinese app interface and are labeled accordingly. Article links open the corresponding tutorial
 page; other Markdown documentation links open the repository source. Each article
 offers a return link at the top and bottom and previous/next navigation. Returning
 to the directory restores the matching card via its stable anchor.
@@ -25,10 +26,13 @@ python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
 ```
 
 Each article must start with a level-one title. `READING_ORDER` in the generator
-puts the four introductory tutorials first, followed by MCP, Skills, trajectories,
-and the standalone advanced CLI tutorial; other articles are appended alphabetically. Filenames determine
+puts Quick Start first, then the four introductory tutorials, MCP, Skills, trajectories,
+and the advanced CLI and ACP tutorials; other articles are appended alphabetically. Filenames determine
 stable article URLs and directory card anchors. Edit the page shell outside the generated
-markers in `docs/tutorials.html`; edit article content in `docs/wechat`.
+markers in `docs/tutorials.html`; edit both language sources when updating articles.
+The generator rejects missing English translations instead of silently showing
+Chinese content in English mode. Relative links in English sources use their own
+`en/` directory as the base (for example, `../../assets/` for screenshots).
 The Pages workflow regenerates both the directory and article pages before
 uploading them. Do not hand-edit the generated files under `docs/tutorials/`.
 
@@ -38,10 +42,16 @@ directory links, the Skills code example, and the tutorial screenshots. Each
 card should open only its own article. Check both return links, previous/next
 navigation, browser Back, and refreshing an article's direct URL.
 Repeat at a narrow mobile width and switch to English; the surrounding navigation
-should translate while the Chinese articles remain visible.
+and all article text should switch language. Reload a direct `?lang=en` URL,
+follow another tutorial, and return to the directory; English must persist even
+when browser storage is unavailable. The language is carried in local HTML links.
 
-The four introductory articles use real frontend screenshots with mocked Tauri
-data. Regenerate them without API keys, real servers, or live browser access:
+The homepage links directly to Quick Start. Models and ACP are accessed through
+the tutorial directory; the former standalone configuration HTML pages and their
+navigation entries have been removed without redirect pages.
+
+Quick Start and the four introductory articles use real frontend screenshots
+with mocked Tauri data. Regenerate them without API keys, real servers, or live browser access:
 
 ```bash
 cd ui-tests
@@ -51,7 +61,9 @@ WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-
 The capture tests normally write to Playwright's output directory; only the
 explicit environment variable updates the published assets. Their demo account,
 host, terminal output, and conversation data are labeled as examples in the
-articles. The Chrome extension installation image is reused from the basic
+articles. Quick Start captures all four onboarding steps, project creation, and a
+first conversation with a deterministic mock reply; it never calls a model API.
+The Chrome extension installation image is reused from the basic
 configuration guide.
 
 ## Build from source

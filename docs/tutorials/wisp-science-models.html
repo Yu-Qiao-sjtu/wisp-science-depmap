@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="模型配置 · 教程 | Wisp Science" data-title-en="Model Configuration · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：模型配置" data-desc-en="Wisp Science Basics: Model Configuration">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -39,9 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
       </nav>
@@ -58,9 +56,11 @@
 
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-models" data-i18n="tutorials.back">返回教程目录</a></nav>
-<article class="tutorial-article" lang="zh-CN" id="wisp-science-models" aria-labelledby="article-title">
-<header><h1 id="article-title">Wisp Science基础入门：模型配置</h1>
-<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-i18n="tutorials.source">查看原文</a></header>
+<article class="tutorial-article" id="wisp-science-models" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：模型配置" data-text-en="Wisp Science Basics: Model Configuration">Wisp Science基础入门：模型配置</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-models.md" data-i18n="tutorials.source">查看原文</a></header>
+<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
+<div class="tutorial-body lang-zh" lang="zh-CN">
 <p>第一次打开 Wisp Science，很多人会停在同一个地方：我已经有一个 AI 账号了，为什么还要填写 API 地址和密钥？模型名称该填什么？保存后，又怎样知道这次对话真的用上了它？</p>
 <p>Wisp Science 把科研工作区与模型接入分开管理。你可以保留同一个项目中的文件和分析记录，再按需要选择能够访问的模型。这篇文章从第一次接入讲起，先完成一个能正常回答的小任务，再认识图片能力和会话切换。</p>
 <blockquote>
@@ -99,7 +99,7 @@
 <p>进入 <strong>设置 → 模型</strong>。这里可以查看已有模型，也可以点击 <strong>添加 API 接入</strong>。首次引导中的模型配置是另一个起点；跳过引导后，仍可以随时回到这里补充。</p>
 <p><img src="../assets/tutorials/models/01-overview.png" alt="模型设置列表：查看已配置模型与添加 API 接入入口" loading="lazy" width="1440" height="1000" /></p>
 <p><em>图 1：先检查已有模型。显示名称便于自己区分用途，实际调用仍依赖模型 ID、协议和地址。</em></p>
-<p>这个页面也有 <strong>ACP Agents</strong> 分类，用来接入外部 Agent 进程。本文先介绍 Wisp 内置 Agent 使用的 HTTP API 模型。手里拿到的是命令行启动命令时，应查看 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/acp-agents.md">ACP 配置说明</a>。</p>
+<p>这个页面也有 <strong>ACP Agents</strong> 分类，用来接入外部 Agent 进程。本文先介绍 Wisp 内置 Agent 使用的 HTTP API 模型。手里拿到的是命令行启动命令时，应查看 <a href="wisp-science-acp.html">ACP 配置说明</a>。</p>
 <p><strong>添加 API 接入，先填写共用信息，再添加模型。</strong></p>
 <p>点击 <strong>添加 API 接入</strong>，先填写服务商给出的 <strong>Base URL</strong> 和 <strong>API 密钥</strong>，然后在下方填写这把密钥可以调用的模型。一组接入可以添加多个模型，每个模型分别选择协议、模型 ID 和能力。</p>
 <p><img src="../assets/tutorials/models/02-api-access.png" alt="添加 API 接入：上方填写共用地址与密钥，下方配置具体模型" loading="lazy" width="1440" height="1000" /></p>
@@ -217,9 +217,167 @@
 <blockquote>
 <p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md">Wisp 模型配置文档</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例提示词不代表已经执行的模型请求。</p>
 </blockquote>
-
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>When you first open Wisp Science, you may wonder why it asks for an API address and key when you already have an AI account. Which model name should you enter? After saving it, how do you know the conversation uses that model?</p>
+<p>Wisp Science manages your research workspace separately from model access. Keep the same project files and analysis records while selecting among models you can access. This tutorial starts with a working first connection, then introduces image capabilities and switching models.</p>
+<blockquote>
+<p>Screenshots come from the real frontend with demonstration settings and conversations, using the Chinese interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.</p>
+</blockquote>
+<p><strong>Understand the app, model service, and API key.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Component</th>
+<th>Responsibility</th>
+<th>What you need</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wisp Science</td>
+<td>Projects, conversations, tool calls, and work records</td>
+<td>Install the app and open a project</td>
+</tr>
+<tr>
+<td>Model service</td>
+<td>Receive requests and generate replies or tool calls</td>
+<td>A reachable address, supported protocol, and model ID</td>
+</tr>
+<tr>
+<td>API key</td>
+<td>Identify the account or quota used for a request</td>
+<td>A key from the provider's console</td>
+</tr>
+</tbody>
+</table></div>
+<p>Website logins, chat subscriptions, and API access may be provisioned separately. Being able to chat on a website does not necessarily mean you have an API key for Wisp. Confirm that you have API access details.</p>
+<p>A laboratory gateway also works when you use the address, model ID, and key supplied by its administrator. Do not put a web-chat URL in the API address field.</p>
+<p><strong>Open Models and check existing configurations.</strong></p>
+<p>Go to <strong>Settings → Models</strong>. Review existing models or click <strong>Add API access</strong>. Model setup in onboarding is another entry point; skipping it does not prevent you from configuring a model here later.</p>
+<p><img src="../assets/tutorials/models/01-overview.png" alt="Models settings showing configured models and Add API access" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 1: Check existing models first. A display name helps identify a model's purpose; requests still depend on its model ID, protocol, and address.</em></p>
+<p>The same page has an <strong>ACP Agents</strong> category for external agent processes. This tutorial covers HTTP API models used by the built-in Wisp agent. If your setup instructions provide a process launch command, see <a href="wisp-science-acp.html">ACP configuration</a>.</p>
+<p><strong>Enter shared API access, then add its models.</strong></p>
+<p>Click <strong>Add API access</strong> and enter the provider's <strong>Base URL</strong> and <strong>API key</strong>. Add the models this key can call below. One API access form can contain multiple models, each with its own protocol, model ID, and capabilities.</p>
+<p><img src="../assets/tutorials/models/02-api-access.png" alt="API access form with shared URL and key above individual model settings" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 2: Models added together share the address and key. The screenshot illustrates the fields without exposing a key. Check suggested models against your account's permissions too.</em></p>
+<p>Get these fields right first:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Field</th>
+<th>What to enter</th>
+<th>Common confusion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Base URL</td>
+<td>The API base address supplied by the provider</td>
+<td>Usually do not append a complete route such as <code>/v1/chat/completions</code> yourself</td>
+</tr>
+<tr>
+<td>API key</td>
+<td>A key generated in the provider console</td>
+<td>It is not your website login password</td>
+</tr>
+<tr>
+<td>Protocol</td>
+<td>OpenAI-compatible, OpenAI Responses, or Anthropic, as documented by the provider</td>
+<td>OpenAI-compatible describes an interface that other providers may implement</td>
+</tr>
+<tr>
+<td>Model ID</td>
+<td>The exact name accepted by the service</td>
+<td>A display name is customizable; the model ID is not arbitrary</td>
+</tr>
+<tr>
+<td>Display name</td>
+<td>A recognizable label, such as Laboratory primary model</td>
+<td>This does not change the model called</td>
+</tr>
+<tr>
+<td>Endpoint suffix</td>
+<td>An extra path explicitly required by the provider</td>
+<td>Usually leave it empty rather than repeatedly appending complete routes</td>
+</tr>
+</tbody>
+</table></div>
+<p>If uncertain, check the protocol and base address together against the provider's documentation. Do not cycle through appending <code>/v1</code>, <code>/responses</code>, and <code>/messages</code> whenever an error occurs.</p>
+<p>A new address needs a valid key. If a key is already stored for that Base URL, leaving the field empty can reuse it. Pasting another key creates separate access for the new model batch. Use distinct display names when the same model is accessed through different accounts.</p>
+<p>Wisp stores API keys in the operating system keyring. Share the address, protocol, and model ID in screenshots or configuration notes, but leave out the actual key.</p>
+<p>Click <strong>Validate</strong>, inspect the result, and then click <strong>Save</strong> after validation succeeds. Validation does not replace saving. You can validate again from a saved model's edit page. Passing this check does not replace testing specific tool-calling or image tasks.</p>
+<p><strong>Use documented output and context limits.</strong></p>
+<p>After saving access, click an individual model in the list to edit output length, context window, reasoning settings, and related options.</p>
+<p><strong>Max output tokens</strong> limits the content generated in one response. <strong>Context window</strong> describes the overall input-and-output capacity. Increasing these numbers does not make the model more capable.</p>
+<p>For exact IDs recognized by the built-in model catalog, Wisp supplies the recorded ceilings. For an unknown alias or gateway model, enter limits documented by the provider. Saving output above a known ceiling produces an error; an oversized context setting is clamped to the known limit.</p>
+<p>Reasoning effort and Fast mode also depend on provider and model support. Leave defaults in place for the first test, then adjust them for actual tasks. Fast mode may affect quota usage; check your service's description before enabling it.</p>
+<p><strong>Choose the model for this conversation.</strong></p>
+<p>Open a new conversation and select the saved model in the picker near the message box.</p>
+<p><img src="../assets/tutorials/models/03-picker.png" alt="The conversation model picker" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 3: This picker selects the current conversation's model. Switching a conversation that already has messages requests confirmation. The model default in Settings is used for new conversations.</em></p>
+<p>Start with a small question that does not require the web or research tools:</p>
+<blockquote>
+<p>Explain CSV files in three sentences, then give a CSV example with two data rows. Do not read files or visit websites for this task.</p>
+</blockquote>
+<p>This helps distinguish a model connection problem from an external-tool setup problem. After a complete response, try a small file from your project.</p>
+<p>Asking “What model are you?” is not sufficient verification: a model's natural-language self-description does not replace configuration records. Check the picker and, where available, the turn's <a href="wisp-science-trajectory.html">trajectory and usage records</a>.</p>
+<p>Switching a populated conversation changes subsequent requests for that conversation. A request already running continues with the configuration used when the turn started; the new configuration takes effect on later turns.</p>
+<p><strong>Configure image input and image analysis when you need them.</strong></p>
+<p>Research often involves microscopy images, screenshots, and plots. Text responses do not establish that a model accepts images.</p>
+<ul>
+<li>Enable <strong>Supports image input</strong> for a chat model with vision support.</li>
+<li>Assign <strong>Use for image analysis</strong> if it should also describe images for a non-visual primary model.</li>
+<li><strong>Use for image generation</strong> is a separate role that produces images; it does not replace image analysis.</li>
+</ul>
+<p>Upload a simple, clearly labeled image without sensitive information and try:</p>
+<blockquote>
+<p>Describe only the visible axes, legend, and trends. Identify any text you cannot read. Do not invent experimental conditions or infer causality.</p>
+</blockquote>
+<p>Verify visible information before moving to scientific interpretation. If the primary model cannot read images and no image-analysis model is available, configure the missing capability before retrying.</p>
+<p><strong>Troubleshoot where the failure occurs.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>401 / 403</td>
+<td>Key validity, enabled API access, and permission for this model</td>
+</tr>
+<tr>
+<td>404 or webpage content</td>
+<td>Base URL, protocol, model ID, and whether a website homepage was entered by mistake</td>
+</tr>
+<tr>
+<td>Timeout or connection failure</td>
+<td>Connectivity and the model API proxy in Settings → General → Network</td>
+</tr>
+<tr>
+<td>Validation succeeds but a task fails</td>
+<td>Support for the task's tool calls, image input, or response length</td>
+</tr>
+<tr>
+<td>Context limit exceeded</td>
+<td>Try <code>/compact</code>, or start a new session explaining what should be continued</td>
+</tr>
+<tr>
+<td>Reply is cut off</td>
+<td>Check maximum output, use Resume if appropriate, or reduce the scope of this request</td>
+</tr>
+</tbody>
+</table></div>
+<p>A first configuration can have a small goal: save one connection, select it in a new conversation, and obtain a complete response. Then explore <a href="wisp-science-mcp.html">MCP</a>, <a href="wisp-science-skills.html">Skills</a>, and <a href="wisp-science-browser.html">Browser</a>, with a clearer idea of where a later problem occurs.</p>
+<blockquote>
+<p>See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md">Model Configuration</a> for details. This tutorial reflects the implementation when written; labels may vary between versions. Example prompts do not represent model requests that have already been executed.</p>
+</blockquote>
+</div>
 </article>
-<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-next" href="wisp-science-browser.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">浏览器使用</strong></a></nav>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-quick-start.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="快速开始" data-text-en="Quick Start">快速开始</strong></a><a class="tutorial-next" href="wisp-science-browser.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="浏览器使用" data-text-en="Using the Browser">浏览器使用</strong></a></nav>
 <div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-models" data-i18n="tutorials.back">返回教程目录</a></div>
   </main>
 
@@ -232,9 +390,7 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
         <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>

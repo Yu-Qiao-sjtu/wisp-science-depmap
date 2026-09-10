@@ -13,7 +13,7 @@ class TutorialBuildTests(unittest.TestCase):
     def test_articles_keep_examples_and_rebase_links_and_images(self):
         with tempfile.TemporaryDirectory() as directory:
             docs = Path(directory)
-            (docs / "wechat").mkdir()
+            (docs / "wechat/en").mkdir(parents=True)
             (docs / "wechat/first.md").write_text(
                 '# First tutorial\n\n[Next](second.md)\n\n'
                 '[Reference](../reference.md)\n\n[External](https://example.com/help)\n\n'
@@ -23,6 +23,8 @@ class TutorialBuildTests(unittest.TestCase):
                 'The final paragraph is included.\n', encoding="utf-8"
             )
             (docs / "wechat/second.md").write_text('# Second tutorial\n\nAnother article.\n', encoding="utf-8")
+            for name in ["first.md", "second.md"]:
+                (docs / "wechat/en" / name).write_text((docs / "wechat" / name).read_text(encoding="utf-8"), encoding="utf-8")
             with patch.object(build_tutorials, "DOCS", docs):
                 pages = build_tutorials.render_tutorials(self.DIRECTORY)
                 html = pages["tutorials/first.html"]
@@ -48,20 +50,21 @@ class TutorialBuildTests(unittest.TestCase):
 
     def test_sibling_navigation_follows_reading_order(self):
         pages = build_tutorials.render_tutorials()
-        first = pages["tutorials/wisp-science-models.html"]
-        last = pages["tutorials/wisp-science-cli.html"]
+        first = pages["tutorials/wisp-science-quick-start.html"]
+        last = pages["tutorials/wisp-science-acp.html"]
         self.assertNotIn('class="tutorial-previous"', first)
-        self.assertIn('class="tutorial-next" href="wisp-science-browser.html"', first)
+        self.assertIn('class="tutorial-next" href="wisp-science-models.html"', first)
         self.assertNotIn('class="tutorial-next"', last)
-        self.assertIn('class="tutorial-previous" href="wisp-science-trajectory.html"', last)
-        self.assertIn('<title>模型配置 · 教程 | Wisp Science</title>', first)
+        self.assertIn('class="tutorial-previous" href="wisp-science-cli.html"', last)
+        self.assertIn('<title>快速开始 · 教程 | Wisp Science</title>', first)
         self.assertIn('src="../assets/i18n.js"', first)
 
     def test_cli_is_a_separate_tutorial_from_server_setup(self):
         pages = build_tutorials.render_tutorials()
         cli = pages["tutorials/wisp-science-cli.html"]
         server = pages["tutorials/wisp-science-servers-cli.html"]
-        self.assertIn('<h1 id="article-title">Wisp Science进阶</h1>', cli)
+        self.assertIn('data-text-zh="Wisp Science进阶"', cli)
+        self.assertIn('data-text-en="Wisp Science Advanced"', cli)
         self.assertIn('WISP_API_KEY', cli)
         self.assertIn('wisp-science run --output jsonl', cli)
         self.assertIn('Get-Credential', cli)
@@ -70,9 +73,33 @@ class TutorialBuildTests(unittest.TestCase):
         self.assertIn('href="wisp-science-cli.html"', server)
         self.assertIn('href="tutorials/wisp-science-cli.html"', pages["tutorials.html"])
 
+    def test_every_tutorial_has_a_complete_english_source_and_language_metadata(self):
+        root = build_tutorials.DOCS / "wechat"
+        self.assertEqual({p.name for p in root.glob("*.md")}, {p.name for p in (root / "en").glob("*.md")})
+        pages = build_tutorials.render_tutorials()
+        for source in root.glob("*.md"):
+            english = root / "en" / source.name
+            with self.subTest(article=source.name):
+                expected = english.read_text(encoding="utf-8").splitlines()[0].removeprefix("# ")
+                html = pages[f"tutorials/{source.stem}.html"]
+                self.assertIn(f'data-text-en="{expected}"', html)
+                self.assertIn('class="tutorial-body lang-en" lang="en"', html)
+                self.assertIn('class="tutorial-body lang-zh" lang="zh-CN"', html)
+                self.assertIn(f'/wechat/en/{source.name}', html)
+                self.assertIn('data-title-en=', html)
+
+    def test_missing_translation_fails_instead_of_publishing_chinese_as_english(self):
+        with tempfile.TemporaryDirectory() as directory:
+            docs = Path(directory)
+            (docs / "wechat").mkdir()
+            (docs / "wechat/missing.md").write_text("# Untranslated\n\nText.", encoding="utf-8")
+            with patch.object(build_tutorials, "DOCS", docs):
+                with self.assertRaisesRegex(ValueError, "Missing English tutorial"):
+                    build_tutorials.render_tutorials(self.DIRECTORY)
+
     def test_article_links_and_screenshots_exist(self):
         parser = build_tutorials.MarkdownIt("commonmark")
-        for source in (build_tutorials.DOCS / "wechat").glob("*.md"):
+        for source in (build_tutorials.DOCS / "wechat").rglob("*.md"):
             for token in parser.parse(source.read_text(encoding="utf-8")):
                 for child in token.children or []:
                     attribute = {"link_open": "href", "image": "src"}.get(child.type)

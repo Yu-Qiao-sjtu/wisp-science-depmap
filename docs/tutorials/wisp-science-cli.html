@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="Wisp Science进阶 · 教程 | Wisp Science" data-title-en="Wisp Science Advanced · Tutorials | Wisp Science" data-desc-zh="Wisp Science进阶" data-desc-en="Wisp Science Advanced">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -39,9 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
       </nav>
@@ -58,9 +56,10 @@
 
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-cli" data-i18n="tutorials.back">返回教程目录</a></nav>
-<article class="tutorial-article" lang="zh-CN" id="wisp-science-cli" aria-labelledby="article-title">
-<header><h1 id="article-title">Wisp Science进阶</h1>
-<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-cli.md" data-i18n="tutorials.source">查看原文</a></header>
+<article class="tutorial-article" id="wisp-science-cli" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science进阶" data-text-en="Wisp Science Advanced">Wisp Science进阶</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-cli.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-cli.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-cli.md" data-i18n="tutorials.source">查看原文</a></header>
+<div class="tutorial-body lang-zh" lang="zh-CN">
 <p>熟悉桌面中的项目与对话后，如果希望在系统终端里使用 Wisp，或者把一次任务接入脚本与日志流程，可以使用独立的 <code>wisp-science</code> CLI。</p>
 <p>这篇教程介绍 CLI 的准备、模型环境变量、交互模式与单次任务。Wisp 会以当前目录作为工作区，因此开始前先确认终端所在的项目目录。桌面中的 SSH 环境与交互终端操作，见<a href="wisp-science-servers-cli.html">服务器环境配置</a>。</p>
 <blockquote>
@@ -137,9 +136,87 @@ wisp-science run --output jsonl &quot;只读检查 data/example.csv 的列名和
 <blockquote>
 <p>配置和构建细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">CLI 开发文档</a>与<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md">模型配置文档</a>。本文依据撰写时的项目实现整理，不同版本的参数和提示文字可能略有差异。</p>
 </blockquote>
-
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>Once you know the desktop project and conversation workflow, you may want to use Wisp in a system terminal or connect a task to scripts and logs. The standalone <code>wisp-science</code> CLI provides that entry point.</p>
+<p>This tutorial covers CLI preparation, model environment variables, interactive mode, and one-shot tasks. Wisp uses the current directory as its workspace, so check where your terminal is before starting. For desktop SSH environments and interactive terminals, see <a href="wisp-science-servers-cli.html">Server Environment Setup</a>.</p>
+<blockquote>
+<p>API addresses, model IDs, and file paths are examples. Replace them with your actual configuration. The commands are not evidence of completed analyses.</p>
+</blockquote>
+<p><strong>Check that the standalone CLI is available.</strong></p>
+<p>If you have built or installed the standalone CLI and <code>wisp-science</code> is on PATH, run it from your project directory. Installing the desktop app does not necessarily put this command on the system PATH.</p>
+<p><strong>Configure a model for this terminal.</strong></p>
+<p>The CLI uses environment variables. It does not automatically turn desktop keyring settings into terminal environment variables. For a compatible API, replace the placeholders below with your own values.</p>
+<p>macOS / Linux:</p>
+<pre><code class="language-bash">export WISP_PROVIDER=&quot;openai&quot;
+export WISP_API_URL=&quot;https://your-api.example.com&quot;
+export WISP_MODEL=&quot;your-model-id&quot;
+read -s WISP_API_KEY
+export WISP_API_KEY
+wisp-science
+</code></pre>
+<p>After <code>read -s WISP_API_KEY</code>, type the key and press Enter. Input is not echoed. The URL and model ID above are placeholders, not a working connection.</p>
+<p>Windows PowerShell:</p>
+<pre><code class="language-powershell">$env:WISP_PROVIDER = &quot;openai&quot;
+$env:WISP_API_URL = &quot;https://your-api.example.com&quot;
+$env:WISP_MODEL = &quot;your-model-id&quot;
+$credential = Get-Credential -UserName &quot;api&quot; -Message &quot;Enter the API key in the password field&quot;
+$env:WISP_API_KEY = $credential.GetNetworkCredential().Password
+wisp-science
+</code></pre>
+<p>Choose <code>openai</code>, <code>openai_responses</code>, or <code>anthropic</code> for <code>WISP_PROVIDER</code> according to the service's protocol.</p>
+<p><strong>Continue a conversation in the project directory.</strong></p>
+<p>After running <code>wisp-science</code>, enter natural-language tasks in interactive mode. For example:</p>
+<blockquote>
+<p>Inspect the current project's directory without changing it. List likely data files, analysis scripts, and result directories. Do not install dependencies or modify files yet.</p>
+</blockquote>
+<p>Use <code>/help</code> for help, <code>/new</code> for a new conversation, <code>/compact</code> to compact context, and <code>/quit</code> to exit.</p>
+<p><strong>Run one task or emit structured events.</strong></p>
+<p>From the project directory:</p>
+<pre><code class="language-bash">wisp-science run &quot;Read-only: list the top-level project files and identify likely data, script, and result directories&quot;
+wisp-science run --output jsonl &quot;Read-only: check the column names and missing values in data/example.csv&quot;
+</code></pre>
+<p><code>jsonl</code> emits one structured event per line for logs or scripts. These commands still call a real model. A command starting successfully does not establish that the example path exists or that analysis will succeed.</p>
+<p><strong>When running from source, check the working directory.</strong></p>
+<p>Developers can run <code>cargo run -p wisp-cli -- run &quot;task&quot;</code> from the repository root. This uses the repository directory as the workspace by default. To analyze another project, build the CLI and run the executable from that project's directory. See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">Development</a> for builds and additional parameters.</p>
+<p><strong>Troubleshoot the command, configuration, and directory.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wisp-science</code> is not found</td>
+<td>Whether the standalone CLI was built/installed and its directory is on PATH</td>
+</tr>
+<tr>
+<td>CLI reports a missing model key</td>
+<td>Whether the variables are set in this terminal, rather than only in desktop settings</td>
+</tr>
+<tr>
+<td>Model request fails</td>
+<td>Matching API address, protocol, model ID, and account permissions</td>
+</tr>
+<tr>
+<td>Input file not found</td>
+<td>Current working directory and whether example paths have been replaced</td>
+</tr>
+<tr>
+<td>Python/R package unavailable</td>
+<td>The actual interpreter and its dependency environment</td>
+</tr>
+</tbody>
+</table></div>
+<p>Start in a small practice directory and ask for a read-only file listing. Once the model responds and the directory is correct, try data inspection or one-shot output.</p>
+<blockquote>
+<p>See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/development.md">CLI Development</a> and <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md">Model Configuration</a>. This tutorial reflects the implementation when written; parameters and messages may vary between versions.</p>
+</blockquote>
+</div>
 </article>
-<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-trajectory.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">轨迹</strong></a></nav>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-trajectory.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="轨迹" data-text-en="Trajectories">轨迹</strong></a><a class="tutorial-next" href="wisp-science-acp.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="ACP配置" data-text-en="ACP Configuration">ACP配置</strong></a></nav>
 <div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-cli" data-i18n="tutorials.back">返回教程目录</a></div>
   </main>
 
@@ -152,9 +229,7 @@ wisp-science run --output jsonl &quot;只读检查 data/example.csv 的列名和
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
         <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>

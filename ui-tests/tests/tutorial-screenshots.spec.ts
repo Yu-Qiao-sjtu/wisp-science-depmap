@@ -14,7 +14,28 @@ test.beforeEach(async ({ page }) => {
     const core = (window as any).__TAURI__.core;
     const invoke = core.invoke;
     core.invoke = async (cmd: string, args: any) => {
+      const quickStart = new URLSearchParams(location.search).has("mockQuickStartTutorial");
+      const arg = (key: string) => args instanceof Map ? args.get(key) : args?.[key];
+      if (quickStart && cmd === "send_message") {
+        ((window as any).__skillInvokeLog ??= []).push({ cmd, args });
+        const frame = String(arg("sessionId"));
+        (window as any).__tauriEmit("agent", { kind: "User", frame_id: frame, text: arg("message") });
+        (window as any).__tauriEmit("agent", {
+          kind: "Text", frame_id: frame,
+          delta: "根据你提供的数字：\n\n| 样本 | 数值 |\n| --- | --- |\n| A | 10 |\n| B | 20 |\n| C | 30 |\n\n**样本数：3。平均值：20。**\n\n计算方式：(10 + 20 + 30) ÷ 3 = 20。\n\n本次只使用消息中的数字，没有读取文件、运行代码或访问网页。",
+        });
+        (window as any).__tauriEmit("agent", { kind: "Done", frame_id: frame, stop_reason: "end_turn" });
+        return frame;
+      }
       const result = await invoke(cmd, args);
+      if (quickStart) {
+        if (cmd === "list_projects" || cmd === "list_recent_sessions") return [];
+        if (cmd === "create_project") return { ...result, name: arg("name"), workspace_dir: "/mock/root/new-project" };
+        if (cmd === "open_project") return { ...result, name: "第一次使用 Wisp", workspace_dir: "/mock/root/new-project" };
+        if (cmd === "get_project_info") return { ...result, name: "第一次使用 Wisp", root: "/mock/root/new-project" };
+        if (cmd === "get_settings") return { ...result, follow_up_questions: false };
+        return result;
+      }
       if (cmd === "list_sessions_page") {
         result.items = [{ id: "s1", title: "示例：检查差异分析结果", ts: 1788998400, folder_id: null, has_user_turn: true, model_id: "default" }];
       }
@@ -53,6 +74,42 @@ async function emit(page: Page, name: string, payload: unknown) {
   await expect.poll(() => page.evaluate((event) => (window as any).__tauriListenerReady?.(event), name)).toBe(true);
   await page.evaluate(({ name, payload }) => (window as any).__tauriEmit(name, payload), { name, payload });
 }
+
+test("quick start walks through onboarding, project creation, and a first conversation", async ({ page }, info) => {
+  await page.goto("/?mockLocale=zh&mockOnboarding=1&mockQuickStartTutorial=1");
+  const modal = page.locator(".onboard");
+  const titles = ["欢迎使用 wisp-science", "wisp-science 能做什么", "配置模型", "本地环境（可选）"];
+  const names = ["01-welcome", "02-features", "03-model", "04-environment"];
+  for (let step = 0; step < 4; step++) {
+    await expect(modal.getByRole("heading")).toHaveText(titles[step]);
+    await expect(modal.locator(".onboard-dot").nth(step)).toHaveClass(/active/);
+    if (step === 3) await expect(modal.getByTestId("local-environment")).toBeVisible();
+    await shot(page, info, `quick-start/${names[step]}`);
+    if (step === 2) await modal.locator('input[type="password"]').fill("demo-key-not-valid");
+    await modal.locator(".row > .primary").click();
+  }
+  await expect(modal).toBeHidden();
+  await expect(page.getByRole("button", { name: /新建项目/ })).toBeVisible();
+  await shot(page, info, "quick-start/05-projects");
+  await page.getByRole("button", { name: /新建项目/ }).click();
+  await page.locator("#new-project-name").fill("第一次使用 Wisp");
+  await page.locator(".pn-dir .btn-ghost").click();
+  await expect(page.locator(".pn-dir .path")).toHaveText("/mock/root/new-project");
+  await shot(page, info, "quick-start/06-create-project");
+  await page.getByRole("button", { name: "创建", exact: true }).click();
+  const composer = page.locator("#composer-input");
+  await expect(composer).toBeVisible();
+  await expect(page.locator(".sidebar")).toContainText("第一次使用 Wisp");
+  await expect.poll(() => page.evaluate(() => (window as any).__tauriListenerReady?.("agent"))).toBe(true);
+  const prompt = "这是我的第一次对话测试。请把样本 A=10、B=20、C=30 整理成表格，并告诉我样本数和平均值。只根据这些数字回答，不读取文件、不运行代码、不访问网页。";
+  await composer.fill(prompt);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.locator(".msg.user")).toContainText(prompt);
+  await expect(page.locator(".msg.assistant")).toContainText("样本数：3。平均值：20。");
+  await expect(page.locator(".msg.assistant table tbody tr")).toHaveCount(3);
+  await expect(composer).toHaveValue("");
+  await shot(page, info, "quick-start/07-first-conversation");
+});
 
 test("model tutorial shows API access and conversation selection", async ({ page }, info) => {
   await enter(page);

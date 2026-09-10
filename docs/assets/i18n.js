@@ -17,7 +17,8 @@ const WISP_PAGES_I18N = {
     "tutorials.kicker": "从入门到实践",
     "tutorials.title": "教程",
     "tutorials.lead": "从配置模型开始，学习浏览器、服务器和导入导出，再用 MCP、Skills 与轨迹完成可核对的科研任务。",
-    "tutorials.language": "以下教程正文为中文。",
+    "tutorials.language": "教程支持中文和英文，可使用顶部语言按钮切换。",
+    "tutorials.screenshots": "截图使用中文界面，正文可切换中英文。",
     "tutorials.aria": "教程目录",
     "tutorials.source": "查看原文",
     "tutorials.back": "返回教程目录",
@@ -44,6 +45,7 @@ const WISP_PAGES_I18N = {
       "Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。",
     "hero.download": "下载桌面安装包",
     "hero.source": "从源码构建",
+    "hero.quickStart": "快速开始",
     "hero.mockUser": "检索 PubMed 上 CRISPR 筛选的最新方法，并画一张流程图。",
     "hero.mockAssistant":
       "已调用 mcp_pubmed 检索 12 篇文献，生成 Markdown 报告与 Python 绘图代码。表格与公式已提取为 artifact。",
@@ -97,7 +99,7 @@ const WISP_PAGES_I18N = {
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 通过 use_skill 工具按需加载 SKILL.md",
     "features.llmTitle": "任意 LLM 后端",
     "features.llmBody":
-      "支持 OpenAI 兼容、OpenAI Responses、Anthropic API，以及本地 <a href=\"acp-agents.html\">ACP Agent</a>。<a href=\"model-configuration.html\">查看 HTTP 模型配置</a>。",
+      "支持 OpenAI 兼容、OpenAI Responses、Anthropic API，以及本地 ACP Agent。<a href=\"tutorials.html\">查看使用教程</a>。",
     "features.ctxTitle": "三层上下文压缩",
     "features.ctxBody":
       "完整历史先归档，安全裁剪 tool/图片噪声；必须移除语义轮次时，先基于原历史生成增量摘要检查点，并保留有界近期上下文。",
@@ -315,7 +317,8 @@ const WISP_PAGES_I18N = {
     "tutorials.kicker": "Learn by doing",
     "tutorials.title": "Tutorials",
     "tutorials.lead": "Start with model setup, then learn browser access, servers, and imports and exports. Use MCP, Skills, and trajectories to carry out and review research tasks.",
-    "tutorials.language": "These tutorials are currently available in Chinese.",
+    "tutorials.language": "Read in Chinese or English using the language switch above.",
+    "tutorials.screenshots": "Screenshots show the Chinese interface; the tutorial text is available in both languages.",
     "tutorials.aria": "Tutorial directory",
     "tutorials.source": "View source",
     "tutorials.back": "Back to tutorials",
@@ -342,6 +345,7 @@ const WISP_PAGES_I18N = {
       "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
     "hero.download": "Download the desktop app",
     "hero.source": "Build from source",
+    "hero.quickStart": "Quick Start",
     "hero.mockUser": "Search PubMed for recent CRISPR screen methods and draft a flowchart.",
     "hero.mockAssistant":
       "Called mcp_pubmed on 12 papers and drafted a Markdown report plus Python plotting code. Tables and equations are already extracted as artifacts.",
@@ -396,7 +400,7 @@ const WISP_PAGES_I18N = {
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nThe agent loads SKILL.md on demand via use_skill",
     "features.llmTitle": "Any LLM backend",
     "features.llmBody":
-      "OpenAI-compatible, OpenAI Responses, Anthropic API, and local <a href=\"acp-agents.html\">ACP agents</a>. <a href=\"model-configuration.html\">See HTTP model configuration</a>.",
+      "OpenAI-compatible, OpenAI Responses, Anthropic API, and local ACP agents. <a href=\"tutorials.html\">Explore the tutorials</a>.",
     "features.ctxTitle": "Three-layer context compression",
     "features.ctxBody":
       "Full history is archived first, then tool/image noise is trimmed safely. When semantic turns must go, an incremental summary checkpoint is written from the original history, and a bounded recent window remains.",
@@ -639,8 +643,9 @@ function wispPagesApply(lang) {
   const page = document.documentElement.dataset.page || "home";
   document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
   document.documentElement.dataset.lang = lang;
-  const title = pack[`meta.${page}.title`];
-  const desc = pack[`meta.${page}.desc`];
+  const root = document.documentElement;
+  const title = root.dataset[lang === "en" ? "titleEn" : "titleZh"] || pack[`meta.${page}.title`];
+  const desc = root.dataset[lang === "en" ? "descEn" : "descZh"] || pack[`meta.${page}.desc`];
   if (title) document.title = title;
   const meta = document.querySelector('meta[name="description"]');
   if (meta && desc) meta.setAttribute("content", desc);
@@ -658,6 +663,21 @@ function wispPagesApply(lang) {
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
     const text = pack[el.dataset.i18nAria];
     if (text != null) el.setAttribute("aria-label", text);
+  });
+  document.querySelectorAll("[data-text-zh][data-text-en]").forEach((el) => {
+    el.textContent = el.getAttribute(`data-text-${lang}`);
+  });
+  document.querySelectorAll("[data-href-zh][data-href-en]").forEach((el) => {
+    el.setAttribute("href", el.getAttribute(`data-href-${lang}`));
+  });
+  // Preserve language in direct URLs and navigation even when storage is blocked.
+  document.querySelectorAll("a[href]").forEach((link) => {
+    const href = link.getAttribute("href");
+    if (!href || href.startsWith("#")) return;
+    const target = new URL(href, location.href);
+    if (target.origin !== location.origin || !target.pathname.endsWith(".html")) return;
+    target.searchParams.set("lang", lang);
+    link.setAttribute("href", href.split(/[?#]/)[0] + target.search + target.hash);
   });
   document.querySelectorAll(".lang-switch [data-lang]").forEach((btn) => {
     btn.setAttribute("aria-pressed", btn.dataset.lang === lang ? "true" : "false");

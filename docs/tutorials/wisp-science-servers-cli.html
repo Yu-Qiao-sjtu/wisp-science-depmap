@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="服务器环境配置 · 教程 | Wisp Science" data-title-en="Server Environment Setup · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：服务器环境配置" data-desc-en="Wisp Science Basics: Server Environment Setup">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -39,9 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
       </nav>
@@ -58,9 +56,11 @@
 
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-servers-cli" data-i18n="tutorials.back">返回教程目录</a></nav>
-<article class="tutorial-article" lang="zh-CN" id="wisp-science-servers-cli" aria-labelledby="article-title">
-<header><h1 id="article-title">Wisp Science基础入门：服务器环境配置</h1>
-<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-i18n="tutorials.source">查看原文</a></header>
+<article class="tutorial-article" id="wisp-science-servers-cli" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：服务器环境配置" data-text-en="Wisp Science Basics: Server Environment Setup">Wisp Science基础入门：服务器环境配置</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-servers-cli.md" data-i18n="tutorials.source">查看原文</a></header>
+<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
+<div class="tutorial-body lang-zh" lang="zh-CN">
 <p>做科研时，文件和计算往往不在同一台电脑上：日常在笔记本里读文献，数据放在实验室服务器，分析需要远程的 Python、R 或 GPU。切换机器时，最容易弄混的是“我现在在哪台机器上”和“这条路径属于哪里”。</p>
 <p>Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍怎样为会话选择计算环境，以及使用应用里的交互终端。</p>
 <blockquote>
@@ -212,9 +212,161 @@ Get-ChildItem
 <blockquote>
 <p>功能细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>和<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/terminal-sessions.md">交互终端说明</a>。本文依据撰写时的项目实现整理，不同版本的界面文字可能略有差异；示例命令和提示词不代表已经执行的远程操作。</p>
 </blockquote>
-
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>Research files and computation often live on different machines: a laptop for reading papers, a lab server for data, and a remote Python, R, or GPU environment for analysis. It is easy to lose track of which machine you are using and which filesystem a path belongs to.</p>
+<p>Wisp Science registers servers, attaches execution environments to conversations, and opens interactive terminals for commands you run yourself. This tutorial starts with an SSH host, then covers selecting a conversation's environment and using the terminal inside the app.</p>
+<blockquote>
+<p>Screenshots show the real frontend in Chinese with simulated server, GPU, and terminal information. <code>gpu.example.org</code> is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.</p>
+</blockquote>
+<p><strong>Distinguish two ways of working.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Entry point</th>
+<th>Who operates it</th>
+<th>Suitable tasks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A conversation's execution environment</td>
+<td>You describe the task; Wisp calls tools in the selected environment</td>
+<td>Read remote data, run analyses, and submit structured tasks</td>
+</tr>
+<tr>
+<td>Wisp's interactive terminal</td>
+<td>You enter commands and the shell executes them</td>
+<td>Inspect directories, debug environments, and monitor output</td>
+</tr>
+</tbody>
+</table></div>
+<p>Server configuration identifies which machine Wisp may use. An interactive terminal lets you type commands yourself. For using the Wisp agent directly from a system terminal, see <a href="wisp-science-cli.html">Wisp Science Advanced</a>.</p>
+<p><strong>Prepare connection details.</strong></p>
+<p>Ask the administrator for the hostname, account, SSH port, and authentication method. Set up any required VPN, jump host, or SSH configuration according to your laboratory's instructions.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Detail</th>
+<th>Example</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name / alias</td>
+<td><code>gpu-lab</code></td>
+<td>How the server appears in Wisp</td>
+</tr>
+<tr>
+<td>Hostname</td>
+<td><code>gpu.example.org</code></td>
+<td>Replace with the actual address</td>
+</tr>
+<tr>
+<td>User</td>
+<td><code>researcher</code></td>
+<td>The remote account, which may differ from your local username</td>
+</tr>
+<tr>
+<td>Port</td>
+<td><code>22</code></td>
+<td>Use the server's configured port</td>
+</tr>
+<tr>
+<td>Identity file</td>
+<td><code>~/.ssh/id_ed25519</code></td>
+<td>A local private-key path; do not paste the private key contents</td>
+</tr>
+</tbody>
+</table></div>
+<p>An existing working <code>ssh</code> login in your system terminal makes these fields easier to verify. When a host-key prompt first appears, compare its fingerprint with the administrator's information. Disabling host verification should not be your routine setup procedure.</p>
+<p><strong>Register the server as an environment.</strong></p>
+<p>Open <strong>Settings → Environments → Add SSH host</strong> and enter the details. Select key/agent or password authentication according to the server's requirements.</p>
+<p><img src="../assets/tutorials/servers/01-add-ssh.png" alt="Add SSH host form with alias, hostname, account, key path, and agent notes" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 1: Hostnames and accounts are teaching placeholders. Agent notes should describe usage rules, not contain passwords or keys.</em></p>
+<p>Useful agent notes might say:</p>
+<blockquote>
+<p>This server is for the current project's analysis. Verify the remote working directory before running anything. Keep large raw data on the server. Submit lengthy computation through the required scheduler, record scripts, parameters, job IDs, and output paths, and do not run long computations on the login node.</p>
+</blockquote>
+<p>Click <strong>Test connection</strong> and add the host after success. Back in the environment list, use <strong>Probe context</strong> to inspect operating system, Python, R, GPU, and scheduler information.</p>
+<p>Being able to log in and having a usable analysis environment are separate checks. If the connection succeeds but Python or R is missing from the probe, check installation and the remote PATH. Use <strong>Configure runtime interpreters</strong> to specify a remote executable path where necessary.</p>
+<p>If you already maintain <code>~/.ssh/config</code>, import its hosts and test and probe them individually. Private-key contents are not copied into Wisp's SQLite database; sensitive password values use the operating system keyring.</p>
+<p><strong>Attach the environment to the conversation and specify the data path.</strong></p>
+<p>Return to the conversation and open <strong>Agent options → Compute</strong> near the lower-left of the composer. Add the server to the current session. The right-side <strong>Environment</strong> panel also offers an attach-server entry point.</p>
+<p><img src="../assets/tutorials/servers/02-context.png" alt="Compute menu showing a server attached to the current session and a default environment selector" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 2: <code>gpu-server</code> is a preconfigured demonstration host. Whether a server is attached and whether it is the default analysis environment are separate states.</em></p>
+<p>Defaults have two levels:</p>
+<ul>
+<li>The global default in <strong>Settings → Environments</strong> provides a starting point for new conversations.</li>
+<li>The current conversation's <strong>Compute</strong> menu can set its own default environment.</li>
+</ul>
+<p>Changing the global default does not rewrite existing conversations. At first, naming the server and remote path explicitly makes the action easier to verify:</p>
+<blockquote>
+<p>On the attached gpu-lab server, check whether /data/project-a/counts.csv exists. Report its size and first five lines. Identify the execution environment actually used. Do not download the full file or modify it.</p>
+</blockquote>
+<p><code>/data/project-a/counts.csv</code> is a remote path. Attaching a server does not make it the same file as local <code>data/counts.csv</code>. For transfers, specify source machine, source path, and destination. Large datasets can remain remote while you retrieve small results or metadata.</p>
+<p><strong>Open an interactive terminal for manual inspection.</strong></p>
+<p>In the right-side <strong>Environment</strong> panel, click <strong>Open terminal</strong> on the environment's card. The terminal appears below the conversation, with its environment identified in the tab.</p>
+<p><img src="../assets/tutorials/servers/03-terminal.png" alt="Remote terminal dock below the conversation and Environment panel" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 3: The conversation and terminal remain in one window. “terminal ready” is mock output that demonstrates the layout, not a real SSH login result.</em></p>
+<p>For a Linux/macOS shell or a remote Linux shell, start with read-only checks:</p>
+<pre><code class="language-bash">hostname
+pwd
+ls -lh
+</code></pre>
+<p>These identify the machine, current directory, and directory contents. An SSH terminal normally starts in the remote user's home directory, not the local project directory. Change to the appropriate remote project directory before using its files.</p>
+<p>The local terminal on Windows uses PowerShell by default:</p>
+<pre><code class="language-powershell">hostname
+Get-Location
+Get-ChildItem
+</code></pre>
+<p>You can open several terminals for one environment. Switching tabs or collapsing the dock keeps them running. Closing a terminal tab terminates its process. Tabs and scrollback do not survive an app restart and are not included in project sync.</p>
+<p><strong>Keep durable records for long computations.</strong></p>
+<p>An interactive terminal is useful for debugging. An analysis running for hours also needs status, cancellation, logs, and output locations. Ask Wisp to use a structured Run instead of waiting indefinitely inside an ordinary shell call:</p>
+<blockquote>
+<p>Check the environment on gpu-lab and prepare a plan for analysis/run_qc.py. List input paths, output directory, and resource requirements. Wait for my confirmation before submitting through a structured Run. If this machine requires a scheduler, use its required submission method and record the job ID.</p>
+</blockquote>
+<p>Submit only when the environment and execution method match the task. Registering a GPU host does not automatically make every script use a GPU, and attaching a server does not convert arbitrary commands into scheduler jobs.</p>
+<p>Review Run status, logs, files, and the <a href="wisp-science-trajectory.html">trajectory</a> together. A terminal reporting that a command was sent does not prove the computation succeeded.</p>
+<p><strong>Check the machine before the command.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SSH connection fails</td>
+<td>Hostname, port, account, VPN/jump host, and authentication</td>
+</tr>
+<tr>
+<td>System SSH login works but Wisp's probe fails</td>
+<td>Login startup scripts, restricted shells, and whether non-interactive commands execute</td>
+</tr>
+<tr>
+<td>Wisp still uses the local machine</td>
+<td>Session attachment, conversation default, and the task's explicit environment</td>
+</tr>
+<tr>
+<td>File not found</td>
+<td>Whether the path is local or remote and the terminal's current directory</td>
+</tr>
+<tr>
+<td>Python/R package missing</td>
+<td>Which interpreter is actually running and whether the package is installed there</td>
+</tr>
+</tbody>
+</table></div>
+<p>For a first exercise, test the connection, probe the environment, attach the server, and inspect one small file. Before starting real computation, make sure you can identify the machine, path, and result at every step.</p>
+<blockquote>
+<p>See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Basic Configuration</a> and <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/terminal-sessions.md">Interactive Terminals</a>. This tutorial reflects the implementation when written; labels may vary by version. Example commands and prompts do not represent completed remote operations.</p>
+</blockquote>
+</div>
 </article>
-<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-browser.html"><span data-i18n="tutorials.previous">上一篇</span><strong lang="zh-CN">浏览器使用</strong></a><a class="tutorial-next" href="wisp-science-transfer.html"><span data-i18n="tutorials.next">下一篇</span><strong lang="zh-CN">导入、导出与分享</strong></a></nav>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-browser.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="浏览器使用" data-text-en="Using the Browser">浏览器使用</strong></a><a class="tutorial-next" href="wisp-science-transfer.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="导入、导出与分享" data-text-en="Import, Export, and Sharing">导入、导出与分享</strong></a></nav>
 <div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-servers-cli" data-i18n="tutorials.back">返回教程目录</a></div>
   </main>
 
@@ -227,9 +379,7 @@ Get-ChildItem
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="../model-configuration.html" data-i18n="nav.models">模型配置</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="../acp-agents.html" data-i18n="nav.acp">ACP</a>
         <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
         <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>

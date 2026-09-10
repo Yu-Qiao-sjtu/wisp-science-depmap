@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="ACP配置 · 教程 | Wisp Science" data-title-en="ACP Configuration · Tutorials | Wisp Science" data-desc-zh="Wisp Science高级：ACP配置" data-desc-en="Wisp Science Advanced: ACP Configuration">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science高级：ACP配置">
+  <title>ACP配置 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-acp" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" id="wisp-science-acp" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science高级：ACP配置" data-text-en="Wisp Science Advanced: ACP Configuration">Wisp Science高级：ACP配置</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-acp.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-acp.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-acp.md" data-i18n="tutorials.source">查看原文</a></header>
+<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
+<div class="tutorial-body lang-zh" lang="zh-CN">
+<p>如果你已经在使用 Codex、Claude 等外部 Agent，希望在 Wisp Science 的项目界面里继续使用它们，可以通过 ACP 接入。Wisp 负责项目界面、消息和权限交互，外部 Agent 负责自己的会话、工具与认证。</p>
+<p>这篇教程从准备本机适配器开始，介绍配置、测试和第一次对话。普通 API 模型的配置见<a href="wisp-science-models.html">模型配置教程</a>。</p>
+<p><strong>先区分 HTTP 模型与 ACP Agent。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>方式</th>
+<th>配置入口</th>
+<th>执行任务的 Agent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTP 模型</td>
+<td>设置 → 模型 → Models → 添加 API 接入</td>
+<td>Wisp 内置 Agent，通过 API 调用模型</td>
+</tr>
+<tr>
+<td>ACP Agent</td>
+<td>设置 → 模型 → ACP Agents → 添加 ACP Agent</td>
+<td>本机启动的外部 Agent 进程</td>
+</tr>
+</tbody>
+</table></div>
+<p>ACP 是 Agent Client Protocol。Wisp 通过本地标准输入输出连接支持 ACP v1 的进程。这里填写的是启动适配器的命令，不是模型 API 地址。</p>
+<p>不要把普通 <code>codex</code>、<code>claude</code> 或 <code>claude -p</code> 命令直接填进 ACP 表单；应使用对应的 ACP 适配器。登录与密钥由外部 Agent 管理，不会因为配置了 Wisp 的 HTTP 模型而自动完成。</p>
+<p><strong>开始前，准备运行环境和适配器。</strong></p>
+<p>先安装适配器需要的 Node.js，并按对应 Agent 的说明完成安装和登录。可以使用以下适配器：</p>
+<ul>
+<li><a href="https://github.com/agentclientprotocol/codex-acp">Codex ACP</a>：<code>@agentclientprotocol/codex-acp</code>。</li>
+<li><a href="https://github.com/agentclientprotocol/claude-agent-acp">Claude Agent ACP</a>：<code>@agentclientprotocol/claude-agent-acp</code>。</li>
+</ul>
+<p>先在系统终端检查适配器是否能启动。ACP 进程等待标准输入中的协议消息时，不会像普通聊天 CLI 一样立即显示对话提示，这不一定表示出错。</p>
+<p><strong>在模型设置中切换到 ACP Agents。</strong></p>
+<p>打开项目，进入 <strong>设置 → 模型</strong>，选择顶部 <strong>ACP Agents</strong> 分类，再点击 <strong>添加 ACP Agent</strong>。点击已有列表行可以编辑配置。</p>
+<p><img src="../assets/basic-configuration/03-acp-agents.png" alt="模型设置中的 ACP Agents 分类" loading="lazy" width="1491" height="768" /></p>
+<p><em>图 1：ACP Agents 与普通 HTTP 模型分开管理。截图展示中文界面，具体布局可能随版本调整。</em></p>
+<p>填写以下字段：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>字段</th>
+<th>填写方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>显示名称</td>
+<td>便于识别的名称，例如 <code>Codex ACP</code></td>
+</tr>
+<tr>
+<td>命令</td>
+<td>只填写可执行文件名或完整路径</td>
+</tr>
+<tr>
+<td>参数</td>
+<td>每个参数单独一行，不要把整条命令拼进命令字段</td>
+</tr>
+</tbody>
+</table></div>
+<p><img src="../assets/basic-configuration/04-add-acp-agent.png" alt="添加 ACP Agent 的命令与参数表单" loading="lazy" width="1491" height="768" /></p>
+<p><em>图 2：命令与参数分别填写。Windows 使用 <code>npx</code> 启动时通常填写 <code>npx.cmd</code>，必要时改为完整路径。</em></p>
+<p><strong>示例一：通过 npx 启动 Codex ACP。</strong></p>
+<p>先在终端验证：</p>
+<pre><code class="language-bash">npx -y @agentclientprotocol/codex-acp --version
+</code></pre>
+<p>在 Wisp 中将名称填为 <code>Codex ACP</code>，命令填为 <code>npx</code>；Windows 通常使用 <code>npx.cmd</code>。参数框填写两行：</p>
+<pre><code class="language-text">-y
+@agentclientprotocol/codex-acp
+</code></pre>
+<p>如果希望先全局安装，可以运行：</p>
+<pre><code class="language-bash">npm install -g @agentclientprotocol/codex-acp
+codex-acp --version
+</code></pre>
+<p>全局安装后，命令字段可填 <code>codex-acp</code> 或其可执行文件完整路径，参数留空。按适配器说明配置底层 Agent 的认证；需要指定特定 Codex 程序时，参考适配器的 <code>CODEX_PATH</code> 说明。</p>
+<p><strong>示例二：接入 Claude Agent ACP。</strong></p>
+<p>同样可以先检查：</p>
+<pre><code class="language-bash">npx -y @agentclientprotocol/claude-agent-acp --version
+</code></pre>
+<p>名称填 <code>Claude ACP</code>，命令填 <code>npx</code> 或 Windows 上的 <code>npx.cmd</code>，参数分两行：</p>
+<pre><code class="language-text">-y
+@agentclientprotocol/claude-agent-acp
+</code></pre>
+<p>也可以全局安装后使用 <code>claude-agent-acp</code>，参数留空：</p>
+<pre><code class="language-bash">npm install -g @agentclientprotocol/claude-agent-acp
+claude-agent-acp --version
+</code></pre>
+<p>以上命令用于展示启动方式，不代表已经完成安装或认证。只配置你实际准备使用的 Agent 即可。</p>
+<p><strong>保存、测试，再完成认证。</strong></p>
+<p>保存 Agent 后点击 <strong>测试连接</strong>。测试成功表示进程能够启动，并完成 ACP <code>initialize</code>，不代表所有任务权限和服务额度都已验证。</p>
+<p>如果出现认证按钮，按 Agent 返回的方式操作。有些认证直接通过 Agent 完成；需要终端登录的方式，会在 Wisp 的终端面板中打开适配器提供的登录命令。完成登录后，再测试或开始会话。凭据由 Agent 管理，Wisp 不会将它们写入 SQLite。</p>
+<p><strong>新建空会话，进行第一次测试。</strong></p>
+<p>回到对话，在空会话的模型选择器中选中对应 ACP Agent，发送一个简单问题：</p>
+<blockquote>
+<p>请用两句话解释 CSV 文件，并给出一个包含两行数据的示例。不要读取文件或运行命令。</p>
+</blockquote>
+<p>首条消息后，这段会话会绑定到所选 Agent。从已有消息的普通对话选择 ACP 时，Wisp 会创建新的空会话，并保留输入框草稿。希望切回普通 HTTP 模型时，也应新建空会话再选择。</p>
+<p>任务期间的权限卡会展示 Agent 提供的选项。若 Agent 支持 model、mode 等会话配置，可通过发送按钮旁的 ACP 模型菜单调整；停止按钮用于取消当前 ACP 回合。</p>
+<p>Wisp 会向用户自己的 ACP 会话提供科研 MCP bridge，让外部 Agent 在项目范围内发现并使用可用的科学工具。具体能力和权限仍以当前会话提供的配置为准。</p>
+<p><strong>连接失败时，先修复 ACP 配置再重试。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>测试立即失败</td>
+<td>可执行文件是否在 PATH，参数是否分行，Windows 是否需要 <code>npx.cmd</code></td>
+</tr>
+<tr>
+<td>认证失败</td>
+<td>底层 Agent 是否完成登录或 API Key 配置，是否需要终端交互</td>
+</tr>
+<tr>
+<td>提示会话选择已锁定</td>
+<td>新建空会话，再选择另一种后端</td>
+</tr>
+<tr>
+<td>修改命令或项目路径后无法继续</td>
+<td>使用新会话；旧会话的启动配置和路径可能已不匹配</td>
+</tr>
+<tr>
+<td>启动、断连或恢复失败</td>
+<td>查看原始错误，检查连接与登录，再重新发送消息</td>
+</tr>
+</tbody>
+</table></div>
+<p>ACP 失败不会自动切换成 HTTP 模型。如果要改用 HTTP，明确新建对话并选择对应模型。普通 HTTP 模型的调用可能使用另一套账号或额度。</p>
+<p>当前 ACP 接入使用本机 stdio，不支持直接把 WSL／SSH／远程 URL 当作 ACP 启动环境，也没有应用内适配器安装市场。重启后能否恢复会话，还取决于适配器的恢复能力，以及配置和项目路径是否保持一致。</p>
+<blockquote>
+<p>完整行为与能力边界见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/acp-agents.md">ACP Agents 文档</a>。本文依据撰写时的项目实现整理，截图与命令用于说明配置流程，不代表已经完成外部 Agent 登录或调用。</p>
+</blockquote>
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>If you already use an external agent such as Codex or Claude and want to work with it inside Wisp Science's project interface, connect it through ACP. Wisp provides the project UI, messaging, and permission interactions; the external agent owns its session, tools, and authentication.</p>
+<p>This tutorial covers preparing a local adapter, configuring it, testing the connection, and starting a conversation. For ordinary model APIs, see <a href="wisp-science-models.html">Model Configuration</a>.</p>
+<p><strong>Distinguish HTTP models from ACP agents.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Method</th>
+<th>Settings entry</th>
+<th>Agent performing the task</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTP model</td>
+<td>Settings → Models → Models → Add API access</td>
+<td>Wisp's built-in agent, calling a model API</td>
+</tr>
+<tr>
+<td>ACP agent</td>
+<td>Settings → Models → ACP Agents → Add ACP Agent</td>
+<td>An external process started locally</td>
+</tr>
+</tbody>
+</table></div>
+<p>ACP is the Agent Client Protocol. Wisp connects to an ACP v1 process over local standard input and output. Enter an adapter launch command, not an API address.</p>
+<p>Do not put bare <code>codex</code>, <code>claude</code>, or <code>claude -p</code> commands in the ACP form. Use the appropriate ACP adapter. External-agent login and keys are separate from Wisp's HTTP model configuration.</p>
+<p><strong>Prepare the runtime and adapter.</strong></p>
+<p>Install the Node.js runtime required by the adapter, then install and authenticate the underlying agent according to its instructions. Available adapters include:</p>
+<ul>
+<li><a href="https://github.com/agentclientprotocol/codex-acp">Codex ACP</a>: <code>@agentclientprotocol/codex-acp</code>.</li>
+<li><a href="https://github.com/agentclientprotocol/claude-agent-acp">Claude Agent ACP</a>: <code>@agentclientprotocol/claude-agent-acp</code>.</li>
+</ul>
+<p>Verify that the adapter starts in a system terminal. An ACP process may wait for protocol messages on stdin rather than show an ordinary chat prompt; that alone does not indicate a failure.</p>
+<p><strong>Switch Models settings to ACP Agents.</strong></p>
+<p>Open a project, go to <strong>Settings → Models</strong>, select <strong>ACP Agents</strong>, and click <strong>Add ACP Agent</strong>. Click an existing row to edit it.</p>
+<p><img src="../assets/basic-configuration/03-acp-agents.png" alt="ACP Agents category in Models settings" loading="lazy" width="1491" height="768" /></p>
+<p><em>Figure 1: ACP agents and HTTP models are managed separately. Screenshots use the Chinese interface; layouts may vary between versions.</em></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Field</th>
+<th>What to enter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Label</td>
+<td>A recognizable name, such as <code>Codex ACP</code></td>
+</tr>
+<tr>
+<td>Command</td>
+<td>Only an executable name or its full path</td>
+</tr>
+<tr>
+<td>Arguments</td>
+<td>One argument per line; do not paste the whole command into Command</td>
+</tr>
+</tbody>
+</table></div>
+<p><img src="../assets/basic-configuration/04-add-acp-agent.png" alt="ACP agent form with separate command and argument fields" loading="lazy" width="1491" height="768" /></p>
+<p><em>Figure 2: Keep Command and Arguments separate. On Windows, use <code>npx.cmd</code> when launching through npx, or its full path if necessary.</em></p>
+<p><strong>Example 1: start Codex ACP through npx.</strong></p>
+<p>Check in a terminal:</p>
+<pre><code class="language-bash">npx -y @agentclientprotocol/codex-acp --version
+</code></pre>
+<p>In Wisp, use label <code>Codex ACP</code> and command <code>npx</code>, or normally <code>npx.cmd</code> on Windows. Put these on two separate argument lines:</p>
+<pre><code class="language-text">-y
+@agentclientprotocol/codex-acp
+</code></pre>
+<p>For a global installation:</p>
+<pre><code class="language-bash">npm install -g @agentclientprotocol/codex-acp
+codex-acp --version
+</code></pre>
+<p>Then use <code>codex-acp</code> or its full executable path as Command and leave Arguments empty. Follow the adapter's instructions for underlying-agent authentication. See its <code>CODEX_PATH</code> documentation if you need a particular Codex executable.</p>
+<p><strong>Example 2: connect Claude Agent ACP.</strong></p>
+<p>Check the adapter:</p>
+<pre><code class="language-bash">npx -y @agentclientprotocol/claude-agent-acp --version
+</code></pre>
+<p>Use label <code>Claude ACP</code>, command <code>npx</code> or <code>npx.cmd</code> on Windows, and two argument lines:</p>
+<pre><code class="language-text">-y
+@agentclientprotocol/claude-agent-acp
+</code></pre>
+<p>Or install it globally and use <code>claude-agent-acp</code> with empty Arguments:</p>
+<pre><code class="language-bash">npm install -g @agentclientprotocol/claude-agent-acp
+claude-agent-acp --version
+</code></pre>
+<p>These demonstrate launch configurations, not completed installation or authentication. Configure only the agent you intend to use.</p>
+<p><strong>Save, test, and authenticate.</strong></p>
+<p>Save the agent, then click <strong>Test Connection</strong>. Success means the process started and completed ACP <code>initialize</code>; it does not verify every task permission or service quota.</p>
+<p>If authentication buttons appear, follow the methods advertised by the agent. Some operate through the agent directly. Terminal methods open the adapter's advertised login command in Wisp's terminal dock. Complete login, then test or start the session again. Credentials remain with the agent and are not written to Wisp's SQLite database.</p>
+<p><strong>Try a simple request in an empty conversation.</strong></p>
+<p>Select the ACP agent in an empty conversation's model picker and send:</p>
+<blockquote>
+<p>Explain CSV files in two sentences and provide an example with two data rows. Do not read files or run commands.</p>
+</blockquote>
+<p>The first message binds the conversation to that agent. Selecting ACP from an ordinary conversation that already has messages creates a new empty session and preserves the composer draft. To return to an HTTP model, start another empty session and select that model.</p>
+<p>Permission cards display the agent's supplied choices. If it advertises session settings such as model or mode, adjust them in the ACP model menu beside Send. Stop cancels the active ACP turn.</p>
+<p>Wisp provides its scientific MCP bridge to user-owned ACP sessions, allowing the external agent to discover and use available scientific tools in project scope. Actual capabilities and permissions depend on the current session configuration.</p>
+<p><strong>Fix the ACP connection before retrying.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Test fails immediately</td>
+<td>Executable PATH, one argument per line, and whether Windows needs <code>npx.cmd</code></td>
+</tr>
+<tr>
+<td>Authentication fails</td>
+<td>Underlying agent login/key and any required interactive terminal flow</td>
+</tr>
+<tr>
+<td>Session selection is locked</td>
+<td>Start a new empty session before choosing another backend</td>
+</tr>
+<tr>
+<td>A changed command or project path prevents continuation</td>
+<td>Start a new session; the old launch configuration or path may no longer match</td>
+</tr>
+<tr>
+<td>Startup, disconnect, or resume failure</td>
+<td>Original error, connection, and login; resend after fixing the cause</td>
+</tr>
+</tbody>
+</table></div>
+<p>ACP failure does not silently switch to an HTTP model. To use HTTP instead, explicitly start a new conversation and select it. HTTP calls may use a different account or quota.</p>
+<p>ACP currently uses local stdio. It does not directly launch an ACP agent through WSL, SSH, or a remote URL, and there is no in-app adapter installation marketplace. Resuming after restart depends on adapter support and matching launch configuration and project path.</p>
+<blockquote>
+<p>See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/acp-agents.md">ACP Agents</a> for full behavior and capability boundaries. This tutorial reflects the implementation when written. Screenshots and commands illustrate setup, not completed external-agent logins or calls.</p>
+</blockquote>
+</div>
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-cli.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="Wisp Science进阶" data-text-en="Wisp Science Advanced">Wisp Science进阶</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-acp" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

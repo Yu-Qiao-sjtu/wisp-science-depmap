@@ -26,7 +26,7 @@ Wisp Science 把科研工作区与模型接入分开管理。你可以保留同�
 
 *图 1：先检查已有模型。显示名称便于自己区分用途，实际调用仍依赖模型 ID、协议和地址。*
 
-这个页面也有 **ACP Agents** 分类，用来接入外部 Agent 进程。本文先介绍 Wisp 内置 Agent 使用的 HTTP API 模型。手里拿到的是命令行启动命令时，应查看 [ACP 配置说明](../acp-agents.md)。
+这个页面也有 **ACP Agents** 分类，用来接入外部 Agent 进程。本文先介绍 Wisp 内置 Agent 使用的 HTTP API 模型。手里拿到的是命令行启动命令时，应查看 [ACP 配置说明](wisp-science-acp.md)。
 
 **添加 API 接入，先填写共用信息，再添加模型。**
 

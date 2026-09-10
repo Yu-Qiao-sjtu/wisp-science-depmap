@@ -77,7 +77,8 @@ a skill with `/`. Encrypted [manual sync](docs/project-sync.md) and
 | macOS    | Signed, notarized `.dmg` (Apple Silicon + Intel) |
 | Linux    | `.deb` / AppImage (x86_64 + aarch64) |
 
-Setup walkthrough: [basic configuration](docs/basic-configuration.md) ·
+Setup walkthrough: [Quick Start](docs/wechat/en/wisp-science-quick-start.md) ·
+[basic configuration](docs/basic-configuration.md) ·
 [model profiles](docs/model-configuration.md) ·
 [ACP agents](docs/acp-agents.md)
 
