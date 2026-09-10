@@ -303,3 +303,54 @@ test("large output days load previews in small groups", async ({ page }) => {
   await expect(outputs).toHaveCount(8);
   await expect(page.getByRole("button",{name:"Show more outputs",exact:true})).toHaveCount(0);
 });
+
+test("research journey does not reserve classic scrollbar gutters", async ({ page }) => {
+  await page.setViewportSize({ width: 1488, height: 900 });
+  await open(page);
+  const metrics = (el: Element) => ({
+    gutter: getComputedStyle(el).scrollbarGutter,
+    width: getComputedStyle(el, "::-webkit-scrollbar").width,
+    thumb: getComputedStyle(el, "::-webkit-scrollbar-thumb").backgroundColor,
+  });
+  await expect.poll(() => page.getByTestId("journey-feed").evaluate(metrics)).toEqual({
+    gutter: "auto",
+    width: "10px",
+    thumb: "rgba(0, 0, 0, 0)",
+  });
+  await expect.poll(() => page.locator(".journey-aside").evaluate(metrics)).toEqual({
+    gutter: "auto",
+    width: "10px",
+    thumb: "rgba(0, 0, 0, 0)",
+  });
+});
+
+test("relationship list scrolls under the wheel over a middle column", async ({ page }) => {
+  await page.setViewportSize({ width: 1488, height: 900 });
+  await open(page, "?mockLocale=zh&mockGraph=dense");
+  const journey = page.getByTestId("research-journey");
+  await journey.getByRole("tab", { name: "关系图", exact: true }).click();
+  const list = journey.getByTestId("research-graph-list");
+  const board = journey.getByTestId("journey-relationships");
+  await expect(list.locator(".graph-node")).toHaveCount(77);
+  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight + 40)).toBe(true);
+  expect(await board.evaluate((el) => {
+    const overflowY = getComputedStyle(el).overflowY;
+    return (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 1;
+  })).toBe(false);
+  const runCard = list.locator(".control-section")
+    .filter({ has: page.locator(".control-section-head", { hasText: "运行" }) })
+    .locator(".graph-node").first();
+  await runCard.hover();
+  const before = await list.evaluate((el) => el.scrollTop);
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(before + 40);
+  await journey.getByRole("button", { name: "图谱", exact: true }).click();
+  const canvas = journey.getByTestId("research-graph-canvas");
+  await expect(canvas).toBeVisible();
+  expect(await canvas.evaluate((el) => el.scrollHeight > el.clientHeight + 40)).toBe(true);
+  const canvasBox = (await canvas.boundingBox())!;
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+  const canvasBefore = await canvas.evaluate((el) => el.scrollTop);
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => canvas.evaluate((el) => el.scrollTop)).toBeGreaterThan(canvasBefore + 40);
+});

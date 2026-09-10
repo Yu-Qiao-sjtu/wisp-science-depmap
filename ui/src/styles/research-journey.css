@@ -23,7 +23,7 @@ body:has(.window-titlebar) .research-journey { top: 38px; }
 .journey-search { display: flex; align-items: center; gap: 10px; background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: var(--radius-xs); padding: 7px 12px; width: min(36%,340px); color: var(--text-faint); margin-bottom: 6px; }
 .journey-search input { background: transparent; border: 0; outline: 0; min-width: 0; width: 100%; color: var(--text); font: inherit; }
 .journey-body { display: grid; grid-template-columns: minmax(0,1fr) 342px; gap: 24px; overflow: hidden; flex: 1; min-height: 0; padding: 24px 28px 0; }
-.journey-feed { min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 8px; }
+.journey-feed { min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 8px; }
 .journey-day { display: grid; grid-template-columns: 104px minmax(0,1fr); padding: 0 0 24px; margin-bottom: 24px; border-bottom: 1px solid var(--border); scroll-margin-top: 12px; }
 .journey-day-date { display: flex; flex-direction: column; gap: 1px; position: relative; padding: 3px 18px 0 0; }
 .journey-day-date strong { font-size: 17px; letter-spacing: .02em; }
@@ -69,7 +69,7 @@ body:has(.window-titlebar) .research-journey { top: 38px; }
 .journey-link:hover { text-decoration: underline; }
 .journey-collapsed-outputs { display: flex; flex-wrap: wrap; gap: 6px 20px; }
 .journey-collapsed-outputs .journey-link { color: var(--text-muted); font-size: 11px; }
-.journey-aside { border-left: 1px solid var(--border); padding: 0 0 24px 24px; overflow: auto; scrollbar-gutter: stable; }
+.journey-aside { border-left: 1px solid var(--border); padding: 0 0 24px 24px; overflow: auto; }
 .journey-calendar { padding: 0 0 22px; border-bottom: 1px solid var(--border); }
 .journey-calendar-head { display: flex; align-items: center; gap: 2px; margin-bottom: 12px; }
 .journey-calendar-head strong { margin-right: auto; font-size: 16px; }
@@ -99,8 +99,37 @@ body:has(.window-titlebar) .research-journey { top: 38px; }
 .journey-empty { padding: 60px 24px; text-align: center; color: var(--text-muted); max-width: 620px; margin: auto; }
 .journey-empty h2 { font: 600 22px var(--font-serif); color: var(--text); }
 .journey-notice { color: var(--warn); font-size: 12px; }
-.journey-graph { padding: 16px 28px; overflow: auto; flex: 1; }
-.journey-graph-tools { display: flex; justify-content: space-between; align-items: center; color: var(--text-faint); }
+/* The list/canvas is the only scrollport. Nested overflow:auto plus
+   overscroll-behavior:contain on an unconstrained list swallows wheel
+   events over the columns, so only the outer right padding scrolled. */
+.journey-graph { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; padding: 16px 28px 0; overflow: hidden; }
+.journey-graph-tools { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; color: var(--text-faint); }
+.journey-graph .research-graph-list,
+.journey-graph .research-graph-canvas,
+.journey-graph .research-graph-empty { flex: 1 1 auto; min-height: 0; }
+.journey-graph .research-edge-detail { flex: 0 0 auto; }
+/* Stable gutters force classic Windows tracks that split the page. Overlay
+   the themed thumb and keep it quiet until the pane is hovered. */
+.research-journey .journey-feed,
+.research-journey .journey-aside,
+.research-journey .research-graph-list,
+.research-journey .research-graph-canvas { scrollbar-gutter: auto; }
+.research-journey .journey-feed::-webkit-scrollbar-thumb,
+.research-journey .journey-aside::-webkit-scrollbar-thumb,
+.research-journey .research-graph-list::-webkit-scrollbar-thumb,
+.research-journey .research-graph-canvas::-webkit-scrollbar-thumb { background: transparent; }
+.research-journey .journey-feed:hover::-webkit-scrollbar-thumb,
+.research-journey .journey-feed:focus-within::-webkit-scrollbar-thumb,
+.research-journey .journey-aside:hover::-webkit-scrollbar-thumb,
+.research-journey .journey-aside:focus-within::-webkit-scrollbar-thumb,
+.research-journey .research-graph-list:hover::-webkit-scrollbar-thumb,
+.research-journey .research-graph-list:focus-within::-webkit-scrollbar-thumb,
+.research-journey .research-graph-canvas:hover::-webkit-scrollbar-thumb,
+.research-journey .research-graph-canvas:focus-within::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: var(--scrollbar-thumb-inset) solid transparent;
+  background-clip: padding-box;
+}
 .journey-detail-overlay { z-index: 80; }
 .journey-editor { width: min(560px,100%); padding: 24px; max-height: 88vh; overflow: auto; }
 .journey-editor label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin: 16px 0; }

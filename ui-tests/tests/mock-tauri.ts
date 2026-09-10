@@ -1535,6 +1535,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     code_preview: String(code ?? "").slice(0, 512),
   });
   const libraryVersions: Record<string, any[]> = {};
+  const denseGraph = new URL(location.href).searchParams.get("mockGraph") === "dense";
   const researchGraph = {
     nodes: [
       { id: "d1", kind: "decision", title: "Use DESeq2 over edgeR", ref_id: null, metadata_json: JSON.stringify({ rationale: "Better fit for the replicate design" }) },
@@ -1542,6 +1543,14 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       { id: "a1", kind: "data_asset", title: "counts.tsv", ref_id: "data/counts.tsv", metadata_json: JSON.stringify({ rows: 24567 }) },
       { id: "run:r1", kind: "run", title: "DESeq2 differential expression", ref_id: "r1", metadata_json: "{}" },
       { id: "artifact:h1", kind: "artifact", title: "deseq2_results.tsv", ref_id: "h1", metadata_json: "{}" },
+      ...(denseGraph ? Array.from({ length: 36 }, (_, i) => ({
+        id: `run:extra-${i}`, kind: "run", title: `Europe PMC harvest ${i + 1}`,
+        ref_id: `extra-run-${i}`, metadata_json: "{}",
+      })) : []),
+      ...(denseGraph ? Array.from({ length: 36 }, (_, i) => ({
+        id: `artifact:extra-${i}`, kind: "artifact", title: `scplantdb_datasets_${i}.csv`,
+        ref_id: `extra-art-${i}`, metadata_json: "{}",
+      })) : []),
     ],
     edges: [
       { source_id: "d1", target_id: "p1", relation: "cites", metadata_json: JSON.stringify({ confidence: "high", evidence: "Methods section" }) },
