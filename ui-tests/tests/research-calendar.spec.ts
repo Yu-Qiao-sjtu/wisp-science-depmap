@@ -173,6 +173,37 @@ test("failed project drill-down returns to a recoverable home screen", async ({ 
   await expect(page.getByTestId("research-journey")).toBeVisible();
 });
 
+test("returning home before a calendar project opens prevents a late journey page", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const invoke = core.invoke;
+    core.invoke = (cmd: string, args: any) => {
+      const id = args instanceof Map ? args.get("id") : args?.id;
+      if (cmd === "open_project" && id === "other") {
+        return new Promise((resolve, reject) => {
+          (window as any).__releaseCalendarProjectOpen = () => {
+            core.invoke = invoke;
+            return invoke(cmd, args).then(resolve, reject);
+          };
+        });
+      }
+      return invoke(cmd, args);
+    };
+  });
+  await page.getByTestId("home-calendar-details").getByRole("button", { name: "Other project · Research journey", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseCalendarProjectOpen)).toBe("function");
+  await page.getByRole("button", { name: "Back to projects", exact: true }).click();
+  await expect(page.locator(".projects-screen")).toBeVisible();
+  await page.evaluate(() => (window as any).__releaseCalendarProjectOpen());
+  // This read is issued after the delayed open completes and attempts to show
+  // its requested day. Wait for that boundary rather than using a fixed sleep.
+  await expect.poll(() => page.evaluate(() => ((window as any).__skillInvokeLog ?? [])
+    .filter((call: any) => call.cmd === "get_research_graph").length)).toBeGreaterThan(0);
+  await expect(page.getByTestId("research-journey")).toHaveCount(0);
+  await expect(page.locator(".projects-screen")).toBeVisible();
+});
+
 test("capture home calendar visual QA", async ({ page }, testInfo) => {
   await page.setViewportSize({width:1488,height:1058});
   await page.goto("/?mockLocale=zh&mockJourney=design");
