@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-servers-cli" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science基础入门：服务器环境配置" data-text-en="Wisp Science Basics: Server Environment Setup">Wisp Science基础入门：服务器环境配置</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-servers-cli.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-servers-cli.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>做科研时，文件和计算往往不在同一台电脑上：日常在笔记本里读文献，数据放在实验室服务器，分析需要远程的 Python、R 或 GPU。切换机器时，最容易弄混的是“我现在在哪台机器上”和“这条路径属于哪里”。</p>
 <p>Wisp Science 可以登记服务器，把计算环境附加到对话，也能打开交互终端，让你亲自检查目录和命令。这篇文章从添加一台 SSH 主机开始，再介绍怎样为会话选择计算环境，以及使用应用里的交互终端。</p>
@@ -217,7 +217,7 @@ Get-ChildItem
 <p>Research files and computation often live on different machines: a laptop for reading papers, a lab server for data, and a remote Python, R, or GPU environment for analysis. It is easy to lose track of which machine you are using and which filesystem a path belongs to.</p>
 <p>Wisp Science registers servers, attaches execution environments to conversations, and opens interactive terminals for commands you run yourself. This tutorial starts with an SSH host, then covers selecting a conversation's environment and using the terminal inside the app.</p>
 <blockquote>
-<p>Screenshots show the real frontend in Chinese with simulated server, GPU, and terminal information. <code>gpu.example.org</code> is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.</p>
+<p>Screenshots show the real frontend in English with simulated server, GPU, and terminal information. <code>gpu.example.org</code> is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.</p>
 </blockquote>
 <p><strong>Distinguish two ways of working.</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
@@ -283,7 +283,7 @@ Get-ChildItem
 <p>An existing working <code>ssh</code> login in your system terminal makes these fields easier to verify. When a host-key prompt first appears, compare its fingerprint with the administrator's information. Disabling host verification should not be your routine setup procedure.</p>
 <p><strong>Register the server as an environment.</strong></p>
 <p>Open <strong>Settings → Environments → Add SSH host</strong> and enter the details. Select key/agent or password authentication according to the server's requirements.</p>
-<p><img src="../assets/tutorials/servers/01-add-ssh.png" alt="Add SSH host form with alias, hostname, account, key path, and agent notes" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/servers/01-add-ssh.png" alt="Add SSH host form with alias, hostname, account, key path, and agent notes" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 1: Hostnames and accounts are teaching placeholders. Agent notes should describe usage rules, not contain passwords or keys.</em></p>
 <p>Useful agent notes might say:</p>
 <blockquote>
@@ -294,7 +294,7 @@ Get-ChildItem
 <p>If you already maintain <code>~/.ssh/config</code>, import its hosts and test and probe them individually. Private-key contents are not copied into Wisp's SQLite database; sensitive password values use the operating system keyring.</p>
 <p><strong>Attach the environment to the conversation and specify the data path.</strong></p>
 <p>Return to the conversation and open <strong>Agent options → Compute</strong> near the lower-left of the composer. Add the server to the current session. The right-side <strong>Environment</strong> panel also offers an attach-server entry point.</p>
-<p><img src="../assets/tutorials/servers/02-context.png" alt="Compute menu showing a server attached to the current session and a default environment selector" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/servers/02-context.png" alt="Compute menu showing a server attached to the current session and a default environment selector" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: <code>gpu-server</code> is a preconfigured demonstration host. Whether a server is attached and whether it is the default analysis environment are separate states.</em></p>
 <p>Defaults have two levels:</p>
 <ul>
@@ -308,7 +308,7 @@ Get-ChildItem
 <p><code>/data/project-a/counts.csv</code> is a remote path. Attaching a server does not make it the same file as local <code>data/counts.csv</code>. For transfers, specify source machine, source path, and destination. Large datasets can remain remote while you retrieve small results or metadata.</p>
 <p><strong>Open an interactive terminal for manual inspection.</strong></p>
 <p>In the right-side <strong>Environment</strong> panel, click <strong>Open terminal</strong> on the environment's card. The terminal appears below the conversation, with its environment identified in the tab.</p>
-<p><img src="../assets/tutorials/servers/03-terminal.png" alt="Remote terminal dock below the conversation and Environment panel" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/servers/03-terminal.png" alt="Remote terminal dock below the conversation and Environment panel" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: The conversation and terminal remain in one window. “terminal ready” is mock output that demonstrates the layout, not a real SSH login result.</em></p>
 <p>For a Linux/macOS shell or a remote Linux shell, start with read-only checks:</p>
 <pre><code class="language-bash">hostname
@@ -379,9 +379,10 @@ Get-ChildItem
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

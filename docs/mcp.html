@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science 内置科研 MCP：进程内 mcp_bio catalog，23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。">
+  <meta name="description" content="了解 Wisp Science 的科研连接器：23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。">
   <title>科研 MCP | Wisp Science</title>
   <script>
     (function () {
@@ -38,6 +38,7 @@
         <a href="index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="mcp.html" aria-current="page" data-i18n="nav.mcp">MCP</a>
+        <a href="skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="tutorials.html" data-i18n="nav.tutorials">教程</a>
         <a href="index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -56,14 +57,12 @@
   <main>
     <section class="doc-hero">
       <div class="container">
-        <div class="eyebrow">Settings → Connections</div>
+        <div class="eyebrow" data-i18n="mcp.settingsPath">设置 → 连接</div>
         <h1 data-i18n="mcp.title">科研 MCP</h1>
-        <p class="lead" data-i18n="mcp.lead">
-          公开生物与化学检索是进程内的原生 catalog（mcp_bio），不是 Python MCP 子进程，也不再附带 ketcher。默认 23 个连接器、247 个工具，覆盖约 80 个上游数据库。Agent 用 search_mcp_tools 发现、use_mcp_tool 调用。
-        </p>
+        <p class="lead" data-i18n="mcp.lead">通过科研连接器，在同一段对话中检索文献、查询数据库和整理结果。Wisp 内置 23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据源，也支持添加自定义 MCP 服务。</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-i18n="models.download">下载最新版</a>
-          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/wiki/Bioinformatics-Databases" data-i18n="mcp.wiki">GitHub Wiki 清单</a>
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/wiki/Bioinformatics-Databases" data-i18n="mcp.wiki">查看完整连接器清单</a>
         </div>
       </div>
     </section>
@@ -72,23 +71,23 @@
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 001 ]</span>
-          <span data-i18n="mcp.howKicker">How it works</span>
+          <span data-i18n="mcp.howKicker">怎样使用</span>
         </div>
         <div class="feature-list doc-card-grid">
           <div class="feature-list-item">
-            <h4 data-i18n="mcp.nativeTitle">进程内 catalog</h4>
-            <p data-i18n="mcp.nativeBody">桌面、CLI 与 ACP bridge 共用 crates/wisp-bio。默认 mcp_bio 挂全部已实现域；WISP_MCP_PKG=mcp_pubmed 可只挂一个域。</p>
+            <h4 data-i18n="mcp.nativeTitle">随应用提供</h4>
+            <p data-i18n="mcp.nativeBody">内置科研连接器可在设置 → 连接中查看和启用。访问在线数据库需要网络，部分服务还需要单独配置凭据。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="mcp.discoverTitle">先发现，再调用</h4>
-            <p data-i18n="mcp.discoverBody">完整 schema 不会塞进每一轮提示词。说清数据库或目标即可，不要猜工具名。连接改动对新会话或空闲 Agent 重建生效。</p>
+            <h4 data-i18n="mcp.discoverTitle">说清目标，按需调用</h4>
+            <p data-i18n="mcp.discoverBody">告诉 Wisp 希望查询的数据源、问题和输出形式。Agent 会发现相关工具并调用；你也可以在轨迹中核对实际请求和结果。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="mcp.customTitle">自定义 MCP</h4>
-            <p data-i18n="mcp.customBody">设置 → 连接 → Add connection 可加本地命令或远程 URL（含 OAuth）。与这份原生 catalog 分开，密钥只进操作系统钥匙串。</p>
+            <h4 data-i18n="mcp.customTitle">接入自己的工具</h4>
+            <p data-i18n="mcp.customBody">在设置 → 连接 → 添加连接中，配置本地命令或远程 MCP 地址。支持需要 OAuth 的服务，敏感凭据保存在系统密钥环中。</p>
           </div>
         </div>
-        <p class="lead doc-note" data-i18n="mcp.notice">KEGG / CADD / PanglaoDB / Sanger Cell Model Passports 带有学术或快照使用说明。ZINC SmallWorld 是公开 ZINC20 在售索引。PubMed 的开放获取标志不是再利用授权。结果几乎都是有界页，不是全库导出。</p>
+        <p class="lead doc-note" data-i18n="mcp.notice">使用各数据源前，请查看其访问条件和使用条款。部分来源仅提供特定用途或快照数据；查询结果通常有数量或分页限制，不能视为完整数据库导出。开放获取标记也不等于获得了任意再利用授权。</p>
       </div>
     </section>
 
@@ -96,17 +95,17 @@
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 002 ]</span>
-          <span data-i18n="mcp.tocKicker">23 connectors</span>
+          <span data-i18n="mcp.tocKicker">按数据来源查找</span>
         </div>
-        <h2 class="doc-subhead" data-i18n="mcp.tocHeading">连接器一览</h2>
+        <h2 class="doc-subhead" data-i18n="mcp.tocHeading">科研连接器一览</h2>
         <div class="table-wrap">
           <table class="doc-table">
             <thead>
               <tr>
                 <th data-i18n="mcp.thConnector">连接器</th>
-                <th data-i18n="mcp.thPkg">包名</th>
-                <th data-i18n="mcp.thCount">工具</th>
-                <th data-i18n="mcp.thUpstream">上游</th>
+                <th data-i18n="mcp.thPkg">连接标识</th>
+                <th data-i18n="mcp.thCount">工具数</th>
+                <th data-i18n="mcp.thUpstream">数据来源</th>
               </tr>
             </thead>
             <tbody>
@@ -268,7 +267,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -324,7 +323,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -376,7 +375,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -444,7 +443,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -488,7 +487,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -536,7 +535,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -608,7 +607,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -712,7 +711,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -760,7 +759,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -812,7 +811,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -896,7 +895,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -960,7 +959,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1028,7 +1027,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1108,7 +1107,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1168,7 +1167,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1260,7 +1259,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1336,7 +1335,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1388,7 +1387,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1476,7 +1475,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1520,7 +1519,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1580,7 +1579,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1668,7 +1667,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1764,7 +1763,7 @@
             <thead>
               <tr>
                 <th data-i18n="mcp.thTool">工具</th>
-                <th data-i18n="mcp.thDoes">做什么</th>
+                <th data-i18n="mcp.thDoes">功能说明</th>
               </tr>
             </thead>
             <tbody>
@@ -1804,9 +1803,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

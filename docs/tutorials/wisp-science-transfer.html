@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-transfer" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science基础入门：导入、导出与分享" data-text-en="Wisp Science Basics: Import, Export, and Sharing">Wisp Science基础入门：导入、导出与分享</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-transfer.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-transfer.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-transfer.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>一项分析做完后，经常会遇到三个不同的需求：换台电脑继续整个项目，把某一次对话交给同事，或者只把一段结果发到组会群里。</p>
 <p>Wisp Science 为这些需求提供了不同入口。选对导出范围，后续导入和阅读会方便很多。这篇文章按“整个项目 → 单个会话 → 部分消息”的顺序介绍，并说明每种方式能带走什么。</p>
@@ -232,7 +232,7 @@
 <p>After an analysis, you may want to continue the whole project on another computer, hand one conversation to a colleague, or share a few results with your lab group.</p>
 <p>Wisp Science provides separate entry points for these needs. Choosing the right scope makes importing and reading easier. This tutorial goes from the whole project to one conversation and then selected messages, explaining what each option carries.</p>
 <blockquote>
-<p>Screenshots use the real frontend in Chinese with demonstration projects and conversations. Numbers, paths, and contact names are examples, not real experimental results or evidence of completed migration.</p>
+<p>Screenshots use the real frontend in English with demonstration projects and conversations. Numbers, paths, and contact names are examples, not real experimental results or evidence of completed migration.</p>
 </blockquote>
 <p><strong>Choose what you want to deliver.</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
@@ -269,7 +269,7 @@
 <p>Project ZIPs and session ZIPs share an extension but have different formats and import entry points. Sharing HTML and trajectory HTML are reading materials, not archives that can be imported to resume a conversation.</p>
 <p><strong>Export a whole project for migration or a complete handoff.</strong></p>
 <p>Wait for active conversations and tasks in the project to finish. Click <strong>Export project</strong> on its project card, or open it and choose <strong>File → Export current project</strong>.</p>
-<p><img src="../assets/tutorials/transfer/02-project-export.png" alt="Project export dialog offering a full ZIP archive" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/transfer/02-project-export.png" alt="Project export dialog offering a full ZIP archive" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 1: Copy the ordinary project folder yourself when you only need files. Choose a full ZIP when you also need Wisp conversations and project records.</em></p>
 <p>Choose <strong>Export ZIP</strong> and a destination. A progress card at the lower right reports stage, file count, bytes, and current path. Wait for completion before copying the ZIP.</p>
 <p>The source project is temporarily read-only during export; other projects remain usable. Do not send a destination file that is unfinished or still empty.</p>
@@ -283,7 +283,7 @@
 <p>The recipient must configure their own models and servers. A remote path may survive as a reference, but importing the ZIP does not grant access to it.</p>
 <p><strong>Distinguish a project ZIP from an ordinary folder.</strong></p>
 <p>Click <strong>Import project</strong> on the Projects screen to see the choices.</p>
-<p><img src="../assets/tutorials/transfer/01-project-import.png" alt="Project import choices: open a folder in place, import a ZIP, or recover workspace conversations" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/transfer/01-project-import.png" alt="Project import choices: open a folder in place, import a ZIP, or recover workspace conversations" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: Open an already-copied folder in place. Use ZIP import for a complete Wisp project export. Workspace conversation recovery is a separate fallback.</em></p>
 <p>For a complete migration:</p>
 <ol>
@@ -297,7 +297,7 @@
 <p>Importing the same project ID twice on a device is rejected rather than merged. For frequent switching between devices, see <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/project-sync.md">Manual Project Sync</a>.</p>
 <p><strong>Export one conversation from the sidebar.</strong></p>
 <p>Inside a project, find the conversation on the left. Right-click it, or open its conversation action menu, and select <strong>Export session</strong>.</p>
-<p><img src="../assets/tutorials/transfer/03-session-export.png" alt="Export session in the conversation action menu" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/transfer/03-session-export.png" alt="Export session in the conversation action menu" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: This menu belongs to the sidebar conversation entry. Right-clicking ordinary transcript text does not open the same export menu.</em></p>
 <p>Choose a destination to save a session ZIP. It contains message records, readable Markdown, tool-call records, and associated artifacts and information that can be collected.</p>
 <p>This is a conversation archive, not an archive of every project file. A file mentioned in prose, located remotely, or deleted locally is not guaranteed to be included.</p>
@@ -308,7 +308,7 @@
 <p>Compare the checklist with the archive. Supply other input files separately or export the complete project if that better matches the handoff.</p>
 <p><strong>Open the receiving project before importing a session.</strong></p>
 <p>In the target project, choose <strong>Edit → Import session archive</strong>. Alternatively, press <strong>Ctrl+P</strong>, or <strong>Cmd+P</strong> on macOS, and search for <strong>Import session archive</strong>.</p>
-<p><img src="../assets/tutorials/transfer/04-session-import.png" alt="Command palette finding Import session archive" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/transfer/04-session-import.png" alt="Command palette finding Import session archive" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 4: This imports into the current project. Select a ZIP produced by Export session, not a project ZIP or sharing HTML.</em></p>
 <p>On first import, the conversation appears in the <code>imported</code> group. Open it, check the messages, and verify that associated artifacts are readable.</p>
 <p>Artifacts are restored to their original relative paths where those paths are safe and unoccupied. Conflicts may place files under <code>imports/&lt;session-id&gt;/</code>; files that cannot be restored are reported. Inspect actual destination paths rather than running old absolute paths from the transcript.</p>
@@ -316,8 +316,8 @@
 <p>Reimporting the same source session may update its existing import or skip it. This is not two-way merging. If both copies have continued differently, keep backups of both before deciding how to hand them off.</p>
 <p><strong>Use Share as image for selected messages.</strong></p>
 <p>For an explanation, result table, or a few turns, use the topbar share button or send <code>/share</code> in the message box.</p>
-<p><img src="../assets/tutorials/transfer/05-share.png" alt="Sharing dialog with selected messages, redaction keywords, and PNG or HTML options" loading="lazy" width="1440" height="1000" /></p>
-<p><em>Figure 5: Only the first two messages are selected. The Chinese contact name is entered as a redaction keyword; the later discussion is excluded.</em></p>
+<p><img src="../assets/tutorials/en/transfer/05-share.png" alt="Sharing dialog with selected messages, redaction keywords, and PNG or HTML options" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 5: Only the first two messages are selected. The contact name “Dr. Lee” is entered as a redaction keyword; the later discussion is excluded.</em></p>
 <p>A practical sequence is:</p>
 <ol>
 <li>Select the messages you want and deselect the rest.</li>
@@ -410,9 +410,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

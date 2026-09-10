@@ -6,7 +6,7 @@ Wisp Science's **Trajectory** view shows that process. It organizes user inputs,
 
 The previous tutorials covered [MCP](wisp-science-mcp.md) and [Skills](wisp-science-skills.md). Here we explain how to open a trajectory, read its records, verify an analysis, and investigate failures.
 
-> Screenshots show the real frontend in Chinese with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.
+> Screenshots show the real frontend in English with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.
 
 **Expand the execution process of a task.**
 
@@ -14,7 +14,7 @@ Suppose you ask Wisp to inspect differential-expression results and draw a volca
 
 The trajectory groups these records by **turn**. Your message starts a turn containing the records produced while Wisp responds.
 
-![Trajectory overview with the timeline and events grouped by turn](../../assets/trajectory/01-overview.png)
+![Trajectory overview with the timeline and events grouped by turn](../../assets/tutorials/en/trajectory/01-overview.png)
 
 *Figure 1: The demonstration has two turns: inspect the table, then try plotting. Closing the details panel provides more room for the event list.*
 
@@ -50,7 +50,7 @@ The demonstration begins with:
 
 Wisp calls Python to read the table. Select that tool record and open **Preview** to inspect parameters and results.
 
-![Tool preview showing the file-reading code, column names, and missing-value counts](../../assets/trajectory/02-tool-details.png)
+![Tool preview showing the file-reading code, column names, and missing-value counts](../../assets/tutorials/en/trajectory/02-tool-details.png)
 
 *Figure 2: Select a Python call on the left and inspect its submitted code and returned content on the right. Longer details can be scrolled.*
 
@@ -75,7 +75,7 @@ The second demonstration turn requests a volcano plot, but the code uses `log2fc
 
 Select the red tool record to see the failing code and result together. Search events for `log2fc` to narrow a long list.
 
-![Searching log2fc locates the failed plotting call and its KeyError](../../assets/trajectory/03-search-error.png)
+![Searching log2fc locates the failed plotting call and its KeyError](../../assets/tutorials/en/trajectory/03-search-error.png)
 
 *Figure 3: Search matches both summaries and detailed content. Here, the code referenced a column that did not exist.*
 
@@ -91,7 +91,7 @@ Use actual errors for other troubleshooting too: check paths for missing files, 
 
 A task may take a long time without failing. The timeline and statistics help distinguish model-response time from tool execution and locate individual calls.
 
-![Usage event showing the model, input/output tokens, and caching information](../../assets/trajectory/04-usage.png)
+![Usage event showing the model, input/output tokens, and caching information](../../assets/tutorials/en/trajectory/04-usage.png)
 
 *Figure 4: The right side shows usage for the selected model call; the bottom summarizes the session. Numbers are for demonstration.*
 

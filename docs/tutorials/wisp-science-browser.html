@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-browser" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science基础入门：浏览器使用" data-text-en="Wisp Science Basics: Using the Browser">Wisp Science基础入门：浏览器使用</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-browser.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-browser.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-browser.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>查文献时，数据库记录往往只是起点。我们还需要打开期刊网页，看看补充材料放在哪里，确认数据下载入口，或者阅读一个没有专用检索工具的网站。</p>
 <p>Wisp Science 可以通过浏览器桥接扩展读取和操作网页。你可以让它在已有浏览器页面上继续工作，查看它实际打开了什么，再把需要的内容整理进项目。这篇文章先完成一次公开网页读取，再介绍标签管理、人工验证和下载。</p>
@@ -191,7 +191,7 @@
 <p>Database records are often only the beginning of literature research. You may need to open a journal page, locate supplementary materials, confirm a data download link, or read a site without a dedicated search tool.</p>
 <p>Wisp Science reads and operates webpages through a browser bridge extension. It can continue work in your browser, show what it actually opened, and organize useful information in the project. This tutorial starts with a public page, then covers tabs, human verification, and downloads.</p>
 <blockquote>
-<p>Wisp screenshots use the real frontend with a teaching conversation and simulated browser events. They show the Chinese interface. The extension screenshot illustrates Chrome's installation controls. Page titles and task states are examples, not evidence of completed live retrieval.</p>
+<p>Wisp screenshots use the real frontend with a teaching conversation and simulated browser events. They show the English interface. The extension screenshot illustrates Chrome's installation controls. Page titles and task states are examples, not evidence of completed live retrieval.</p>
 </blockquote>
 <p><strong>Ground the answer in an actual page.</strong></p>
 <p>Browser tools can open pages, read text, locate actionable elements, and capture screenshots or save webpage assets when required. For databases with dedicated connectors, <a href="wisp-science-mcp.html">MCP</a> can retrieve structured records. Both approaches can serve the same task.</p>
@@ -210,8 +210,8 @@
 <li>Select the entire <code>browser-extension</code> directory reported by Wisp.</li>
 <li>Open the extension popup and check for <strong>Connected to Wisp</strong>.</li>
 </ol>
-<p><img src="../assets/basic-configuration/18-browser-extension.png" alt="Chrome extension management, showing Developer mode and Load unpacked" loading="lazy" width="1214" height="90" /></p>
-<p><em>Figure 1: Load the whole extension directory, not a ZIP or an individual file inside it. Use the exact path reported on your computer.</em></p>
+<p><img src="../assets/tutorials/en/browser/00-extension-install.png" alt="English Chromium extension management, showing Developer mode and Load unpacked" loading="lazy" width="1200" height="114" /></p>
+<p><em>Figure 1: The English Chromium extension manager. Load the whole extension directory, not a ZIP or an individual file inside it. Use the exact path reported on your computer.</em></p>
 <p>Do not copy another person's Windows, macOS, or WSL path. Wisp prepares a stable managed directory; that is the path the browser should remember.</p>
 <p>If the popup says connected but Wisp still reports an unusable connection, ask it to check again. An old extension, another tool occupying the same port, or an incomplete handshake may be involved. Follow the reported cause.</p>
 <p><strong>Read a public page first.</strong></p>
@@ -227,7 +227,7 @@
 <p>Compare the answer with the visible browser page. Use the <a href="wisp-science-trajectory.html">trajectory</a> to check tools, addresses, failures, and retries.</p>
 <p><strong>Review browser settings for daily use.</strong></p>
 <p>Open <strong>Settings → Browser</strong> for automatic launching, tab cleanup, and domain lists.</p>
-<p><img src="../assets/tutorials/browser/01-settings.png" alt="Browser settings with automatic launching, tab cleanup, and preferred domains" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/browser/01-settings.png" alt="Browser settings with automatic launching, tab cleanup, and preferred domains" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: PubMed is added to the preferred list in this example. A preference does not block all other websites.</em></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
 <thead>
@@ -258,13 +258,13 @@
 <p>These are domain-level settings, not a substitute for checking page content. Blocking a domain does not remove tabs that are already open; existing tabs can still be scanned.</p>
 <p><strong>Decide which tabs to keep after a turn.</strong></p>
 <p>When automatic closing is off, Wisp lists tabs it opened during the turn. Choose which to close and which to keep. Tabs you already had open are outside this cleanup scope.</p>
-<p><img src="../assets/tutorials/browser/02-tabs.png" alt="Tab cleanup dialog with a page deselected so it remains open" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/browser/02-tabs.png" alt="Tab cleanup dialog with a page deselected so it remains open" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: The PubMed page is deselected to keep it for further reading. Only selected tabs will be closed by this confirmation.</em></p>
 <p>Keep paper pages you still need to verify and close temporary searches. Escape dismisses the prompt without requiring you to close the pages to return to the conversation.</p>
 <p>If the extension is disconnected at turn end, the pending list is retained for reconnection. Tabs awaiting human verification are protected from ordinary automatic cleanup.</p>
 <p><strong>Complete login or human verification in the browser yourself.</strong></p>
 <p>Some sites require login or confirmation that you are human. When Wisp detects a verification challenge, it pauses the relevant automation and asks you to take over.</p>
-<p><img src="../assets/tutorials/browser/03-human-check.png" alt="Human-verification prompt asking the user to complete the challenge in the visible browser" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/browser/03-human-check.png" alt="Human-verification prompt asking the user to complete the challenge in the visible browser" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 4: A simulated event demonstrates this prompt. Complete verification on the actual webpage; Wisp rechecks the page before continuing.</em></p>
 <p>Open the indicated tab, complete verification manually, leave it open, and confirm in Wisp. If the challenge remains, inspect the page instead of repeatedly asking the agent to click it.</p>
 <p><strong>Be explicit about downloads and where files are saved.</strong></p>
@@ -328,9 +328,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

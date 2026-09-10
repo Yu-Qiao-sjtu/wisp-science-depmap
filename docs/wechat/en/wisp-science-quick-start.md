@@ -4,7 +4,7 @@ You do not need to configure servers, browser access, and every research tool be
 
 This tutorial takes you from downloading the app to your first conversation. You need a computer and access to a working model API. Without an API key, you can still install the app, explore its interface, and read the bundled demonstration.
 
-> Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the Chinese interface. Labels may vary between versions.
+> Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.
 
 **Step 1: Download an installer from the official release page.**
 
@@ -30,19 +30,19 @@ Once installed, open **Wisp Science**. This tutorial's text-only conversation do
 
 The first launch displays a welcome guide. Use the button at the bottom to continue.
 
-![Welcome page of the onboarding guide, with the Next button at the bottom](../../assets/tutorials/quick-start/01-welcome.png)
+![Welcome page of the onboarding guide, with the Next button at the bottom](../../assets/tutorials/en/quick-start/01-welcome.png)
 
 *Figure 1: Start on the welcome page and click Next. The dots show your current step.*
 
 The second page introduces project conversations, analysis, research tools, and file previews. You only need to know that these capabilities exist; you do not need to configure all of them now.
 
-![The onboarding page introducing Wisp Science features](../../assets/tutorials/quick-start/02-features.png)
+![The onboarding page introducing Wisp Science features](../../assets/tutorials/en/quick-start/02-features.png)
 
 *Figure 2: The feature introduction outlines the workbench. Start with an ordinary conversation, then explore analysis and retrieval.*
 
 The third page is **Set up your model**. The current onboarding shortcut uses DeepSeek: enter your own API key and follow the prompts to save it and continue. Obtain the key from your model provider's console; it is not your website login password.
 
-![The model onboarding page with the provider console link and API key field](../../assets/tutorials/quick-start/03-model.png)
+![The model onboarding page with the provider console link and API key field](../../assets/tutorials/en/quick-start/03-model.png)
 
 *Figure 3: Enter a valid API key on your own computer. No key is shown in the screenshot. This onboarding shortcut is for DeepSeek; add other providers later in Settings.*
 
@@ -52,7 +52,7 @@ For another provider or a laboratory gateway, choose **Set up later**. Then open
 
 The fourth page, **Local environment (optional)**, checks paths to tools such as Python and R.
 
-![The local-environment detection page in onboarding](../../assets/tutorials/quick-start/04-environment.png)
+![The local-environment detection page in onboarding](../../assets/tutorials/en/quick-start/04-environment.png)
 
 *Figure 4: Detected tool paths appear here. These are simulated paths, not values to copy. Missing tools do not prevent this text-only test.*
 
@@ -64,13 +64,13 @@ To reopen the guide, press **Ctrl+P**, or **Cmd+P** on macOS, and search for **Q
 
 After onboarding, the Projects screen appears. A project organizes conversations, files, and results for a piece of work. Keep this first exercise in a separate practice project.
 
-![The Projects screen with New project in the top toolbar](../../assets/tutorials/quick-start/05-projects.png)
+![The Projects screen with New project in the top toolbar](../../assets/tutorials/en/quick-start/05-projects.png)
 
 *Figure 5: This screen uses demonstration data. A new installation may have an empty project list or show the bundled example. Click New project to create your own workspace.*
 
 Click **New project**, enter a name such as **My first Wisp project**, and choose a local folder for the exercise. A dedicated empty folder makes subsequent files easy to find.
 
-![The New project form with a project name and local folder](../../assets/tutorials/quick-start/06-create-project.png)
+![The New project form with a project name and local folder](../../assets/tutorials/en/quick-start/06-create-project.png)
 
 *Figure 6: The name identifies the project in Wisp; the directory determines where files live. `/mock/root/new-project` is a simulated path. Select a folder on your own computer.*
 
@@ -88,7 +88,7 @@ Copy this message into the input box and click **Send**:
 
 This exercise requires no extra data files or research tools. It checks message sending, model responses, and table rendering.
 
-![A teaching example of the first conversation, showing the sample table, count, and mean](../../assets/tutorials/quick-start/07-first-conversation.png)
+![A teaching example of the first conversation, showing the sample table, count, and mean](../../assets/tutorials/en/quick-start/07-first-conversation.png)
 
 *Figure 7: The screenshot uses a simulated model response to show where a successful answer appears. Your reply can use different wording, but the numbers should be checkable.*
 

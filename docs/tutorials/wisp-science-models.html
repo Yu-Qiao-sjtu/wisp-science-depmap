@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-models" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science基础入门：模型配置" data-text-en="Wisp Science Basics: Model Configuration">Wisp Science基础入门：模型配置</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-models.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-models.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>第一次打开 Wisp Science，很多人会停在同一个地方：我已经有一个 AI 账号了，为什么还要填写 API 地址和密钥？模型名称该填什么？保存后，又怎样知道这次对话真的用上了它？</p>
 <p>Wisp Science 把科研工作区与模型接入分开管理。你可以保留同一个项目中的文件和分析记录，再按需要选择能够访问的模型。这篇文章从第一次接入讲起，先完成一个能正常回答的小任务，再认识图片能力和会话切换。</p>
@@ -222,7 +222,7 @@
 <p>When you first open Wisp Science, you may wonder why it asks for an API address and key when you already have an AI account. Which model name should you enter? After saving it, how do you know the conversation uses that model?</p>
 <p>Wisp Science manages your research workspace separately from model access. Keep the same project files and analysis records while selecting among models you can access. This tutorial starts with a working first connection, then introduces image capabilities and switching models.</p>
 <blockquote>
-<p>Screenshots come from the real frontend with demonstration settings and conversations, using the Chinese interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.</p>
+<p>Screenshots come from the real frontend with demonstration settings and conversations, using the English interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.</p>
 </blockquote>
 <p><strong>Understand the app, model service, and API key.</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
@@ -255,12 +255,12 @@
 <p>A laboratory gateway also works when you use the address, model ID, and key supplied by its administrator. Do not put a web-chat URL in the API address field.</p>
 <p><strong>Open Models and check existing configurations.</strong></p>
 <p>Go to <strong>Settings → Models</strong>. Review existing models or click <strong>Add API access</strong>. Model setup in onboarding is another entry point; skipping it does not prevent you from configuring a model here later.</p>
-<p><img src="../assets/tutorials/models/01-overview.png" alt="Models settings showing configured models and Add API access" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/models/01-overview.png" alt="Models settings showing configured models and Add API access" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 1: Check existing models first. A display name helps identify a model's purpose; requests still depend on its model ID, protocol, and address.</em></p>
 <p>The same page has an <strong>ACP Agents</strong> category for external agent processes. This tutorial covers HTTP API models used by the built-in Wisp agent. If your setup instructions provide a process launch command, see <a href="wisp-science-acp.html">ACP configuration</a>.</p>
 <p><strong>Enter shared API access, then add its models.</strong></p>
 <p>Click <strong>Add API access</strong> and enter the provider's <strong>Base URL</strong> and <strong>API key</strong>. Add the models this key can call below. One API access form can contain multiple models, each with its own protocol, model ID, and capabilities.</p>
-<p><img src="../assets/tutorials/models/02-api-access.png" alt="API access form with shared URL and key above individual model settings" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/models/02-api-access.png" alt="API access form with shared URL and key above individual model settings" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: Models added together share the address and key. The screenshot illustrates the fields without exposing a key. Check suggested models against your account's permissions too.</em></p>
 <p>Get these fields right first:</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
@@ -315,7 +315,7 @@
 <p>Reasoning effort and Fast mode also depend on provider and model support. Leave defaults in place for the first test, then adjust them for actual tasks. Fast mode may affect quota usage; check your service's description before enabling it.</p>
 <p><strong>Choose the model for this conversation.</strong></p>
 <p>Open a new conversation and select the saved model in the picker near the message box.</p>
-<p><img src="../assets/tutorials/models/03-picker.png" alt="The conversation model picker" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/models/03-picker.png" alt="The conversation model picker" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: This picker selects the current conversation's model. Switching a conversation that already has messages requests confirmation. The model default in Settings is used for new conversations.</em></p>
 <p>Start with a small question that does not require the web or research tools:</p>
 <blockquote>
@@ -390,9 +390,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

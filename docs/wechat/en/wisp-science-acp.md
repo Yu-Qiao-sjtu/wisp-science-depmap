@@ -28,9 +28,9 @@ Verify that the adapter starts in a system terminal. An ACP process may wait for
 
 Open a project, go to **Settings → Models**, select **ACP Agents**, and click **Add ACP Agent**. Click an existing row to edit it.
 
-![ACP Agents category in Models settings](../../assets/basic-configuration/03-acp-agents.png)
+![ACP Agents category in Models settings](../../assets/tutorials/en/acp/01-overview.png)
 
-*Figure 1: ACP agents and HTTP models are managed separately. Screenshots use the Chinese interface; layouts may vary between versions.*
+*Figure 1: ACP agents and HTTP models are managed separately. Screenshots use the English interface; layouts may vary between versions.*
 
 | Field | What to enter |
 | --- | --- |
@@ -38,7 +38,7 @@ Open a project, go to **Settings → Models**, select **ACP Agents**, and click 
 | Command | Only an executable name or its full path |
 | Arguments | One argument per line; do not paste the whole command into Command |
 
-![ACP agent form with separate command and argument fields](../../assets/basic-configuration/04-add-acp-agent.png)
+![ACP agent form with separate command and argument fields](../../assets/tutorials/en/acp/02-add-agent.png)
 
 *Figure 2: Keep Command and Arguments separate. On Windows, use `npx.cmd` when launching through npx, or its full path if necessary.*
 

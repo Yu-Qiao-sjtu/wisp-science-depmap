@@ -4,7 +4,7 @@ When you first open Wisp Science, you may wonder why it asks for an API address 
 
 Wisp Science manages your research workspace separately from model access. Keep the same project files and analysis records while selecting among models you can access. This tutorial starts with a working first connection, then introduces image capabilities and switching models.
 
-> Screenshots come from the real frontend with demonstration settings and conversations, using the Chinese interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.
+> Screenshots come from the real frontend with demonstration settings and conversations, using the English interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.
 
 **Understand the app, model service, and API key.**
 
@@ -22,7 +22,7 @@ A laboratory gateway also works when you use the address, model ID, and key supp
 
 Go to **Settings → Models**. Review existing models or click **Add API access**. Model setup in onboarding is another entry point; skipping it does not prevent you from configuring a model here later.
 
-![Models settings showing configured models and Add API access](../../assets/tutorials/models/01-overview.png)
+![Models settings showing configured models and Add API access](../../assets/tutorials/en/models/01-overview.png)
 
 *Figure 1: Check existing models first. A display name helps identify a model's purpose; requests still depend on its model ID, protocol, and address.*
 
@@ -32,7 +32,7 @@ The same page has an **ACP Agents** category for external agent processes. This 
 
 Click **Add API access** and enter the provider's **Base URL** and **API key**. Add the models this key can call below. One API access form can contain multiple models, each with its own protocol, model ID, and capabilities.
 
-![API access form with shared URL and key above individual model settings](../../assets/tutorials/models/02-api-access.png)
+![API access form with shared URL and key above individual model settings](../../assets/tutorials/en/models/02-api-access.png)
 
 *Figure 2: Models added together share the address and key. The screenshot illustrates the fields without exposing a key. Check suggested models against your account's permissions too.*
 
@@ -69,7 +69,7 @@ Reasoning effort and Fast mode also depend on provider and model support. Leave 
 
 Open a new conversation and select the saved model in the picker near the message box.
 
-![The conversation model picker](../../assets/tutorials/models/03-picker.png)
+![The conversation model picker](../../assets/tutorials/en/models/03-picker.png)
 
 *Figure 3: This picker selects the current conversation's model. Switching a conversation that already has messages requests confirmation. The model default in Settings is used for new conversations.*
 

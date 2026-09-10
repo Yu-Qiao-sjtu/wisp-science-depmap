@@ -4,7 +4,7 @@ Research files and computation often live on different machines: a laptop for re
 
 Wisp Science registers servers, attaches execution environments to conversations, and opens interactive terminals for commands you run yourself. This tutorial starts with an SSH host, then covers selecting a conversation's environment and using the terminal inside the app.
 
-> Screenshots show the real frontend in Chinese with simulated server, GPU, and terminal information. `gpu.example.org` is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.
+> Screenshots show the real frontend in English with simulated server, GPU, and terminal information. `gpu.example.org` is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.
 
 **Distinguish two ways of working.**
 
@@ -33,7 +33,7 @@ An existing working `ssh` login in your system terminal makes these fields easie
 
 Open **Settings → Environments → Add SSH host** and enter the details. Select key/agent or password authentication according to the server's requirements.
 
-![Add SSH host form with alias, hostname, account, key path, and agent notes](../../assets/tutorials/servers/01-add-ssh.png)
+![Add SSH host form with alias, hostname, account, key path, and agent notes](../../assets/tutorials/en/servers/01-add-ssh.png)
 
 *Figure 1: Hostnames and accounts are teaching placeholders. Agent notes should describe usage rules, not contain passwords or keys.*
 
@@ -51,7 +51,7 @@ If you already maintain `~/.ssh/config`, import its hosts and test and probe the
 
 Return to the conversation and open **Agent options → Compute** near the lower-left of the composer. Add the server to the current session. The right-side **Environment** panel also offers an attach-server entry point.
 
-![Compute menu showing a server attached to the current session and a default environment selector](../../assets/tutorials/servers/02-context.png)
+![Compute menu showing a server attached to the current session and a default environment selector](../../assets/tutorials/en/servers/02-context.png)
 
 *Figure 2: `gpu-server` is a preconfigured demonstration host. Whether a server is attached and whether it is the default analysis environment are separate states.*
 
@@ -70,7 +70,7 @@ Changing the global default does not rewrite existing conversations. At first, n
 
 In the right-side **Environment** panel, click **Open terminal** on the environment's card. The terminal appears below the conversation, with its environment identified in the tab.
 
-![Remote terminal dock below the conversation and Environment panel](../../assets/tutorials/servers/03-terminal.png)
+![Remote terminal dock below the conversation and Environment panel](../../assets/tutorials/en/servers/03-terminal.png)
 
 *Figure 3: The conversation and terminal remain in one window. “terminal ready” is mock output that demonstrates the layout, not a real SSH login result.*
 

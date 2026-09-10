@@ -4,7 +4,7 @@ Database records are often only the beginning of literature research. You may ne
 
 Wisp Science reads and operates webpages through a browser bridge extension. It can continue work in your browser, show what it actually opened, and organize useful information in the project. This tutorial starts with a public page, then covers tabs, human verification, and downloads.
 
-> Wisp screenshots use the real frontend with a teaching conversation and simulated browser events. They show the Chinese interface. The extension screenshot illustrates Chrome's installation controls. Page titles and task states are examples, not evidence of completed live retrieval.
+> Wisp screenshots use the real frontend with a teaching conversation and simulated browser events. They show the English interface. The extension screenshot illustrates Chrome's installation controls. Page titles and task states are examples, not evidence of completed live retrieval.
 
 **Ground the answer in an actual page.**
 
@@ -28,9 +28,9 @@ Wisp uses `browser_setup` to report status and the correct path. In the Chrome p
 4. Select the entire `browser-extension` directory reported by Wisp.
 5. Open the extension popup and check for **Connected to Wisp**.
 
-![Chrome extension management, showing Developer mode and Load unpacked](../../assets/basic-configuration/18-browser-extension.png)
+![English Chromium extension management, showing Developer mode and Load unpacked](../../assets/tutorials/en/browser/00-extension-install.png)
 
-*Figure 1: Load the whole extension directory, not a ZIP or an individual file inside it. Use the exact path reported on your computer.*
+*Figure 1: The English Chromium extension manager. Load the whole extension directory, not a ZIP or an individual file inside it. Use the exact path reported on your computer.*
 
 Do not copy another person's Windows, macOS, or WSL path. Wisp prepares a stable managed directory; that is the path the browser should remember.
 
@@ -54,7 +54,7 @@ Compare the answer with the visible browser page. Use the [trajectory](wisp-scie
 
 Open **Settings → Browser** for automatic launching, tab cleanup, and domain lists.
 
-![Browser settings with automatic launching, tab cleanup, and preferred domains](../../assets/tutorials/browser/01-settings.png)
+![Browser settings with automatic launching, tab cleanup, and preferred domains](../../assets/tutorials/en/browser/01-settings.png)
 
 *Figure 2: PubMed is added to the preferred list in this example. A preference does not block all other websites.*
 
@@ -71,7 +71,7 @@ These are domain-level settings, not a substitute for checking page content. Blo
 
 When automatic closing is off, Wisp lists tabs it opened during the turn. Choose which to close and which to keep. Tabs you already had open are outside this cleanup scope.
 
-![Tab cleanup dialog with a page deselected so it remains open](../../assets/tutorials/browser/02-tabs.png)
+![Tab cleanup dialog with a page deselected so it remains open](../../assets/tutorials/en/browser/02-tabs.png)
 
 *Figure 3: The PubMed page is deselected to keep it for further reading. Only selected tabs will be closed by this confirmation.*
 
@@ -83,7 +83,7 @@ If the extension is disconnected at turn end, the pending list is retained for r
 
 Some sites require login or confirmation that you are human. When Wisp detects a verification challenge, it pauses the relevant automation and asks you to take over.
 
-![Human-verification prompt asking the user to complete the challenge in the visible browser](../../assets/tutorials/browser/03-human-check.png)
+![Human-verification prompt asking the user to complete the challenge in the visible browser](../../assets/tutorials/en/browser/03-human-check.png)
 
 *Figure 4: A simulated event demonstrates this prompt. Complete verification on the actual webpage; Wisp rechecks the page before continuing.*
 

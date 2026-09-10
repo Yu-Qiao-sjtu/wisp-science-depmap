@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-trajectory" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science使用技巧：轨迹" data-text-en="Wisp Science Tips: Trajectories">Wisp Science使用技巧：轨迹</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-trajectory.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>让 AI 帮忙分析一份数据，最后收到一句“分析完成”，往往还不够。我们还想知道：它读的是哪个文件？执行了什么代码？绘图失败时，报错来自哪里？过几天再回头看，能不能找回当时的操作过程？</p>
 <p>Wisp Science 的 <strong>轨迹</strong> 功能，就是用来查看这些过程的。它把一段对话中的用户输入、助手回复、工具调用和模型用量按顺序组织起来，让你可以从结果往前追，找到具体做过的那一步。</p>
@@ -198,12 +198,12 @@
 <p>Wisp Science's <strong>Trajectory</strong> view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.</p>
 <p>The previous tutorials covered <a href="wisp-science-mcp.html">MCP</a> and <a href="wisp-science-skills.html">Skills</a>. Here we explain how to open a trajectory, read its records, verify an analysis, and investigate failures.</p>
 <blockquote>
-<p>Screenshots show the real frontend in Chinese with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.</p>
+<p>Screenshots show the real frontend in English with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.</p>
 </blockquote>
 <p><strong>Expand the execution process of a task.</strong></p>
 <p>Suppose you ask Wisp to inspect differential-expression results and draw a volcano plot. It may read the table, check column names, handle missing values, and run plotting code. A failure may lead to further checks and retries.</p>
 <p>The trajectory groups these records by <strong>turn</strong>. Your message starts a turn containing the records produced while Wisp responds.</p>
-<p><img src="../assets/trajectory/01-overview.png" alt="Trajectory overview with the timeline and events grouped by turn" loading="lazy" width="1860" height="1206" /></p>
+<p><img src="../assets/tutorials/en/trajectory/01-overview.png" alt="Trajectory overview with the timeline and events grouped by turn" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 1: The demonstration has two turns: inspect the table, then try plotting. Closing the details panel provides more room for the event list.</em></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
 <thead>
@@ -254,7 +254,7 @@
 <p>Check the column names and missing values in results/differential_expression.csv.</p>
 </blockquote>
 <p>Wisp calls Python to read the table. Select that tool record and open <strong>Preview</strong> to inspect parameters and results.</p>
-<p><img src="../assets/trajectory/02-tool-details.png" alt="Tool preview showing the file-reading code, column names, and missing-value counts" loading="lazy" width="1860" height="1206" /></p>
+<p><img src="../assets/tutorials/en/trajectory/02-tool-details.png" alt="Tool preview showing the file-reading code, column names, and missing-value counts" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: Select a Python call on the left and inspect its submitted code and returned content on the right. Longer details can be scrolled.</em></p>
 <p>Compare the request with the operation: correct file path, chosen columns, any filtering, and whether the output supports the assistant's description.</p>
 <p>The sample table has <code>gene</code>, <code>log2FoldChange</code>, and <code>padj</code>; <code>padj</code> contains 128 missing values. Later, check that plotting code handles them and uses the correct effect-size column.</p>
@@ -289,7 +289,7 @@
 <p><strong>Second use: locate a failure.</strong></p>
 <p>The second demonstration turn requests a volcano plot, but the code uses <code>log2fc</code> where the table has <code>log2FoldChange</code>. The tool returns <code>KeyError: 'log2fc'</code>.</p>
 <p>Select the red tool record to see the failing code and result together. Search events for <code>log2fc</code> to narrow a long list.</p>
-<p><img src="../assets/trajectory/03-search-error.png" alt="Searching log2fc locates the failed plotting call and its KeyError" loading="lazy" width="1860" height="1206" /></p>
+<p><img src="../assets/tutorials/en/trajectory/03-search-error.png" alt="Searching log2fc locates the failed plotting call and its KeyError" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: Search matches both summaries and detailed content. Here, the code referenced a column that did not exist.</em></p>
 <p>Return to the conversation with a specific correction:</p>
 <blockquote>
@@ -299,7 +299,7 @@
 <p>Use actual errors for other troubleshooting too: check paths for missing files, environments for dependencies, and returned messages for retrieval failures. Searching a filename, tool name, or error keyword is usually easier than rereading the whole conversation.</p>
 <p><strong>Third use: understand time and usage.</strong></p>
 <p>A task may take a long time without failing. The timeline and statistics help distinguish model-response time from tool execution and locate individual calls.</p>
-<p><img src="../assets/trajectory/04-usage.png" alt="Usage event showing the model, input/output tokens, and caching information" loading="lazy" width="1860" height="1206" /></p>
+<p><img src="../assets/tutorials/en/trajectory/04-usage.png" alt="Usage event showing the model, input/output tokens, and caching information" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 4: The right side shows usage for the selected model call; the bottom summarizes the session. Numbers are for demonstration.</em></p>
 <p>Tokens are a unit used to measure model input and output. Usage records include input, output, and cache information. Summary statistics include model/tool time, output speed, and cache-hit measures.</p>
 <p>These help review the effects of long documents, retries, or repeated calls. Actual cost depends on provider pricing and cannot be inferred from one token total alone.</p>
@@ -338,9 +338,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>

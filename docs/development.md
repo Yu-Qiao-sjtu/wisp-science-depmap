@@ -10,8 +10,9 @@ The website's [tutorial directory](tutorials.html) links to one independent page
 per article under `docs/tutorials/`, generated from `docs/wechat/*.md` and matching
 English translations in `docs/wechat/en/`. The directory contains only compact
 cards. The language switch changes titles, complete article text, captions,
-examples, source links, and previous/next navigation. Screenshots currently show
-the Chinese app interface and are labeled accordingly. Article links open the corresponding tutorial
+examples, source links, and previous/next navigation. Each language uses screenshots
+of the corresponding app interface; English assets live under
+`docs/assets/tutorials/en/`. Article links open the corresponding tutorial
 page; other Markdown documentation links open the repository source. Each article
 offers a return link at the top and bottom and previous/next navigation. Returning
 to the directory restores the matching card via its stable anchor.
@@ -50,12 +51,16 @@ The homepage links directly to Quick Start. Models and ACP are accessed through
 the tutorial directory; the former standalone configuration HTML pages and their
 navigation entries have been removed without redirect pages.
 
-Quick Start and the four introductory articles use real frontend screenshots
-with mocked Tauri data. Regenerate them without API keys, real servers, or live browser access:
+The tutorial screenshots use the real frontend with localized mock data. The
+English set also covers ACP, the trajectory inspector, and the actual Chromium
+extension manager in a fresh offline profile. Regenerate them without API keys,
+real servers, or live website access:
 
 ```bash
 cd ui-tests
 WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-screenshots.spec.ts
+# Only regenerate the English assets:
+WISP_TUTORIAL_LOCALE=en WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-screenshots.spec.ts
 ```
 
 The capture tests normally write to Playwright's output directory; only the
@@ -63,8 +68,27 @@ explicit environment variable updates the published assets. Their demo account,
 host, terminal output, and conversation data are labeled as examples in the
 articles. Quick Start captures all four onboarding steps, project creation, and a
 first conversation with a deterministic mock reply; it never calls a model API.
-The Chrome extension installation image is reused from the basic
-configuration guide.
+Chinese assets retain their existing paths; English captures go into `en/`.
+The English screenshot tests reject visible Chinese text, including input values.
+The Chrome/Chromium installation screenshot uses Playwright's full Chromium
+binary, included by `npx playwright install chromium`, rather than headless shell.
+
+The [Skills catalog](skills.html) groups all bundled Skills into research tasks.
+Reviewed Chinese and English summaries live in `docs/skills-catalog.json`.
+`docs/build_skills.py` checks the catalog against `skills/*/SKILL.md` before
+generating the page; adding or removing a bundled Skill also requires updating
+its catalog entry. To regenerate and verify it:
+
+```bash
+python3 docs/build_skills.py
+python3 docs/build_skills.py --check
+python3 -m unittest discover -s docs -p 'test_build_*.py'
+```
+
+Website copy lives in `docs/assets/i18n.js`; keep the static Chinese fallback in
+the homepage and MCP page consistent with it. Research-task cards are illustrative
+requests, not attributed testimonials. The privacy FAQ distinguishes local
+storage from content sent to configured model or data services.
 
 ## Build from source
 

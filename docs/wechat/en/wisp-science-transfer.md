@@ -4,7 +4,7 @@ After an analysis, you may want to continue the whole project on another compute
 
 Wisp Science provides separate entry points for these needs. Choosing the right scope makes importing and reading easier. This tutorial goes from the whole project to one conversation and then selected messages, explaining what each option carries.
 
-> Screenshots use the real frontend in Chinese with demonstration projects and conversations. Numbers, paths, and contact names are examples, not real experimental results or evidence of completed migration.
+> Screenshots use the real frontend in English with demonstration projects and conversations. Numbers, paths, and contact names are examples, not real experimental results or evidence of completed migration.
 
 **Choose what you want to deliver.**
 
@@ -21,7 +21,7 @@ Project ZIPs and session ZIPs share an extension but have different formats and 
 
 Wait for active conversations and tasks in the project to finish. Click **Export project** on its project card, or open it and choose **File → Export current project**.
 
-![Project export dialog offering a full ZIP archive](../../assets/tutorials/transfer/02-project-export.png)
+![Project export dialog offering a full ZIP archive](../../assets/tutorials/en/transfer/02-project-export.png)
 
 *Figure 1: Copy the ordinary project folder yourself when you only need files. Choose a full ZIP when you also need Wisp conversations and project records.*
 
@@ -42,7 +42,7 @@ The recipient must configure their own models and servers. A remote path may sur
 
 Click **Import project** on the Projects screen to see the choices.
 
-![Project import choices: open a folder in place, import a ZIP, or recover workspace conversations](../../assets/tutorials/transfer/01-project-import.png)
+![Project import choices: open a folder in place, import a ZIP, or recover workspace conversations](../../assets/tutorials/en/transfer/01-project-import.png)
 
 *Figure 2: Open an already-copied folder in place. Use ZIP import for a complete Wisp project export. Workspace conversation recovery is a separate fallback.*
 
@@ -63,7 +63,7 @@ Importing the same project ID twice on a device is rejected rather than merged. 
 
 Inside a project, find the conversation on the left. Right-click it, or open its conversation action menu, and select **Export session**.
 
-![Export session in the conversation action menu](../../assets/tutorials/transfer/03-session-export.png)
+![Export session in the conversation action menu](../../assets/tutorials/en/transfer/03-session-export.png)
 
 *Figure 3: This menu belongs to the sidebar conversation entry. Right-clicking ordinary transcript text does not open the same export menu.*
 
@@ -81,7 +81,7 @@ Compare the checklist with the archive. Supply other input files separately or e
 
 In the target project, choose **Edit → Import session archive**. Alternatively, press **Ctrl+P**, or **Cmd+P** on macOS, and search for **Import session archive**.
 
-![Command palette finding Import session archive](../../assets/tutorials/transfer/04-session-import.png)
+![Command palette finding Import session archive](../../assets/tutorials/en/transfer/04-session-import.png)
 
 *Figure 4: This imports into the current project. Select a ZIP produced by Export session, not a project ZIP or sharing HTML.*
 
@@ -97,9 +97,9 @@ Reimporting the same source session may update its existing import or skip it. T
 
 For an explanation, result table, or a few turns, use the topbar share button or send `/share` in the message box.
 
-![Sharing dialog with selected messages, redaction keywords, and PNG or HTML options](../../assets/tutorials/transfer/05-share.png)
+![Sharing dialog with selected messages, redaction keywords, and PNG or HTML options](../../assets/tutorials/en/transfer/05-share.png)
 
-*Figure 5: Only the first two messages are selected. The Chinese contact name is entered as a redaction keyword; the later discussion is excluded.*
+*Figure 5: Only the first two messages are selected. The contact name “Dr. Lee” is entered as a redaction keyword; the later discussion is excluded.*
 
 A practical sequence is:
 

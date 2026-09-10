@@ -112,6 +112,25 @@ class TutorialBuildTests(unittest.TestCase):
                     with self.subTest(article=source.name, target=value):
                         self.assertTrue(target.is_file(), f"Missing tutorial resource: {target}")
 
+    def test_english_tutorials_have_their_own_screenshots(self):
+        parser = build_tutorials.MarkdownIt("commonmark")
+        root = build_tutorials.DOCS / "wechat"
+        def images(source):
+            return [child.attrGet("src") for token in parser.parse(source.read_text(encoding="utf-8"))
+                    for child in token.children or [] if child.type == "image"]
+        referenced = set()
+        for english in (root / "en").glob("*.md"):
+            english_images = images(english)
+            with self.subTest(article=english.name):
+                self.assertEqual(len(english_images), len(images(root / english.name)))
+                for value in english_images:
+                    self.assertTrue(value.startswith("../../assets/tutorials/en/"), value)
+                    target = (english.parent / value).resolve()
+                    self.assertTrue(target.is_file(), str(target))
+                    referenced.add(target)
+        # Every published English screenshot must be used by a tutorial.
+        self.assertEqual(referenced, {p.resolve() for p in (build_tutorials.DOCS / "assets/tutorials/en").rglob("*.png")})
+
 
 if __name__ == "__main__":
     unittest.main()

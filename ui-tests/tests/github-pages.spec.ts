@@ -39,14 +39,15 @@ const loadI18n = () => {
   return sandbox.WISP_PAGES_I18N as { zh: Record<string, string>; en: Record<string, string> };
 };
 
-test("GitHub Pages homepage aligns with v1.5.0 and ships a language switch", () => {
+test("GitHub Pages homepage describes current capabilities and ships a language switch", () => {
   const index = readRepositoryFile("docs/index.html");
   const i18nJs = readRepositoryFile("docs/assets/i18n.js");
 
   expect(index).toContain('class="lang-switch"');
   expect(index).toContain("assets/i18n.js");
-  expect(index).toContain("34 个内置 SKILL");
-  expect(index).toContain("v1.5.0");
+  expect(index).toContain(`${skillCount} 个内置技能`);
+  expect(index).not.toContain("v1.5.0");
+  expect(index).not.toContain("数据不出机器");
   expect(index).toContain("Linux");
   expect(index).toContain("Python / R");
   expect(index).not.toContain("30 个内置");
@@ -72,7 +73,7 @@ test("Pages i18n dictionaries cover every data-i18n key and stay in sync", () =>
   const enKeys = Object.keys(i18n.en).sort();
   expect(zhKeys).toEqual(enKeys);
 
-  for (const page of ["index.html", "mcp.html", "tutorials.html", ...readdirSync(resolve(repositoryRoot, "docs/tutorials")).filter(name => name.endsWith(".html")).map(name => `tutorials/${name}`)]) {
+  for (const page of ["index.html", "mcp.html", "skills.html", "tutorials.html", ...readdirSync(resolve(repositoryRoot, "docs/tutorials")).filter(name => name.endsWith(".html")).map(name => `tutorials/${name}`)]) {
     const html = readRepositoryFile(`docs/${page}`);
     expect(html).toContain('class="lang-switch"');
     expect(html).toContain("assets/i18n.js");
@@ -92,6 +93,34 @@ async function serveTutorialSite(page: import("@playwright/test").Page) {
     return existsSync(file) ? route.fulfill({ path: file }) : route.abort();
   });
 }
+
+test("Skills follows MCP in navigation and presents every bundled skill in both languages", async ({ page }) => {
+  await serveTutorialSite(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("https://tutorials.test/wisp-science/index.html");
+  const link = page.locator('.nav-links [data-i18n="nav.mcp"] + a');
+  await expect(link).toHaveText("SKILLS");
+  await link.click();
+  await expect(page).toHaveURL(/skills\.html\?lang=zh$/);
+  await expect(page.locator("h1")).toHaveText("科研技能");
+  const ids = readdirSync(resolve(repositoryRoot, "skills")).filter(name => existsSync(resolve(repositoryRoot, "skills", name, "SKILL.md")));
+  await expect(page.locator(".skill-card")).toHaveCount(ids.length);
+  expect(await page.locator(".skill-card").evaluateAll(cards => cards.map(card => card.getAttribute("data-skill-id")).sort())).toEqual(ids.sort());
+  for (const id of ids) {
+    await expect(page.locator(`[data-skill-id="${id}"] > a`)).toHaveAttribute("href", `https://github.com/xuzhougeng/wisp-science/blob/main/skills/${id}/SKILL.md`);
+  }
+  await page.screenshot({ path: test.info().outputPath("skills-zh.png") });
+  for (const lang of ["en", "zh"]) {
+    await page.locator(`.lang-switch [data-lang="${lang}"]`).click();
+    await expect(page.locator("h1")).toHaveText(lang === "en" ? "Research Skills" : "科研技能");
+    if (lang === "en") expect(await page.locator("main").innerText()).not.toMatch(/[\p{Script=Han}]/u);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.locator('.skills-groups a[href="#environment"]').click();
+    await expect(page.locator("#environment h2")).toBeInViewport();
+    await page.screenshot({ path: test.info().outputPath(`skills-${lang}-mobile.png`) });
+  }
+});
 
 test("tutorial directory stays compact and links to independent articles", async ({ page }) => {
   await serveTutorialSite(page);
@@ -145,6 +174,11 @@ for (const name of readdirSync(resolve(repositoryRoot, "docs/wechat")).filter((n
     await expect(page.locator("h1")).toHaveText(englishTitle);
     await expect(page.locator('.tutorial-body[lang="en"]')).toBeVisible();
     await expect(page.locator('.tutorial-body[lang="zh-CN"]')).toBeHidden();
+    for (const img of await page.locator(".tutorial-body:visible img").all()) {
+      await expect(img).toHaveAttribute("src", /^\.\.\/assets\/tutorials\/en\//);
+      await img.scrollIntoViewIfNeeded();
+      await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+    }
     expect(await page.locator(".tutorial-body:visible").innerText()).not.toMatch(/[\p{Script=Han}]/u);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('[data-href-en]')).toHaveAttribute("href", new RegExp(`/wechat/en/${name}$`));

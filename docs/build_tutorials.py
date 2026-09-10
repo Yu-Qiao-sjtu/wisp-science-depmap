@@ -150,8 +150,6 @@ def render_tutorials(directory=None):
                 siblings.append(f'<a class="tutorial-{key}" href="{sibling_id}.html">'
                                 f'<span data-i18n="tutorials.{key}">{label}</span>'
                                 + localized("strong", sibling_zh["short"], sibling_en["short"]) + '</a>')
-        screenshot_note = ('<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>\n'
-                           if '<img ' in zh["body"] else '')
         pages[f"tutorials/{anchor}.html"] = (
             article_head + '  <main class="tutorial-reader container">\n'
             f'<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav">{back}</nav>\n'
@@ -159,7 +157,6 @@ def render_tutorials(directory=None):
             + localized("h1", zh["title"], en["title"], ' id="article-title"')
             + f'\n<a href="{escape(zh["source"])}" data-href-zh="{escape(zh["source"])}" '
             f'data-href-en="{escape(en["source"])}" data-i18n="tutorials.source">查看原文</a></header>\n'
-            + screenshot_note
             + f'<div class="tutorial-body lang-zh" lang="zh-CN">\n{zh["body"]}</div>\n'
             f'<div class="tutorial-body lang-en" lang="en">\n{en["body"]}</div>\n</article>\n'
             '<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination">'

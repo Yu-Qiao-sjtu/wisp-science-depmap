@@ -39,6 +39,7 @@
         <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
         <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
         <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
@@ -59,7 +60,6 @@
 <article class="tutorial-article" id="wisp-science-quick-start" aria-labelledby="article-title">
 <header><h1 id="article-title" data-text-zh="Wisp Science基础入门：快速开始" data-text-en="Wisp Science Basics: Quick Start">Wisp Science基础入门：快速开始</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-quick-start.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-quick-start.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-quick-start.md" data-i18n="tutorials.source">查看原文</a></header>
-<p class="tutorial-language" data-i18n="tutorials.screenshots">截图使用中文界面，正文可切换中英文。</p>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>第一次使用 Wisp Science，不必一开始就配置服务器、浏览器和各种科研工具。先下载安装，走完首次引导，创建一个练习项目，再发送一条能核对结果的小问题，就能确认最基本的使用流程是否畅通。</p>
 <p>这篇教程带你完成从下载到第一次对话的过程。你只需要一台电脑，以及一个可以使用的模型 API 接入；暂时没有 API Key，也可以先安装应用、浏览界面和内置演示。</p>
@@ -200,7 +200,7 @@
 <p>You do not need to configure servers, browser access, and every research tool before using Wisp Science. Install the app, complete the welcome guide, create a practice project, and send a small question whose answer you can check. This establishes that the basic workflow works.</p>
 <p>This tutorial takes you from downloading the app to your first conversation. You need a computer and access to a working model API. Without an API key, you can still install the app, explore its interface, and read the bundled demonstration.</p>
 <blockquote>
-<p>Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the Chinese interface. Labels may vary between versions.</p>
+<p>Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.</p>
 </blockquote>
 <p><strong>Step 1: Download an installer from the official release page.</strong></p>
 <p>Open the <a href="https://github.com/xuzhougeng/wisp-science/releases/latest">official Wisp Science download page on GitHub Releases</a>, find <strong>Assets</strong>, and choose a file for your operating system and processor. You can also use <strong>Download desktop app</strong> on the <a href="https://xuzhougeng.github.io/wisp-science/">Wisp Science website</a>.</p>
@@ -246,27 +246,27 @@
 <p>Once installed, open <strong>Wisp Science</strong>. This tutorial's text-only conversation does not require installing Rust, Python, or R first.</p>
 <p><strong>Step 2: Follow the four onboarding pages.</strong></p>
 <p>The first launch displays a welcome guide. Use the button at the bottom to continue.</p>
-<p><img src="../assets/tutorials/quick-start/01-welcome.png" alt="Welcome page of the onboarding guide, with the Next button at the bottom" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/01-welcome.png" alt="Welcome page of the onboarding guide, with the Next button at the bottom" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 1: Start on the welcome page and click Next. The dots show your current step.</em></p>
 <p>The second page introduces project conversations, analysis, research tools, and file previews. You only need to know that these capabilities exist; you do not need to configure all of them now.</p>
-<p><img src="../assets/tutorials/quick-start/02-features.png" alt="The onboarding page introducing Wisp Science features" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/02-features.png" alt="The onboarding page introducing Wisp Science features" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 2: The feature introduction outlines the workbench. Start with an ordinary conversation, then explore analysis and retrieval.</em></p>
 <p>The third page is <strong>Set up your model</strong>. The current onboarding shortcut uses DeepSeek: enter your own API key and follow the prompts to save it and continue. Obtain the key from your model provider's console; it is not your website login password.</p>
-<p><img src="../assets/tutorials/quick-start/03-model.png" alt="The model onboarding page with the provider console link and API key field" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/03-model.png" alt="The model onboarding page with the provider console link and API key field" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 3: Enter a valid API key on your own computer. No key is shown in the screenshot. This onboarding shortcut is for DeepSeek; add other providers later in Settings.</em></p>
 <p>For another provider or a laboratory gateway, choose <strong>Set up later</strong>. Then open <strong>Settings → Models → Add API access</strong> and enter the address, protocol, model ID, and key. See the <a href="wisp-science-models.html">model configuration tutorial</a> for field details.</p>
 <p><strong>Configure at least one usable model before attempting the conversation below.</strong> Skipping the key lets you explore the app and its demonstration, but does not give you API access. Whether a web-chat account includes API access depends on the provider.</p>
 <p>The fourth page, <strong>Local environment (optional)</strong>, checks paths to tools such as Python and R.</p>
-<p><img src="../assets/tutorials/quick-start/04-environment.png" alt="The local-environment detection page in onboarding" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/04-environment.png" alt="The local-environment detection page in onboarding" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 4: Detected tool paths appear here. These are simulated paths, not values to copy. Missing tools do not prevent this text-only test.</em></p>
 <p>Installed tools can be detected automatically. Use <strong>Edit paths</strong> if a path is wrong. If Python or R is not installed, click <strong>Get started</strong> and configure it when you need to run analysis. Onboarding does not automatically install every tool.</p>
 <p>To reopen the guide, press <strong>Ctrl+P</strong>, or <strong>Cmd+P</strong> on macOS, and search for <strong>Quick setup</strong>. Reopening it does not erase existing projects.</p>
 <p><strong>Step 3: Create a practice project.</strong></p>
 <p>After onboarding, the Projects screen appears. A project organizes conversations, files, and results for a piece of work. Keep this first exercise in a separate practice project.</p>
-<p><img src="../assets/tutorials/quick-start/05-projects.png" alt="The Projects screen with New project in the top toolbar" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/05-projects.png" alt="The Projects screen with New project in the top toolbar" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 5: This screen uses demonstration data. A new installation may have an empty project list or show the bundled example. Click New project to create your own workspace.</em></p>
 <p>Click <strong>New project</strong>, enter a name such as <strong>My first Wisp project</strong>, and choose a local folder for the exercise. A dedicated empty folder makes subsequent files easy to find.</p>
-<p><img src="../assets/tutorials/quick-start/06-create-project.png" alt="The New project form with a project name and local folder" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/06-create-project.png" alt="The New project form with a project name and local folder" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 6: The name identifies the project in Wisp; the directory determines where files live. <code>/mock/root/new-project</code> is a simulated path. Select a folder on your own computer.</em></p>
 <p>Leave the other fields and directory-layout options at their defaults for now. Confirm the name and folder, then click <strong>Create</strong>. Inside the project, conversations are listed on the left, the transcript occupies the center, and the message box is at the bottom. Use <strong>New session</strong> on the left for a new discussion.</p>
 <p>Without an API key, you can read the built-in example from the Projects screen. Sending your own questions still requires a usable model.</p>
@@ -277,7 +277,7 @@
 <p>This is my first conversation test. Put samples A=10, B=20, and C=30 in a table, then report the sample count and mean. Answer only from these numbers. Do not read files, run code, or visit websites.</p>
 </blockquote>
 <p>This exercise requires no extra data files or research tools. It checks message sending, model responses, and table rendering.</p>
-<p><img src="../assets/tutorials/quick-start/07-first-conversation.png" alt="A teaching example of the first conversation, showing the sample table, count, and mean" loading="lazy" width="1440" height="1000" /></p>
+<p><img src="../assets/tutorials/en/quick-start/07-first-conversation.png" alt="A teaching example of the first conversation, showing the sample table, count, and mean" loading="lazy" width="1440" height="1000" /></p>
 <p><em>Figure 7: The screenshot uses a simulated model response to show where a successful answer appears. Your reply can use different wording, but the numbers should be checkable.</em></p>
 <p>Check that:</p>
 <ul>
@@ -346,9 +346,10 @@
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
         <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
