@@ -104,6 +104,7 @@ mod specialists;
 pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
 pub(crate) use wisp_runs::ssh_master;
+mod clipboard_files;
 mod storage_prefs;
 mod terminal_sessions;
 mod trajectory;
@@ -7081,6 +7082,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            clipboard_files::read_clipboard_file_paths,
             agent_turn::send_message,
             update_mcp_app_context,
             call_mcp_app_tool,

@@ -7461,6 +7461,8 @@ dependencies = [
  "ignore",
  "image",
  "mac-notification-sys",
+ "objc2-app-kit",
+ "objc2-foundation",
  "portable-pty",
  "pulldown-cmark",
  "qrcode",

@@ -65,6 +65,10 @@ extern "C" {
     pub(crate) fn close_mcp_app(instance_id: &str);
     #[wasm_bindgen(js_name = pasted_image_count)]
     pub(crate) fn pasted_image_count(event: JsValue) -> usize;
+    pub(crate) fn paste_has_files(event: JsValue) -> bool;
+    pub(crate) fn clipboard_paste_snapshot(event: JsValue) -> JsValue;
+    #[wasm_bindgen(catch)]
+    pub(crate) async fn clipboard_file_paths(event: JsValue) -> Result<JsValue, JsValue>;
     /// Chat media as a cached blob object URL (never a base64 data URL) —
     /// `null` when the file cannot be read, so callers paint their fallback.
     /// `owner_id` is a unique mounted element that owns the URL until removal.
