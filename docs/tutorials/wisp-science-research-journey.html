@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="研究历程，让每一天的探索都有迹可循 · 教程 | Wisp Science" data-title-en="Research Journey, a trace for every day of discovery · Tutorials | Wisp Science" data-desc-zh="Wisp Science使用技巧：研究历程，让每一天的探索都有迹可循" data-desc-en="Wisp Science Tips: Research Journey, a trace for every day of discovery">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science使用技巧：研究历程，让每一天的探索都有迹可循">
+  <title>研究历程，让每一天的探索都有迹可循 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-research-journey" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" id="wisp-science-research-journey" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science使用技巧：研究历程，让每一天的探索都有迹可循" data-text-en="Wisp Science Tips: Research Journey, a trace for every day of discovery">Wisp Science使用技巧：研究历程，让每一天的探索都有迹可循</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-research-journey.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-research-journey.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-research-journey.md" data-i18n="tutorials.source">查看原文</a></header>
+<div class="tutorial-body lang-zh" lang="zh-CN">
+<p>上周那张图是怎么得到的？当时为什么选择方案 B？昨天的实验没有成功，今天应该从哪一步继续？</p>
+<p>研究往往同时发生在几段对话、几次运行和不同版本的文件里。到了组会或写论文的时候，我们需要把它们重新接起来：哪天做了什么，留下了哪份结果，依据是什么，还有哪些问题没有验证。</p>
+<p>Wisp Science v1.11.0 的主题是 <strong>Research Journey · 研究历程</strong>。这一篇从首页研究日历出发，带你回到项目中的一天，查看成果来源、补充研究记录，再把选中的证据放进论文工作区。</p>
+<blockquote>
+<p>本文适用于 v1.11.0。截图来自 Wisp Science 实际前端，使用固定日期和模拟数据演示操作，无需连接模型或服务器。文件、实验与结论均为教学示例；论文页面使用另一组独立的演示证据，不表示前面的结果已自动转入论文。</p>
+</blockquote>
+<h2>先分清三个入口</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>入口</th>
+<th>适合回答的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>首页「研究日历」</td>
+<td>这一天，哪些项目留下了研究记录？</td>
+</tr>
+<tr>
+<td>项目侧栏「研究历程」</td>
+<td>这个项目最近做了什么？产物对应哪次运行？</td>
+</tr>
+<tr>
+<td>对话中的「轨迹」</td>
+<td>这一段对话具体调用了什么工具、执行了哪一步？</td>
+</tr>
+</tbody>
+</table></div>
+<p>如果需要检查一次工具调用的参数或报错，继续看 <a href="wisp-science-trajectory.html">轨迹教程</a>。研究历程把视角放到项目和日期，帮助你回顾跨对话的工作。</p>
+<h2>第一步：从日历找到当天的工作</h2>
+<p>打开 Wisp 的项目首页，点击右上角、收藏图标左侧的<strong>日历图标</strong>。</p>
+<p>研究日历默认显示本月和今天。左侧可以选择所有项目或单个项目，中间按日期显示活动标记，右侧按项目列出当天记录；窄窗口会把详情放在日历下方。</p>
+<p><img src="../assets/tutorials/research-journey/01-calendar.png" alt="首页研究日历：按日期查看多个项目的活动" loading="lazy" width="1440" height="1000" /></p>
+<p>可以按这个顺序试一遍：</p>
+<ol>
+<li>点击一个有活动标记的日期，查看当天涉及哪些项目。</li>
+<li>点击左侧项目，缩小到自己要回顾的研究。</li>
+<li>记录较多时，在当天详情中展开项目、点击「显示更早记录」。</li>
+<li>点击详情中<strong>项目标题右侧的打开图标</strong>，进入该项目所选日期的研究历程。</li>
+</ol>
+<p>月份箭头可以查看过去，「今天」回到当前日期。日历记录的是已经发生并登记的活动，不是未来任务排期；活动日数也不代表研究完成度。隐私模式隐藏的项目不会出现在汇总里。</p>
+<h2>第二步：在项目里读懂一天的研究</h2>
+<p>也可以直接打开项目，点击左侧<strong>研究历程</strong>。从侧栏进入时，默认显示本月，最近有活动的一天展开；从首页日历进入时，则定位到刚才选择的日期。</p>
+<p><img src="../assets/tutorials/research-journey/02-journey.png" alt="项目研究历程：每日记录、运行与产物放在一起" loading="lazy" width="1440" height="1000" /></p>
+<p>示例中，三天的工作依次是导入原始数据、完成质控、比较归一化方法。当天卡片把实验、产物、人工记录和对话放在一起，便于回顾前后关系。</p>
+<p>这里的记录来自项目已有内容：会话、运行、登记过的产物、文献、数据资产、决策，以及手动补充的笔记。失败或取消的运行也可以留下记录，因为“这条路为什么没有走通”同样有价值。</p>
+<p>点击右侧日历查看某一天，点击「显示整月」恢复月视图。搜索框只搜索<strong>当前已经载入的范围</strong>，不会自动遍历所有月份。找不到旧记录时，先切到对应月份或日期；页面提示读取不完整时，可以缩小到某一天。</p>
+<h2>第三步：从一份结果追到它的来源</h2>
+<p>假设组会上要使用 <code>normalized_counts.csv</code>。仅凭文件名，还不能确定它对应的是哪一次分析。</p>
+<p>点击当天产物中的这个文件，右侧来源栏会显示所选历史版本、对应的生成运行，以及已登记的输入。</p>
+<p><img src="../assets/tutorials/research-journey/03-source.png" alt="来源栏：查看准确版本、生成运行和输入数据" loading="lazy" width="1440" height="1000" /></p>
+<p>重点核对三件事：</p>
+<ul>
+<li><strong>版本</strong>：这里是当天登记的具体版本；文件后来更新，不会把历史卡片悄悄换成新版。</li>
+<li><strong>输入和运行</strong>：确认是否使用了预期数据。点击「查看运行记录」，可查看状态、命令、执行环境和日志尾部。</li>
+<li><strong>实际内容</strong>：点击「打开产物」，查看该版本的内容，而不只依赖标题或说明。</li>
+</ul>
+<p>来源信息取决于已有登记。页面显示“未记录”时，就不能据此推断输入或生成过程完整。今天才登记的历史文件，也不会自动变成几天前的实验产出。</p>
+<p>按 Escape 会先关闭最上层的产物预览或运行详情，之后才退出研究历程。</p>
+<h2>第四步：把判断和下一步写下来</h2>
+<p>运行日志能说明执行了什么，但“为什么选择这个方法”“哪些结论还不确定”通常需要研究者补充。</p>
+<p>点击右上角<strong>补充记录</strong>，选择研究日期和记录类型，再填写标题与详情。</p>
+<p><img src="../assets/tutorials/research-journey/04-entry.png" alt="补充研究记录：同时写下发现、依据和待验证事项" loading="lazy" width="1440" height="1000" /></p>
+<p>四种类型分别是进展、发现、决策和待继续。可以参考下面这条发现记录：</p>
+<blockquote>
+<p><strong>标题</strong>：小样本比较：方案 B 波动较小，仍需完整数据验证</p>
+<p><strong>详情与依据</strong>：教学示例。依据：normalization_comparison.png v1。当前只比较了小样本；保留方案 A 作为基线，下一步在完整数据集上复核。</p>
+</blockquote>
+<p>一条有用的记录，最好写清<strong>观察到了什么、依据在哪、还有什么没验证</strong>。保存后，它会出现在所选研究日期下；如果是补记，系统还会保留实际保存时间。</p>
+<p>人工记录不会自动获得科学验证。目前也没有记录编辑或删除入口，保存前检查日期与表述。</p>
+<h2>第五步：写论文时，挑选真正支撑论点的证据</h2>
+<p>需要把研究成果用于论文时，关闭研究历程，进入项目侧栏的<strong>论文证据</strong>。</p>
+<p>这里按论文组织证据：左侧是章节、论点或图表等条目，右侧展示选中的结果、分析来源，以及用途和选择理由。页面另有「定稿检查」和「版本记录」。</p>
+<p><img src="../assets/tutorials/research-journey/05-publication.png" alt="论文证据工作区：围绕论文条目组织选中的结果与来源" loading="lazy" width="1440" height="1000" /></p>
+<p>对一份可编辑的草稿，可以这样开始：</p>
+<ol>
+<li>创建或选择论文及草稿版本，添加需要支持的章节、论点或图表条目。</li>
+<li>点击「添加证据」，从已登记结果、分析运行或已保存的研究对话中选择来源。</li>
+<li>写明证据用途、选择状态，以及必要的选择理由。对话来源可以选取一段原文，文件来源绑定所选准确版本。</li>
+<li>在「定稿检查」中先检查当前版本，处理提示。通过后，再明确确认锁定证据。</li>
+</ol>
+<p><strong>检查通过不会自动锁定草稿</strong>；锁定需要单独操作。查看旧版本时打开的是已保存的历史修订；继续修改时克隆一个新版本。前面的日历和笔记，也不会自动替你选好论文证据。</p>
+<p>更详细的版本、证据包和验证规则，见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/publication-evidence.md">论文证据工作区说明</a>。</p>
+<h2>一个可以每天重复的小习惯</h2>
+<p>开始工作时，从日历回顾昨天，找到尚未验证的问题。结束工作前，打开今天的研究历程，核对关键产物的版本和来源，再补一条包含依据与下一步的记录。</p>
+<p>准备组会或论文时，就可以沿着日期回到原始成果，查看当时的运行与判断。它能保留的上下文，仍取决于你实际登记了哪些结果、输入和笔记；它不会自动生成每日科学总结，也不会把目录里的所有文件都当作研究成果。</p>
+<p><strong>让每一天的探索，都有迹可循。</strong></p>
+<p>项目与下载：<a href="https://github.com/xuzhougeng/wisp-science">Wisp Science</a> · <a href="https://github.com/xuzhougeng/wisp-science/releases/tag/v1.11.0">v1.11.0</a></p>
+<p>继续阅读：<a href="wisp-science-quick-start.html">快速开始</a> · <a href="wisp-science-trajectory.html">对话轨迹</a> · <a href="wisp-science-transfer.html">导入、导出与分享</a></p>
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>How did you produce last week's figure? Why did you choose method B? Yesterday's experiment failed; where should you pick up today?</p>
+<p>Research often spans several conversations, runs, and file versions. Before a lab meeting or while writing a paper, you need to reconnect them: what happened on a particular day, which results it produced, what supported your decisions, and what still needs validation.</p>
+<p>The theme of Wisp Science v1.11.0 is <strong>Research Journey</strong>. This tutorial starts at the home research calendar, takes you into a project's daily history, and shows how to inspect sources, add research notes, and organize selected evidence for a manuscript.</p>
+<blockquote>
+<p>This tutorial applies to v1.11.0. Screenshots show the actual Wisp Science frontend with a fixed date and simulated data; no model or server connection is needed. Files, experiments, and findings are teaching examples. The publication screenshot uses a separate demonstration dataset; it does not imply that the earlier results were transferred automatically.</p>
+</blockquote>
+<h2>Three views to know</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>View</th>
+<th>The question it helps answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Research calendar on the Projects home</td>
+<td>Which projects recorded activity on this date?</td>
+</tr>
+<tr>
+<td>Research journey in the project sidebar</td>
+<td>What happened in this project, and which run produced an output?</td>
+</tr>
+<tr>
+<td>A conversation's trajectory</td>
+<td>Which tools did this conversation call, and what happened at each step?</td>
+</tr>
+</tbody>
+</table></div>
+<p>To inspect tool arguments or an error, see the <a href="wisp-science-trajectory.html">trajectory tutorial</a>. Research Journey provides the project and date view for reviewing work across conversations.</p>
+<h2>Step 1: Find the day's work in the calendar</h2>
+<p>Open the Projects home and click the <strong>calendar icon</strong> at the upper right, to the left of the Library icon.</p>
+<p>The calendar opens at the current month and today. Choose all projects or a single project on the left, inspect activity markers in the middle, and read the day's records grouped by project on the right. Narrow windows place the details below the calendar.</p>
+<p><img src="../assets/tutorials/en/research-journey/01-calendar.png" alt="Home research calendar: activity across projects on a selected date" loading="lazy" width="1440" height="1000" /></p>
+<p>Try this sequence:</p>
+<ol>
+<li>Select a date with activity markers to see which projects have records.</li>
+<li>Select a project on the left to focus the view.</li>
+<li>For a busy day, expand a project group and use <strong>Show earlier records</strong>.</li>
+<li>Click the <strong>open icon to the right of the project heading</strong> in the day details to open that project's Research Journey at the selected date.</li>
+</ol>
+<p>The month arrows show earlier or later months; <strong>Today</strong> returns to the current date. This calendar reflects recorded activity, rather than scheduling future tasks. Activity-day counts do not measure research completion. Projects hidden by privacy mode are excluded from the overview.</p>
+<h2>Step 2: Read a day in your project's history</h2>
+<p>You can also open a project and choose <strong>Research journey</strong> in its sidebar. Sidebar entry opens the current month with the most recent active day expanded. Entry from the home calendar opens the date you selected.</p>
+<p><img src="../assets/tutorials/en/research-journey/02-journey.png" alt="Project Research Journey: daily notes, runs, and outputs together" loading="lazy" width="1440" height="1000" /></p>
+<p>In the example, three days cover importing raw data, completing quality checks, and comparing normalization methods. Each day brings experiments, outputs, manual notes, and conversations together so you can review their context.</p>
+<p>The view draws on existing project records: conversations, runs, registered outputs, papers, data assets, decisions, and manual notes. Failed or cancelled runs can also appear; understanding an unsuccessful attempt is useful when deciding what to try next.</p>
+<p>Select a day in the calendar or choose <strong>Show full month</strong> to return to the monthly view. Search covers <strong>the currently loaded range</strong>, not every month in the project. If an older record is missing, navigate to its month or day first. If the page reports an incomplete read, narrow the range to one day.</p>
+<h2>Step 3: Trace an output to its source</h2>
+<p>Suppose you want to use <code>normalized_counts.csv</code> in a lab meeting. Its filename alone cannot tell you which analysis it belongs to.</p>
+<p>Click that output in the daily card. The source panel shows its exact historical version, the producing run, and registered inputs when available.</p>
+<p><img src="../assets/tutorials/en/research-journey/03-source.png" alt="Source panel: exact version, producing run, and input data" loading="lazy" width="1440" height="1000" /></p>
+<p>Check three things:</p>
+<ul>
+<li><strong>Version:</strong> the card refers to the specific version registered at that time. A later file update does not silently replace it with the latest version.</li>
+<li><strong>Inputs and run:</strong> check whether the analysis used the intended data. <strong>View run record</strong> shows status, command, execution context, and log tails.</li>
+<li><strong>Content:</strong> choose <strong>Open output</strong> to inspect that version rather than relying only on its title or description.</li>
+</ul>
+<p>Source details depend on what was registered. A “Not recorded” field does not establish a complete analysis history. An old file registered today does not automatically become an output from an earlier experiment.</p>
+<p>Escape closes the topmost output preview or run dialog before exiting Research Journey.</p>
+<h2>Step 4: Record your judgment and next step</h2>
+<p>A run log can show what executed. Why you chose a method, or which findings remain uncertain, often needs a researcher's note.</p>
+<p>Choose <strong>Add entry</strong> at the upper right, select the research date and category, and enter a title and details.</p>
+<p><img src="../assets/tutorials/en/research-journey/04-entry.png" alt="Adding a research entry with a finding, evidence, and pending validation" loading="lazy" width="1440" height="1000" /></p>
+<p>The four categories cover progress, findings, decisions, and next steps. Here is an example finding:</p>
+<blockquote>
+<p><strong>Title:</strong> Small-sample comparison: B varies less; full-data validation pending</p>
+<p><strong>Details and evidence:</strong> Teaching example. Evidence: normalization_comparison.png v1. Only a small sample was compared. Keep A as the baseline and validate on the full dataset next.</p>
+</blockquote>
+<p>A useful note states <strong>what you observed, where the evidence is, and what remains untested</strong>. Saving places it under the selected research date. A backdated entry also retains the time when you actually added it.</p>
+<p>Manual notes are not automatically scientifically verified. There is currently no entry editing or deletion control, so review the date and wording before saving.</p>
+<h2>Step 5: Select evidence that supports your manuscript</h2>
+<p>When preparing results for a paper, close Research Journey and choose <strong>Publication</strong> in the project sidebar.</p>
+<p>This workspace organizes evidence around the manuscript. Its outline contains sections, claims, or figures; evidence cards show selected results, analysis lineage, and the recorded purpose or selection rationale. The page also includes <strong>Finalization check</strong> and <strong>Version history</strong>.</p>
+<p><img src="../assets/tutorials/en/research-journey/05-publication.png" alt="Publication workspace: selected results and sources organized around manuscript items" loading="lazy" width="1440" height="1000" /></p>
+<p>For an editable draft:</p>
+<ol>
+<li>Create or select a publication and draft revision, then add the section, claim, or figure you want to support.</li>
+<li>Choose <strong>Add evidence</strong> and select registered results, analysis runs, or saved research conversations.</li>
+<li>Record the purpose, selection state, and any needed rationale. Conversation sources support passage selection; file sources bind the exact version selected.</li>
+<li>Use <strong>Finalization check</strong> to inspect the revision and address its findings. After a successful check, explicitly confirm and lock the evidence.</li>
+</ol>
+<p><strong>Passing a check does not automatically lock the draft.</strong> Locking is a separate action. Version history opens the stored revision; clone a new revision to continue editing. The calendar and notes do not automatically select manuscript evidence for you.</p>
+<p>For revision, capsule, and verification details, see the <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/publication-evidence.md">Publication Evidence Workspace guide</a>.</p>
+<h2>A small daily habit</h2>
+<p>At the start of work, use the calendar to review yesterday and find the questions still awaiting validation. Before finishing, open today's Research Journey, check the versions and sources of key outputs, and add a note with evidence and a next step.</p>
+<p>When a meeting or manuscript deadline arrives, follow the dates back to the original results, runs, and reasoning. The context available still depends on the outputs, inputs, and notes you actually registered. Wisp does not automatically generate daily scientific summaries or treat every file in a directory as a research result.</p>
+<p><strong>A trace for every day of discovery.</strong></p>
+<p>Project and downloads: <a href="https://github.com/xuzhougeng/wisp-science">Wisp Science</a> · <a href="https://github.com/xuzhougeng/wisp-science/releases/tag/v1.11.0">v1.11.0</a></p>
+<p>Continue reading: <a href="wisp-science-quick-start.html">Quick Start</a> · <a href="wisp-science-trajectory.html">Trajectories</a> · <a href="wisp-science-transfer.html">Import, Export, and Sharing</a></p>
+</div>
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-trajectory.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="轨迹" data-text-en="Trajectories">轨迹</strong></a><a class="tutorial-next" href="wisp-science-cli.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="Wisp Science进阶" data-text-en="Wisp Science Advanced">Wisp Science进阶</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-research-journey" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

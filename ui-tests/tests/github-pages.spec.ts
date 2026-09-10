@@ -210,6 +210,8 @@ test("article links, previous and next navigation, and browser back stay within 
   await page.locator(".tutorial-previous").click();
   await expect(page.locator("h1")).toHaveText("Wisp Science进阶");
   await page.locator(".tutorial-previous").click();
+  await expect(page.locator("h1")).toContainText("研究历程");
+  await page.locator(".tutorial-previous").click();
   await page.locator('.tutorial-body:visible p a[href^="wisp-science-skills.html"]').click();
   await expect(page.locator("h1")).toContainText("Skills");
   await expect(page.locator(".tutorial-body:visible pre").filter({ hasText: "name: lab-paper-note" })).toContainText("# 实验室论文阅读笔记");
