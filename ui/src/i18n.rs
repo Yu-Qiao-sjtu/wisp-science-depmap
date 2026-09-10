@@ -2331,10 +2331,10 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "msg.branch") => Some("Branch"),
         (Locale::En, "msg.branch_to_new_chat") => Some("Branch to new conversation"),
         (Locale::En, "exploration.start") => Some("Start exploration"),
-        (Locale::En, "exploration.history_unavailable") => Some("Explorations can only start from the current completed turn."),
+        (Locale::En, "exploration.history_unavailable") => Some("The selected response’s context is unavailable; it may have been compacted or rewound."),
         (Locale::En, "exploration.default_name") => Some("Exploration {n}"),
         (Locale::En, "exploration.start_title") => Some("Start an isolated exploration"),
-        (Locale::En, "exploration.start_hint") => Some("This snapshots the current completed mainline state into an isolated local workspace. Each candidate may create multiple files and is separate from a normal conversation branch."),
+        (Locale::En, "exploration.start_hint") => Some("This exploration inherits the conversation through the selected response. Project files and records are copied from the current state when the round starts; earlier file versions are not restored."),
         (Locale::En, "exploration.name") => Some("Exploration name"),
         (Locale::En, "exploration.create") => Some("Create exploration"),
         (Locale::En, "exploration.group") => Some("Explorations"),
@@ -4949,10 +4949,10 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "msg.branch") => Some("分支"),
         (Locale::Zh, "msg.branch_to_new_chat") => Some("分支到新会话"),
         (Locale::Zh, "exploration.start") => Some("开始探索"),
-        (Locale::Zh, "exploration.history_unavailable") => Some("只能从当前最新的已完成轮次开始探索。"),
+        (Locale::Zh, "exploration.history_unavailable") => Some("所选回答的上下文已不可用，可能已被压缩或回溯。"),
         (Locale::Zh, "exploration.default_name") => Some("探索 {n}"),
         (Locale::Zh, "exploration.start_title") => Some("开始隔离探索"),
-        (Locale::Zh, "exploration.start_hint") => Some("这会把当前已完成的主线状态复制到一个持久、隔离的工作区；它不同于普通对话分支。"),
+        (Locale::Zh, "exploration.start_hint") => Some("探索将继承截至所选回答的对话。项目文件和记录使用本轮探索创建时的当前状态，不会恢复为历史文件版本。"),
         (Locale::Zh, "exploration.name") => Some("探索名称"),
         (Locale::Zh, "exploration.create") => Some("创建探索"),
         (Locale::Zh, "exploration.group") => Some("探索"),
@@ -5562,11 +5562,18 @@ pub fn localize_backend(locale: Locale, msg: &str) -> String {
                     .into()
             }
         }
+        m if m.starts_with("exploration_history_unavailable:") => {
+            if locale == Locale::Zh {
+                "所选回答的完整上下文已不可用，可能已被压缩或回溯。请从仍保留上下文的回答开始探索。".into()
+            } else {
+                m.trim_start_matches("exploration_history_unavailable:").trim().into()
+            }
+        }
         m if m.starts_with("exploration_round_active:") => {
             if locale == Locale::Zh {
-                "另一个主线会话已有当前探索轮；请先结束该轮探索。".to_string()
+                "已有探索轮正在进行；请从该轮原回答继续创建候选，或先结束该轮探索。".to_string()
             } else {
-                "Another mainline conversation already owns the current exploration round. Finish that round first.".to_string()
+                "An exploration round is already open. Start candidates from its original response, or finish that round first.".to_string()
             }
         }
         m if m.starts_with("exploration_mainline_frozen:") => {

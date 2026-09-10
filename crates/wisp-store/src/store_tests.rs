@@ -3306,6 +3306,7 @@ async fn delete_project_clears_later_child_tables_and_ignores_orphan_schedules()
             source_message_seq: 1,
             source_frame_head_seq: 1,
             source_ui_event_seq: 0,
+            source_ui_event_head_seq: 0,
             source_family_generation: 0,
             source_state_generation: 0,
             workspace_snapshot_id: "gone-snap".into(),
@@ -4555,6 +4556,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             RUN_REVIEW_DISMISSED_MIGRATION.to_string(),
             SESSION_SERVICE_TIER_MIGRATION.to_string(),
             RESEARCH_JOURNAL_MIGRATION.to_string(),
+            EXPLORATION_HISTORY_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();
@@ -8203,6 +8205,7 @@ async fn create_exploration_checkpoint_fixture(store: &Store) {
             source_message_seq: 2,
             source_frame_head_seq: 2,
             source_ui_event_seq: 0,
+            source_ui_event_head_seq: 0,
             source_family_generation: 0,
             source_state_generation: 0,
             workspace_snapshot_id: "snapshot".into(),
@@ -8214,6 +8217,39 @@ async fn create_exploration_checkpoint_fixture(store: &Store) {
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn exploration_history_migration_backfills_heads_and_is_idempotent() {
+    let (store, tmp) = exploration_store_fixture("history-migration").await;
+    create_exploration_checkpoint_fixture(&store).await;
+    sqlx::query("UPDATE exploration_checkpoints SET source_ui_event_seq=7")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE exploration_checkpoints DROP COLUMN source_ui_event_head_seq")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM wisp_schema_migrations WHERE version=?")
+        .bind(EXPLORATION_HISTORY_MIGRATION)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    store.pool.close().await;
+    for _ in 0..2 {
+        let reopened = Store::open(&tmp).await.unwrap();
+        let checkpoint = reopened
+            .get_exploration_checkpoint("checkpoint")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.source_ui_event_head_seq, 7);
+        assert_eq!(checkpoint.source_ui_event_seq, 7);
+        assert_eq!(checkpoint.source_message_seq, 2);
+        reopened.pool.close().await;
+    }
+    let _ = std::fs::remove_file(tmp);
 }
 
 #[tokio::test]
@@ -9056,6 +9092,7 @@ async fn exploration_checkpoint_rejects_stale_mainline_state() {
         source_message_seq: 2,
         source_frame_head_seq: 2,
         source_ui_event_seq: 0,
+        source_ui_event_head_seq: 0,
         source_family_generation: 0,
         source_state_generation: 0,
         workspace_snapshot_id: "snapshot".into(),

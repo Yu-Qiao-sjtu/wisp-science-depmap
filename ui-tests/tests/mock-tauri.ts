@@ -241,7 +241,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     created_at: createdAt,
     updated_at: createdAt,
   });
-  let mockExplorations: any[] = mockExplorationFlow
+  let mockExplorations: any[] = mockExplorationFlow && query.get("mockNoExplorationRound") !== "1"
     ? [
         { exploration: makeMockExploration("exploration-a", "exploration-frame-a", "Exploration A", 2001), source_frame_id: "exploration-mainline", checkpoint_user_index: 0, isolation_summary_json: '{"partial":false}' },
         { exploration: makeMockExploration("exploration-b", "exploration-frame-b", "Exploration B", 2002), source_frame_id: "exploration-mainline", checkpoint_user_index: 0, isolation_summary_json: '{"partial":true}' },
@@ -274,7 +274,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           { role: "assistant", text: suffix, tool_name: null, ok: null },
         ],
         next_before_seq: null,
-        user_offset: 0,
+        user_offset: Number(query.get("mockExplorationUserOffset") ?? 0),
         branches,
       };
     }

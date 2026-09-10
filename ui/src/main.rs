@@ -5918,7 +5918,7 @@ fn App() -> impl IntoView {
             exploration_busy.set(false);
         });
     });
-    let start_exploration_from_head = Callback::new(move |turn_index: usize| {
+    let start_exploration_from_turn = Callback::new(move |turn_index: usize| {
         let Some(source_frame_id) = active_session.get_untracked() else {
             return;
         };
@@ -11540,14 +11540,9 @@ fn App() -> impl IntoView {
                                         )
                                 })
                                 .count();
-                            let latest_turn_index = items.with(|rows| {
-                                rows.iter()
-                                    .filter(|item| matches!(item, ChatItem::User(_)))
-                                    .count()
-                                    .saturating_sub(1)
-                            }) + transcript_pages
-                                .with(|pages| pages.get(&frame_id).copied())
-                                .map_or(0, |page| page.user_offset);
+                            let checkpoint_turn_index = rows.iter()
+                                .find(|row| row.source_frame_id == frame_id)
+                                .map_or(0, |row| row.checkpoint_user_index);
                             (active_count > 0).then(|| view! {
                                 <section class="exploration-banner mainline" data-testid="mainline-exploration-banner">
                                     <div class="exploration-banner-copy">
@@ -11555,7 +11550,7 @@ fn App() -> impl IntoView {
                                         <strong>{tf(locale.get(), "exploration.mainline_count", &[("n", &active_count.to_string())])}</strong>
                                         <span>{t(locale.get(), "exploration.mainline_warning")}</span>
                                     </div>
-                                    <button type="button" on:click=move |_| start_exploration_from_head.call(latest_turn_index)>{t(locale.get(), "exploration.start_another")}</button>
+                                    <button type="button" on:click=move |_| start_exploration_from_turn.call(checkpoint_turn_index)>{t(locale.get(), "exploration.start_another")}</button>
                                 </section>
                             }.into_view())
                         }
@@ -11960,12 +11955,7 @@ fn App() -> impl IntoView {
                                         let Some(frame_id) = active_session.get() else {
                                             return false;
                                         };
-                                        let is_latest_completed = items.with(|rows| {
-                                            rows.iter().rposition(|item| {
-                                                matches!(item, ChatItem::Assistant { text, .. } if !text.trim().is_empty())
-                                            }) == Some(i)
-                                        });
-                                        is_latest_completed && !explorations.with(|rows| {
+                                        !explorations.with(|rows| {
                                             rows.iter().any(|row| {
                                                 row.exploration.frame_id == frame_id
                                             })
@@ -11983,10 +11973,11 @@ fn App() -> impl IntoView {
                                                 .find(|row| {
                                                     matches!(
                                                         row.exploration.status.as_str(),
-                                                        "creating" | "active" | "promoting"
+                                                        "creating" | "active" | "promoting" | "failed"
                                                     )
                                                 })
-                                                .is_none_or(|row| row.source_frame_id == frame_id)
+                                                .is_none_or(|row| row.source_frame_id == frame_id
+                                                    && Some(row.checkpoint_user_index) == explore_turn_index)
                                         });
                                         if !joins_current_round {
                                             return false;
@@ -12024,7 +12015,7 @@ fn App() -> impl IntoView {
                                                     run_records, run_clock.read_only(), busy.read_only(), compact_assistant,
                                                     active_acp_agent_id.get().is_none()
                                                         && !matches!(active_branch_state.get_untracked().as_deref(), Some("merged" | "orphaned")),
-                                                    can_branch, show_actions, can_undo, show_explore, can_explore, edit_message, branch_message, undo_message, explore_turn_index.unwrap_or_default(), start_exploration_from_head, session_id,
+                                                    can_branch, show_actions, can_undo, show_explore, can_explore, edit_message, branch_message, undo_message, explore_turn_index.unwrap_or_default(), start_exploration_from_turn, session_id,
                                                     request_turn_memory, request_session_review, respond_confirm, on_resume,
                                                     step_disclosure_state,
                                                     plan_mode_active, plan_compat, on_plan_decision,
