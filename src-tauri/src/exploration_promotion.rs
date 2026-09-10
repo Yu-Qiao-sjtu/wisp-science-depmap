@@ -892,7 +892,7 @@ pub(crate) async fn open_exploration_manual_resolution(
 pub(crate) async fn promote_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     exploration_id: String,
     expected_guard_hash: String,
 ) -> Result<ExplorationPromotionResult, String> {
@@ -1029,7 +1029,7 @@ pub(crate) async fn promote_exploration(
 pub(crate) async fn discard_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     exploration_id: String,
 ) -> Result<(), String> {
     let exploration = state

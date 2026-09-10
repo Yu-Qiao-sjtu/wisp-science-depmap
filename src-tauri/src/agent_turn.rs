@@ -28,7 +28,7 @@ impl TurnOrigin {
 pub(crate) async fn send_message(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     message: String,
     attachments: Option<Vec<String>>,
@@ -1367,7 +1367,7 @@ pub(crate) fn spawn_queue_driver(
 pub(crate) async fn enqueue_turn(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     message: String,
@@ -1470,7 +1470,7 @@ pub(crate) fn reclaim_unconsumed_cutin(
 pub(crate) async fn queued_turn_action(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     action: String,

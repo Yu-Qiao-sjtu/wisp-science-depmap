@@ -1,9 +1,10 @@
 use super::AppState;
+use crate::workspace_surface::WorkspaceSurface;
 use base64::Engine;
 use serde::Serialize;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use tauri::{ipc::Response, State, WebviewWindow};
+use tauri::{ipc::Response, State};
 
 const REMOTE_DIR_PROTOCOL: &[u8] = b"WISP_REMOTE_DIR_V1\0";
 const REMOTE_FILE_PROTOCOL: &[u8] = b"WISP_REMOTE_FILE_V1\0";
@@ -484,7 +485,7 @@ fn collect_file_search_hits(
 #[tauri::command]
 pub(super) fn search_files(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<FileSearchHit>, String> {
@@ -508,7 +509,7 @@ pub(super) fn search_files(
 #[tauri::command]
 pub(super) fn list_dir(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: Option<String>,
 ) -> Result<Vec<DirEntry>, String> {
     let ap = state.require_active(window.label())?;
@@ -617,7 +618,7 @@ async fn writable_active_project(
 #[tauri::command]
 pub(super) async fn create_file(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
 ) -> Result<(), String> {
     let (project, scope, _activity) = writable_active_project(&state, window.label()).await?;
@@ -652,7 +653,7 @@ pub(super) fn save_file_at(root: &Path, path: &str, content: &str) -> Result<(),
 #[tauri::command]
 pub(super) async fn save_file(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
     content: String,
 ) -> Result<(), String> {
@@ -675,7 +676,7 @@ pub(super) fn create_directory_at(root: &Path, path: &str) -> Result<(), String>
 #[tauri::command]
 pub(super) async fn create_directory(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
 ) -> Result<(), String> {
     let (project, scope, _activity) = writable_active_project(&state, window.label()).await?;
@@ -715,7 +716,7 @@ pub(super) fn rename_entry_at(root: &Path, path: &str, new_path: &str) -> Result
 #[tauri::command]
 pub(super) async fn rename_entry(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
     new_path: String,
 ) -> Result<(), String> {
@@ -744,7 +745,7 @@ pub(super) fn delete_entry_at(root: &Path, path: &str) -> Result<(), String> {
 #[tauri::command]
 pub(super) async fn delete_entry(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
 ) -> Result<(), String> {
     let (project, scope, _activity) = writable_active_project(&state, window.label()).await?;
@@ -1315,7 +1316,7 @@ fn file_content_from_bytes(
 #[tauri::command]
 pub(super) fn read_file(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
     max_bytes: Option<u64>,
 ) -> Result<FileContent, String> {
@@ -1325,7 +1326,7 @@ pub(super) fn read_file(
 #[tauri::command]
 pub(super) fn read_file_bytes(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     path: String,
     max_bytes: Option<u64>,
 ) -> Result<Response, String> {
@@ -1399,7 +1400,7 @@ pub(super) fn append_review_note_at(
 #[tauri::command]
 pub(super) async fn append_review_note(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     source_path: String,
     quote: String,
     note: Option<String>,

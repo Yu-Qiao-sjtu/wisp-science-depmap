@@ -1,6 +1,7 @@
 //! Tauri v2 desktop shell: commands that drive the Wisp agent and stream
 //! events to the webview, plus a settings/confirm surface.
 
+use crate::workspace_surface::WorkspaceManager;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
@@ -105,6 +106,8 @@ pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
 pub(crate) use wisp_runs::ssh_master;
 mod clipboard_files;
+mod mcp_app_child_commands;
+mod mcp_app_children;
 mod storage_prefs;
 mod terminal_sessions;
 mod trajectory;
@@ -117,6 +120,7 @@ mod windows_snap;
 mod workspace_manifest;
 mod workspace_scan;
 mod workspace_session_recovery;
+mod workspace_surface;
 mod wsl_contexts;
 
 pub(crate) use agent_turn::*;
@@ -2483,6 +2487,17 @@ async fn call_mcp_app_tool(
     name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    call_mcp_app_tool_inner(app, &state, instance_id, name, arguments, None).await
+}
+
+async fn call_mcp_app_tool_inner(
+    app: AppHandle,
+    state: &AppState,
+    instance_id: String,
+    name: String,
+    arguments: serde_json::Value,
+    child: Option<&mcp_app_children::Child>,
+) -> Result<serde_json::Value, String> {
     let frame_id = mcp_app_frame_id(&instance_id)?.to_string();
     if name.is_empty() || name.len() > MAX_MCP_APP_TOOL_NAME_BYTES {
         return Err("MCP App tool name is empty or too long.".into());
@@ -2513,6 +2528,12 @@ async fn call_mcp_app_tool(
     };
     if bridge.frame_id != frame_id {
         return Err(MCP_APP_STALE_INSTANCE_ERROR.into());
+    }
+    if let Some(child) = child {
+        mcp_app_child_commands::ensure_current(state, child)?;
+        if child.bridge_generation != Some(bridge.generation) {
+            return Err(MCP_APP_STALE_INSTANCE_ERROR.into());
+        }
     }
     if !bridge.server.visible_to_app(&name) {
         return Err(format!(
@@ -2621,6 +2642,11 @@ async fn call_mcp_app_tool(
             }
         }
     }
+    // Approval may outlive the page that asked for it. Never dispatch a stale
+    // request after an asynchronous policy/user decision.
+    if let Some(child) = child {
+        mcp_app_child_commands::ensure_current(state, child)?;
+    }
     audit_mcp_app_tool(
         "mcp_app.tool_call_approved",
         &instance_id,
@@ -2639,6 +2665,9 @@ async fn call_mcp_app_tool(
     .await
     {
         Ok(result) => {
+            if let Some(child) = child {
+                mcp_app_child_commands::ensure_current(state, child)?;
+            }
             let result_bytes = serde_json::to_vec(&result)
                 .map_err(|error| format!("Invalid MCP App tool result: {error}"))?
                 .len();
@@ -2726,7 +2755,7 @@ async fn mcp_app_has_server_tools(
     let frame_id = mcp_app_frame_id(&instance_id)?;
     Ok(state
         .mcp_app_bridge(&instance_id)
-        .is_some_and(|bridge| bridge.frame_id == frame_id))
+        .is_some_and(|bridge| bridge.frame_id == frame_id && bridge.server.is_connected()))
 }
 
 /// Revoke an MCP App instance's host-side bridge when the iframe tears down
@@ -3025,6 +3054,7 @@ impl Output for TauriOutput {
                 self.app.state::<AppState>().register_mcp_app_bridge(
                     instance_id,
                     McpAppToolBridge {
+                        generation: 0,
                         frame_id: self.frame_id.clone(),
                         server,
                         limiter: McpAppCallLimiter::new(),
@@ -3506,19 +3536,19 @@ fn mac_menu_action(id: &str, focused: bool) -> Option<&'static str> {
 }
 
 #[cfg(target_os = "macos")]
-fn wire_macos_menu_events(window: &tauri::WebviewWindow) {
+fn wire_macos_menu_events(window: &crate::workspace_surface::WorkspaceSurface) {
     window.on_menu_event(|window, event| {
         // Tauri invokes every window's menu handler for each native action.
         if window.is_focused().unwrap_or(false) {
             match event.id().as_ref() {
                 "recovery.stop-agent" => {
-                    if let Some(target) = window.app_handle().get_webview_window(window.label()) {
+                    if let Some(target) = window.app_handle().workspace_surface(window.label()) {
                         ui_health::stop_window_agent(&target);
                     }
                     return;
                 }
                 "recovery.reload-window" => {
-                    if let Some(target) = window.app_handle().get_webview_window(window.label()) {
+                    if let Some(target) = window.app_handle().workspace_surface(window.label()) {
                         ui_health::reload_window(&target, "native menu");
                     }
                     return;
@@ -5989,7 +6019,7 @@ struct ReviewerBackendTestResult {
 #[tauri::command]
 async fn test_reviewer_backend(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     mut reviewer: specialists::Specialist,
 ) -> Result<ReviewerBackendTestResult, String> {
     if reviewer.id != "reviewer" {
@@ -6042,7 +6072,7 @@ async fn test_reviewer_backend(
 async fn review_session(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
 ) -> Result<(), String> {
     let frame_id = match session_id.as_deref().filter(|s| !s.is_empty()) {
@@ -6204,7 +6234,7 @@ fn branch_title(raw: Option<&str>) -> Option<String> {
 #[tauri::command]
 async fn side_chat(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     question: String,
     acp_agent_id: Option<String>,
@@ -6399,7 +6429,7 @@ async fn build_project_info(state: &AppState, label: &str) -> Result<ProjectInfo
 /// Tell the webview whether we're in dev (keep native context menu / DevTools).
 fn set_dev_flag(app: &tauri::AppHandle) {
     let dev = cfg!(debug_assertions);
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app.workspace_surface("main") else {
         return;
     };
     let _ = window.eval(&format!("window.__WISP_DEV__ = {};", dev));
@@ -6784,6 +6814,7 @@ pub fn run() {
     let macos_exit_for_setup = Arc::clone(&macos_exit_in_progress);
 
     tauri::Builder::default()
+        .manage(mcp_app_children::McpAppChildren::default())
         // Keep this first so a repeated launch is intercepted before other plugins
         // and application state are initialized in a second process.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -6802,8 +6833,12 @@ pub fn run() {
                 }
             }
             tauri::WindowEvent::Destroyed => {
+                mcp_app_child_commands::reset_owner(window.app_handle(), window.label(), true);
                 record_window_focus(window.label(), false);
                 ui_health::remove_window(window.label());
+            }
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                mcp_app_children::hide_owner(window.app_handle(), window.label());
             }
             _ => {}
         })
@@ -6812,6 +6847,11 @@ pub fn run() {
         // `setup` total next to a huge `window_ready` moves the search from the
         // backend to WebView2 and asset loading.
         .on_page_load(|webview, payload| {
+            if workspace_surface::is_primary_document(webview.window().label(), webview.label())
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                mcp_app_child_commands::reset_owner(webview.app_handle(), webview.label(), false);
+            }
             if webview.label() != "main"
                 || !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
             {
@@ -6976,6 +7016,7 @@ pub fn run() {
                 store.clone(),
             ));
             let state = AppState {
+                desktop: app.handle().clone(),
                 app_data,
                 store,
                 library,
@@ -7047,14 +7088,14 @@ pub fn run() {
                 startup.record("windows_shell", || {
                     desktop_lifecycle::install_windows_shell(app, &locale)
                 })?;
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.workspace_surface("main") {
                     let _ = window.set_decorations(false);
                     let _ = window.set_shadow(true);
                     windows_snap::install_for_window(&window);
                 }
             }
             #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.workspace_surface("main") {
                 wire_macos_menu_events(&window);
                 let app_handle = app.handle().clone();
                 let label = window.label().to_string();
@@ -7075,13 +7116,27 @@ pub fn run() {
             // Dev runs the bare debug binary, which does not grab focus on macOS.
             // release launches from the .app bundle and activates normally.
             #[cfg(debug_assertions)]
-            if let Some(w) = app.get_webview_window("main") {
+            if let Some(w) = app.workspace_surface("main") {
                 let _ = w.set_focus();
             }
             startup.finish();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke| {
+            if !mcp_app_children::child_command_allowed(invoke.message.webview().label(), invoke.message.command()) {
+                invoke.resolver.reject("MCP App child command is not permitted");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+            mcp_app_child_commands::mcp_app_host_info,
+            mcp_app_child_commands::open_mcp_app_child,
+            mcp_app_child_commands::update_mcp_app_child_bounds,
+            mcp_app_child_commands::mcp_app_child_bootstrap,
+            mcp_app_child_commands::mcp_app_child_ready,
+            mcp_app_child_commands::mcp_app_child_request,
+            mcp_app_child_commands::request_mcp_app_child_action,
+            mcp_app_child_commands::mcp_app_child_action_reply,
+            mcp_app_child_commands::close_mcp_app_child,
             clipboard_files::read_clipboard_file_paths,
             agent_turn::send_message,
             update_mcp_app_context,
@@ -7449,7 +7504,9 @@ pub fn run() {
             specialists::remove_specialist,
             specialists::set_session_specialist,
             specialists::get_session_specialist,
-        ])
+        ];
+            handler(invoke)
+        })
         .build(tauri::generate_context!())
         .expect("error while building Wisp")
         .run(move |_app, _event| {

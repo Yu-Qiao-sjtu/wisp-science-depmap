@@ -160,7 +160,7 @@ pub(crate) async fn respond_remote_confirmation(
 #[tauri::command]
 pub(super) async fn get_session_full_permission(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<bool, String> {
     let project = state.require_active(window.label())?;
@@ -171,7 +171,7 @@ pub(super) async fn get_session_full_permission(
 #[tauri::command]
 pub(super) async fn set_session_full_permission(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     enabled: bool,
 ) -> Result<bool, String> {

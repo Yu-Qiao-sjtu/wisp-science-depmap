@@ -2,13 +2,14 @@ use super::{
     build_project_summary, exploration_commands, workspace_manifest, workspace_scan, AppState,
     ProjectSummary,
 };
+use crate::workspace_surface::WorkspaceSurface;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, State};
 
 const ARCHIVE_KIND: &str = "wisp-project";
 const ARCHIVE_VERSION: u32 = 1;
@@ -66,7 +67,7 @@ impl TransferReporterState {
 impl TransferReporter {
     fn new(
         app: AppHandle,
-        window: &WebviewWindow,
+        window: &WorkspaceSurface,
         direction: &'static str,
         project_id: Option<String>,
     ) -> Self {
@@ -834,7 +835,7 @@ pub(super) async fn pick_import_parent(app: &AppHandle) -> Result<Option<PathBuf
 pub(super) async fn export_project(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     id: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -945,7 +946,7 @@ pub(super) async fn export_project(
 pub(super) async fn import_project(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
 ) -> Result<Option<ProjectSummary>, String> {
     let (_, scope) =
         exploration_commands::working_project_for_active_frame(&state, window.label()).await?;

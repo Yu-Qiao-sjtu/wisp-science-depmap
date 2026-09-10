@@ -202,7 +202,7 @@ async fn load_schedule(state: &AppState, id: &str) -> Result<ScheduleRecord, Str
 #[tauri::command]
 pub(crate) async fn create_schedule(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     name: String,
     prompt: String,
     interval_secs: i64,
@@ -257,7 +257,7 @@ pub(crate) async fn create_schedule(
 #[tauri::command]
 pub(crate) async fn list_schedules(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<ScheduleRecord>, String> {
     let project_id = state.require_active(window.label())?.id;
     state

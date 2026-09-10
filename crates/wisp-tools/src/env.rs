@@ -15,6 +15,11 @@ use std::sync::Arc;
 /// connection secrets stay on the host and are reused via the existing client.
 #[async_trait]
 pub trait McpAppServer: Send + Sync {
+    /// Cheap liveness probe, without sending a tool request or exposing the
+    /// connection to the guest. Implementations with weak clients override it.
+    fn is_connected(&self) -> bool {
+        true
+    }
     /// Host-readable connector identity for audit and approval UI.
     fn connector_id(&self) -> &str;
     /// Human app name for audit and approval UI.

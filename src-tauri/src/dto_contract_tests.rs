@@ -9,6 +9,42 @@
 use serde_json::json;
 
 #[test]
+fn mcp_app_isolation_dtos_keep_js_camel_case_and_page_generation() {
+    let handle = wisp_dto::McpAppChildHandle {
+        owner_epoch: "page-1".into(),
+        mount_serial: 4,
+        child_label: "mcp-app-child-test".into(),
+    };
+    let value = serde_json::to_value(&handle).unwrap();
+    assert_eq!(
+        value,
+        json!({"ownerEpoch":"page-1","mountSerial":4,"childLabel":"mcp-app-child-test"})
+    );
+    let bounds: wisp_dto::McpAppChildBounds = serde_json::from_value(json!({"x":10,"y":20,"width":300,"height":200,"viewportWidth":1000,"viewportHeight":700,"visible":false,"revision":3})).unwrap();
+    assert_eq!(bounds.revision, 3);
+    let bootstrap = wisp_dto::McpAppChildBootstrap {
+        handle,
+        instance_id: "mcp-app:session:ui://test".into(),
+        payload: json!({"resource":{"text":"<body>"}}),
+        host_context: json!({"theme":"light"}),
+        version: "test".into(),
+        server_tools_available: false,
+    };
+    let decoded: wisp_dto::McpAppChildBootstrap = roundtrip(&bootstrap);
+    assert_eq!(decoded.handle.mount_serial, 4);
+    assert_eq!(decoded.host_context["theme"], "light");
+    let request: wisp_dto::McpAppChildRequest = serde_json::from_value(
+        json!({"id":null,"method":"ui/notifications/initialized","params":{}}),
+    )
+    .unwrap();
+    assert!(request.id.is_none());
+    assert_eq!(
+        serde_json::to_value(wisp_dto::McpAppChildCloseReason::UserClose).unwrap(),
+        "user_close"
+    );
+}
+
+#[test]
 fn network_settings_support_partial_persisted_configuration() {
     let settings: wisp_dto::NetworkSettings = serde_json::from_value(json!({
         "model_proxy_url": "none",

@@ -149,7 +149,7 @@ pub(crate) fn sync_delegation_prompt(prompt: &mut String, enabled: bool) {
 #[tauri::command]
 pub(crate) async fn get_session_delegation_enabled(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<bool, String> {
     let project = state.require_active(window.label())?;
@@ -160,7 +160,7 @@ pub(crate) async fn get_session_delegation_enabled(
 #[tauri::command]
 pub(crate) async fn set_session_delegation_enabled(
     state: State<'_, crate::AppState>,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     enabled: bool,
 ) -> Result<bool, String> {
@@ -181,7 +181,7 @@ pub(crate) async fn set_session_delegation_enabled(
 #[tauri::command]
 pub(crate) async fn list_agent_workflows(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
 ) -> Result<Vec<AgentWorkflowSnapshot>, String> {
     let project = state.require_active(window.label())?;
@@ -419,7 +419,7 @@ pub(crate) async fn create_dynamic_agent_workflow_draft(
 #[tauri::command]
 pub(crate) async fn get_dynamic_agent_options(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<dynamic_workflow::DynamicAgentEditorOptions, String> {
     let project = state.require_active(window.label())?;
     let frame_id = state.active_frame(window.label());
@@ -583,7 +583,7 @@ pub(crate) async fn load_agent_workflow_result(
 #[tauri::command]
 pub(crate) async fn get_agent_workflow_result(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     step_id: String,
 ) -> Result<AgentWorkflowResultDetail, String> {
@@ -642,7 +642,7 @@ pub(crate) async fn approve_created_automatic_workflow(
 #[tauri::command]
 pub(crate) async fn approve_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     expected_version: i64,
 ) -> Result<AgentWorkflowSnapshot, String> {
@@ -669,7 +669,7 @@ pub(crate) async fn approve_agent_workflow(
 #[tauri::command]
 pub(crate) async fn cancel_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<(), String> {
     let project = state.require_active(window.label())?;
@@ -692,7 +692,7 @@ pub(crate) async fn cancel_agent_workflow(
 #[tauri::command]
 pub(crate) async fn discard_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<(), String> {
     let project = state.require_active(window.label())?;
@@ -713,7 +713,7 @@ pub(crate) async fn discard_agent_workflow(
 #[tauri::command]
 pub(crate) async fn retry_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
 ) -> Result<AgentWorkflowSnapshot, String> {
@@ -942,7 +942,7 @@ pub(crate) async fn prepare_agent_workflow_retry(
 #[tauri::command]
 pub(crate) async fn run_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<DelegationExecutionResult, String> {
     let project = state.require_active(window.label())?;

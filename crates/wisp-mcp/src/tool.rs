@@ -158,6 +158,11 @@ impl McpAppServerHandle {
 
 #[async_trait]
 impl McpAppServer for McpAppServerHandle {
+    fn is_connected(&self) -> bool {
+        self.client
+            .upgrade()
+            .is_some_and(|client| client.is_connected())
+    }
     fn connector_id(&self) -> &str {
         &self.connector_id
     }

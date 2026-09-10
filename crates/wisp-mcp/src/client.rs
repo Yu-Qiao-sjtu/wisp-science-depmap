@@ -277,6 +277,27 @@ impl Drop for CancellationCleanup<'_> {
 }
 
 impl McpClient {
+    /// Local transport liveness only; never issue a network probe or a tool
+    /// call just to advertise the App capability. HTTP remains best-effort.
+    pub fn is_connected(&self) -> bool {
+        match &self.transport {
+            Transport::Stdio {
+                closing,
+                terminated,
+                child,
+                ..
+            } => {
+                !closing.load(Ordering::SeqCst)
+                    && !terminated.load(Ordering::SeqCst)
+                    && child.try_lock().map_or(true, |mut child| {
+                        child
+                            .as_mut()
+                            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+                    })
+            }
+            Transport::Http(_) => true,
+        }
+    }
     /// Spawn `command args...` and perform the MCP initialize handshake.
     pub async fn launch(command: &str, args: &[String]) -> Result<Self> {
         let mut cmd = tokio::process::Command::new(command);

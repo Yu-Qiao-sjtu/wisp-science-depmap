@@ -98,7 +98,7 @@ pub(crate) async fn save_session_completion_settings(
 #[tauri::command]
 pub(crate) async fn get_session_agent_completion(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<AgentCompletionSettings, String> {
     let project = state.require_active(window.label())?;
@@ -120,7 +120,7 @@ pub(crate) async fn get_session_agent_completion(
 #[tauri::command]
 pub(crate) async fn set_session_agent_completion(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     policy: AgentCompletionPolicy,
     auto_resume: bool,

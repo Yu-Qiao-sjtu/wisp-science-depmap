@@ -27,6 +27,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     }
   };
   (window as any).__tauriEmit = emit;
+  (window as any).__WISP_MCP_APP_BACKEND__ = "legacy-iframe";
   // Tauri app listeners also receive events addressed to a different window.
   (window as any).__tauriEmitToOtherWindow = (event: string, payload: unknown) => {
     listeners[event]?.({ payload });

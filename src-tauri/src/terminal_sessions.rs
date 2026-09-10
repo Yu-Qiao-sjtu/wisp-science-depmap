@@ -7,6 +7,7 @@
 //! `open_terminal` call creates an independent PTY so multiple terminals can
 //! run concurrently, including multiple shells in the same context.
 
+use crate::workspace_surface::WorkspaceSurface;
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -15,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
-use tauri::{State, WebviewWindow};
+use tauri::State;
 
 const DEFAULT_ROWS: u16 = 30;
 const DEFAULT_COLS: u16 = 100;
@@ -537,7 +538,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub async fn open_terminal(
     app_state: State<'_, crate::AppState>,
     terminals: State<'_, TerminalManager>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     context_id: String,
 ) -> Result<TerminalSessionSummary, String> {
     let (project, scope) =

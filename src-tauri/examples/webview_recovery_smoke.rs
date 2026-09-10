@@ -4,7 +4,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewWindow};
+use tauri::Manager;
+#[path = "../src/mcp_app_children.rs"]
+#[allow(dead_code)]
+mod mcp_app_children;
+#[path = "../src/workspace_surface.rs"]
+#[allow(dead_code)]
+mod workspace_surface;
+use workspace_surface::{WorkspaceManager, WorkspaceSurface};
 
 #[path = "../src/ui_health.rs"]
 #[allow(dead_code)]
@@ -35,7 +42,7 @@ mod agent_turn {
 }
 
 #[tauri::command]
-fn smoke_ready(window: WebviewWindow, state: tauri::State<'_, AppState>) {
+fn smoke_ready(window: WorkspaceSurface, state: tauri::State<'_, AppState>) {
     *state
         .boots
         .lock()
@@ -109,8 +116,8 @@ fn run_smoke(app: &tauri::AppHandle) -> Result<(), String> {
         || state.boots.lock().unwrap().len() == 2,
         "both WebViews boot",
     )?;
-    let main = app.get_webview_window("main").unwrap();
-    let sibling = app.get_webview_window("proj-health").unwrap();
+    let main = app.workspace_surface("main").unwrap();
+    let sibling = app.workspace_surface("proj-health").unwrap();
     // Bounded busy loop: verifies the escape path without leaving a wedged process.
     main.eval("const end = performance.now() + 15000; while (performance.now() < end) {}")
         .map_err(|e| e.to_string())?;

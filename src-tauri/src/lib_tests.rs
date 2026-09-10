@@ -200,6 +200,7 @@ impl wisp_tools::McpAppServer for FakeAppServer {
 
 fn fake_app_bridge(frame_id: &str, connector_id: &str, tool: &str) -> super::McpAppToolBridge {
     super::McpAppToolBridge {
+        generation: 0,
         frame_id: frame_id.into(),
         server: Arc::new(FakeAppServer {
             connector_id: connector_id.into(),
@@ -259,6 +260,25 @@ async fn parallel_mcp_app_instances_keep_separate_bridges() {
     assert!(bridges.get(motif).is_some());
     bridges.remove_for_frame("session-b");
     assert!(bridges.get(motif).is_none());
+}
+
+#[test]
+fn mcp_app_stale_cleanup_cannot_remove_replacement_generation() {
+    let bridges = super::McpAppBridges::default();
+    let id = "mcp-app:session-a:figures";
+    bridges.register(
+        id.into(),
+        fake_app_bridge("session-a", "figure-library", "preview"),
+    );
+    let old = bridges.get(id).unwrap().generation;
+    bridges.register(
+        id.into(),
+        fake_app_bridge("session-a", "figure-library", "preview"),
+    );
+    let new = bridges.get(id).unwrap().generation;
+    assert_ne!(old, new);
+    assert!(!bridges.close_generation(id, Some(old)));
+    assert!(bridges.close_generation(id, Some(new)));
 }
 
 #[tokio::test]
@@ -2205,9 +2225,13 @@ fn project_window_url_carries_the_target_session() {
 fn default_capability_grants_ipc_to_blank_windows() {
     let spec: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-    let windows: Vec<&str> = spec["windows"]
+    assert!(
+        spec.get("windows").is_none(),
+        "window-scoped grants would leak to MCP child WebViews"
+    );
+    let windows: Vec<&str> = spec["webviews"]
         .as_array()
-        .expect("default capability lists windows")
+        .expect("default capability lists primary WebViews")
         .iter()
         .filter_map(|value| value.as_str())
         .collect();

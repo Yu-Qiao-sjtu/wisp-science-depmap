@@ -1,8 +1,10 @@
 //! Window-scoped renderer liveness and native recovery. No Run cancellation.
+use crate::workspace_surface::WorkspaceManager;
+use crate::workspace_surface::WorkspaceSurface;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager};
 use wisp_dto::UiHealthSnapshot;
 
 const STALE: Duration = Duration::from_secs(60);
@@ -90,7 +92,7 @@ pub(crate) fn remove_window(label: &str) {
 }
 
 #[tauri::command]
-pub(crate) fn ui_heartbeat(window: WebviewWindow, snapshot: Option<UiHealthSnapshot>) {
+pub(crate) fn ui_heartbeat(window: WorkspaceSurface, snapshot: Option<UiHealthSnapshot>) {
     if window.label() == "pet" {
         return;
     }
@@ -116,7 +118,7 @@ pub(crate) fn ui_heartbeat(window: WebviewWindow, snapshot: Option<UiHealthSnaps
 pub(crate) async fn run_watchdog(app: AppHandle) {
     loop {
         tokio::time::sleep(Duration::from_secs(10)).await;
-        let windows = app.webview_windows();
+        let windows = app.workspace_surfaces();
         registry()
             .lock()
             .unwrap()
@@ -144,7 +146,7 @@ pub(crate) async fn run_watchdog(app: AppHandle) {
     }
 }
 
-pub(crate) fn reload_window(window: &WebviewWindow, reason: &str) {
+pub(crate) fn reload_window(window: &WorkspaceSurface, reason: &str) {
     // Reload only the WebView; AppState, agent runtimes and RunManager stay alive.
     let now = Instant::now();
     {
@@ -161,7 +163,7 @@ pub(crate) fn reload_window(window: &WebviewWindow, reason: &str) {
         success = result.is_ok(), error = ?result.err(), "webview recovery requested");
 }
 
-pub(crate) fn stop_window_agent(window: &WebviewWindow) {
+pub(crate) fn stop_window_agent(window: &WorkspaceSurface) {
     let app = window.app_handle().clone();
     let Some(state) = app.try_state::<crate::AppState>() else {
         return;
@@ -182,11 +184,11 @@ pub(crate) fn stop_window_agent(window: &WebviewWindow) {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn last_workspace_window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn last_workspace_window(app: &AppHandle) -> Option<WorkspaceSurface> {
     let label = registry().lock().unwrap().last_focused.clone();
     label
-        .and_then(|label| app.get_webview_window(&label))
-        .or_else(|| app.get_webview_window("main"))
+        .and_then(|label| app.workspace_surface(&label))
+        .or_else(|| app.workspace_surface("main"))
 }
 
 #[cfg(test)]

@@ -105,7 +105,7 @@ struct AgentPortfolioTask {
 #[tauri::command]
 pub(crate) async fn plan_skill_portfolio(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     request: SkillPortfolioRequest,
 ) -> Result<SkillPortfolioDraft, String> {
     let research_request = request.request.trim();
