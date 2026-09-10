@@ -15601,6 +15601,7 @@ fn App() -> impl IntoView {
                                         })}
                                     </div>
                                     <div class="sidechat-composer">
+                                      <div class="sidechat-composer-inner">
                                         {move || (!side_chat_quotes.get().is_empty()).then(|| view! {
                                             <div class="composer-attachments composer-reference-chips sidechat-quotes">
                                                 {side_chat_quotes.get().into_iter().enumerate().map(|(idx, quote)| {
@@ -15633,6 +15634,7 @@ fn App() -> impl IntoView {
                                         })}
                                         <textarea
                                             id=SIDE_CHAT_INPUT_ID
+                                            rows="2"
                                             prop:value=move || side_chat_input.get()
                                             prop:placeholder=move || t(locale.get(), "sidechat.placeholder")
                                             on:input=move |ev| side_chat_input.set(event_target_value(&ev))
@@ -15654,7 +15656,7 @@ fn App() -> impl IntoView {
                                                     <button type="button" class="sidechat-model-btn"
                                                         class:active=move || side_chat_model_menu_open.get()
                                                         on:click=move |_| side_chat_model_menu_open.update(|o| *o = !*o)>
-                                                        {move || {
+                                                        <span class="model-picker-label">{move || {
                                                             if let Some(id) = side_chat_acp_agent.get() {
                                                                 acp_agents.get().into_iter().find(|agent| agent.id == id).map(|agent| agent.label).unwrap_or_else(|| "ACP Agent".into())
                                                             } else {
@@ -15665,8 +15667,8 @@ fn App() -> impl IntoView {
                                                                     .map(|m| m.label.clone())
                                                                     .unwrap_or_default()
                                                             }
-                                                        }}
-                                                        <span>"▾"</span>
+                                                        }}</span>
+                                                        {compose_icon("chevron-down")}
                                                     </button>
                                                     {move || side_chat_model_menu_open.get().then(|| view! {
                                                         <div class="sidechat-model-backdrop" on:click=move |_| side_chat_model_menu_open.set(false)></div>
@@ -15690,7 +15692,7 @@ fn App() -> impl IntoView {
                                                                             });
                                                                         }>
                                                                         <span>{m.label.clone()}</span>
-                                                                        {is_active.then(|| view! { <span>"✓"</span> })}
+                                                                        {is_active.then(|| compose_icon("check"))}
                                                                     </button>
                                                                 }
                                                             }).collect_view()}
@@ -15706,7 +15708,7 @@ fn App() -> impl IntoView {
                                                                                 side_chat_acp_agent.set(Some(id.clone()));
                                                                             }>
                                                                             <span>{agent.label.clone()}</span>
-                                                                            {selected.then(|| view! { <span>"✓"</span> })}
+                                                                            {selected.then(|| compose_icon("check"))}
                                                                         </button>
                                                                     }
                                                                 }).collect_view()}
@@ -15727,6 +15729,7 @@ fn App() -> impl IntoView {
                                                 {move || t(locale.get(), "composer.send")}
                                             </button>
                                         </div>
+                                      </div>
                                     </div>
                                 </div>
                             }.into_view()

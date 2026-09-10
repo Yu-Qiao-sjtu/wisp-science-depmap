@@ -6285,7 +6285,7 @@ async fn side_chat(
     }
     let http_llm = side_chat_http_provider(&state).await;
     let intent = match &http_llm {
-        Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await?,
+        Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await,
         Err(error) => {
             if acp_agent_id.as_deref().is_some_and(|id| !id.is_empty()) {
                 side_chat::SideChatIntent::session_fallback(question)
