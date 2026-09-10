@@ -1422,6 +1422,7 @@ async fn cancelling_ssh_input_staging_aborts_the_transfer() {
     run.remote_workdir = Some("~/.wisp-science/runs/upload".into());
     run.remote_handle_json = Some(serde_json::to_string(&test_handle("upload", false)).unwrap());
     run.progress_json = serde_json::to_string(&wisp_store::RunProgress {
+        indeterminate: false,
         phase: "uploading".into(),
         direction: "upload".into(),
         completed_bytes: 25,

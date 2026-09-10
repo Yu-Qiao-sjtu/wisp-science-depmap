@@ -7101,6 +7101,92 @@ test("active SSH transfer shows a live progress card and can be cancelled", asyn
   });
 });
 
+test("unmeasured relay shows elapsed activity and collapses without cancelling", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    Object.assign(run, {
+      frame_id: "s-complete", context_id: "ssh:gpu-server", title: "Relay source to destination",
+      kind: "file_transfer", status: "running", started_at: now - 65, ended_at: null,
+      progress_json: JSON.stringify({
+        phase: "uploading", direction: "relay", indeterminate: true,
+        completed_bytes: 0, total_bytes: Math.floor(2.58 * 1024 ** 3),
+        files_completed: 0, files_total: 1, current_file: "reads.fastq.gz",
+        bytes_per_second: null, eta_seconds: null, updated_at: now - 65,
+      }),
+    });
+  });
+  await page.getByTestId("recent-session-card").nth(1).click();
+  const card = page.locator('.transfer-card[data-run-id="run-local-002"]');
+  await expect(card).toContainText("2.58 GB total");
+  await expect(card).toContainText("byte progress unavailable");
+  await expect(card).not.toContainText("0%");
+  await expect(card).not.toContainText("ETA");
+  await expect(card.locator("progress")).not.toHaveAttribute("value");
+  const elapsed = await card.locator(".transfer-elapsed").innerText();
+  await expect.poll(() => card.locator(".transfer-elapsed").innerText()).not.toBe(elapsed);
+  await card.screenshot({ path: test.info().outputPath("relay-expanded.png") });
+  // A higher surface consumes Escape first; the transfer tray stays expanded.
+  await composer(page).press("@");
+  await expect(page.locator(".mention-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".mention-menu")).toBeHidden();
+  await expect(card).toBeVisible();
+  const fullHeight = (await card.boundingBox())!.height;
+  await card.getByRole("button", { name: "Collapse transfers" }).click();
+  const summary = page.getByRole("button", { name: "Expand transfers" });
+  await expect(summary).toBeVisible();
+  await expect(summary).toContainText("Transfers (1)");
+  expect((await summary.boundingBox())!.height).toBeLessThan(fullHeight);
+  await expect(card).toBeHidden();
+  // Polls and the one-second clock must preserve the user's collapsed state.
+  await page.waitForTimeout(2200);
+  await expect(summary).toBeVisible();
+  await summary.click();
+  await expect(card).toBeVisible();
+  // No focus movement into the newly expanded tray before Escape.
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeVisible();
+  await expect(newSessionButton(page)).toBeVisible();
+  expect(await lastInvokeArgs(page, "cancel_run")).toBeNull();
+  await summary.click();
+  await card.getByRole("button", { name: "Cancel run" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "cancel_run")).toMatchObject({ runId: "run-local-002" });
+});
+
+test("unknown-size download is indeterminate and completion restores measured progress", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    Object.assign(run, {
+      frame_id: "s-complete", kind: "file_transfer", status: "running", ended_at: null,
+      progress_json: JSON.stringify({
+        phase: "downloading", direction: "download", indeterminate: true,
+        completed_bytes: 0, total_bytes: 0, files_completed: 0, files_total: 0,
+        current_file: null, bytes_per_second: null, eta_seconds: null,
+        updated_at: Math.floor(Date.now() / 1000),
+      }),
+    });
+  });
+  await page.getByTestId("recent-session-card").nth(1).click();
+  const card = page.locator('.transfer-card[data-run-id="run-local-002"]');
+  await expect(card).toContainText("Byte progress unavailable");
+  await expect(card.locator("progress")).not.toHaveAttribute("value");
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    run.status = "succeeded";
+    run.ended_at = Math.floor(Date.now() / 1000);
+    run.progress_json = JSON.stringify({ ...JSON.parse(run.progress_json),
+      phase: "downloaded", indeterminate: false, total_bytes: 1024, completed_bytes: 1024,
+      updated_at: run.ended_at,
+    });
+  });
+  await expect(card).toContainText("1.00 KB / 1.00 KB · 100%");
+  await expect(card.locator("progress")).toHaveAttribute("value", "100");
+  await expect(card).toBeHidden({ timeout: 5000 });
+});
+
 test("completed SSH transfer cards leave the composer tray promptly", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {

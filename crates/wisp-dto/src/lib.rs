@@ -4644,6 +4644,9 @@ pub struct MethodSearchProgressView {
 
 #[derive(Deserialize, Clone)]
 pub struct RunProgress {
+    /// The transport cannot report byte-level progress for this phase.
+    #[serde(default)]
+    pub indeterminate: bool,
     pub phase: String,
     pub direction: String,
     pub completed_bytes: u64,

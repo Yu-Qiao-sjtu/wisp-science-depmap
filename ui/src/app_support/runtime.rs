@@ -2508,6 +2508,7 @@ mod transfer_progress_tests {
 
     fn progress(phase: &str, updated_at: i64) -> RunProgress {
         RunProgress {
+            indeterminate: false,
             phase: phase.into(),
             direction: "download".into(),
             completed_bytes: 1,
@@ -2581,6 +2582,8 @@ pub(crate) fn run_status_label(locale: Locale, status: &str) -> String {
 }
 
 pub(crate) fn run_progress_meter(progress: RunProgress, locale: Locale) -> impl IntoView {
+    let indeterminate = matches!(progress.phase.as_str(), "uploading" | "downloading")
+        && (progress.indeterminate || progress.total_bytes == 0);
     let percent = if progress.total_bytes == 0 {
         0
     } else {
@@ -2599,22 +2602,38 @@ pub(crate) fn run_progress_meter(progress: RunProgress, locale: Locale) -> impl 
         "failed" => "transfer.failed",
         _ => "transfer.transferring",
     };
-    let bytes = format!(
-        "{} / {} · {percent}%",
-        transfer_bytes(progress.completed_bytes),
-        transfer_bytes(progress.total_bytes)
-    );
+    let bytes = if indeterminate {
+        if progress.total_bytes > 0 {
+            tf(
+                locale,
+                "transfer.total",
+                &[("size", &transfer_bytes(progress.total_bytes))],
+            )
+        } else {
+            t(locale, "transfer.byte_progress_unavailable")
+        }
+    } else {
+        format!(
+            "{} / {} · {percent}%",
+            transfer_bytes(progress.completed_bytes),
+            transfer_bytes(progress.total_bytes)
+        )
+    };
     let speed = progress
         .bytes_per_second
+        .filter(|_| !indeterminate)
         .map(|rate| format!("{}/s", transfer_bytes(rate)));
-    let eta = progress.eta_seconds.map(|seconds| {
-        tf(
-            locale,
-            "transfer.eta",
-            &[("time", &transfer_duration(seconds))],
-        )
-    });
-    let files = (progress.files_total > 1).then(|| {
+    let eta = progress
+        .eta_seconds
+        .filter(|_| !indeterminate)
+        .map(|seconds| {
+            tf(
+                locale,
+                "transfer.eta",
+                &[("time", &transfer_duration(seconds))],
+            )
+        });
+    let files = (!indeterminate && progress.files_total > 1).then(|| {
         tf(
             locale,
             "transfer.files",
@@ -2625,19 +2644,19 @@ pub(crate) fn run_progress_meter(progress: RunProgress, locale: Locale) -> impl 
         )
     });
     view! {
-        <div class="run-progress" data-direction=progress.direction>
+        <div class="run-progress" class:indeterminate=indeterminate data-direction=progress.direction>
             <div class="run-progress-head">
                 <strong>{t(locale, phase_key)}</strong>
                 {progress.current_file.map(|file| view! { <span>{file}</span> })}
             </div>
-            <progress max="100" value=percent.to_string()
-                aria-label=t(locale, phase_key)></progress>
             <div class="run-progress-meta">
-                <span>{bytes}</span>
+                <span title=indeterminate.then(|| t(locale, "transfer.byte_progress_unavailable"))>{bytes}</span>
                 {speed.map(|value| view! { <span>{value}</span> })}
                 {eta.map(|value| view! { <span>{value}</span> })}
                 {files.map(|value| view! { <span>{value}</span> })}
             </div>
+            <progress max="100" value=(!indeterminate).then(|| percent.to_string())
+                aria-label=t(locale, phase_key)></progress>
         </div>
     }
 }

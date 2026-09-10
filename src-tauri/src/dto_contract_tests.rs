@@ -610,3 +610,22 @@ fn renderer_health_accepts_partial_numeric_snapshots() {
         .is_err()
     );
 }
+
+#[test]
+fn transfer_progress_preserves_indeterminate_and_accepts_legacy_records() {
+    let legacy = json!({
+        "phase": "uploading", "direction": "relay", "completed_bytes": 0,
+        "total_bytes": 1024, "files_completed": 0, "files_total": 1,
+        "current_file": null, "bytes_per_second": null, "eta_seconds": null,
+        "updated_at": 100,
+    });
+    let mut backend: wisp_store::RunProgress = serde_json::from_value(legacy.clone()).unwrap();
+    let old_ui: wisp_dto::RunProgress = serde_json::from_value(legacy).unwrap();
+    assert!(!backend.indeterminate);
+    assert!(!old_ui.indeterminate);
+    backend.indeterminate = true;
+    let ui: wisp_dto::RunProgress = roundtrip(&backend);
+    assert!(ui.indeterminate);
+    assert_eq!(ui.total_bytes, 1024);
+    assert_eq!(ui.completed_bytes, 0);
+}

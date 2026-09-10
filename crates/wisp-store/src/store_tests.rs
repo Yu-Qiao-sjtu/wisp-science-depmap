@@ -5957,6 +5957,7 @@ async fn run_manager_roundtrip_and_lifecycle() {
     run.output_specs_json = r#"[{"glob":"results/*.tsv","kind":"table"}]"#.into();
     run.timeout_secs = Some(900);
     run.progress_json = serde_json::to_string(&RunProgress {
+        indeterminate: false,
         phase: "uploading".into(),
         direction: "upload".into(),
         completed_bytes: 512,
@@ -6186,6 +6187,7 @@ async fn conditional_terminal_update_does_not_overwrite_winner() {
         .await
         .unwrap());
     let progress = RunProgress {
+        indeterminate: false,
         phase: "uploading".into(),
         direction: "upload".into(),
         completed_bytes: 4,
