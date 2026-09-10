@@ -578,7 +578,7 @@ struct DirectArtifactGroup {
 #[tauri::command]
 pub(crate) async fn freeze_publication_revision(
     state: tauri::State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     revision_id: String,
     policy: PublicationFreezePolicy,
 ) -> Result<PublicationFreezeOutcome, String> {
@@ -594,7 +594,7 @@ pub(crate) async fn freeze_publication_revision(
 #[tauri::command]
 pub(crate) async fn check_publication_revision(
     state: tauri::State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     revision_id: String,
     policy: PublicationFreezePolicy,
 ) -> Result<PublicationFreezeOutcome, String> {

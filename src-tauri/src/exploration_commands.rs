@@ -5,12 +5,13 @@
 use crate::exploration_workspace::{
     ExplorationWorkspaceBackend, PersistentExplorationWorkspace, WorkspaceSnapshot,
 };
+use crate::workspace_surface::WorkspaceSurface;
 use crate::{load_skill_index, ActiveProject, AppState, MemoryManager};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{State, WebviewWindow};
+use tauri::State;
 use wisp_store::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
     ExplorationBaselineEntity, ExplorationCheckpoint, ExplorationFamily, ExplorationStatus,
@@ -882,7 +883,7 @@ pub(crate) async fn reject_private_exploration_project_mutation(
 pub(crate) async fn start_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     source_frame_id: String,
     turn_index: Option<i64>,
     name: String,
@@ -962,7 +963,7 @@ pub(crate) async fn start_exploration(
 #[tauri::command]
 pub(crate) async fn list_project_explorations(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
 ) -> Result<Vec<ExplorationSummary>, String> {
     let project = state.require_active(window.label())?;
     state
@@ -975,7 +976,7 @@ pub(crate) async fn list_project_explorations(
 #[tauri::command]
 pub(crate) async fn open_exploration(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     exploration_id: String,
 ) -> Result<Exploration, String> {
     let exploration = state
@@ -997,7 +998,7 @@ pub(crate) async fn open_exploration(
 pub(crate) async fn abandon_exploration_round(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     source_frame_id: String,
 ) -> Result<(), String> {
     let owner = state

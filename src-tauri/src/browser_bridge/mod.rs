@@ -10,6 +10,7 @@
 //! This module is Wisp's independent Rust implementation; see
 //! `browser-extension/NOTICE.md` for provenance details.
 
+use crate::workspace_surface::WorkspaceManager;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -3576,7 +3577,7 @@ impl Tool for WebAgentReadTool {
 #[tauri::command]
 pub async fn list_pending_browser_tab_cleanups(
     state: tauri::State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<BrowserTabCleanupPrompt>, String> {
     let project_id = crate::window_bound_project_id(&state, window.label());
     state
@@ -3621,7 +3622,7 @@ pub(crate) async fn emit_browser_needs_human(
 ) {
     use tauri::{Emitter, Manager};
     let state = app.state::<crate::AppState>();
-    for (label, window) in app.webview_windows() {
+    for (label, window) in app.workspace_surfaces() {
         let project_id = crate::window_bound_project_id(&state, &label);
         if let Ok(prompt) =
             project_browser_needs_human(&state.store, tabs, project_id.as_deref()).await
@@ -3660,7 +3661,7 @@ pub async fn dismiss_browser_tab_cleanup(
 #[tauri::command]
 pub async fn list_pending_browser_needs_human(
     state: tauri::State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<BrowserNeedsHumanPrompt, String> {
     let project_id = crate::window_bound_project_id(&state, window.label());
     let prompt = state.browser_bridge.list_needs_human().await;

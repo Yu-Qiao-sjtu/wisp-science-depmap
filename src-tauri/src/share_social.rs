@@ -333,7 +333,7 @@ fn clamp_chars(text: &str, max: usize) -> String {
 #[tauri::command]
 pub(super) async fn generate_share_social_copy(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     platform: String,
     locale: String,

@@ -1,3 +1,4 @@
+use crate::workspace_surface::WorkspaceManager;
 #[cfg(target_os = "windows")]
 use tauri::{
     menu::{Menu, MenuItemBuilder},
@@ -117,13 +118,13 @@ pub(crate) fn activate_workspace(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app.show();
 
-    for (label, window) in app.webview_windows() {
+    for (label, window) in app.workspace_surfaces() {
         if should_activate_workspace_window(&label) {
             let _ = window.show();
             let _ = window.unminimize();
         }
     }
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.workspace_surface("main") {
         let _ = main.set_focus();
     }
 }
@@ -142,8 +143,8 @@ pub(crate) fn activate_workspace_window(
     let _ = app.show();
 
     let window = app
-        .get_webview_window(preferred_label)
-        .or_else(|| app.get_webview_window("main"));
+        .workspace_surface(preferred_label)
+        .or_else(|| app.workspace_surface("main"));
     let Some(window) = window else {
         return;
     };
@@ -179,7 +180,7 @@ fn default_pet_position(app: &AppHandle) -> Option<(f64, f64)> {
 
 #[cfg(target_os = "windows")]
 fn ensure_pet_window(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window(PET_WINDOW_LABEL).is_some() {
+    if app.workspace_surface(PET_WINDOW_LABEL).is_some() {
         return Ok(());
     }
     let url = WebviewUrl::App("index.html?pet=desktop".into());
@@ -208,7 +209,7 @@ fn ensure_pet_window(app: &AppHandle) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 pub(crate) fn sync_pet_window(app: &AppHandle, enabled: bool) -> Result<(), String> {
     if !enabled {
-        if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        if let Some(window) = app.workspace_surface(PET_WINDOW_LABEL) {
             let _ = window.hide();
         }
         return Ok(());
@@ -230,7 +231,7 @@ pub(crate) fn set_pet_window_visible(app: tauri::AppHandle, visible: bool) -> Re
         if visible {
             ensure_pet_window(&app)?;
         }
-        if let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) {
+        if let Some(window) = app.workspace_surface(PET_WINDOW_LABEL) {
             if visible {
                 window.show().map_err(|error| error.to_string())?;
             } else {
@@ -296,7 +297,7 @@ pub(crate) fn install_windows_shell(app: &mut App, locale_tag: &str) -> tauri::R
     }
     tray.build(app)?;
 
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.workspace_surface("main") {
         let app_handle = app.handle().clone();
         main.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -304,7 +305,7 @@ pub(crate) fn install_windows_shell(app: &mut App, locale_tag: &str) -> tauri::R
                     // Hide only the main window (it lives on in the tray).
                     // Per-project windows close independently (#420).
                     api.prevent_close();
-                    if let Some(main) = app_handle.get_webview_window("main") {
+                    if let Some(main) = app_handle.workspace_surface("main") {
                         let _ = main.hide();
                     }
                 }

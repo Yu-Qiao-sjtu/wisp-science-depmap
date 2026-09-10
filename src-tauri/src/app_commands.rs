@@ -185,7 +185,7 @@ pub(super) async fn pick_executable_file(app: AppHandle) -> Result<Option<String
 pub(super) async fn upload_to_context(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     destination_dir: String,
     source_paths: Option<Vec<String>>,
@@ -241,7 +241,7 @@ pub(super) fn parse_ssh_artifact_uri(uri: &str) -> Option<(String, String)> {
 pub(super) async fn download_file(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     path: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -422,7 +422,7 @@ pub(super) async fn save_share_html(
 #[tauri::command]
 pub(super) async fn get_capabilities(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Capabilities, String> {
     let ap = state.require_active(window.label())?;
     let tags = load_skill_tags(&state.store).await;
@@ -716,7 +716,7 @@ pub(super) async fn extension_connected(state: State<'_, AppState>) -> Result<bo
 pub(super) fn reveal_in_file_manager(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     path: String,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -734,7 +734,7 @@ pub(super) fn reveal_in_file_manager(
 pub(super) fn open_workspace_path(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     path: String,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;

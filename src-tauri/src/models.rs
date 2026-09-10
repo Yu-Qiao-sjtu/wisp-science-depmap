@@ -1353,7 +1353,7 @@ pub async fn list_models(state: State<'_, crate::AppState>) -> Result<Vec<ModelP
 #[tauri::command]
 pub async fn get_session_model(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<String, String> {
     let project = state.require_active(window.label())?;
@@ -1382,7 +1382,7 @@ pub async fn get_session_model(
 #[tauri::command]
 pub async fn get_session_reasoning_effort(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<Option<String>, String> {
     let project = state.require_active(window.label())?;
@@ -1406,7 +1406,7 @@ pub async fn get_session_reasoning_effort(
 #[tauri::command]
 pub async fn get_session_service_tier(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<Option<String>, String> {
     let project = state.require_active(window.label())?;
@@ -1634,7 +1634,7 @@ pub async fn reorder_models(
 #[tauri::command]
 pub async fn set_active_model(
     state: State<'_, crate::AppState>,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     session_id: Option<String>,
 ) -> Result<Vec<ModelProfile>, String> {

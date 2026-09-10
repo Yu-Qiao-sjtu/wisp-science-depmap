@@ -596,7 +596,7 @@ async fn bind_evidence(
 #[tauri::command]
 pub(super) async fn list_publication_sources(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     kind: String,
     query: String,
     offset: u32,
@@ -612,7 +612,7 @@ pub(super) async fn list_publication_sources(
 #[tauri::command]
 pub(super) async fn get_publication_workspace(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     publication_id: Option<String>,
     revision_id: Option<String>,
 ) -> Result<PublicationWorkspace, String> {
@@ -630,7 +630,7 @@ pub(super) async fn get_publication_workspace(
 #[tauri::command]
 pub(super) async fn create_publication_workspace(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: CreatePublicationInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =
@@ -646,7 +646,7 @@ pub(super) async fn create_publication_workspace(
 #[tauri::command]
 pub(super) async fn save_publication_item(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: SavePublicationItemInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =
@@ -685,7 +685,7 @@ pub(super) async fn save_publication_item(
 #[tauri::command]
 pub(super) async fn bind_publication_evidence(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: BindPublicationEvidenceInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =
@@ -701,7 +701,7 @@ pub(super) async fn bind_publication_evidence(
 #[tauri::command]
 pub(super) async fn update_publication_evidence_binding(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: UpdateEvidenceBindingInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =
@@ -736,7 +736,7 @@ pub(super) async fn update_publication_evidence_binding(
 #[tauri::command]
 pub(super) async fn clone_publication_revision(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     revision_id: String,
     label: String,
 ) -> Result<PublicationWorkspace, String> {
@@ -762,7 +762,7 @@ pub(super) async fn clone_publication_revision(
 #[tauri::command]
 pub(super) async fn save_publication_waiver(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: SavePublicationWaiverInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =
@@ -794,7 +794,7 @@ pub(super) async fn save_publication_waiver(
 #[tauri::command]
 pub(super) async fn verify_publication_revision(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     input: VerifyPublicationRevisionInput,
 ) -> Result<PublicationWorkspace, String> {
     let (project, _activity) =

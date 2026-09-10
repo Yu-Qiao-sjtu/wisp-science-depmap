@@ -929,7 +929,7 @@ pub(crate) async fn enabled_plugin_mcp_launches(
 #[tauri::command]
 pub(super) async fn list_plugins(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<PluginView>, String> {
     let project = state.require_active(window.label())?;
     let bindings = state
@@ -1138,7 +1138,7 @@ pub(super) async fn install_plugin_url(
 #[tauri::command]
 pub(super) async fn set_plugin_enabled(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     plugin_id: String,
     version: String,
     enabled: bool,

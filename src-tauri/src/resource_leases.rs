@@ -303,7 +303,13 @@ mod tests {
         std::fs::write(root.join("plot.R"), "plot(1)\n").unwrap();
         let request =
             request_for_call(&root, "edit", &serde_json::json!({"path": "plot.R"})).unwrap();
-        assert_eq!(request, path(ResourceAccess::Write, "plot.R"));
+        assert_eq!(
+            request,
+            path(
+                ResourceAccess::Write,
+                if cfg!(windows) { "plot.r" } else { "plot.R" }
+            )
+        );
         std::fs::remove_dir_all(root).ok();
     }
 }

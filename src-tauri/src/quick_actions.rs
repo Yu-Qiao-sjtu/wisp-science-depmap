@@ -1617,7 +1617,7 @@ async fn create_action_session(
 #[tauri::command]
 pub(crate) async fn run_quick_action(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     action_id: String,
     mut input: QuickActionInput,
 ) -> Result<QuickActionRun, String> {

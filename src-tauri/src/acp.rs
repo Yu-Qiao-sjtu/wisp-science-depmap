@@ -218,7 +218,7 @@ pub(crate) async fn list_acp_agents(
 #[tauri::command]
 pub(crate) async fn get_acp_session_agent(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     frame_id: String,
 ) -> Result<Option<String>, String> {
     let project = state.require_active(window.label())?;
@@ -249,7 +249,7 @@ pub(crate) async fn get_acp_session_agent(
 #[tauri::command]
 pub(crate) async fn get_acp_session_state(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     frame_id: String,
 ) -> Result<Option<wisp_dto::AcpSessionState>, String> {
     let project = state.require_active(window.label())?;
@@ -339,7 +339,7 @@ pub(crate) async fn test_acp_agent(
 pub(crate) async fn authenticate_acp_agent(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     method_id: String,
 ) -> Result<Option<crate::terminal_sessions::TerminalSessionSummary>, String> {
@@ -1642,7 +1642,7 @@ pub(crate) async fn respond_remote_permission(
 pub(crate) async fn respond_ask_user(
     state: State<'_, AppState>,
     app: AppHandle,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     request_id: String,
     answer: String,
 ) -> Result<(), String> {
@@ -1704,7 +1704,7 @@ pub(crate) async fn respond_ask_user(
 pub(crate) async fn set_acp_session_config(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     frame_id: String,
     config_id: String,
     value: serde_json::Value,
@@ -1752,7 +1752,7 @@ pub(crate) async fn set_acp_session_config(
 #[tauri::command]
 pub(crate) async fn set_acp_session_mode(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     frame_id: String,
     mode_id: String,
 ) -> Result<String, String> {

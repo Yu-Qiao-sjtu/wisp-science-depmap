@@ -57,13 +57,21 @@ mod tests {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
-        assert_eq!(envs["HTTPS_PROXY"], "http://localhost:7890");
-        assert_eq!(envs["https_proxy"], "http://localhost:7890");
-        assert_eq!(envs["no_proxy"], "");
+        // Windows Command env keys are case-insensitive, so both spellings
+        // collapse to one entry. Look up ignore-case instead of requiring
+        // both HashMap keys to exist.
+        let get = |name: &str| {
+            envs.iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(get("HTTPS_PROXY"), Some("http://localhost:7890"));
+        assert_eq!(get("https_proxy"), Some("http://localhost:7890"));
+        assert_eq!(get("no_proxy"), Some(""));
         command.envs(proxy_env("none"));
-        assert!(command
-            .get_envs()
-            .any(|(k, v)| k == "NO_PROXY" && v == Some(std::ffi::OsStr::new("*"))));
+        assert!(command.get_envs().any(|(k, v)| {
+            k.eq_ignore_ascii_case("NO_PROXY") && v == Some(std::ffi::OsStr::new("*"))
+        }));
     }
 
     #[test]

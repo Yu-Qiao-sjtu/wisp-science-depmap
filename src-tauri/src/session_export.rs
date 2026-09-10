@@ -382,7 +382,7 @@ pub(super) async fn capture_env(
 #[tauri::command]
 pub(super) async fn get_artifact_provenance(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     path: String,
 ) -> Result<Option<ArtifactProvenance>, String> {
@@ -447,7 +447,7 @@ pub(super) async fn artifact_provenance_for_path(
 pub(super) async fn export_session(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     artifact_paths: Vec<String>,
 ) -> Result<Option<String>, String> {
