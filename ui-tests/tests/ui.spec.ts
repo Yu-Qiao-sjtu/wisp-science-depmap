@@ -8927,6 +8927,56 @@ test("settings page shows the saved protocol", async ({ page }) => {
   await page.locator(".settings-footer").getByRole("button", { name: "Cancel" }).click();
 });
 
+for (const locale of ["en", "zh"]) {
+  test(`model explanations stay with their controls in ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.getByRole("button", { name: locale === "zh" ? "设置" : "Settings", exact: true }).click();
+    await page.locator(".settings-nav").getByRole("button", { name: locale === "zh" ? "模型" : "Models", exact: true }).click();
+    await page.locator(".settings-list-row").first().click();
+    await providerSelect(page).selectOption("anthropic");
+    await page.getByRole("textbox", { name: locale === "zh" ? "模型 ID" : "Model ID", exact: true }).fill("glm-5.3");
+    const form = page.locator(".model-form");
+    const effort = page.getByRole("combobox", { name: locale === "zh" ? "推理强度" : "Reasoning effort", exact: true });
+    await expect(effort).toHaveAccessibleDescription(/.+/);
+    const image = page.getByTestId("use-for-image-generation");
+    const video = page.getByTestId("use-for-video-generation");
+    await expect(image).toHaveAccessibleDescription(/gpt-image-2/);
+    await expect(video).toHaveAccessibleDescription(/grok-imagine-video/);
+    for (const width of [1440, 640]) {
+      await page.setViewportSize({ width, height: 1200 });
+      const control = (await effort.boundingBox())!;
+      const hint = (await page.locator("#model-reasoning-hint").boundingBox())!;
+      expect(Math.abs(control.x - hint.x)).toBeLessThan(2);
+      expect(hint.y - control.y - control.height).toBeGreaterThanOrEqual(0);
+      expect(hint.y - control.y - control.height).toBeLessThan(12);
+      const groups = form.locator(".model-capability");
+      await expect(groups).toHaveCount(3);
+      for (const group of await groups.all()) {
+        const explanation = group.locator(":scope > .hint");
+        const bounds = (await group.boundingBox())!;
+        const text = (await explanation.boundingBox())!;
+        expect(text.x).toBeGreaterThan(bounds.x);
+        expect(text.x + text.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(text.y + text.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+      }
+      const imageGroup = (await groups.nth(1).boundingBox())!;
+      const videoGroup = (await groups.nth(2).boundingBox())!;
+      if (width === 1440) {
+        expect(Math.abs(imageGroup.y - videoGroup.y)).toBeLessThan(2);
+      } else {
+        expect(videoGroup.y).toBeGreaterThanOrEqual(imageGroup.y + imageGroup.height);
+      }
+      expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+      await form.screenshot({ animations: "disabled", path: testInfo.outputPath(`model-explanations-${locale}-${width}.png`) });
+    }
+    await image.check();
+    await video.check();
+    await expect(image).not.toBeChecked();
+    await expect(video).toBeChecked();
+  });
+}
+
 test("model settings updates activation and confirms removal", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Models");

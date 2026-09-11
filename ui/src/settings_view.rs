@@ -3459,6 +3459,7 @@ pub(super) fn SettingsView(
                                                 ])}
                                             </span>
                                         })}
+                                        <div class="model-reasoning-field">
                                         <label>{move || t(locale.get(), "settings.reasoning_effort")}
                                             {move || {
                                                 let form = model_form.get();
@@ -3477,7 +3478,7 @@ pub(super) fn SettingsView(
                                                 }
                                                 let loc = locale.get();
                                                 view! {
-                                                    <select
+                                                    <select aria-describedby="model-reasoning-hint"
                                                         on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                             let v = dom_value(&ev);
                                                             o.reasoning_effort = if v == "default" { String::new() } else { v };
@@ -3497,7 +3498,7 @@ pub(super) fn SettingsView(
                                         // Hint lives OUTSIDE the <label> on purpose: its text mentions
                                         // "model", and nesting it would fold that into the <select>'s
                                         // accessible name, so getByLabel("Model") would match it (#e2e).
-                                        <span class="hint effort-hint span-2">{move || {
+                                        <span id="model-reasoning-hint" class="hint effort-hint">{move || {
                                             let form = model_form.get();
                                             let provider = form.as_ref().map(|f| f.provider.clone()).unwrap_or_default();
                                             let model = form.as_ref().map(|f| f.model.clone()).unwrap_or_default();
@@ -3508,6 +3509,7 @@ pub(super) fn SettingsView(
                                                 None => t(loc, "settings.reasoning_effort.unknown_hint").to_string(),
                                             }
                                         }}</span>
+                                        </div>
                                         {move || {
                                             let form = model_form.get();
                                             let provider = form.as_ref().map(|f| settings_provider_value(&f.provider)).unwrap_or_default();
@@ -3545,7 +3547,9 @@ pub(super) fn SettingsView(
                                                 }
                                             })
                                         }}
-                                        <div class="span-2 settings-form-grid">
+                                        <div class="span-2 settings-form-grid model-capabilities">
+                                            <div class="model-capability span-2" role="group" aria-describedby="model-vision-hint">
+                                            <div class="model-capability-checks">
                                             <label class="settings-check">
                                                 <input type="checkbox"
                                                     prop:checked=move || model_form.get().map(|f| f.supports_vision).unwrap_or(false)
@@ -3568,18 +3572,23 @@ pub(super) fn SettingsView(
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_vision")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.vision_hint")}</span>
+                                            </div>
+                                            <span id="model-vision-hint" class="hint">{move || t(locale.get(), "settings.vision_hint")}</span>
+                                            </div>
+                                            <div class="model-capability">
                                             <label class="settings-check span-2">
-                                                <input type="checkbox" data-testid="use-for-image-generation"
+                                                <input type="checkbox" data-testid="use-for-image-generation" aria-describedby="model-image-generation-hint"
                                                     prop:checked=move || model_form.get().map(|f| f.use_for_image_generation).unwrap_or(false)
                                                     on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                         o.use_for_image_generation = event_target_checked(&ev);
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_image_generation")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.image_generation_hint")}</span>
+                                            <span id="model-image-generation-hint" class="hint">{move || t(locale.get(), "settings.image_generation_hint")}</span>
+                                            </div>
+                                            <div class="model-capability">
                                             <label class="settings-check span-2">
-                                                <input type="checkbox" data-testid="use-for-video-generation"
+                                                <input type="checkbox" data-testid="use-for-video-generation" aria-describedby="model-video-generation-hint"
                                                     prop:checked=move || model_form.get().map(|f| f.use_for_video_generation).unwrap_or(false)
                                                     on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                         o.use_for_video_generation = event_target_checked(&ev);
@@ -3589,7 +3598,8 @@ pub(super) fn SettingsView(
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_video_generation")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.video_generation_hint")}</span>
+                                            <span id="model-video-generation-hint" class="hint">{move || t(locale.get(), "settings.video_generation_hint")}</span>
+                                            </div>
                                         </div>
                                                 }.into_view()
                                             }

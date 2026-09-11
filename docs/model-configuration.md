@@ -110,6 +110,11 @@ Leave User-Agent blank to identify the client as `wisp-science`. Do not enter
 headers. Configure session sending separately; API keys continue to use the
 existing keyring storage.
 
+In the model editor, reasoning guidance sits directly below its selector.
+Image input and analysis share a group; image and video generation each have
+their own group with the explanation below the checkbox. These groups stack
+vertically in narrow windows.
+
 OpenAI Chat Completions and Responses profiles also have a **Fast mode** toggle
 on the model form, next to reasoning effort. Off uses the provider default and
 omits the field; on sends top-level `service_tier: "priority"` on ordinary
