@@ -2016,6 +2016,12 @@ struct Settings {
     service_tier: String,
     #[serde(default)]
     user_agent: String,
+    #[serde(default = "default_send_user_agent_setting")]
+    send_user_agent: bool,
+    #[serde(default)]
+    send_session_id: Option<bool>,
+    #[serde(default)]
+    session_header_name: String,
     /// LLM HTTP proxy. Empty = follow system/env proxy; `none` = force direct;
     /// otherwise a proxy URL (http://, https://, socks5://).
     #[serde(default)]
@@ -2050,6 +2056,10 @@ const MAX_MCP_APP_NAME_CHARS: usize = 160;
 
 const fn default_max_iter_setting() -> i64 {
     DEFAULT_MAX_ITER as i64
+}
+
+const fn default_send_user_agent_setting() -> bool {
+    true
 }
 
 const fn default_auto_compact() -> bool {
@@ -3899,7 +3909,19 @@ pub(crate) async fn load_settings(store: &Store) -> (String, String, String, Str
 async fn load_session_settings(
     store: &Store,
     frame_id: &str,
-) -> (String, String, String, String, u64, String, String, String) {
+) -> (
+    String,
+    String,
+    String,
+    String,
+    u64,
+    String,
+    String,
+    String,
+    bool,
+    Option<bool>,
+    String,
+) {
     let profile_id = models::session_profile_id(store, frame_id).await;
     let (
         provider,
@@ -3910,12 +3932,22 @@ async fn load_session_settings(
         profile_reasoning_effort,
         profile_service_tier,
         user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
     ) = match models::profile_llm(store, &profile_id).await {
         Some(config) => config,
         None => {
             let (provider, api_url, model, api_key) = load_settings(store).await;
-            let (max_tokens, reasoning_effort, service_tier, user_agent) =
-                models::active_llm_advanced(store).await;
+            let (
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
+            ) = models::active_llm_advanced(store).await;
             (
                 provider,
                 api_url,
@@ -3925,6 +3957,9 @@ async fn load_session_settings(
                 reasoning_effort,
                 service_tier,
                 user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
             )
         }
     };
@@ -3942,6 +3977,9 @@ async fn load_session_settings(
         reasoning_effort,
         service_tier,
         user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
     )
 }
 
@@ -4689,6 +4727,10 @@ fn build_provider_config(
     reasoning_effort: &str,
     service_tier: &str,
     user_agent: &str,
+    send_user_agent: bool,
+    send_session_id: Option<bool>,
+    session_header_name: &str,
+    session_id: Option<&str>,
 ) -> Result<ProviderConfig, String> {
     let provider = normalized_provider(provider);
     let api_url = api_url.trim();
@@ -4717,7 +4759,14 @@ fn build_provider_config(
         &provider,
     );
     cfg.user_agent = wisp_llm::provider::normalize_user_agent(user_agent)?;
+    cfg.send_user_agent = send_user_agent;
+    cfg.send_session_id = send_session_id;
+    cfg.session_header_name =
+        wisp_llm::provider::normalize_session_header_name(session_header_name)?;
     cfg.proxy = llm_proxy();
+    if let Some(session_id) = session_id {
+        cfg.session_id = session_id.to_string();
+    }
     Ok(cfg)
 }
 
@@ -4725,11 +4774,13 @@ fn add_configured_image_generation_tool(
     agent: &mut Agent,
     config: Option<(String, String, String, models::ImageGenerationOptions)>,
     proxy: Option<String>,
+    session_id: &str,
 ) {
     if let Some((api_url, model, api_key, options)) = config {
         agent.add_tool(Box::new(
             image_generation_tool::GenerateImageTool::new(api_url, api_key, model, proxy)
-                .with_options(options),
+                .with_options(options)
+                .with_session_id(session_id),
         ));
     }
 }
@@ -4738,18 +4789,31 @@ fn add_configured_video_generation_tool(
     agent: &mut Agent,
     config: Option<(String, String, String, models::VideoGenerationOptions)>,
     proxy: Option<String>,
+    session_id: &str,
 ) {
     if let Some((api_url, model, api_key, options)) = config {
         agent.add_tool(Box::new(
             video_generation_tool::GenerateVideoTool::new(api_url, api_key, model, proxy)
-                .with_options(options),
+                .with_options(options)
+                .with_session_id(session_id),
         ));
     }
 }
 
-async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
-        models::vision_config(store).await?;
+async fn build_vision_provider_config(store: &Store, session_id: &str) -> Option<ProviderConfig> {
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = models::vision_config(store).await?;
     match build_provider_config(
         &provider,
         &api_url,
@@ -4759,6 +4823,10 @@ async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
         &reasoning_effort,
         &service_tier,
         &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(session_id),
     ) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -5667,6 +5735,9 @@ async fn generate_review_with_backend(
                 reasoning_effort,
                 service_tier,
                 user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
             ) = specialists::specialist_llm(&state.store, &reviewer).await;
             let cfg = build_provider_config(
                 &provider,
@@ -5677,6 +5748,10 @@ async fn generate_review_with_backend(
                 &reasoning_effort,
                 &service_tier,
                 &user_agent,
+                send_user_agent,
+                send_session_id,
+                &session_header_name,
+                Some(frame_id),
             )?;
             let llm = wisp_llm::build(cfg);
             let reviewer_model = llm.model().to_string();
@@ -6195,13 +6270,24 @@ async fn generate_follow_up_questions(
         .await
         .map_err(|error| error.to_string())?;
     let specialist = specialists::session_specialist(&state.store, &session_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
-        match specialist {
-            Some(ref specialist) if !specialist.model_id.trim().is_empty() => {
-                specialists::specialist_llm(&state.store, specialist).await
-            }
-            _ => load_session_settings(&state.store, &session_id).await,
-        };
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = match specialist {
+        Some(ref specialist) if !specialist.model_id.trim().is_empty() => {
+            specialists::specialist_llm(&state.store, specialist).await
+        }
+        _ => load_session_settings(&state.store, &session_id).await,
+    };
     let llm = wisp_llm::build(build_provider_config(
         &provider,
         &api_url,
@@ -6211,6 +6297,10 @@ async fn generate_follow_up_questions(
         &reasoning_effort,
         &service_tier,
         &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&session_id),
     )?);
     let completion = llm
         .complete(
@@ -6284,7 +6374,7 @@ async fn side_chat(
         snapshot_version = messages.last().map(|(seq, _)| *seq).unwrap_or_default();
         history = side_chat::history_from_messages(&messages);
     }
-    let http_llm = side_chat_http_provider(&state).await;
+    let http_llm = side_chat_http_provider(&state, frame_id).await;
     let intent = match &http_llm {
         Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await,
         Err(error) => {
@@ -6333,10 +6423,20 @@ async fn side_chat(
     })
 }
 
-async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::Provider>, String> {
+async fn side_chat_http_provider(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Box<dyn wisp_llm::Provider>, String> {
     let (provider, api_url, model, api_key) = load_settings(&state.store).await;
-    let (max_tokens, reasoning_effort, service_tier, user_agent) =
-        models::active_llm_advanced(&state.store).await;
+    let (
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = models::active_llm_advanced(&state.store).await;
     let cfg = build_provider_config(
         &provider,
         &api_url,
@@ -6346,6 +6446,10 @@ async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::P
         &reasoning_effort,
         &service_tier,
         &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(session_id),
     )?;
     Ok(wisp_llm::build(cfg))
 }

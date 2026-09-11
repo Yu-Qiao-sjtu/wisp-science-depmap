@@ -135,7 +135,8 @@ pub(crate) async fn plan_skill_portfolio(
         return Err("No effective, enabled Skills are available for planning.".into());
     }
 
-    let (llm, model_label) = planner_provider(&state.store, model_id, &policy.host).await?;
+    let (llm, model_label) =
+        planner_provider(&state.store, model_id, &policy.host, frame_id.as_deref()).await?;
     let messages = planning_messages(research_request, &catalog)?;
     let completion = tokio::time::timeout(PLANNER_TIMEOUT, llm.complete(&messages, &[]))
         .await
@@ -183,6 +184,7 @@ async fn planner_provider(
     store: &wisp_store::Store,
     model_id: &str,
     host: &wisp_core::DelegationHostPolicy,
+    session_id: Option<&str>,
 ) -> Result<(Box<dyn Provider>, String), String> {
     if !host
         .models
@@ -198,10 +200,21 @@ async fn planner_provider(
         .into_iter()
         .find(|profile| profile.id == model_id)
         .ok_or_else(|| format!("Unknown planning model: {model_id}"))?;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier, user_agent) =
-        models::profile_llm(store, model_id)
-            .await
-            .ok_or_else(|| format!("Unknown planning model: {model_id}"))?;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = models::profile_llm(store, model_id)
+        .await
+        .ok_or_else(|| format!("Unknown planning model: {model_id}"))?;
     let (provider, api_url, model, api_key) =
         crate::resolve_model_settings(provider, api_url, model, api_key);
     let config = crate::build_provider_config(
@@ -213,6 +226,10 @@ async fn planner_provider(
         &reasoning_effort,
         &service_tier,
         &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        session_id,
     )?;
     Ok((wisp_llm::build(config), profile.label))
 }
