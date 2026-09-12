@@ -58,8 +58,16 @@ Choosing a level saves it as the profile's default — it applies to every
 conversation using that model and is not scoped to the current conversation.
 Choosing "default" clears the value so the provider decides.
 
-The add/edit model page includes collapsed **Advanced options** with a
-**Send User-Agent** switch (on by default) and an optional **User-Agent** field.
+The add/edit model page includes collapsed **Request headers (advanced)**
+(请求附加信息（高级）). It explains that these settings add HTTP request headers
+to requests sent to the model service, including connection validation. Keep the
+defaults unless the service requires specific values. Each header has its own
+explanation, editable field, and live example of `Header-Name: value`; switching
+it off replaces the example with an explicit “will not be sent” state.
+
+**Send client identifier (User-Agent)** is on by default. The **Client identifier
+(User-Agent value)** field lets you customize the application identifier sent
+to the service.
 Turn the switch off to omit the header entirely. While enabled, leave the field
 blank to send `wisp-science`, or enter a client
 identifier such as `research-client/1.0` using printable ASCII characters.
@@ -85,9 +93,9 @@ Use the bare API model ID, without OpenCode's client-side provider prefix.
 Context and output ceilings continue to come from Wisp's baked models.dev
 catalog, using exact model IDs and the appropriate Go or Zen namespace.
 
-**Send session ID** controls the session header for every HTTP model. It defaults
+**Send conversation identifier** controls the session header for every HTTP model. It defaults
 to enabled for OpenCode's `/zen` routes and disabled elsewhere. You can explicitly
-enable or disable it per model, including custom gateways. **Session header name**
+enable or disable it per model, including custom gateways. **Header name for the conversation ID**
 defaults to `x-opencode-session` when blank; enter another valid HTTP header name
 if your service requires one. Authentication and transport header names cannot
 be replaced. Turning either sending switch off retains its configured text but
@@ -100,7 +108,7 @@ helpers carry the same identity; independent child conversations have their
 own IDs. Connection validation uses a temporary identity for that operation.
 CLI/RPC retain theirs in `.wisp/session-id` alongside `.wisp/session.json`;
 CLI `/new` rotates it. A local HTTP proxy does not change these identities.
-For a custom gateway, enable **Send session ID** and set the header name expected
+For a custom gateway, enable **Send conversation identifier** and set the header name expected
 by that gateway. The same controls apply to image/video model validation,
 generation, and status polling; session headers are not attached to generated
 media download URLs.

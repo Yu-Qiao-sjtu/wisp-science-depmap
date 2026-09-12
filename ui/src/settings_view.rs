@@ -145,16 +145,20 @@ fn model_advanced_options(
     view! {
         <details class="model-advanced-options" data-testid="model-advanced-options">
             <summary>{move || t(locale.get(), "models.advanced_options")}</summary>
-            <div class="settings-form-grid">
-                <label class="settings-check span-2">
+            <p class="hint model-request-intro">{move || t(locale.get(), "models.request_headers_hint")}</p>
+            <div class="model-request-headers">
+                <div class="model-request-header">
+                <label class="settings-check">
                     <input type="checkbox" data-testid="model-send-user-agent"
+                        aria-describedby="model-user-agent-purpose"
                         prop:checked=move || model_form.get().is_some_and(|form| form.send_user_agent)
                         on:change=move |ev| model_form.update(|form| if let Some(form) = form {
                             form.send_user_agent = event_target_checked(&ev);
                         }) />
                     <span>{move || t(locale.get(), "models.send_user_agent")}</span>
                 </label>
-                <label class="span-2">"User-Agent"
+                <p class="hint" id="model-user-agent-purpose">{move || t(locale.get(), "models.user_agent_purpose")}</p>
+                <label>{move || t(locale.get(), "models.user_agent_value")}
                     <input data-testid="model-user-agent"
                         disabled=move || !model_form.get().is_some_and(|form| form.send_user_agent)
                         aria-describedby="model-user-agent-hint"
@@ -164,26 +168,57 @@ fn model_advanced_options(
                             form.user_agent = event_target_input(&ev).value();
                         }) />
                 </label>
-                <span id="model-user-agent-hint" class="hint span-2">
+                <span id="model-user-agent-hint" class="hint">
                     {move || t(locale.get(), "models.user_agent_hint")}
                 </span>
-                <label class="settings-check span-2">
+                <div class="model-request-preview">
+                    <span>{move || t(locale.get(), "models.request_header_preview")}</span>
+                    <code data-testid="model-user-agent-preview">{move || {
+                        let form = model_form.get();
+                        if let Some(form) = form.filter(|form| form.send_user_agent) {
+                            let value = form.user_agent.trim();
+                            format!("User-Agent: {}", if value.is_empty() { "wisp-science" } else { value })
+                        } else {
+                            t(locale.get(), "models.request_header_disabled").to_string()
+                        }
+                    }}</code>
+                </div>
+                </div>
+                <div class="model-request-header">
+                <label class="settings-check">
                     <input type="checkbox" data-testid="model-send-session-id"
+                        aria-describedby="model-session-purpose"
                         prop:checked=move || model_form.get().is_some_and(|form| session_identity_enabled(&form))
                         on:change=move |ev| model_form.update(|form| if let Some(form) = form {
                             form.send_session_id = Some(event_target_checked(&ev));
                         }) />
                     <span>{move || t(locale.get(), "models.send_session_id")}</span>
                 </label>
-                <label class="span-2">{move || t(locale.get(), "models.session_header_name")}
+                <p class="hint" id="model-session-purpose">{move || t(locale.get(), "models.session_identity_purpose")}</p>
+                <label>{move || t(locale.get(), "models.session_header_name")}
                     <input data-testid="model-session-header-name" placeholder="x-opencode-session"
+                        aria-describedby="model-session-header-hint"
                         disabled=move || !model_form.get().is_some_and(|form| session_identity_enabled(&form))
                         prop:value=move || model_form.get().map(|form| form.session_header_name).unwrap_or_default()
                         on:input=move |ev| model_form.update(|form| if let Some(form) = form {
                             form.session_header_name = event_target_input(&ev).value();
                         }) />
                 </label>
-                <span class="hint span-2">{move || t(locale.get(), "models.session_identity_hint")}</span>
+                <span class="hint" id="model-session-header-hint">{move || t(locale.get(), "models.session_identity_hint")}</span>
+                <div class="model-request-preview">
+                    <span>{move || t(locale.get(), "models.request_header_preview")}</span>
+                    <code data-testid="model-session-header-preview">{move || {
+                        let form = model_form.get();
+                        if let Some(form) = form.filter(session_identity_enabled) {
+                            let name = form.session_header_name.trim();
+                            format!("{}: {}", if name.is_empty() { "x-opencode-session" } else { name },
+                                t(locale.get(), "models.session_id_generated"))
+                        } else {
+                            t(locale.get(), "models.request_header_disabled").to_string()
+                        }
+                    }}</code>
+                </div>
+                </div>
             </div>
         </details>
     }
