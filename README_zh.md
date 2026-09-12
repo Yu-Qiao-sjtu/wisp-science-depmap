@@ -23,7 +23,7 @@ WISP — *Workspace for Intelligent Scientific Practice*
 <a href="https://github.com/xuzhougeng/wisp-science/releases"><img src="https://img.shields.io/badge/macOS-supported-000000" alt="支持 macOS"></a>
 <a href="https://github.com/xuzhougeng/wisp-science/releases"><img src="https://img.shields.io/badge/Linux-supported-FCC624" alt="支持 Linux"></a>
 
-[English](README.md) · [简体中文](README_zh.md) · [网站](https://xuzhougeng.github.io/wisp-science/) · [Releases](https://github.com/xuzhougeng/wisp-science/releases)
+[English](README.md) · [简体中文](README_zh.md) · [网站](https://wispscience.com/) · [Releases](https://github.com/xuzhougeng/wisp-science/releases)
 
 <img src="docs/assets/app-home.png" alt="Wisp Science 桌面应用正在运行内置的 RNA-seq 分析演示" width="100%" />
 
@@ -62,7 +62,7 @@ Agent 读写项目文件、执行 shell，并按需加载 Skills（`SKILL.md`）
 
 ## 开始使用
 
-1. 从 [GitHub Releases](https://github.com/xuzhougeng/wisp-science/releases) 下载。
+1. 打开[下载页](https://wispscience.com/#download)，选择系统与芯片，通过 Cloudflare 下载安装包。也可使用 [GitHub Releases](https://github.com/xuzhougeng/wisp-science/releases) 备用下载。
 2. 打开内置演示（无需 API Key），看完整的 RNA-seq 轨迹。
 3. 在 **设置 → 模型** 中添加模型，然后开一个项目。
 

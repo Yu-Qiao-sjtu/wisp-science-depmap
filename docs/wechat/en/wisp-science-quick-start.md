@@ -6,9 +6,9 @@ This tutorial takes you from downloading the app to your first conversation. You
 
 > Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.
 
-**Step 1: Download an installer from the official release page.**
+**Step 1: Choose an installer for your computer.**
 
-Open the [official Wisp Science download page on GitHub Releases](https://github.com/xuzhougeng/wisp-science/releases/latest), find **Assets**, and choose a file for your operating system and processor. You can also use **Download desktop app** on the [Wisp Science website](https://xuzhougeng.github.io/wisp-science/).
+Open the [Wisp Science download page](https://wispscience.com/?lang=en#download), choose your operating system, processor and package format, then select **Download from Cloudflare**. The page shows the version, file size and installation steps. On a Mac, check **About This Mac** to choose Apple Silicon or Intel. Use the GitHub fallback if the download is unavailable.
 
 The version number in the filename changes. Look for the architecture and file extension:
 

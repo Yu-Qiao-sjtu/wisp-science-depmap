@@ -22,7 +22,7 @@ WISP — *Workspace for Intelligent Scientific Practice*
 <a href="https://github.com/xuzhougeng/wisp-science/releases"><img src="https://img.shields.io/badge/macOS-supported-000000" alt="macOS supported"></a>
 <a href="https://github.com/xuzhougeng/wisp-science/releases"><img src="https://img.shields.io/badge/Linux-supported-FCC624" alt="Linux supported"></a>
 
-[English](README.md) · [简体中文](README_zh.md) · [Website](https://xuzhougeng.github.io/wisp-science/) · [Releases](https://github.com/xuzhougeng/wisp-science/releases)
+[English](README.md) · [简体中文](README_zh.md) · [Website](https://wispscience.com/) · [Releases](https://github.com/xuzhougeng/wisp-science/releases)
 
 <img src="docs/assets/app-home.png" alt="Wisp Science desktop app running a bundled RNA-seq analysis demo" width="100%" />
 
@@ -67,7 +67,7 @@ a skill with `/`. Encrypted [manual sync](docs/project-sync.md) and
 
 ## Get started
 
-1. Download from [GitHub Releases](https://github.com/xuzhougeng/wisp-science/releases).
+1. Open the [download page](https://wispscience.com/?lang=en#download), choose your operating system and processor, and download via Cloudflare. [GitHub Releases](https://github.com/xuzhougeng/wisp-science/releases) is also available.
 2. Open a bundled demo — no API key needed — to see a full RNA-seq trajectory.
 3. Add a model in **Settings → Models** and start a project.
 

@@ -15,6 +15,7 @@ dist
 web-dist/
 .wisp/
 ui-tests/test-results/
+ui-tests/website-test-results/
 wisp-cli*.exe
 wisp-science*.exe
 /runtime
@@ -33,3 +34,7 @@ __pycache__/
 *.pyo
 .vscode
 .DS_Store
+/docs/dist-cloudflare/
+/.wrangler/
+/docs/.wrangler/
+/docs/worker-configuration.d.ts

@@ -1,5 +1,7 @@
 const WISP_PAGES_I18N = {
   zh: {
+    "meta.downloads.title": "下载安装包 | Wisp Science",
+    "meta.downloads.desc": "按系统与芯片选择 Wisp Science 安装包：Windows、macOS、Linux。提供 Cloudflare 下载与 GitHub 备用入口。",
     "mcp.settingsPath": "设置 → 连接",
     "footer.releases": "版本记录",
     "footer.issues": "问题反馈",
@@ -305,6 +307,8 @@ const WISP_PAGES_I18N = {
     "acp.pathChanged": "改过启动参数或项目路径后需新开会话",
   },
   en: {
+    "meta.downloads.title": "Download installers | Wisp Science",
+    "meta.downloads.desc": "Choose a Wisp Science installer for Windows, macOS or Linux by system and processor. Download via Cloudflare or GitHub.",
     "mcp.settingsPath": "Settings → Connections",
     "footer.releases": "Releases",
     "footer.issues": "Issues",

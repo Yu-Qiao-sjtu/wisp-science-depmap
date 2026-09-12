@@ -6,11 +6,11 @@
 
 > 本文截图来自 Wisp Science 实际前端，使用模拟配置和教学回复。图中的路径、项目及回答用于说明操作，不代表已验证真实 API 账号。不同版本的界面文字可能略有差异。
 
-**第一步：从官方发布页下载安装包。**
+**第一步：选择适合电脑的安装包。**
 
-打开 [Wisp Science 官方下载页（GitHub Releases）](https://github.com/xuzhougeng/wisp-science/releases/latest)，向下找到 **Assets**，按电脑系统和处理器类型选择安装包。也可以从 [Wisp Science 官网](https://xuzhougeng.github.io/wisp-science/) 点击“下载桌面版”进入。
+打开 [Wisp Science 下载页](https://wispscience.com/#download)，选择操作系统、芯片和安装格式，再点击“从 Cloudflare 下载”。页面会显示版本号、文件大小与安装方法；Mac 用户请在“关于本机”中确认是 Apple Silicon 还是 Intel。下载不可用时，可使用页面上的 GitHub 备用入口。
 
-安装包名称中的版本号会变化，主要看文件末尾的架构与格式：
+安装包名称中的版本号会变化，使用 GitHub 备用下载时，在 Assets 中主要看文件末尾的架构与格式：
 
 | 电脑类型 | 在 Assets 中寻找 | 下载后怎样安装 |
 | --- | --- | --- |
