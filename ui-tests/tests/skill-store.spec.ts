@@ -79,11 +79,49 @@ test("explicit selection installs a single complete pinned package and refreshes
   await expect(page.locator(".skill-origin")).toContainText("release/v1");
 });
 
-for (const mode of ["conflict", "invalid"]) {
+for (const locale of ["en", "zh"]) {
+  test(`successful installation shows installed status without a conflict in ${locale}`, async ({ page }) => {
+    await open(page, "multi", locale);
+    await page.getByRole("button", { name: "Anthropic Skills", exact: true }).click();
+    await page.locator(".skill-store-candidate").filter({ hasText: "research-handoff" }).click();
+    const reviewName = locale === "zh" ? "查看安装确认" : "Review installation";
+    const installed = locale === "zh" ? "已安装" : "Installed";
+    const conflict = locale === "zh" ? "同名冲突" : "Name conflict";
+    await page.getByRole("button", { name: reviewName, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: locale === "zh" ? "确认并安装" : "Confirm and install", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const detail = page.getByTestId("skill-store-preview");
+    await expect(detail.getByRole("status")).toContainText(locale === "zh" ? "已安装，可返回技能列表管理。" : "Already installed. Manage the package in Installed Skills.");
+    await expect(detail.locator(".settings-status.fail")).toHaveCount(0);
+    await expect(detail).not.toContainText(conflict);
+    await expect(page.getByRole("button", { name: reviewName, exact: true })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    const row = page.locator(".skill-store-candidate").filter({ hasText: "research-handoff" });
+    await expect(row).toContainText(installed);
+    await expect(row).not.toContainText(conflict);
+    const other = page.locator(".skill-store-candidate").filter({ hasText: "second-skill" });
+    await expect(other).not.toContainText(installed);
+    await other.click();
+    await expect(page.getByRole("button", { name: reviewName, exact: true })).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await row.click();
+    await expect(detail.getByRole("status")).toBeVisible();
+    await expect(detail.locator(".settings-status.fail")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: reviewName, exact: true })).toBeDisabled();
+    expect(await installs(page)).toBe(1);
+  });
+}
+
+for (const mode of ["conflict", "conflict-origin", "invalid"]) {
   test(`${mode} explains the blocker without overwriting any package`, async ({ page }) => {
     await open(page, mode); await preview(page);
     await expect(page.getByRole("button", { name: "Review installation", exact: true })).toBeDisabled();
-    if (mode === "conflict") await expect(page.getByTestId("skill-store-preview")).toContainText("/app/skills/literature-review/SKILL.md");
+    if (mode.startsWith("conflict")) {
+      await expect(page.getByTestId("skill-store-preview")).toContainText("/app/skills/literature-review/SKILL.md");
+      await expect(page.getByTestId("skill-store-preview").locator(".settings-status.fail")).toContainText("Name conflict");
+      await expect(page.getByTestId("skill-store-preview")).not.toContainText("Already installed.");
+    }
     else {
       await expect(page.getByTestId("skill-store-preview")).toContainText("Format error");
       await expect(page.getByTestId("skill-store-preview")).toContainText("Resource error");

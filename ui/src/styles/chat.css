@@ -478,6 +478,11 @@
   background: color-mix(in srgb, var(--warn) 10%, var(--bg-elev));
 }
 .exploration-banner.browser-extension-update .exploration-banner-eyebrow { color: var(--warn); }
+.exploration-banner.browser-extension-update .exploration-banner-copy,
+.exploration-banner.browser-extension-update .exploration-banner-actions {
+  /* Column layouts must constrain intrinsic widths before the path can truncate. */
+  min-width: 0; max-width: 100%;
+}
 .exploration-banner.browser-extension-update .exploration-banner-copy strong { white-space: normal; }
 .browser-extension-path {
   display: block; overflow: hidden; max-width: 100%; box-sizing: border-box; padding: 3px 5px;

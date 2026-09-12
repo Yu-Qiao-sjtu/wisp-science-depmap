@@ -237,8 +237,7 @@ pub(crate) fn SkillStore(
                     )));
                     candidates.update(|all| {
                         if let Some(value) = all.get_mut(index) {
-                            value.conflict =
-                                Some(t(locale.get_untracked(), "store.already_installed"));
+                            value.conflict = None;
                             value.installed_source = Some(value.source.clone());
                         }
                     });
@@ -380,14 +379,15 @@ pub(crate) fn SkillStore(
                         <button class="skill-store-candidate" on:click=move |_| { selected.set(Some(i)); error.set(None); success.set(None); }>
                             <strong>{candidate.name}</strong><span>{candidate.source.package_path}</span>
                             <span class="skill-store-candidate-description">{candidate.description}</span>
-                            <span>{if candidate.conflict.is_some() { t(locale.get(), "store.conflict") } else if !candidate.format_errors.is_empty() || !candidate.resource_errors.is_empty() { t(locale.get(), "store.invalid") } else { t(locale.get(), "store.format_pass") }}</span>
+                            <span>{if candidate.conflict.is_some() { t(locale.get(), "store.conflict") } else if candidate.installed_source.is_some() { t(locale.get(), "store.installed") } else if !candidate.format_errors.is_empty() || !candidate.resource_errors.is_empty() { t(locale.get(), "store.invalid") } else { t(locale.get(), "store.format_pass") }}</span>
                             {compose_icon("chevron-right")}
                         </button>
                     }).collect_view()}
                 </div>
             })}
             {move || selected.get().and_then(|i| candidates.get().get(i).cloned()).map(|candidate| {
-                let blocked = candidate.conflict.is_some() || !candidate.format_errors.is_empty() || !candidate.resource_errors.is_empty();
+                let installed = candidate.installed_source.is_some() && candidate.conflict.is_none();
+                let blocked = installed || candidate.conflict.is_some() || !candidate.format_errors.is_empty() || !candidate.resource_errors.is_empty();
                 let format_valid = candidate.format_errors.is_empty();
                 view! {
                     <section class="skill-store-preview" data-testid="skill-store-preview">
@@ -419,6 +419,7 @@ pub(crate) fn SkillStore(
                         {candidate.format_errors.into_iter().map(|e| view! { <p class="settings-status fail">{move || t(locale.get(), "store.format_error")} ": " {e}</p> }).collect_view()}
                         {candidate.resource_errors.into_iter().map(|e| view! { <p class="settings-status fail">{move || t(locale.get(), "store.resource_error")} ": " {e}</p> }).collect_view()}
                         {candidate.conflict.map(|reason| view! { <p class="settings-status fail">{move || t(locale.get(), "store.conflict")} ": " {reason}</p> })}
+                        {installed.then(|| view! { <p class="settings-status ok" role="status">{move || t(locale.get(), "store.already_installed")}</p> })}
                         {candidate.installed_source.map(|source| view! { <h4>{move || t(locale.get(), "store.installed_source")}</h4><SourceDetails source=source /> })}
                         <p>{move || t(locale.get(), "store.dependencies_pending")}</p>
                         <p>{move || t(locale.get(), "store.unverified")}</p>

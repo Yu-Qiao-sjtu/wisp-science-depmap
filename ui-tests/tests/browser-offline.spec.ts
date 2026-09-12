@@ -120,78 +120,101 @@ test("an outdated connected extension gets a verified update and manual reload f
   await expect(banner).toHaveCount(0);
 });
 
-test("extension update banner stays in the composer column and ellipsizes a long path", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  const longPath = "C:\\Users\\xuzhougeng\\AppData\\Roaming\\science.wisp-science\\wisp-science\\browser-extension\\unpacked\\very-long-managed-path-segment";
-  await page.addInitScript((path) => {
-    const status = {
-      connected: true,
-      current_version: "0.3.0",
-      bundled_version: "0.3.1",
-      current_protocol: 1,
-      required_protocol: 2,
-      update_required: true,
-      automatic_reload_available: false,
-      extension_path: path,
-      extension_path_verified: true,
-      integrity_verified: true,
-      error: null,
-    };
-    (window as any).__browserExtensionStatus = status;
-    (window as any).__browserExtensionUpdateResult = {
-      outcome: "manual_reload_required",
-      status,
-      opened: true,
-      error: null,
-    };
-  }, longPath);
-  await enterApp(page);
+for (const [width, locale] of [[1280, "en"], [820, "zh"], [1440, "zh"]] as const) {
+  test(`long paths and actions fit at ${width}px in ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const windowsPath = "C:\\Users\\xuzhougeng\\AppData\\Roaming\\science.wisp-science\\wisp-science\\browser-extension\\unpacked\\very-long-managed-path-segment";
+    const longPath = (locale === "en" ? windowsPath : "/Users/xuzhougeng/Library/Application Support/science.wisp-science/wisp-science/browser-extension/unpacked/very-long-managed-path-segment")
+      + (locale === "en" ? "\\nested-managed-directory" : "/nested-managed-directory").repeat(8);
+    await page.addInitScript((path) => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        writeText: async (value: string) => { (window as any).__copiedExtensionPath = value; },
+      } });
+      const status = {
+        connected: true,
+        current_version: "0.3.0",
+        bundled_version: "0.3.1",
+        current_protocol: 1,
+        required_protocol: 2,
+        update_required: true,
+        automatic_reload_available: false,
+        extension_path: path,
+        extension_path_verified: true,
+        integrity_verified: true,
+        error: null,
+      };
+      (window as any).__browserExtensionStatus = status;
+      (window as any).__browserExtensionUpdateResult = {
+        outcome: "manual_reload_required",
+        status,
+        opened: true,
+        error: null,
+      };
+    }, longPath);
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.locator(".proj-card-main").first().click();
 
-  const banner = page.getByTestId("browser-extension-update-banner");
-  await expect(banner).toBeVisible();
-  await banner.getByRole("button", { name: "Update extension" }).click();
-  await expect(banner).toContainText("Updated files are ready");
-  const path = banner.getByTestId("browser-extension-path");
-  await expect(path).toHaveText(longPath);
+    const banner = page.getByTestId("browser-extension-update-banner");
+    await expect(banner).toBeVisible();
 
-  const layout = await page.evaluate(() => {
-    const bannerEl = document.querySelector("[data-testid='browser-extension-update-banner']") as HTMLElement | null;
-    const pathEl = document.querySelector("[data-testid='browser-extension-path']") as HTMLElement | null;
-    const composer = document.querySelector(".composer") as HTMLElement | null;
-    const inner = document.querySelector(".composer-inner") as HTMLElement | null;
-    const strip = document.querySelector(".session-runtime-strip") as HTMLElement | null;
-    if (!bannerEl || !pathEl || !composer || !inner) return null;
-    const bannerBox = bannerEl.getBoundingClientRect();
-    const pathBox = pathEl.getBoundingClientRect();
-    const composerBox = composer.getBoundingClientRect();
-    const innerBox = inner.getBoundingClientRect();
-    const stripBox = strip?.getBoundingClientRect();
-    const pathStyle = getComputedStyle(pathEl);
-    return {
-      bannerWidth: bannerBox.width,
-      bannerRight: bannerBox.right,
-      bannerBottom: bannerBox.bottom,
-      composerRight: composerBox.right,
-      innerWidth: innerBox.width,
-      innerTop: innerBox.top,
-      stripTop: stripBox?.top ?? innerBox.top,
-      pathRight: pathBox.right,
-      pathWhiteSpace: pathStyle.whiteSpace,
-      pathOverflow: pathStyle.overflow,
-      pathTextOverflow: pathStyle.textOverflow,
-      bannerOverflows: bannerEl.scrollWidth > bannerEl.clientWidth + 1,
+    const path = banner.getByTestId("browser-extension-path");
+    await expect(path).toHaveText(longPath);
+
+    const checkLayout = async () => {
+      const layout = await page.evaluate(() => {
+        const bannerEl = document.querySelector("[data-testid='browser-extension-update-banner']") as HTMLElement | null;
+        const pathEl = document.querySelector("[data-testid='browser-extension-path']") as HTMLElement | null;
+        const composer = document.querySelector(".composer") as HTMLElement | null;
+        const inner = document.querySelector(".composer-inner") as HTMLElement | null;
+        const strip = document.querySelector(".session-runtime-strip") as HTMLElement | null;
+        if (!bannerEl || !pathEl || !composer || !inner) return null;
+        const bannerBox = bannerEl.getBoundingClientRect();
+        const pathBox = pathEl.getBoundingClientRect();
+        const composerBox = composer.getBoundingClientRect();
+        const innerBox = inner.getBoundingClientRect();
+        const stripBox = strip?.getBoundingClientRect();
+        const pathStyle = getComputedStyle(pathEl);
+        return {
+          bannerWidth: bannerBox.width,
+          bannerRight: bannerBox.right,
+          bannerBottom: bannerBox.bottom,
+          composerRight: composerBox.right,
+          innerWidth: innerBox.width,
+          innerTop: innerBox.top,
+          stripTop: stripBox?.top ?? innerBox.top,
+          pathRight: pathBox.right,
+          pathWhiteSpace: pathStyle.whiteSpace,
+          pathOverflow: pathStyle.overflow,
+          pathTextOverflow: pathStyle.textOverflow,
+          actionsFit: [...bannerEl.querySelectorAll("button")].every(button => {
+            const box = button.getBoundingClientRect();
+            return box.left >= bannerBox.left && box.right <= bannerBox.right;
+          }),
+          pathClipped: pathEl.scrollWidth > pathEl.clientWidth,
+          bannerOverflows: bannerEl.scrollWidth > bannerEl.clientWidth + 1,
+        };
+      });
+      expect(layout).not.toBeNull();
+      expect(layout!.bannerOverflows).toBe(false);
+      expect(layout!.actionsFit).toBe(true);
+      expect(layout!.pathClipped).toBe(true);
+      expect(layout!.bannerWidth).toBeLessThanOrEqual(layout!.innerWidth + 2);
+      expect(layout!.bannerRight).toBeLessThanOrEqual(layout!.composerRight + 1);
+      expect(layout!.pathRight).toBeLessThanOrEqual(layout!.bannerRight + 1);
+      expect(layout!.bannerBottom).toBeLessThanOrEqual(layout!.stripTop + 1);
+      expect(layout!.pathWhiteSpace).toBe("nowrap");
+      expect(layout!.pathOverflow).toBe("hidden");
+      expect(layout!.pathTextOverflow).toBe("ellipsis");
     };
+    await checkLayout();
+    await banner.getByRole("button", { name: locale === "zh" ? "复制扩展路径" : "Copy extension path", exact: true }).click();
+    expect(await page.evaluate(() => (window as any).__copiedExtensionPath)).toBe(longPath);
+    await page.screenshot({ path: testInfo.outputPath("extension-update-path.png"), animations: "disabled" });
+    await banner.getByRole("button", { name: locale === "zh" ? "更新扩展" : "Update extension", exact: true }).click();
+    await expect(banner).toContainText(locale === "zh" ? "新版文件已就绪" : "Updated files are ready");
+    await checkLayout();
   });
-  expect(layout).not.toBeNull();
-  expect(layout!.bannerOverflows).toBe(false);
-  expect(layout!.bannerWidth).toBeLessThanOrEqual(layout!.innerWidth + 2);
-  expect(layout!.bannerRight).toBeLessThanOrEqual(layout!.composerRight + 1);
-  expect(layout!.pathRight).toBeLessThanOrEqual(layout!.bannerRight + 1);
-  expect(layout!.bannerBottom).toBeLessThanOrEqual(layout!.stripTop + 1);
-  expect(layout!.pathWhiteSpace).toBe("nowrap");
-  expect(layout!.pathOverflow).toBe("hidden");
-  expect(layout!.pathTextOverflow).toBe("ellipsis");
-});
+}
 
 test("disconnected browser retrieval shows a banner that Escape dismisses without moving focus", async ({ page }) => {
   await enterApp(page);
