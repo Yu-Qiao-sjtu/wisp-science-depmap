@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,8 +64,8 @@ class TutorialBuildTests(unittest.TestCase):
         pages = build_tutorials.render_tutorials()
         cli = pages["tutorials/wisp-science-cli.html"]
         server = pages["tutorials/wisp-science-servers-cli.html"]
-        self.assertIn('data-text-zh="Wisp Science进阶"', cli)
-        self.assertIn('data-text-en="Wisp Science Advanced"', cli)
+        self.assertIn('data-text-zh="Wisp 命令行"', cli)
+        self.assertIn('data-text-en="Wisp CLI"', cli)
         self.assertIn('WISP_API_KEY', cli)
         self.assertIn('wisp-science run --output jsonl', cli)
         self.assertIn('Get-Credential', cli)
@@ -72,6 +73,24 @@ class TutorialBuildTests(unittest.TestCase):
         self.assertNotIn('wisp-science run --output jsonl', server)
         self.assertIn('href="wisp-science-cli.html"', server)
         self.assertIn('href="tutorials/wisp-science-cli.html"', pages["tutorials.html"])
+
+    def test_directory_groups_tutorials_without_losing_order_or_links(self):
+        directory = build_tutorials.render_tutorials()["tutorials.html"]
+        groups = re.findall(r'<section class="tutorial-group" id="([^"]+)".*?</section>',
+                            directory, re.DOTALL)
+        self.assertEqual(groups, ["basics", "tips", "advanced"])
+        expected = [build_tutorials.READING_ORDER[:7], build_tutorials.READING_ORDER[7:9],
+                    build_tutorials.READING_ORDER[9:]]
+        for (group, zh, en), article_ids in zip(build_tutorials.TUTORIAL_GROUPS, expected):
+            section = re.search(rf'<section class="tutorial-group" id="{group}".*?</section>',
+                                directory, re.DOTALL).group()
+            self.assertIn(f'aria-labelledby="{group}-title"', section)
+            self.assertIn(f'data-text-zh="{zh}" data-text-en="{en}"', section)
+            self.assertEqual(re.findall(r'<a class="tutorial-card" id="([^"]+)"', section),
+                             article_ids)
+            self.assertEqual(section.count('<h3 '), len(article_ids))
+        self.assertEqual(re.findall(r'<span class="tutorial-number">(\d+)</span>', directory),
+                         [f"{number:02d}" for number in range(1, 12)])
 
     def test_every_tutorial_has_a_complete_english_source_and_language_metadata(self):
         root = build_tutorials.DOCS / "wechat"

@@ -8,8 +8,10 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 
 The website's [tutorial directory](tutorials.html) links to one independent page
 per article under `docs/tutorials/`, generated from `docs/wechat/*.md` and matching
-English translations in `docs/wechat/en/`. The directory contains only compact
-cards. The language switch changes titles, complete article text, captions,
+English translations in `docs/wechat/en/`. The directory groups compact cards under
+three dividers: Basics (基础入门), Tips (使用技巧), and Advanced (进阶).
+Wisp CLI (Wisp 命令行) is an independent tutorial in Advanced, alongside ACP configuration.
+The language switch changes group headings, titles, complete article text, captions,
 examples, source links, and previous/next navigation. Each language uses screenshots
 of the corresponding app interface; English assets live under
 `docs/assets/tutorials/en/`. Article links open the corresponding tutorial
@@ -28,7 +30,9 @@ python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
 
 Each article must start with a level-one title. `READING_ORDER` in the generator
 puts Quick Start first, then the four introductory tutorials, MCP, Skills, trajectories,
-and the advanced CLI and ACP tutorials; other articles are appended alphabetically. Filenames determine
+research journey, and the advanced CLI and ACP tutorials; other articles are appended alphabetically.
+`TUTORIAL_GROUPS` defines the directory sections. Chinese title prefixes select Basics
+or Tips; other articles appear in Advanced. Filenames determine
 stable article URLs and directory card anchors. Edit the page shell outside the generated
 markers in `docs/tutorials.html`; edit both language sources when updating articles.
 The generator rejects missing English translations instead of silently showing

@@ -1,4 +1,4 @@
-# Wisp Science进阶
+# Wisp 命令行
 
 熟悉桌面中的项目与对话后，如果希望在系统终端里使用 Wisp，或者把一次任务接入脚本与日志流程，可以使用独立的 `wisp-science` CLI。
 

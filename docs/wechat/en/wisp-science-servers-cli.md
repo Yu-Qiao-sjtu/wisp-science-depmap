@@ -13,7 +13,7 @@ Wisp Science registers servers, attaches execution environments to conversations
 | A conversation's execution environment | You describe the task; Wisp calls tools in the selected environment | Read remote data, run analyses, and submit structured tasks |
 | Wisp's interactive terminal | You enter commands and the shell executes them | Inspect directories, debug environments, and monitor output |
 
-Server configuration identifies which machine Wisp may use. An interactive terminal lets you type commands yourself. For using the Wisp agent directly from a system terminal, see [Wisp Science Advanced](wisp-science-cli.md).
+Server configuration identifies which machine Wisp may use. An interactive terminal lets you type commands yourself. For using the Wisp agent directly from a system terminal, see [Wisp CLI](wisp-science-cli.md).
 
 **Prepare connection details.**
 

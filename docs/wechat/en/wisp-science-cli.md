@@ -1,4 +1,4 @@
-# Wisp Science Advanced
+# Wisp CLI
 
 Once you know the desktop project and conversation workflow, you may want to use Wisp in a system terminal or connect a task to scripts and logs. The standalone `wisp-science` CLI provides that entry point.
 

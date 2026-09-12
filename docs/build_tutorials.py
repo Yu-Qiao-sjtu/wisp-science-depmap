@@ -15,6 +15,11 @@ DOCS = Path(__file__).resolve().parent
 START = "<!-- BEGIN GENERATED TUTORIALS -->"
 END = "<!-- END GENERATED TUTORIALS -->"
 REPOSITORY = "https://github.com/xuzhougeng/wisp-science/blob/main/docs/"
+TUTORIAL_GROUPS = [
+    ("basics", "基础入门", "Basics"),
+    ("tips", "使用技巧", "Tips"),
+    ("advanced", "进阶", "Advanced"),
+]
 READING_ORDER = [
     "wisp-science-quick-start", "wisp-science-models", "wisp-science-browser",
     "wisp-science-servers-cli", "wisp-science-transfer", "wisp-science-mcp",
@@ -116,19 +121,32 @@ def render_tutorials(directory=None):
     entries = [(source.stem, render_article(source, all_sources, "zh"),
                 render_article(translation, all_sources, "en"))
                for source, translation in zip(sources, translations)]
-    cards = []
+    cards = {group: [] for group, _, _ in TUTORIAL_GROUPS}
     for number, (anchor, zh, en) in enumerate(entries, 1):
-        cards.append(
+        group, category_zh, category_en = next(
+            (item for item in TUTORIAL_GROUPS if item[1] == zh["category"]),
+            TUTORIAL_GROUPS[-1],
+        )
+        cards[group].append(
             f'<a class="tutorial-card" id="{anchor}" href="tutorials/{anchor}.html">'
             f'<span class="tutorial-card-meta"><span class="tutorial-number">{number:02d}</span>'
-            + localized("span", zh["category"], en["category"]) + '</span>'
-            + localized("h2", zh["short"], en["short"])
+            + localized("span", category_zh, category_en) + '</span>'
+            + localized("h3", zh["short"], en["short"])
             + '<span class="tutorial-read" data-i18n="tutorials.read">阅读教程</span></a>'
         )
+    sections = []
+    for group, zh, en in TUTORIAL_GROUPS:
+        if cards[group]:
+            sections.append(
+                f'<section class="tutorial-group" id="{group}" aria-labelledby="{group}-title">\n'
+                + localized("h2", zh, en, f' class="tutorial-group-title" id="{group}-title"')
+                + '\n<div class="tutorial-cards">\n' + "\n".join(cards[group])
+                + '\n</div>\n</section>'
+            )
     before, rest = directory.split(START)
     _, after = rest.split(END)
-    pages = {"tutorials.html": before + START + '\n<div class="tutorial-cards">\n'
-             + "\n".join(cards) + "\n</div>\n" + END + after}
+    pages = {"tutorials.html": before + START + '\n'
+             + "\n".join(sections) + "\n" + END + after}
     head, footer = article_shell(directory)
     for index, (anchor, zh, en) in enumerate(entries):
         zh_title = zh["short"] + " · 教程 | Wisp Science"

@@ -145,13 +145,28 @@ test("tutorial directory stays compact and links to independent articles", async
   const sources = readdirSync(resolve(repositoryRoot, "docs/wechat")).filter((name) => name.endsWith(".md"));
   await expect(page.locator(".tutorial-card")).toHaveCount(sources.length);
   await expect(page.locator(".tutorial-article")).toHaveCount(0);
-  await expect(page.locator(".tutorial-card h2").first()).toHaveText("快速开始");
+  await expect(page.locator(".tutorial-card h3").first()).toHaveText("快速开始");
+  await expect(page.locator(".tutorial-group-title")).toHaveText(["基础入门", "使用技巧", "进阶"]);
+  await expect(page.locator("#basics .tutorial-card")).toHaveCount(7);
+  await expect(page.locator("#tips .tutorial-card")).toHaveCount(2);
+  await expect(page.locator("#advanced .tutorial-card h3")).toHaveText(["Wisp 命令行", "ACP配置"]);
   await page.screenshot({ path: test.info().outputPath("tutorials-desktop.png") });
   for (const width of [1440, 1280, 1120, 1101, 1100, 980, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     for (const lang of ["en", "zh"]) {
       await page.locator(`button[data-lang="${lang}"]`).click();
       await expect(page).toHaveTitle(lang === "en" ? "Tutorials | Wisp Science" : "教程 | Wisp Science");
+      await expect(page.locator(".tutorial-group-title")).toHaveText(
+        lang === "en" ? ["Basics", "Tips", "Advanced"] : ["基础入门", "使用技巧", "进阶"],
+      );
+      await expect(page.locator("#advanced .tutorial-card h3").first()).toHaveText(
+        lang === "en" ? "Wisp CLI" : "Wisp 命令行",
+      );
+      const basics = (await page.locator("#basics").boundingBox())!;
+      const tips = (await page.locator("#tips").boundingBox())!;
+      const advanced = (await page.locator("#advanced").boundingBox())!;
+      expect(tips.y).toBeGreaterThan(basics.y + basics.height);
+      expect(advanced.y).toBeGreaterThan(tips.y + tips.height);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const links = page.locator(".nav-links");
       if (await links.isVisible()) {
@@ -222,7 +237,7 @@ test("article links, previous and next navigation, and browser back stay within 
   await expect(page.locator(".tutorial-next")).toHaveCount(0);
   await expect(page.locator("h1")).toHaveText("Wisp Science高级：ACP配置");
   await page.locator(".tutorial-previous").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science进阶");
+  await expect(page.locator("h1")).toHaveText("Wisp 命令行");
   await page.locator(".tutorial-previous").click();
   await expect(page.locator("h1")).toContainText("研究历程");
   await page.locator(".tutorial-previous").click();
@@ -240,6 +255,7 @@ test("article reading and returning to the directory work without JavaScript", a
   await serveTutorialSite(page);
   await page.goto("https://tutorials.test/wisp-science/index.html");
   await page.locator('.footer-links a[href^="tutorials.html"]').click();
+  await expect(page.locator(".tutorial-group-title")).toHaveText(["基础入门", "使用技巧", "进阶"]);
   await page.locator(".tutorial-card#wisp-science-skills").click();
   await expect(page.locator("h1")).toContainText("Skills");
   await expect(page.locator(".tutorial-article")).toHaveCount(1);
@@ -262,7 +278,7 @@ test("English links preserve language without storage and old configuration page
   await page.locator(".tutorial-next").click();
   await expect(page.locator("h1")).toHaveText("Wisp Science Basics: Model Configuration");
   await page.locator(".tutorial-breadcrumb a").click();
-  await expect(page.locator(".tutorial-card#wisp-science-models h2")).toHaveText("Model Configuration");
+  await expect(page.locator(".tutorial-card#wisp-science-models h3")).toHaveText("Model Configuration");
   await page.locator(".tutorial-card#wisp-science-acp").click();
   await expect(page.locator("h1")).toHaveText("Wisp Science Advanced: ACP Configuration");
   await page.screenshot({ path: test.info().outputPath("acp-english.png") });
@@ -270,7 +286,7 @@ test("English links preserve language without storage and old configuration page
   await expect(page.locator("h1")).toHaveText("Wisp Science高级：ACP配置");
   await expect(page.locator('.tutorial-body[lang="en"]')).toBeHidden();
   await page.locator(".tutorial-breadcrumb a").click();
-  await expect(page.locator(".tutorial-card#wisp-science-acp h2")).toHaveText("ACP配置");
+  await expect(page.locator(".tutorial-card#wisp-science-acp h3")).toHaveText("ACP配置");
   expect(existsSync(resolve(repositoryRoot, "docs/model-configuration.html"))).toBe(false);
   expect(existsSync(resolve(repositoryRoot, "docs/acp-agents.html"))).toBe(false);
   for (const name of ["index.html", "tutorials.html", "mcp.html"]) {
