@@ -76,6 +76,8 @@ Chinese assets retain their existing paths; English captures go into `en/`.
 The English screenshot tests reject visible Chinese text, including input values.
 The Chrome/Chromium installation screenshot uses Playwright's full Chromium
 binary, included by `npx playwright install chromium`, rather than headless shell.
+On macOS, the test uses a temporary launcher with `AppleLanguages` to select
+English for native browser pages without changing the user's language settings.
 
 The [Skills catalog](skills.html) groups all bundled Skills into research tasks.
 Reviewed Chinese and English summaries live in `docs/skills-catalog.json`.

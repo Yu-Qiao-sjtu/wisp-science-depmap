@@ -1,5 +1,5 @@
 import { chromium, expect, test, type Page, type TestInfo } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { tauriMock } from "./mock-tauri";
@@ -304,9 +304,20 @@ if (locale === "en") {
     // chrome://extensions is not provided by the stripped headless-shell binary.
     // Use Playwright's full Chromium in a fresh profile, without external requests.
     const profile = mkdtempSync(resolve(tmpdir(), "wisp-extension-guide-"));
+    const macLauncher = resolve(profile, "chromium-en");
+    if (process.platform === "darwin") {
+      // Native macOS pages use AppleLanguages instead of --lang. A temporary
+      // launcher supplies the array argument without changing user preferences.
+      const executable = "'" + chromium.executablePath().replaceAll("'", "'\\''") + "'";
+      writeFileSync(macLauncher, `#!/bin/sh\nexec ${executable} "$@" -AppleLanguages '(en-US)'\n`, { mode: 0o700 });
+    }
     const context = await chromium.launchPersistentContext(profile, {
-      channel: "chromium", headless: true, args: ["--lang=en-US"],
-      ignoreDefaultArgs: ["--disable-extensions"], locale: "en-US",
+      ...(process.platform === "darwin" ? { executablePath: macLauncher } : { channel: "chromium" }),
+      headless: true, args: ["--lang=en-US"],
+      // Chromium also parses the AppleLanguages value as a startup target;
+      // omit its default blank target because headless mode permits only one.
+      ignoreDefaultArgs: process.platform === "darwin" ? ["--disable-extensions", "about:blank"] : ["--disable-extensions"],
+      locale: "en-US",
       viewport: { width: 1200, height: 700 }, offline: true,
     });
     try {
@@ -318,7 +329,8 @@ if (locale === "en") {
       await expect(loadUnpacked).toBeInViewport({ ratio: 1 });
       // Wait for the developer-controls drawer to settle without opening a picker.
       await loadUnpacked.click({ trial: true });
-      expect(await page.locator("body").innerText()).not.toMatch(/[\p{Script=Han}]/u);
+      // Native extension-manager strings live in shadow roots.
+      expect(await page.locator("body").ariaSnapshot()).not.toMatch(/[\p{Script=Han}]/u);
       const relative = "en/browser/00-extension-install.png";
       const path = process.env.WISP_TUTORIAL_SHOTS ? resolve(process.env.WISP_TUTORIAL_SHOTS, relative) : info.outputPath(relative);
       mkdirSync(dirname(path), { recursive: true });

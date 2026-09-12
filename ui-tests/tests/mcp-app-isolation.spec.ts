@@ -132,7 +132,9 @@ test("approval scope click preserves native child visibility and submits the sel
   await page.evaluate(() => { (window as any).__nativeCalls = []; });
   // selectOption alone skips the pointerdown that used to hide/show WebView2.
   await scope.click();
-  await page.keyboard.press("Escape");
+  // Accept the current native option without rejecting the host approval.
+  // macOS Chromium forwards Escape from its select popup to the page.
+  await page.keyboard.press("Enter");
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect((await calls(page, "update_mcp_app_child_bounds")).filter((c: any) => !c.args.bounds.visible)).toEqual([]);
   await expect(scope).toBeFocused();
