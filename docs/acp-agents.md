@@ -257,7 +257,7 @@ can be imported into the current project without copy/paste (#464).
 
 ## Related docs
 
-- [GitHub Pages: ACP Agent 配置](acp-agents.html) — site page for this guide
+- [GitHub Pages tutorials](tutorials.html) — includes the advanced ACP configuration tutorial
 - [Model configuration](model-configuration.md) — HTTP API profiles for the built-in agent
 - [ACP client integration plan](superpowers/plans/2026-07-11-acp-client-integration.md) — architecture notes
 - [ACP protocol](https://agentclientprotocol.com/protocol/v1/overview)

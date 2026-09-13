@@ -200,8 +200,19 @@ async fn generate_turn_memory_candidate(
             if let Some(review::ReviewBackendConfig::HttpModel { profile_id }) = backend {
                 analyst.model_id = profile_id;
             }
-            let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-                specialists::specialist_llm(&state.store, &analyst).await;
+            let (
+                provider,
+                api_url,
+                model,
+                api_key,
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
+            ) = specialists::specialist_llm(&state.store, &analyst).await;
             let cfg = build_provider_config(
                 &provider,
                 &api_url,
@@ -210,6 +221,11 @@ async fn generate_turn_memory_candidate(
                 max_tokens,
                 &reasoning_effort,
                 &service_tier,
+                &user_agent,
+                send_user_agent,
+                send_session_id,
+                &session_header_name,
+                Some(frame_id),
             )?;
             let llm = wisp_llm::build(cfg);
             let selected_profile = if analyst.model_id.trim().is_empty() {
@@ -339,7 +355,7 @@ async fn require_writable_memory_target(
 #[tauri::command]
 pub(super) async fn get_memory_view(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     project_id: Option<String>,
 ) -> Result<MemoryView, String> {
     let enabled = load_memory_enabled(&state.store).await;
@@ -349,7 +365,7 @@ pub(super) async fn get_memory_view(
 #[tauri::command]
 pub(super) async fn set_memory_enabled(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     enabled: bool,
     project_id: Option<String>,
 ) -> Result<MemoryView, String> {
@@ -361,7 +377,7 @@ pub(super) async fn set_memory_enabled(
 #[tauri::command]
 pub(super) async fn read_memory_file(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     name: String,
     project_id: Option<String>,
 ) -> Result<String, String> {
@@ -376,7 +392,7 @@ pub(super) async fn read_memory_file(
 #[tauri::command]
 pub(super) async fn write_memory_file(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     name: String,
     content: String,
     project_id: Option<String>,
@@ -408,7 +424,7 @@ pub(super) async fn write_memory_file(
 #[tauri::command]
 pub(super) async fn delete_memory_file(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     name: String,
     project_id: Option<String>,
 ) -> Result<Vec<MemoryFile>, String> {
@@ -438,7 +454,7 @@ pub(super) async fn delete_memory_file(
 #[tauri::command]
 pub(super) async fn clear_memory(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     project_id: Option<String>,
 ) -> Result<Vec<MemoryFile>, String> {
     let target_project_id = match project_id

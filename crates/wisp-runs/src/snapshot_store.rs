@@ -31,14 +31,22 @@ pub fn capture_file(
     source: &Path,
     policy: SnapshotPolicy,
 ) -> Result<CapturedFile, String> {
+    let source_path = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        project_root.join(source)
+    };
     reject_project_symlinks(project_root, source)?;
-    let metadata = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    let metadata = std::fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("artifact snapshots do not follow symlinks".into());
+    }
     if !metadata.is_file() {
         return Err(format!("'{}' is not a regular file", source.display()));
     }
 
     let root = dunce::canonicalize(project_root).map_err(|error| error.to_string())?;
-    let source = dunce::canonicalize(source).map_err(|error| error.to_string())?;
+    let source = dunce::canonicalize(&source_path).map_err(|error| error.to_string())?;
     if !source.starts_with(&root) {
         return Err(format!(
             "artifact path '{}' is outside project root",
@@ -195,11 +203,13 @@ fn verify_blob(path: &Path, expected_checksum: &str, expected_size: u64) -> Resu
 fn reject_project_symlinks(project_root: &Path, source: &Path) -> Result<(), String> {
     // macOS exposes the temporary directory through `/var` while canonical
     // input paths use `/private/var`. Compare against the physical root so a
-    // path that is genuinely inside the project is not rejected.
-    let logical_root = dunce::simplified(project_root);
+    // path that is genuinely inside the project is not rejected. dunce avoids
+    // Windows `\\?\` prefixes that would fail strip_prefix.
+    let logical_root = project_root;
     let project_root =
         dunce::canonicalize(logical_root).unwrap_or_else(|_| logical_root.to_path_buf());
-    let source = dunce::simplified(source);
+    // Walk the requested path. Canonicalizing the leaf first would follow a
+    // source symlink and treat its target as a regular in-project file.
     let source = if source.is_absolute() {
         source
             .strip_prefix(logical_root)
@@ -290,21 +300,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn accepts_a_canonical_source_inside_a_logical_project_root() {
-        let root =
-            std::env::temp_dir().join(format!("wisp_snapshot_canonical_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let source = root.join("input.txt");
-        std::fs::write(&source, b"input").unwrap();
-        let canonical_source = std::fs::canonicalize(&source).unwrap();
-
-        let captured = capture_file(&root, &canonical_source, SnapshotPolicy::Reference).unwrap();
-        assert_eq!(captured.storage_path, "input.txt");
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlink_sources() {
@@ -318,8 +313,30 @@ mod tests {
 
         let error =
             capture_file(&root, &root.join("link.txt"), SnapshotPolicy::Always).unwrap_err();
-        assert!(error.contains("symlink"));
+        assert!(error.contains("symlink"), "{error}");
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_source_with_logical_root_is_contained() {
+        let root =
+            std::env::temp_dir().join(format!("wisp_snapshot_canonical_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("input.txt");
+        std::fs::write(&source, "bounded input").unwrap();
+        let canonical = dunce::canonicalize(&source).unwrap();
+        reject_project_symlinks(&root, &canonical).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn relative_source_is_resolved_against_project_root() {
+        let root = std::env::temp_dir().join(format!("wisp_snapshot_rel_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("input.txt"), "hello").unwrap();
+        let captured = capture_file(&root, Path::new("input.txt"), SnapshotPolicy::Always).unwrap();
+        assert_eq!(captured.size_bytes, 5);
         let _ = std::fs::remove_dir_all(root);
     }
 

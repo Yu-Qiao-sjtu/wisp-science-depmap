@@ -6,9 +6,8 @@
 //! this process is only for Wisp-native capabilities and policy/config reuse.
 
 use crate::{
-    bio_domains, connect_mcp, load_disabled_connectors, load_disabled_skills,
-    load_enabled_skill_names, load_mcp_connections, load_skill_index, load_skill_tags, run_context,
-    ActiveProject,
+    bio_domains, load_disabled_connectors, load_disabled_skills, load_enabled_skill_names,
+    load_mcp_connections, load_skill_index, load_skill_tags, run_context, ActiveProject,
 };
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -61,10 +60,11 @@ enum Route {
     },
 }
 
+#[derive(Clone)]
 struct BridgeServer {
     cfg: BridgeConfig,
     store: Store,
-    memory: wisp_core::MemoryManager,
+    memory: Arc<wisp_core::MemoryManager>,
     run_manager: run_context::RunManager,
     runtime_manager: wisp_runtime::RuntimeManager,
     skills: Arc<SkillIndex>,
@@ -133,7 +133,7 @@ impl BridgeServer {
             }
             None => Arc::new(project_skills),
         };
-        let memory = wisp_core::MemoryManager::new(&cfg.project_root);
+        let memory = Arc::new(wisp_core::MemoryManager::new(&cfg.project_root));
         Ok(Self {
             cfg,
             store,
@@ -317,10 +317,10 @@ impl BridgeServer {
                 else {
                     return Ok(tool_call_result("'tool_input' must be a JSON object", true));
                 };
-                match self.call_remote_tool(tool_name, tool_input).await {
-                    Ok(result) => result,
-                    Err(error) => (error.to_string(), true),
-                }
+                return match self.call_remote_tool(tool_name, tool_input).await {
+                    Ok(result) => Ok(result),
+                    Err(error) => Ok(tool_call_result(error.to_string(), true)),
+                };
             }
             "wisp_search_memory" => match self.search_memory_text(&args) {
                 Ok(s) => (s, false),
@@ -407,7 +407,7 @@ impl BridgeServer {
                     .await;
                 (result.content, !result.success)
             }
-            other => self.call_remote_tool(other, &args).await?,
+            other => return self.call_remote_tool(other, &args).await,
         };
         Ok(tool_call_result(text, is_error))
     }
@@ -431,20 +431,14 @@ impl BridgeServer {
     }
 
     async fn register_bundled_bio_tools(&mut self) {
-        if let Ok(command) = std::env::var("WISP_MCP_COMMAND") {
+        if std::env::var("WISP_MCP_COMMAND").is_ok() {
             let allowed = self.allowed_connectors();
             if self.cfg.allowed_tools.is_some() && !allowed.contains("dev-mcp") {
                 return;
             }
-            let parts = command.split_whitespace().collect::<Vec<_>>();
-            let Some((program, args)) = parts.split_first() else {
-                return;
-            };
-            let args = args
-                .iter()
-                .map(|arg| (*arg).to_string())
-                .collect::<Vec<_>>();
-            let Ok(client) = wisp_mcp::McpClient::launch(program, &args).await else {
+            let Ok(client) =
+                crate::mcp_broker::proxy_client(crate::BUNDLED_DEV_MCP_CONNECTOR_ID).await
+            else {
                 return;
             };
             let client = Arc::new(client);
@@ -549,7 +543,7 @@ impl BridgeServer {
             })
             .collect::<Vec<_>>();
         for conn in conns {
-            let Ok(client) = connect_mcp(&conn).await else {
+            let Ok(client) = crate::mcp_broker::proxy_client(&conn.id).await else {
                 continue;
             };
             let client = Arc::new(client);
@@ -586,7 +580,7 @@ impl BridgeServer {
                 continue;
             }
             let connector_id = launch.connector_id.clone();
-            let Ok(client) = crate::connect_plugin_mcp(&launch).await else {
+            let Ok(client) = crate::mcp_broker::proxy_client(&launch.connector_id).await else {
                 continue;
             };
             let client = Arc::new(client);
@@ -655,7 +649,7 @@ impl BridgeServer {
         search_tool_catalog(self.route_tools(), args)
     }
 
-    async fn call_remote_tool(&mut self, name: &str, args: &Value) -> Result<(String, bool)> {
+    async fn call_remote_tool(&mut self, name: &str, args: &Value) -> Result<Value> {
         self.ensure_remote_tools().await?;
         let route = self
             .routes
@@ -669,8 +663,8 @@ impl BridgeServer {
                 ..
             } => {
                 return Ok(match client.call(&remote_name, args).await {
-                    Ok(value) => (value.to_string(), false),
-                    Err(error) => (error.to_string(), true),
+                    Ok(value) => tool_call_result(value.to_string(), false),
+                    Err(error) => tool_call_result(error.to_string(), true),
                 });
             }
             Route::Custom {
@@ -679,9 +673,12 @@ impl BridgeServer {
                 ..
             } => (client, remote_name),
         };
-        Ok(match client.tool_call(&remote_name, args).await {
-            Ok(text) => (text, false),
-            Err(error) => (error.to_string(), true),
+        Ok(match client.tool_call_rich(&remote_name, args).await {
+            // Host-to-host transport: preserve the MCP envelope, including
+            // isError, images, structuredContent and App-only metadata. The
+            // receiving host is responsible for its own model projection.
+            Ok(result) => serde_json::to_value(result)?,
+            Err(error) => tool_call_result(error.to_string(), true),
         })
     }
 
@@ -1344,6 +1341,7 @@ fn is_builtin_tool(name: &str) -> bool {
     matches!(
         name,
         "wisp_get_capabilities"
+            | "ask_user"
             | "wisp_list_skills"
             | "wisp_use_skill"
             | "wisp_search_tools"
@@ -1398,31 +1396,146 @@ fn sanitize_tool_part(raw: &str) -> String {
     }
 }
 
+/// Local requests never acquire the discovery lock. Only requests that expose
+/// or call remote tools share initialization; publish a complete snapshot so
+/// cancelling discovery cannot leave its loaded flags set on a partial catalog.
+struct BridgeDispatcher {
+    local: BridgeServer,
+    remote: tokio::sync::Mutex<Option<BridgeServer>>,
+}
+
+impl BridgeDispatcher {
+    fn new(local: BridgeServer) -> Self {
+        Self {
+            local,
+            remote: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn handle(&self, req: JsonRpcIn) -> Option<Value> {
+        let needs_remote = match req.method.as_str() {
+            "tools/list" => !self.local.allowed_connectors().is_empty(),
+            "tools/call" => req
+                .params
+                .as_ref()
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    matches!(name, "wisp_search_tools" | "wisp_use_tool") || !is_builtin_tool(name)
+                }),
+            _ => false,
+        };
+        let mut snapshot = if needs_remote {
+            let mut remote = self.remote.lock().await;
+            if remote.is_none() {
+                let mut candidate = self.local.clone();
+                if let Err(error) = candidate.ensure_remote_tools().await {
+                    return req.id.map(|id| {
+                        json!({"jsonrpc":"2.0", "id":id,
+                        "error":{"code":-32000,"message":error.to_string()}})
+                    });
+                }
+                *remote = Some(candidate);
+            }
+            remote.as_ref().unwrap().clone()
+        } else {
+            self.local.clone()
+        };
+        snapshot.handle(req).await
+    }
+}
+
 pub(crate) async fn run_stdio(cfg: BridgeConfig) -> Result<()> {
-    let mut server = BridgeServer::new(cfg).await?;
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin);
-    let mut stdout = tokio::io::stdout();
+    let server = Arc::new(BridgeDispatcher::new(BridgeServer::new(cfg).await?));
+    // A streaming lease lets the Host cancel this bridge's calls on process loss.
+    let lease = if let Some(config) = crate::mcp_broker::proxy_config() {
+        let (base, token) = (&config.base, &config.token);
+        let url = reqwest::Url::parse(&base)?;
+        if url.host_str() != Some("127.0.0.1") || url.scheme() != "http" {
+            anyhow::bail!("Invalid private MCP broker address");
+        }
+        let mut response = reqwest::Client::builder()
+            .no_proxy()
+            .build()?
+            .get(format!("{base}/lease"))
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?;
+        Some(tokio::spawn(async move {
+            while matches!(response.chunk().await, Ok(Some(_))) {}
+        }))
+    } else {
+        None
+    };
+    let mut reader = BufReader::new(tokio::io::stdin());
+    let (responses, mut output) = tokio::sync::mpsc::channel::<Value>(64);
+    let writer = tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(response) = output.recv().await {
+            stdout.write_all(format!("{response}\n").as_bytes()).await?;
+            stdout.flush().await?;
+        }
+        Ok::<_, std::io::Error>(())
+    });
+    let mut tasks = tokio::task::JoinSet::new();
+    let pending = Arc::new(std::sync::Mutex::new(HashMap::<
+        String,
+        tokio::task::AbortHandle,
+    >::new()));
     let mut line = String::new();
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
+        if reader.read_line(&mut line).await? == 0 {
             break;
         }
-        let raw = line.trim();
-        if raw.is_empty() {
-            continue;
-        }
-        let Ok(req) = serde_json::from_str::<JsonRpcIn>(raw) else {
+        let Ok(req) = serde_json::from_str::<JsonRpcIn>(line.trim()) else {
             continue;
         };
-        if let Some(resp) = server.handle(req).await {
-            stdout.write_all(resp.to_string().as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+        if req.method == "notifications/cancelled" {
+            let id = req
+                .params
+                .as_ref()
+                .and_then(|p| p.get("requestId"))
+                .map(Value::to_string)
+                .unwrap_or_default();
+            if let Some(task) = pending.lock().unwrap().remove(&id) {
+                task.abort();
+            }
+            continue;
         }
+        let Some(id) = req.id.as_ref().map(Value::to_string) else {
+            continue;
+        };
+        if pending.lock().unwrap().contains_key(&id) || pending.lock().unwrap().len() >= 64 {
+            continue;
+        }
+        let server = server.clone();
+        let responses = responses.clone();
+        let pending_task = pending.clone();
+        let request_id = id.clone();
+        // Start only after the abort handle is registered (avoids completed-task leaks).
+        let (start, ready) = tokio::sync::oneshot::channel();
+        let task = tasks.spawn(async move {
+            let _ = ready.await;
+            if let Some(response) = server.handle(req).await {
+                let _ = responses.send(response).await;
+            }
+            pending_task.lock().unwrap().remove(&request_id);
+        });
+        pending.lock().unwrap().insert(id, task);
+        let _ = start.send(());
+        while tasks.try_join_next().is_some() {}
     }
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    // Drop the lease only after dropping all call futures; the Host never kills plugins here.
+    if let Some(lease) = lease {
+        lease.abort();
+        let _ = lease.await;
+    }
+    drop(responses);
+    writer.await??;
     Ok(())
 }
 
@@ -1494,6 +1607,7 @@ fn parse_mcp_bridge_cli_args() -> BridgeConfig {
 }
 
 pub fn run_mcp_bridge_cli() {
+    crate::mcp_broker::capture_proxy_environment();
     let cfg = parse_mcp_bridge_cli_args();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1508,6 +1622,140 @@ pub fn run_mcp_bridge_cli() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn local_requests_bypass_blocked_discovery_and_do_not_initialize_plugins() {
+        let base =
+            std::env::temp_dir().join(format!("wisp-bridge-dispatch-{}", uuid::Uuid::new_v4()));
+        let server = BridgeServer::new(BridgeConfig {
+            app_data: base.join("app-data"),
+            project_root: base.join("project"),
+            resource_root: None,
+            project_id: "p".into(),
+            frame_id: None,
+            allowed_tools: None,
+        })
+        .await
+        .unwrap();
+        let dispatcher = BridgeDispatcher::new(server);
+        // Hold the same lock a slow remote initialization owns. Poll a real
+        // discovery request into it before issuing local/control requests.
+        let discovery = dispatcher.remote.lock().await;
+        let mut remote = Box::pin(dispatcher.handle(JsonRpcIn {
+            id: Some(json!(1)),
+            method: "tools/call".into(),
+            params: Some(json!({"name":"wisp_search_tools","arguments":{"query":"echo"}})),
+        }));
+        assert!(futures_util::poll!(remote.as_mut()).is_pending());
+        for (id, method, params) in [
+            (2, "initialize", None),
+            (3, "tools/list", None),
+            (
+                4,
+                "tools/call",
+                Some(json!({"name":"wisp_list_skills","arguments":{}})),
+            ),
+            (
+                5,
+                "tools/call",
+                Some(json!({"name":"wisp_get_run","arguments":{"run_id":"missing"}})),
+            ),
+            (
+                6,
+                "tools/call",
+                Some(json!({"name":"wisp_cancel_run","arguments":{"run_id":"missing"}})),
+            ),
+            (
+                7,
+                "tools/call",
+                Some(json!({"name":"ask_user","arguments":{"question":"test"}})),
+            ),
+        ] {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                dispatcher.handle(JsonRpcIn {
+                    id: Some(json!(id)),
+                    method: method.into(),
+                    params,
+                }),
+            )
+            .await
+            .expect("local request waited on plugin discovery")
+            .unwrap();
+            assert_eq!(response["id"], id);
+            assert!(response.get("result").is_some() || response.get("error").is_some());
+        }
+        assert!(
+            discovery.is_none(),
+            "local calls must not initialize remote tools"
+        );
+        drop(remote);
+        drop(discovery);
+        drop(dispatcher);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn remote_dispatch_keeps_grants_and_shares_the_discovered_catalog() {
+        let base =
+            std::env::temp_dir().join(format!("wisp-bridge-catalog-{}", uuid::Uuid::new_v4()));
+        let mut server = BridgeServer::new(BridgeConfig {
+            app_data: base.join("app-data"),
+            project_root: base.join("project"),
+            resource_root: None,
+            project_id: "p".into(),
+            frame_id: None,
+            allowed_tools: Some(HashSet::from([
+                crate::delegation_resources::connector_token("pubmed"),
+            ])),
+        })
+        .await
+        .unwrap();
+        // Preloaded local native tools exercise real listing/dispatch without
+        // a provider, Python environment, or external network.
+        server.bundled_bio_tools_loaded = true;
+        server.custom_mcp_tools_loaded = true;
+        server.register_native_bio_tools("mcp_bio", &mut HashSet::new());
+        let dispatcher = BridgeDispatcher::new(server);
+        let listed = dispatcher
+            .handle(JsonRpcIn {
+                id: Some(json!(1)),
+                method: "tools/list".into(),
+                params: None,
+            })
+            .await
+            .unwrap();
+        assert!(listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "search_articles"));
+        assert!(dispatcher.remote.lock().await.is_some());
+        let called = dispatcher
+            .handle(JsonRpcIn {
+                id: Some(json!(2)),
+                method: "tools/call".into(),
+                params: Some(json!({"name":"search_articles","arguments":{"query":""}})),
+            })
+            .await
+            .unwrap();
+        assert_eq!(called["result"]["isError"], true);
+        assert!(called.to_string().contains("query must contain"));
+        let denied = dispatcher
+            .handle(JsonRpcIn {
+                id: Some(json!(3)),
+                method: "tools/call".into(),
+                params: Some(json!({"name":"wisp_get_run","arguments":{"run_id":"missing"}})),
+            })
+            .await
+            .unwrap();
+        assert!(denied["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("outside this Agent's capability grant"));
+        drop(dispatcher);
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[tokio::test]
     async fn native_bio_registration_honors_filters_grants_and_errors_without_python() {
@@ -1712,6 +1960,78 @@ mod tests {
             result["results"][0]["input_schema"]["properties"]["query"]["type"],
             "string"
         );
+    }
+
+    #[tokio::test]
+    async fn custom_bridge_preserves_rich_results_for_direct_and_dispatch_calls() {
+        let expected = json!({
+            "content": [
+                {"type": "text", "text": "NEXT_ACTION: ask_user"},
+                {"type": "image", "mimeType": "image/png", "data": "aW1hZ2U="}
+            ],
+            "structuredContent": {"planDigest": "exact"},
+            "_meta": {"appOnly": "not-model-context"},
+            "isError": true
+        });
+        let response = expected.clone();
+        let router = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+                let response = response.clone();
+                async move {
+                    let result = if request["method"] == "tools/call" {
+                        response
+                    } else {
+                        json!({"protocolVersion": "2024-11-05", "capabilities": {},
+                               "serverInfo": {"name": "fixture", "version": "1"}})
+                    };
+                    axum::Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let service = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = Arc::new(
+            wisp_mcp::McpClient::connect_http_with_proxy(&url, &[], "none")
+                .await
+                .unwrap(),
+        );
+        let base = std::env::temp_dir().join(format!("wisp_bridge_rich_{}", uuid::Uuid::new_v4()));
+        let project_root = base.join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let mut server = BridgeServer::new(BridgeConfig {
+            app_data: base.join("app-data"),
+            project_root,
+            resource_root: None,
+            project_id: "rich-test".into(),
+            frame_id: None,
+            allowed_tools: None,
+        })
+        .await
+        .unwrap();
+        server.bundled_bio_tools_loaded = true;
+        server.custom_mcp_tools_loaded = true;
+        server.routes.insert(
+            "fixture_preview".into(),
+            Route::Custom {
+                connector_id: "fixture".into(),
+                client,
+                remote_name: "preview".into(),
+                description: String::new(),
+                input_schema: json!({"type": "object"}),
+            },
+        );
+        for params in [
+            json!({"name": "fixture_preview", "arguments": {}}),
+            json!({"name": "wisp_use_tool", "arguments": {"tool_name": "fixture_preview", "tool_input": {}}}),
+        ] {
+            assert_eq!(server.tools_call(params).await.unwrap(), expected);
+        }
+        drop(server);
+        service.abort();
+        let _ = service.await;
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[tokio::test]

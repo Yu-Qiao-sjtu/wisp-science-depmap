@@ -15,6 +15,7 @@
 //! lives in SQLite settings; the Feishu app secret and WeChat bot token live
 //! in the keyring.
 
+use crate::workspace_surface::WorkspaceManager;
 pub mod feishu;
 pub mod feishu_card;
 pub mod feishu_registration;
@@ -1112,7 +1113,7 @@ pub(crate) async fn handle_inbound_observed(
         return format!("未知命令“{command}”。发送 /help 查看可用命令。");
     }
 
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app.workspace_surface("main") else {
         return "桌面端主窗口不可用,无法处理消息。".to_string();
     };
     // Resolve and, when needed, create the shared target atomically.

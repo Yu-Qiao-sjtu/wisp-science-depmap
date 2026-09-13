@@ -578,16 +578,48 @@ struct DirectArtifactGroup {
 #[tauri::command]
 pub(crate) async fn freeze_publication_revision(
     state: tauri::State<'_, crate::AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
     revision_id: String,
     policy: PublicationFreezePolicy,
 ) -> Result<PublicationFreezeOutcome, String> {
+    crate::publication_commands::validate_publication_revision(
+        &state,
+        window.label(),
+        &revision_id,
+    )
+    .await?;
     freeze_publication_revision_in_store(&state.store, &revision_id, policy).await
+}
+
+#[tauri::command]
+pub(crate) async fn check_publication_revision(
+    state: tauri::State<'_, crate::AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    revision_id: String,
+    policy: PublicationFreezePolicy,
+) -> Result<PublicationFreezeOutcome, String> {
+    crate::publication_commands::validate_publication_revision(
+        &state,
+        window.label(),
+        &revision_id,
+    )
+    .await?;
+    prepare_or_freeze_publication(&state.store, &revision_id, policy, true).await
 }
 
 pub(crate) async fn freeze_publication_revision_in_store(
     store: &Store,
     revision_id: &str,
     policy: PublicationFreezePolicy,
+) -> Result<PublicationFreezeOutcome, String> {
+    prepare_or_freeze_publication(store, revision_id, policy, false).await
+}
+
+async fn prepare_or_freeze_publication(
+    store: &Store,
+    revision_id: &str,
+    policy: PublicationFreezePolicy,
+    check_only: bool,
 ) -> Result<PublicationFreezeOutcome, String> {
     let attempt_id = uuid::Uuid::new_v4().to_string();
     store
@@ -605,7 +637,7 @@ pub(crate) async fn freeze_publication_revision_in_store(
             return Err(error);
         }
     };
-    if !prepared.readiness.can_freeze {
+    if check_only || !prepared.readiness.can_freeze {
         store
             .abort_publication_freeze(revision_id, &attempt_id)
             .await
@@ -2684,6 +2716,69 @@ mod tests {
             b"legacy bytes\n"
         );
 
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn readiness_check_does_not_lock_revision_and_confirm_rechecks_evidence() {
+        let (root, store) = fixture("check_before_freeze").await;
+        store
+            .append_message("frame", 1, &wisp_llm::Message::user("stable evidence"))
+            .await
+            .unwrap();
+        publication_with_item(&store, PublicationItemKind::Methods).await;
+        let locator = canonical_json(
+            &json!({"byte_end":15,"byte_start":0,"frame_id":"frame","message_seq":1}),
+        );
+        select_evidence(&store, EvidenceSourceKind::MessageSpan, &locator).await;
+        let checked = prepare_or_freeze_publication(&store, "revision", public_policy(), true)
+            .await
+            .unwrap();
+        assert!(
+            checked.readiness.can_freeze,
+            "{:?}",
+            checked.readiness.blockers
+        );
+        assert!(!checked.frozen);
+        assert_eq!(
+            checked.revision.state,
+            wisp_store::PublicationRevisionState::Draft
+        );
+        assert!(checked.revision.manifest_sha256.is_none());
+        // Check is repeatable and does not leave a freezing lease behind.
+        assert!(
+            !prepare_or_freeze_publication(&store, "revision", public_policy(), true)
+                .await
+                .unwrap()
+                .frozen
+        );
+        store
+            .update_evidence_binding_selection(
+                "binding",
+                EvidenceSelectionState::Rejected,
+                EvidenceVisibility::Public,
+            )
+            .await
+            .unwrap();
+        let rejected = freeze_publication_revision_in_store(&store, "revision", public_policy())
+            .await
+            .unwrap();
+        assert!(!rejected.frozen);
+        store
+            .update_evidence_binding_selection(
+                "binding",
+                EvidenceSelectionState::Selected,
+                EvidenceVisibility::Public,
+            )
+            .await
+            .unwrap();
+        assert!(
+            freeze_publication_revision_in_store(&store, "revision", public_policy())
+                .await
+                .unwrap()
+                .frozen
+        );
         drop(store);
         let _ = std::fs::remove_dir_all(root);
     }

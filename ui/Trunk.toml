@@ -11,6 +11,7 @@ dist = "dist"
 [watch]
 watch = [
   "src",
+  "mcp-app",
   "index.html",
   "fonts.css",
   "fonts",

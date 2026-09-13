@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 36 个内置 SKILL。">
+  <meta name="description" content="Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 28 个内置 SKILL。">
   <title>Wisp Science | 开源科学计算 Agent</title>
   <script>
     (function () {
@@ -25,6 +25,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/downloads.css">
 </head>
 <body>
   <header class="site-nav">
@@ -38,8 +39,8 @@
         <a href="#usecases" data-i18n="nav.usecases">场景</a>
         <a href="#stack" data-i18n="nav.stack">生态</a>
         <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
-        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="tutorials.html" data-i18n="nav.tutorials">教程</a>
         <a href="#faq" data-i18n="nav.faq">FAQ</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
       </nav>
@@ -49,7 +50,7 @@
           <button type="button" data-lang="en" aria-pressed="false">EN</button>
         </div>
         <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+        <a class="btn btn-primary" href="#download"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
       </div>
     </div>
   </header>
@@ -58,13 +59,14 @@
     <section class="hero">
       <div class="container">
         <img class="hero-wordmark" src="assets/wordmark-light.svg" alt="Wisp Science" width="520" height="344">
-        <div class="eyebrow" data-i18n="hero.eyebrow">开源 · 本地优先 · Windows / macOS / Linux · v1.10.0</div>
+        <div class="eyebrow" data-i18n="hero.eyebrow">开源 · 本地优先 · Windows / macOS / Linux · v1.12.0</div>
         <h1 data-i18n-html="hero.title">严谨科研的<br>本地 Agent 工作台</h1>
         <p class="lead" data-i18n="hero.lead">
           Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-i18n="hero.download">下载桌面安装包</a>
+          <a class="btn btn-primary" href="#download" data-i18n="hero.download">下载桌面安装包</a>
+          <a class="btn btn-secondary" href="tutorials/wisp-science-quick-start.html" data-i18n="hero.quickStart">快速开始</a>
           <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science#build--run" data-i18n="hero.source">从源码构建</a>
         </div>
 
@@ -82,7 +84,7 @@
             </aside>
             <div class="mock-chat">
               <div class="mock-bubble user" data-i18n="hero.mockUser">检索 PubMed 上 CRISPR 筛选的最新方法，并画一张流程图。</div>
-              <div class="mock-bubble assistant" data-i18n="hero.mockAssistant">已调用 mcp_pubmed 检索 12 篇文献，生成 Markdown 报告与 Python 绘图代码。表格与公式已提取为 artifact。</div>
+              <div class="mock-bubble assistant" data-i18n="hero.mockAssistant">已检索 12 篇候选文献，并整理为带来源的报告。绘图代码与结果已保存到项目中。</div>
             </div>
             <aside class="mock-artifacts">
               <h4>Artifacts</h4>
@@ -92,6 +94,52 @@
             </aside>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="download" class="download-page" aria-labelledby="download-title">
+      <div class="container">
+      <div class="eyebrow">WISP SCIENCE · DESKTOP</div>
+      <h2 id="download-title" data-text-zh="选择适合你电脑的版本" data-text-en="Choose the version for your computer">选择适合你电脑的版本</h2>
+      <p class="download-lead" data-text-zh="选择系统与芯片，下载安装包即可开始。无需下载源码。" data-text-en="Choose your operating system and processor, then install. No source-code download needed.">选择系统与芯片，下载安装包即可开始。无需下载源码。</p>
+      <div class="download-layout">
+        <div class="download-panel">
+          <p id="release-status" role="status" data-text-zh="正在读取可下载版本…" data-text-en="Loading the available release…">正在读取可下载版本…</p>
+          <div class="download-fields">
+            <label for="download-os"><span data-text-zh="1. 操作系统" data-text-en="1. Operating system">1. 操作系统</span>
+              <select id="download-os">
+                <option value="" data-text-zh="请选择系统" data-text-en="Choose a system">请选择系统</option>
+                <option value="windows">Windows</option><option value="macos">macOS</option><option value="linux">Linux</option>
+              </select>
+            </label>
+            <label for="download-arch"><span data-text-zh="2. 芯片 / 架构" data-text-en="2. Processor / architecture">2. 芯片 / 架构</span><select id="download-arch" aria-describedby="architecture-help" disabled></select></label>
+            <label for="download-format"><span data-text-zh="3. 安装格式" data-text-en="3. Package format">3. 安装格式</span><select id="download-format" disabled></select></label>
+          </div>
+          <p id="architecture-help" class="download-help"></p>
+          <div class="download-result" aria-live="polite">
+            <p id="package-name"></p>
+            <p id="package-size" class="download-help"></p>
+            <a id="download-primary" class="btn btn-primary" aria-disabled="true" data-text-zh="从 Cloudflare 下载" data-text-en="Download from Cloudflare">从 Cloudflare 下载</a>
+            <a id="download-github" class="download-backup" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-text-zh="GitHub 备用下载" data-text-en="Download via GitHub">GitHub 备用下载</a>
+            <p id="install-help" class="download-help"></p>
+            <details id="checksum-details" hidden><summary data-text-zh="SHA-256 文件校验" data-text-en="SHA-256 checksum">SHA-256 文件校验</summary><code id="package-checksum"></code></details>
+          </div>
+          <noscript><p>请选择 GitHub 备用下载并按系统、芯片选择安装包。JavaScript is required for the guided picker; use GitHub Releases to choose an installer.</p></noscript>
+        </div>
+        <aside class="download-guide" aria-labelledby="download-guide-title">
+          <h2 id="download-guide-title" data-text-zh="不确定选哪个？" data-text-en="Find the right package">不确定选哪个？</h2>
+          <h3>Windows</h3>
+          <p data-text-zh="普通安装选择 EXE；需要 MSI 格式的部署环境选择 MSI。目前提供 Intel / AMD 64 位版本，没有原生 Windows ARM64 安装包。" data-text-en="Choose EXE for a standard installation, or MSI for managed deployment. Intel / AMD 64-bit builds are available; there is no native Windows ARM64 installer.">普通安装选择 EXE；需要 MSI 格式的部署环境选择 MSI。目前提供 Intel / AMD 64 位版本，没有原生 Windows ARM64 安装包。</p>
+          <h3>macOS</h3>
+          <p data-text-zh="打开苹果菜单 → 关于本机。“芯片”为 Apple M 系列选 Apple Silicon；“处理器”为 Intel 选 Intel。" data-text-en="Open Apple menu → About This Mac. Choose Apple Silicon for an Apple M-series chip, or Intel for an Intel processor.">打开苹果菜单 → 关于本机。“芯片”为 Apple M 系列选 Apple Silicon；“处理器”为 Intel 选 Intel。</p>
+          <h3>Linux</h3>
+          <p data-text-zh="运行 uname -m：x86_64 选 Intel / AMD，aarch64 选 ARM64。Debian / Ubuntu 优先选 DEB；其他兼容发行版可选 AppImage，仍需满足系统依赖。" data-text-en="Run uname -m: x86_64 means Intel / AMD; aarch64 means ARM64. Prefer DEB on Debian / Ubuntu, or AppImage on other compatible distributions. System dependencies still apply.">运行 uname -m：x86_64 选 Intel / AMD，aarch64 选 ARM64。Debian / Ubuntu 优先选 DEB；其他兼容发行版可选 AppImage，仍需满足系统依赖。</p>
+          <div class="download-guide-links">
+            <a href="tutorials/wisp-science-quick-start.html" data-text-zh="安装后的第一步" data-text-en="After installation">安装后的第一步</a>
+            <a href="https://github.com/xuzhougeng/wisp-science/releases" data-text-zh="历史版本与发布说明" data-text-en="Older versions and release notes">历史版本与发布说明</a>
+          </div>
+        </aside>
+      </div>
       </div>
     </section>
 
@@ -133,36 +181,36 @@
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 001b ]</span>
-          <span data-i18n="voices.kicker">From real research questions</span>
+          <span data-i18n="voices.kicker">常见科研任务</span>
         </div>
         <div class="section-head">
-          <h2 id="voices-heading" data-i18n="voices.heading">他们这样用 Wisp Science</h2>
-          <p data-i18n="voices.lead">不是一句“帮我分析”，而是把手头真实、具体的科研任务交给它继续推进。</p>
+          <h2 id="voices-heading" data-i18n="voices.heading">从一个具体问题开始</h2>
+          <p data-i18n="voices.lead">下面这些任务描述，展示了如何把研究目标、检查要求和交付内容说清楚。</p>
         </div>
         <div class="voice-grid">
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q1">“能不能先帮我把这批单细胞数据做完 QC，再看看这几个 cluster 到底是什么细胞？每一步的参数和图都留下来，我明天组会要讲。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-1" aria-hidden="true"></i><span><strong data-i18n="voices.role1">生物信息方向博士生</strong><span data-i18n="voices.a1">以前最怕中途改参数，现在可以沿着同一段对话接着跑，图、代码和判断也都找得到。</span></span></figcaption>
+            <blockquote data-i18n="voices.q1">“请先检查这批单细胞数据的质量，再协助判断各细胞群的类型。保留每一步的参数、代码和图表，方便组会讨论。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-1" aria-hidden="true"></i><span><strong data-i18n="voices.role1">单细胞分析</strong><span data-i18n="voices.a1">沿着同一段对话调整分析，保留参数与结果，便于复盘和继续验证。</span></span></figcaption>
           </figure>
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q2">“把最近五年和这个靶点有关的临床前研究梳理一下。别只给结论，把检索来源、相互矛盾的结果和还缺什么证据一起列出来。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-2" aria-hidden="true"></i><span><strong data-i18n="voices.role2">药物研发团队研究员</strong><span data-i18n="voices.a2">它更像一个愿意把依据摊开的研究搭档，而不是给我一段看起来很确定的摘要。</span></span></figcaption>
+            <blockquote data-i18n="voices.q2">“梳理近五年与这个靶点相关的临床前研究。列出来源、相互矛盾的结果，以及仍然缺少的证据。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-2" aria-hidden="true"></i><span><strong data-i18n="voices.role2">药物研发</strong><span data-i18n="voices.a2">把检索记录与结论放在一起，方便逐项核对研究依据。</span></span></figcaption>
           </figure>
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q3">“这个蛋白的几个突变位点可能影响稳定性吗？先查数据库和文献，再给我一个能在本地复现的分析方案，不要动原始数据。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-3" aria-hidden="true"></i><span><strong data-i18n="voices.role3">结构生物学研究者</strong><span data-i18n="voices.a3">数据留在电脑上很重要；更省心的是检索、分析和最后的 Methods 草稿能在一个项目里串起来。</span></span></figcaption>
+            <blockquote data-i18n="voices.q3">“评估这些蛋白突变可能产生的影响。先查数据库和文献，再给出可在本机验证的分析方案，保留原始数据。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-3" aria-hidden="true"></i><span><strong data-i18n="voices.role3">结构生物学</strong><span data-i18n="voices.a3">在项目中衔接检索、分析与方法记录，减少来回整理材料的工作。</span></span></figcaption>
           </figure>
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q4">“我把 20 篇 PDF 放进项目了。能按实验体系整理它们各自用了什么对照吗？有数字对不上的地方先标出来，别替作者猜。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-4" aria-hidden="true"></i><span><strong data-i18n="voices.role4">分子生物学博士后</strong><span data-i18n="voices.a4">做文献表格时最有用的不是快，而是它会把出处带回来，我能立刻核对原文。</span></span></figcaption>
+            <blockquote data-i18n="voices.q4">“按实验体系比较这 20 篇论文使用的对照。每项结论标明出处，数字不一致的地方单独列出。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-4" aria-hidden="true"></i><span><strong data-i18n="voices.role4">论文精读</strong><span data-i18n="voices.a4">为文献比较保留证据位置，遇到疑问时可以直接回到原文。</span></span></figcaption>
           </figure>
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q5">“这份代谢组结果先别急着解释。帮我检查缺失值、批次效应和异常样本，再把你建议的统计步骤写成一份可重复运行的脚本。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-5" aria-hidden="true"></i><span><strong data-i18n="voices.role5">转化医学实验室成员</strong><span data-i18n="voices.a5">它不会只扔给我一张漂亮图，前面的数据检查和后面的脚本都在，交接给同事也方便。</span></span></figcaption>
+            <blockquote data-i18n="voices.q5">“先检查代谢组数据的缺失值、批次效应和异常样本，再提出统计方案，并保留可重复运行的脚本。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-5" aria-hidden="true"></i><span><strong data-i18n="voices.role5">组学数据分析</strong><span data-i18n="voices.a5">把数据检查、分析建议和脚本一起交付，方便后续复现与协作。</span></span></figcaption>
           </figure>
           <figure class="voice-card">
-            <blockquote data-i18n="voices.q6">“根据这组候选分子查一下 ChEMBL 和 PubChem，活性、选择性和已知风险分开列。最后告诉我下一轮最值得补哪三个实验。”</blockquote>
-            <figcaption><i class="voice-avatar avatar-6" aria-hidden="true"></i><span><strong data-i18n="voices.role6">计算化学研究员</strong><span data-i18n="voices.a6">数据库检索和本地分析不用来回切工具，尤其适合先把问题收敛，再决定昂贵的实验往哪做。</span></span></figcaption>
+            <blockquote data-i18n="voices.q6">“查询候选分子的活性、选择性与已知风险，分项整理来源，并列出下一步需要验证的问题。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-6" aria-hidden="true"></i><span><strong data-i18n="voices.role6">计算化学</strong><span data-i18n="voices.a6">结合数据库记录与本地分析，逐步明确值得继续研究的方向。</span></span></figcaption>
           </figure>
         </div>
       </div>
@@ -171,50 +219,50 @@
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 002 ]</span>
-          <span data-i18n="features.kicker">Built for scientific research</span>
+          <span data-i18n="features.kicker">围绕科研工作设计</span>
         </div>
         <div class="section-head">
-          <h2 data-i18n="features.heading">为科研而生</h2>
-          <p data-i18n="features.lead">独立开源的 Rust/Tauri 科研工作台：Agent 核心、生物工具链与桌面 UI 全部本地运行，数据不出机器。</p>
+          <h2 data-i18n="features.heading">从问题到结果，保留每一步</h2>
+          <p data-i18n="features.lead">项目、会话和结果文件统一管理。根据任务连接模型、调用工具，在本机或已配置的计算环境中继续工作。</p>
         </div>
 
         <div class="feature-grid">
           <article class="feature-card">
             <div>
-              <h3 data-i18n="features.artTitle">科学产物，完整可追溯</h3>
-              <p data-i18n="features.artBody">对话中的表格、代码块、LaTeX 公式与文件路径自动提取为 artifact，侧边栏即时预览。Markdown 渲染支持 KaTeX 与代码高亮。</p>
+              <h3 data-i18n="features.artTitle">图表、代码与文件，随时回看</h3>
+              <p data-i18n="features.artBody">对话中的表格、代码、公式与文件可作为产物查看，并关联到生成它们的会话。支持 Markdown、公式排版和代码高亮。</p>
             </div>
             <div class="feature-visual">
               <pre data-i18n="features.artPre">{{artifact:abc123}}
-→ Table · 8 rows × 4 cols
-→ figure_umap.py · 42 lines
-→ $\hat{\beta}$ · LaTeX equation
+→ 表格 · 8 行 × 4 列
+→ figure_umap.py · 42 行
+→ LaTeX 公式
 
-每个 artifact 绑定生成它的对话上下文，
-便于复现、编辑与版本回溯。</pre>
+从结果回到对应会话，
+查看代码、参数与生成过程。</pre>
             </div>
           </article>
 
           <article class="feature-card reverse">
             <div>
-              <h3 data-i18n="features.pyTitle">持久 Python / R 内核</h3>
-              <p data-i18n-html="features.pyBody">长驻内核子进程保持变量与 DataFrame 在内存中，且按会话隔离。跨轮次迭代分析无需重复加载数据，并行会话也不会互相覆盖状态。</p>
+              <h3 data-i18n="features.pyTitle">连续分析，无需反复加载数据</h3>
+              <p data-i18n-html="features.pyBody">Python 和 R 运行时可在多轮对话间保留变量与数据对象。不同会话的状态相互隔离，便于逐步调整和检查分析。</p>
             </div>
             <div class="feature-visual">
-              <pre data-i18n="features.pyPre">>>> import scanpy as sc
->>> adata = sc.read_h5ad("pbmc.h5ad")
->>> adata.shape
+              <pre data-i18n="features.pyPre">&gt;&gt;&gt; import scanpy as sc
+&gt;&gt;&gt; adata = sc.read_h5ad("pbmc.h5ad")
+&gt;&gt;&gt; adata.shape
 (2700, 32738)
 
-# 变量在后续 tool call 中仍然可用
->>> sc.pp.neighbors(adata)
->>> sc.tl.umap(adata)</pre>
+# 后续调用可以继续使用 adata
+&gt;&gt;&gt; sc.pp.neighbors(adata)
+&gt;&gt;&gt; sc.tl.umap(adata)</pre>
             </div>
           </article>
 
           <article class="feature-card">
             <div>
-              <h3 data-i18n="features.skillTitle">36 个内置 SKILL 工作流</h3>
+              <h3 data-i18n="features.skillTitle">28 个内置 SKILL 工作流</h3>
               <p data-i18n="features.skillBody">从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。</p>
             </div>
             <div class="feature-visual">
@@ -225,23 +273,23 @@
 ├─ figure-composer/
 └─ paper-narrative/ …
 
-Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
+Agent 根据任务读取相应的技能说明。</pre>
             </div>
           </article>
         </div>
 
         <div class="feature-list">
           <div class="feature-list-item">
-            <h4 data-i18n="features.llmTitle">任意 LLM 后端</h4>
-            <p data-i18n-html="features.llmBody">支持 OpenAI 兼容、OpenAI Responses、Anthropic API，以及本地 <a href="acp-agents.html">ACP Agent</a>。<a href="model-configuration.html">查看 HTTP 模型配置</a>。</p>
+            <h4 data-i18n="features.llmTitle">连接适合任务的模型</h4>
+            <p data-i18n-html="features.llmBody">支持 OpenAI 兼容、OpenAI Responses 和 Anthropic API，也可接入本机 ACP Agent。配置方法见<a href="tutorials.html">使用教程</a>。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="features.ctxTitle">三层上下文压缩</h4>
-            <p data-i18n="features.ctxBody">完整历史先归档，安全裁剪 tool/图片噪声；必须移除语义轮次时，先基于原历史生成增量摘要检查点，并保留有界近期上下文。</p>
+            <h4 data-i18n="features.ctxTitle">长对话也能继续推进</h4>
+            <p data-i18n="features.ctxBody">压缩上下文前先保留完整历史，再整理较早的工具输出和对话摘要，为后续任务留出空间。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="features.sqlTitle">SQLite 持久化</h4>
-            <p data-i18n="features.sqlBody">项目、会话帧、消息与 artifact 写入本地数据库，重启应用完整恢复历史。</p>
+            <h4 data-i18n="features.sqlTitle">工作记录保存在本机</h4>
+            <p data-i18n="features.sqlBody">项目与会话记录保存在本地数据库，文件留在工作区。重新打开项目时，可以继续查看此前的工作。</p>
           </div>
         </div>
       </div>
@@ -251,24 +299,24 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 002b ]</span>
-          <span data-i18n="local.kicker">Works wherever your data lives</span>
+          <span data-i18n="local.kicker">跟随数据所在的位置</span>
         </div>
         <div class="section-head">
-          <h2 data-i18n="local.heading">数据留在本地</h2>
-          <p data-i18n="local.lead">Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；原生生物工具无需 Python；可选运行环境可在启动后按需配置。</p>
+          <h2 data-i18n="local.heading">项目在本机，计算按需选择</h2>
+          <p data-i18n="local.lead">支持 Windows、macOS 与 Linux，也提供命令行入口。本机和远程环境各有用途，可以根据数据位置和计算需求选择。</p>
         </div>
         <div class="feature-list">
           <div class="feature-list-item">
-            <h4 data-i18n="local.pkgTitle">自包含安装包</h4>
-            <p data-i18n="local.pkgBody">skills、原生科研工具、Python/R 内核与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。</p>
+            <h4 data-i18n="local.pkgTitle">下载安装即可开始</h4>
+            <p data-i18n="local.pkgBody">桌面安装包随附技能、原生科研工具和演示会话。Python、R 等可选运行工具可在需要时配置，无需先下载项目源码。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="local.mcpTitle">原生科研 MCP</h4>
-            <p data-i18n="local.mcpBody">默认启用进程内 mcp_bio：23 个连接器、247 个工具，覆盖 PubMed、UniProt、ChEMBL 等约 80 个数据库。无需 Python MCP 子进程。</p>
+            <h4 data-i18n="local.mcpTitle">科研数据库，按需连接</h4>
+            <p data-i18n="local.mcpBody">内置 23 个科研连接器、247 个工具，可检索 PubMed、UniProt、ChEMBL 等约 80 个数据库。访问在线数据源仍需网络。</p>
           </div>
           <div class="feature-list-item">
-            <h4 data-i18n="local.remoteTitle">远程计算</h4>
-            <p data-i18n="local.remoteBody">SKILL 支持 SSH、WSL 与 GPU 主机；Agent 可编写并提交带实时日志的长 Run。</p>
+            <h4 data-i18n="local.remoteTitle">让远程计算有记录可查</h4>
+            <p data-i18n="local.remoteBody">配置 SSH／WSL 环境后，可以读取远程数据、运行分析，并通过任务记录查看状态、日志和输出位置。</p>
           </div>
         </div>
       </div>
@@ -278,11 +326,11 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 003 ]</span>
-          <span data-i18n="usecases.kicker">How researchers use Wisp Science</span>
+          <span data-i18n="usecases.kicker">贴近实际研究场景</span>
         </div>
         <div class="section-head">
-          <h2 data-i18n="usecases.heading">研究者如何使用</h2>
-          <p data-i18n="usecases.lead">预置生命科学多领域工作流；跨学科项目可在同一会话中串联文献、分析与可视化。</p>
+          <h2 data-i18n="usecases.heading">按你的研究问题使用</h2>
+          <p data-i18n="usecases.lead">从文献、数据和计算结果出发，在同一个项目中串联分析、可视化与写作。</p>
         </div>
 
         <div class="tab-bar" role="tablist">
@@ -295,64 +343,64 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
         <div id="tab-scrna" class="tab-panel active" role="tabpanel">
           <div>
             <h3 data-i18n="usecases.scrnaTitle">单细胞与转录组分析</h3>
-            <p data-i18n-html="usecases.scrnaBody">用 analysis-workflow 把 QC、聚类、注释收成可复现模块；在持久 Python 内核中完成 Scanpy 流程与 UMAP 可视化。</p>
+            <p data-i18n-html="usecases.scrnaBody">将质量控制、聚类和细胞类型注释整理为可复现的分析模块，使用 Python／R 完成计算与可视化。</p>
             <ul>
-              <li data-i18n="usecases.scrnaLi1">调用 MCP 查询 GEO / CellxGene 元数据</li>
-              <li data-i18n="usecases.scrnaLi2">表格与图形自动进入 artifact 面板</li>
-              <li data-i18n="usecases.scrnaLi3">代码与对话绑定，便于复现</li>
+              <li data-i18n="usecases.scrnaLi1">检索 GEO／CELLxGENE 数据集与元数据</li>
+              <li data-i18n="usecases.scrnaLi2">随时查看生成的表格和图形</li>
+              <li data-i18n="usecases.scrnaLi3">保留代码、参数与会话记录</li>
             </ul>
           </div>
           <div class="prompt-mock">
-            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
-            <span data-i18n="usecases.scrnaPrompt">对 PBMC 3k 数据做标准 Scanpy 流程，标注 major cell types，并导出 marker 基因热图。</span>
+            <div class="label" data-i18n="usecases.promptLabel">可以这样提问</div>
+            <span data-i18n="usecases.scrnaPrompt">请对 PBMC 3k 数据开展单细胞分析。先检查质量并提出筛选方案，再进行聚类与主要细胞类型注释，保存分析脚本和标记基因热图。</span>
           </div>
         </div>
 
         <div id="tab-protein" class="tab-panel" role="tabpanel">
           <div>
             <h3 data-i18n="usecases.proteinTitle">蛋白结构与序列</h3>
-            <p data-i18n="usecases.proteinBody">从 UniProt / PDB 拉取序列与实验结构，结合文献综述与作图，生成可引用的位点表和 Methods 草稿。</p>
+            <p data-i18n="usecases.proteinBody">结合序列、结构和文献记录，整理可核对的位点信息，并保留分析方法与来源。</p>
             <ul>
-              <li data-i18n="usecases.proteinLi1">从 UniProt / PDB MCP 拉取序列与结构</li>
-              <li data-i18n="usecases.proteinLi2">3D 结构查看器在 Roadmap 中</li>
-              <li data-i18n="usecases.proteinLi3">与文献综述 SKILL 串联假设生成</li>
+              <li data-i18n="usecases.proteinLi1">查询 UniProt／PDB 序列与结构记录</li>
+              <li data-i18n="usecases.proteinLi2">在工作台中预览分子与蛋白结构</li>
+              <li data-i18n="usecases.proteinLi3">结合文献证据提出待验证的假设</li>
             </ul>
           </div>
           <div class="prompt-mock">
-            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
-            <span data-i18n="usecases.proteinPrompt">获取 TP53 预测结构，叠加 ClinVar 致病突变位点，并生成 Methods 段落草稿。</span>
+            <div class="label" data-i18n="usecases.promptLabel">可以这样提问</div>
+            <span data-i18n="usecases.proteinPrompt">请查找 TP53 的结构记录及相关突变信息，标明每项来源，提出可验证的结构分析方案。</span>
           </div>
         </div>
 
         <div id="tab-chem" class="tab-panel" role="tabpanel">
           <div>
             <h3 data-i18n="usecases.chemTitle">化学信息学与分子设计</h3>
-            <p data-i18n="usecases.chemBody">通过 ChEMBL、PubChem MCP 检索活性数据，计算理化性质与相似性，用 figure-composer 出 SAR 图。</p>
+            <p data-i18n="usecases.chemBody">查询 ChEMBL、PubChem 等数据库的活性记录，结合本地计算比较分子性质，并整理图表与证据。</p>
             <ul>
               <li data-i18n="usecases.chemLi1">计算理化性质与相似性</li>
-              <li data-i18n="usecases.chemLi2">右侧面板预览 SMILES / MOL / SDF（RDKit）</li>
-              <li data-i18n="usecases.chemLi3">figure-composer 统一出图风格</li>
+              <li data-i18n="usecases.chemLi2">在侧边面板查看 SMILES／MOL／SDF 分子内容</li>
+              <li data-i18n="usecases.chemLi3">用统一的图表规范呈现比较结果</li>
             </ul>
           </div>
           <div class="prompt-mock">
-            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
-            <span data-i18n="usecases.chemPrompt">检索靶点 EGFR 的 IC50 数据，筛选 oral bioavailability 较好的候选，并绘制 SAR 热力图。</span>
+            <div class="label" data-i18n="usecases.promptLabel">可以这样提问</div>
+            <span data-i18n="usecases.chemPrompt">请检索针对 EGFR 的 IC50 记录，核对实验条件和来源，再比较候选分子的性质，整理构效关系图表。</span>
           </div>
         </div>
 
         <div id="tab-lit" class="tab-panel" role="tabpanel">
           <div>
-            <h3 data-i18n="usecases.litTitle">文献检索与稿件草稿</h3>
-            <p data-i18n="usecases.litBody">literature-review、paper-narrative、pdf-explore SKILL 帮助从 PDF 到结构化综述与叙事。</p>
+            <h3 data-i18n="usecases.litTitle">文献调研与论文写作</h3>
+            <p data-i18n="usecases.litBody">结合文献检索、PDF 阅读和论文叙事技能，整理证据、比较研究，并形成可继续修改的草稿。</p>
             <ul>
-              <li data-i18n="usecases.litLi1">PubMed / OpenAlex / arXiv MCP 检索</li>
-              <li data-i18n="usecases.litLi2">Markdown + LaTeX 实时预览</li>
-              <li data-i18n="usecases.litLi3">indication-dossier 适应症档案模板</li>
+              <li data-i18n="usecases.litLi1">检索 PubMed／OpenAlex／arXiv 等来源</li>
+              <li data-i18n="usecases.litLi2">预览 Markdown 文本与数学公式</li>
+              <li data-i18n="usecases.litLi3">按研究问题组织疾病与适应症资料</li>
             </ul>
           </div>
           <div class="prompt-mock">
-            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
-            <span data-i18n="usecases.litPrompt">基于附件 PDF 写一段 Discussion，附引用列表，并检查数字是否与表格一致。</span>
+            <div class="label" data-i18n="usecases.promptLabel">可以这样提问</div>
+            <span data-i18n="usecases.litPrompt">请基于附件论文起草讨论部分，区分已有证据与推测，附上引用，并检查文中数字是否与表格一致。</span>
           </div>
         </div>
       </div>
@@ -362,28 +410,28 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 003b ]</span>
-          <span data-i18n="demo.kicker">See it in action</span>
+          <span data-i18n="demo.kicker">先看一次完整的工作过程</span>
         </div>
         <div class="section-head">
-          <h2 data-i18n="demo.heading">内置 Demo 会话</h2>
-          <p data-i18n="demo.lead">桌面应用「Open demo」可打开只读示例：CRISPR 筛选、酶工程、极端微生物与免疫治疗——无需 API 额度即可感受工作流。</p>
+          <h2 data-i18n="demo.heading">从内置演示了解 Wisp</h2>
+          <p data-i18n="demo.lead">打开应用中的示例项目，查看文献检索、分析与结果整理的只读记录。浏览演示无需模型额度，发送自己的任务时再配置模型。</p>
         </div>
         <div class="demo-grid">
           <article class="demo-card">
-            <h4 data-i18n="demo.crisprTitle">CRISPR Screen</h4>
-            <p data-i18n="demo.crisprBody">从 raw counts 到 hit calling 与可视化报告的完整 Agent 轨迹。</p>
+            <h4 data-i18n="demo.crisprTitle">CRISPR 筛选</h4>
+            <p data-i18n="demo.crisprBody">查看从原始计数、命中基因筛选到图表与报告的任务记录。</p>
           </article>
           <article class="demo-card">
-            <h4 data-i18n="demo.enzymeTitle">Enzyme Engineering</h4>
-            <p data-i18n="demo.enzymeBody">序列分析、突变建议与活性预测的多轮工具调用示例。</p>
+            <h4 data-i18n="demo.enzymeTitle">酶工程</h4>
+            <p data-i18n="demo.enzymeBody">了解序列分析、突变建议和活性研究中的多轮工具使用。</p>
           </article>
           <article class="demo-card">
-            <h4 data-i18n="demo.extTitle">Extremophile</h4>
-            <p data-i18n="demo.extBody">宏基因组检索与功能注释的跨数据库工作流。</p>
+            <h4 data-i18n="demo.extTitle">极端环境微生物</h4>
+            <p data-i18n="demo.extBody">查看跨数据库检索与功能注释如何衔接。</p>
           </article>
           <article class="demo-card">
-            <h4 data-i18n="demo.immTitle">Immunotherapy</h4>
-            <p data-i18n="demo.immBody">肿瘤免疫相关文献整合与假设生成演示。</p>
+            <h4 data-i18n="demo.immTitle">肿瘤免疫</h4>
+            <p data-i18n="demo.immBody">从文献整理出发，了解如何梳理证据并提出研究问题。</p>
           </article>
         </div>
       </div>
@@ -393,15 +441,15 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       <div class="container">
         <div class="section-label">
           <span class="idx">[ 004 ]</span>
-          <span data-i18n="stack.kicker">Works with your stack</span>
+          <span data-i18n="stack.kicker">连接已有工具与方法</span>
         </div>
         <div class="section-head">
-          <h2 data-i18n="stack.heading">对接你的工具链</h2>
-          <p data-i18n="stack.lead">内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。</p>
+          <h2 data-i18n="stack.heading">融入你的科研工具链</h2>
+          <p data-i18n="stack.lead">通过 MCP 使用科研数据库与自定义工具，通过 Skills 复用分析方法。根据当前任务组合这些能力，并把结果留在项目中。</p>
         </div>
         <div class="stack-grid">
           <div class="stack-item" data-i18n-html="stack.bioItem">mcp_bio<span>247 个工具 · 23 个连接器</span></div>
-          <div class="stack-item">SKILL.md<span data-i18n="stack.skill">36 bundled workflows</span></div>
+          <div class="stack-item">SKILL.md<span data-i18n="stack.skill">28 bundled workflows</span></div>
           <div class="stack-item">Python / R<span data-i18n="stack.python">uv-managed venv · isolated R</span></div>
           <div class="stack-item">Filesystem tools<span>read / write / shell</span></div>
           <div class="stack-item">OpenAI API<span>compatible endpoints</span></div>
@@ -410,7 +458,7 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
           <div class="stack-item">MCP Apps<span>interactive UI from MCP tools</span></div>
         </div>
         <p style="margin-top:32px;text-align:center;">
-          <a class="btn btn-secondary" href="mcp.html" data-i18n="stack.browse">查看 MCP 工具目录</a>
+          <a class="btn btn-secondary" href="mcp.html" data-i18n="stack.browse">浏览科研连接器</a>
         </p>
       </div>
     </section>
@@ -430,56 +478,56 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
               <span data-i18n="faq.q1">Wisp Science 是新模型吗？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a1"></div>
+            <div class="faq-a" data-i18n="faq.a1">Wisp Science 是科研工作台，不是一个新模型。你可以配置兼容的模型 API，也可以接入本机 ACP Agent，用它们处理项目中的任务。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
               <span data-i18n="faq.q2">与通用 AI 助手有何不同？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a2"></div>
+            <div class="faq-a" data-i18n="faq.a2">它围绕项目组织文件、会话、工具与执行记录，可以运行 Python／R、检索科研数据库，并保存分析产物。28 个内置技能提供可复用的方法与检查步骤。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
-              <span data-i18n="faq.q3">研究数据是否私密？</span>
+              <span data-i18n="faq.q3">数据会保存在哪里？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a3"></div>
+            <div class="faq-a" data-i18n="faq.a3">项目文件和会话记录保存在本机。调用远程模型或在线服务时，任务所需的消息、附件内容或工具结果可能发送给对应服务；具体范围取决于你的配置与任务，并受服务商的数据政策约束。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
               <span data-i18n="faq.q4">支持哪些平台？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a4"></div>
+            <div class="faq-a" data-i18n="faq.a4">提供 Windows、macOS 和 Linux 安装包。请从官方发布页选择与操作系统和处理器架构匹配的版本；安装步骤见“快速开始”。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
               <span data-i18n="faq.q5">macOS 为什么反复弹出钥匙串密码框？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n-html="faq.a5"></div>
+            <div class="faq-a" data-i18n-html="faq.a5">macOS 钥匙串会核对访问密钥的应用身份。升级或更换应用签名后，可能需要重新授权。先确认提示来自 Wisp，再按系统提示处理；若仍反复出现，可检查对应的 Wisp 钥匙串条目并重新配置 API Key。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
-              <span data-i18n="faq.q6">需要什么前置依赖？</span>
+              <span data-i18n="faq.q6">需要提前安装哪些工具？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a6"></div>
+            <div class="faq-a" data-i18n="faq.a6">普通模型对话不需要先安装 Python 或 R。涉及代码运行、浏览器控制或第三方工具时，再按任务准备相应环境。首次引导会检测已有工具路径，缺少工具不会阻止你打开应用。源码构建所需环境另见开发文档。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
               <span data-i18n="faq.q7">Wisp Science 是独立项目吗？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a7"></div>
+            <div class="faq-a" data-i18n="faq.a7">是的。Wisp Science 使用 Rust／Tauri 独立开发，以 AGPL-3.0 协议开源。你可以查看源码、连接兼容的模型服务，并根据自己的科研需求使用和改进它。</div>
           </div>
           <div class="faq-item">
             <button class="faq-q" type="button">
-              <span data-i18n="faq.q8">当前版本稳定吗？</span>
+              <span data-i18n="faq.q8">第一次使用，建议从哪里开始？</span>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <div class="faq-a" data-i18n="faq.a8"></div>
+            <div class="faq-a" data-i18n="faq.a8">先按“快速开始”完成安装、模型配置和第一条对话，再用熟悉的小数据验证工作流程。项目持续迭代，具体变化以发布说明为准；科研结论和关键结果仍需结合原始材料核对。</div>
           </div>
         </div>
       </div>
@@ -495,10 +543,10 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
         <a href="mcp.html" data-i18n="nav.mcp">MCP</a>
-        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
-        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
-        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
       <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
@@ -507,5 +555,6 @@ Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
 
   <script src="assets/i18n.js"></script>
   <script src="assets/main.js"></script>
+  <script type="module" src="assets/downloads.mjs"></script>
 </body>
 </html>

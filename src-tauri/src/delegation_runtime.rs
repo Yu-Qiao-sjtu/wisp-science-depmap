@@ -149,7 +149,7 @@ pub(crate) fn sync_delegation_prompt(prompt: &mut String, enabled: bool) {
 #[tauri::command]
 pub(crate) async fn get_session_delegation_enabled(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<bool, String> {
     let project = state.require_active(window.label())?;
@@ -160,7 +160,7 @@ pub(crate) async fn get_session_delegation_enabled(
 #[tauri::command]
 pub(crate) async fn set_session_delegation_enabled(
     state: State<'_, crate::AppState>,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     enabled: bool,
 ) -> Result<bool, String> {
@@ -181,7 +181,7 @@ pub(crate) async fn set_session_delegation_enabled(
 #[tauri::command]
 pub(crate) async fn list_agent_workflows(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
 ) -> Result<Vec<AgentWorkflowSnapshot>, String> {
     let project = state.require_active(window.label())?;
@@ -426,7 +426,7 @@ pub(crate) async fn create_dynamic_agent_workflow_draft(
 #[tauri::command]
 pub(crate) async fn get_dynamic_agent_options(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<dynamic_workflow::DynamicAgentEditorOptions, String> {
     let project = state.require_active(window.label())?;
     let frame_id = state.active_frame(window.label());
@@ -591,7 +591,7 @@ pub(crate) async fn load_agent_workflow_result(
 #[tauri::command]
 pub(crate) async fn get_agent_workflow_result(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     step_id: String,
 ) -> Result<AgentWorkflowResultDetail, String> {
@@ -677,7 +677,7 @@ pub(crate) async fn approve_created_automatic_workflow(
 #[tauri::command]
 pub(crate) async fn approve_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     expected_version: i64,
 ) -> Result<AgentWorkflowSnapshot, String> {
@@ -704,7 +704,7 @@ pub(crate) async fn approve_agent_workflow(
 #[tauri::command]
 pub(crate) async fn cancel_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<(), String> {
     let project = state.require_active(window.label())?;
@@ -727,7 +727,7 @@ pub(crate) async fn cancel_agent_workflow(
 #[tauri::command]
 pub(crate) async fn discard_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<(), String> {
     let project = state.require_active(window.label())?;
@@ -748,7 +748,7 @@ pub(crate) async fn discard_agent_workflow(
 #[tauri::command]
 pub(crate) async fn retry_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
     budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
 ) -> Result<AgentWorkflowSnapshot, String> {
@@ -978,7 +978,7 @@ pub(crate) async fn prepare_agent_workflow_retry(
 #[tauri::command]
 pub(crate) async fn run_agent_workflow(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     workflow_id: String,
 ) -> Result<DelegationExecutionResult, String> {
     let project = state.require_active(window.label())?;
@@ -2618,8 +2618,19 @@ impl AgentDelegator for NativeDelegator {
             String::new()
         };
         let prompt = delegation_task_prompt(&request, &host_evidence)?;
-        let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-            native_llm_config(&self.store, &request).await?;
+        let (
+            provider,
+            api_url,
+            model,
+            api_key,
+            max_tokens,
+            reasoning_effort,
+            service_tier,
+            user_agent,
+            send_user_agent,
+            send_session_id,
+            session_header_name,
+        ) = native_llm_config(&self.store, &request).await?;
         let cfg = build_provider_config(
             &provider,
             &api_url,
@@ -2633,6 +2644,11 @@ impl AgentDelegator for NativeDelegator {
                 .unwrap_or(max_tokens),
             &reasoning_effort,
             &service_tier,
+            &user_agent,
+            send_user_agent,
+            send_session_id,
+            &session_header_name,
+            Some(&child_frame_id),
         )
         .map_err(anyhow::Error::msg)?;
         let llm = wisp_llm::build(cfg);
@@ -2990,7 +3006,19 @@ impl AgentDelegator for NativeDelegator {
 async fn native_llm_config(
     store: &Store,
     request: &AgentDelegationRequest,
-) -> anyhow::Result<(String, String, String, String, u64, String, String)> {
+) -> anyhow::Result<(
+    String,
+    String,
+    String,
+    String,
+    u64,
+    String,
+    String,
+    String,
+    bool,
+    Option<bool>,
+    String,
+)> {
     let profile_id = request
         .spec
         .model
@@ -3003,7 +3031,15 @@ async fn native_llm_config(
         .ok_or_else(|| anyhow::anyhow!("resolved model profile no longer exists"))?;
     if profile.active {
         let (provider, api_url, model, api_key) = load_settings(store).await;
-        let (max_tokens, reasoning_effort, service_tier) = models::active_llm_advanced(store).await;
+        let (
+            max_tokens,
+            reasoning_effort,
+            service_tier,
+            user_agent,
+            send_user_agent,
+            send_session_id,
+            session_header_name,
+        ) = models::active_llm_advanced(store).await;
         return Ok((
             provider,
             api_url,
@@ -3012,6 +3048,10 @@ async fn native_llm_config(
             max_tokens,
             reasoning_effort,
             service_tier,
+            user_agent,
+            send_user_agent,
+            send_session_id,
+            session_header_name,
         ));
     }
     models::profile_llm(store, profile_id)

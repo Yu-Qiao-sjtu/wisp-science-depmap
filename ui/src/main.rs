@@ -3,6 +3,7 @@ mod agent_workflows;
 mod app_overlays;
 mod bindings;
 mod channels_view;
+mod chat_find;
 mod chat_render;
 mod context_menu;
 mod dto;
@@ -15,12 +16,16 @@ mod overlays;
 mod pet;
 mod project_landing;
 mod publication;
+mod publication_sources;
 mod research;
+mod research_calendar;
+mod research_journey;
 mod runtime_views;
 mod session_modals;
 mod settings_view;
 mod sidebar;
 mod skill_detail;
+mod skill_store;
 mod text;
 mod trajectory;
 mod window_titlebar;
@@ -59,8 +64,9 @@ use overlays::{
 };
 use pet::{PetDesktop, PetOverlay};
 use project_landing::{ProjectLanding, ProjectLandingState};
-use publication::{PublicationEvidenceSource, PublicationWorkspaceModal};
-use research::{refresh_research_graph, ResearchGraphModal};
+use publication::{PublicationEvidenceSource, PublicationWorkspacePage};
+use research::refresh_research_graph;
+use research_journey::ResearchJourneyView;
 use serde_wasm_bindgen::{from_value, to_value};
 use session_modals::{
     BranchMergeDetailOverlay, BranchMergeOverlay, BranchMergeOverlayState, EditConfirmOverlay,
@@ -371,9 +377,12 @@ fn App() -> impl IntoView {
     let pending_turns = create_rw_signal::<HashMap<String, usize>>(HashMap::new());
     let transcripts = create_rw_signal::<HashMap<String, Vec<ChatItem>>>(HashMap::new());
     let transcript_pages = create_rw_signal::<HashMap<String, TranscriptPageState>>(HashMap::new());
+    let transcript_request_sequence = store_value(0_u64);
+    let transcript_page_error = create_rw_signal::<Option<(String, String)>>(None);
     let conversation_outlines =
         create_rw_signal::<HashMap<String, Vec<SessionOutlineItem>>>(HashMap::new());
     let conversation_outline_open = create_rw_signal(false);
+    let chat_find_open = create_rw_signal(false);
     let conversation_outline_mounted = create_rw_signal(false);
     let conversation_outline_selected = create_rw_signal::<Option<usize>>(None);
     create_effect(move |_| {
@@ -458,6 +467,10 @@ fn App() -> impl IntoView {
     // Configured model profiles + the composer's bottom-right picker state.
     let models = create_rw_signal::<Vec<ModelProfile>>(vec![]);
     let active_session = create_rw_signal::<Option<String>>(None);
+    create_effect(move |_| {
+        active_session.get();
+        chat_find_open.set(false);
+    });
     // The stopping banner belongs to the session where Stop was clicked, and
     // only while that session is still running. Switching conversations must
     // not carry it over; a missed or late Done must not leave it over Send.
@@ -900,7 +913,12 @@ fn App() -> impl IntoView {
             service_tier_busy.set(false);
         });
     });
-    let compaction_active = create_rw_signal(false);
+    let compacting_sessions = create_rw_signal(HashSet::<String>::new());
+    let compaction_active = create_memo(move |_| {
+        active_session
+            .get()
+            .is_some_and(|id| compacting_sessions.with(|sessions| sessions.contains(&id)))
+    });
     let switch_http_model = Callback::new(move |(id, dont_ask_again): (String, bool)| {
         provisional_acp_selection.set(None);
         active_acp_agent_id.set(None);
@@ -1545,8 +1563,34 @@ fn App() -> impl IntoView {
     // sidebar modal is opened rather than kept live.
     let research_graph = create_rw_signal(ResearchGraph::default());
     let show_research_graph = create_rw_signal(false);
+    let home_calendar_open = create_rw_signal(false);
+    let home_dialog_open = create_rw_signal(false);
+    let calendar_journey_request = create_rw_signal(None::<(String, i64)>);
+    let journey_initial_day = create_rw_signal(None::<i64>);
+    // Every home navigation path must dispose the project journey. Also watch
+    // its open flag while at home: a delayed calendar drill-down can set it
+    // after the user has already left the project.
+    create_effect(move |_| {
+        if show_projects.get() {
+            if show_research_graph.get() {
+                show_research_graph.set(false);
+            }
+            journey_initial_day.set(None);
+        }
+    });
     let show_publication_workspace = create_rw_signal(false);
     let publication_binding_source = create_rw_signal::<Option<PublicationEvidenceSource>>(None);
+    create_effect(move |previous: Option<Option<String>>| {
+        let project = project_info.get().map(|project| project.id);
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous != &project)
+        {
+            show_publication_workspace.set(false);
+            publication_binding_source.set(None);
+        }
+        project
+    });
     create_effect(move |_| {
         side_chat_items.with(|items| items.len());
         if !show_right.get() || right_tab.get() != RightTab::SideChat {
@@ -2447,7 +2491,7 @@ fn App() -> impl IntoView {
     };
     let pet_activity_cb = pet_activity;
     let status_cb = status;
-    let compaction_active_cb = compaction_active;
+    let compacting_sessions_cb = compacting_sessions;
     let locale_cb = locale;
     let models_cb = models;
     let session_models_cb = session_model_ids;
@@ -2587,9 +2631,9 @@ fn App() -> impl IntoView {
             }
         };
         let finish_compaction = |frame_id: &str| {
-            if active_cb.get_untracked().as_deref() == Some(frame_id) {
-                compaction_active_cb.set(false);
-            }
+            compacting_sessions_cb.update(|sessions| {
+                sessions.remove(frame_id);
+            });
         };
         let refresh_transcript_projections = |frame_id: &str| {
             if active_cb.get_untracked().as_deref() == Some(frame_id) {
@@ -2616,9 +2660,9 @@ fn App() -> impl IntoView {
         };
         match ev {
             AgentEvent::CompactionStarted { frame_id, .. } => {
-                if active_cb.get_untracked().as_deref() == Some(frame_id.as_str()) {
-                    compaction_active_cb.set(true);
-                }
+                compacting_sessions_cb.update(|sessions| {
+                    sessions.insert(frame_id);
+                });
             }
             AgentEvent::User { frame_id, text } => {
                 dismiss_follow_up_questions(follow_up_questions, follow_up_generation, &frame_id);
@@ -2999,19 +3043,13 @@ fn App() -> impl IntoView {
                 if active_cb.get().as_deref() == Some(&frame_id) {
                     let before = before.to_string();
                     let after = after.to_string();
-                    status_cb.set(if auto_continue {
-                        tf(
+                    if auto_continue {
+                        status_cb.set(tf(
                             locale_cb.get(),
                             "chat.auto_continued",
                             &[("count", before.as_str()), ("limit", after.as_str())],
-                        )
-                    } else {
-                        tf(
-                            locale_cb.get(),
-                            "status.compact",
-                            &[("before", before.as_str()), ("after", after.as_str())],
-                        )
-                    });
+                        ));
+                    }
                 }
             }
             AgentEvent::ContextWarning {
@@ -3079,7 +3117,7 @@ fn App() -> impl IntoView {
                     items.drain(..first_item);
                     page.next_before_seq = Some(before_seq);
                     page.user_offset = user_offset;
-                    page.loading = false;
+                    page.loading_request = None;
                     page.window_user_start = usize::MAX;
                     trimmed = true;
                 });
@@ -3884,7 +3922,7 @@ fn App() -> impl IntoView {
         );
         let reference_args = refs
             .iter()
-            .map(ComposerReferenceChip::arg)
+            .filter_map(ComposerReferenceChip::arg)
             .collect::<Vec<_>>();
         // An @-referenced server turns itself on for the session backend-side;
         // re-read the enabled set afterwards so the sidebar toggles agree.
@@ -3894,11 +3932,7 @@ fn App() -> impl IntoView {
                 ComposerReferenceArg::Context { .. } | ComposerReferenceArg::Runtime { .. }
             )
         });
-        if message.trim().is_empty()
-            && paths.is_empty()
-            && reference_args.is_empty()
-            && quotes.is_empty()
-        {
+        if message.trim().is_empty() && paths.is_empty() && refs.is_empty() && quotes.is_empty() {
             return;
         }
         let active = active_session.get();
@@ -4288,6 +4322,25 @@ fn App() -> impl IntoView {
     };
 
     let on_send = move |ev: web_sys::KeyboardEvent| {
+        if (ev.ctrl_key() || ev.meta_key())
+            && !ev.alt_key()
+            && !ev.shift_key()
+            && ev.key().eq_ignore_ascii_case("v")
+            && !ev.repeat()
+            && !uploading.get_untracked()
+        {
+            let session = active_session.get_untracked();
+            spawn_local(async move {
+                match bindings::clipboard_file_paths(JsValue::NULL).await {
+                    Ok(value) if active_session.get_untracked() == session => {
+                        attach_clipboard_paths(composer_references, value);
+                    }
+                    Err(error) => status.set(js_error_text(error)),
+                    _ => {}
+                }
+            });
+        }
+
         // While an IME is composing (e.g. Chinese pinyin), Enter confirms the
         // candidate, so let the IME handle every key and never send/navigate
         // mid-composition (#108; keyCode-229 quirk in ime_composing).
@@ -4567,7 +4620,7 @@ fn App() -> impl IntoView {
                                 Some(TranscriptPageState {
                                     next_before_seq: page.next_before_seq,
                                     user_offset: page.user_offset,
-                                    loading: false,
+                                    loading_request: None,
                                     window_user_start: usize::MAX,
                                 }),
                             )
@@ -4768,7 +4821,7 @@ fn App() -> impl IntoView {
                                         TranscriptPageState {
                                             next_before_seq: page.next_before_seq,
                                             user_offset: page.user_offset,
-                                            loading: false,
+                                            loading_request: None,
                                             window_user_start: usize::MAX,
                                         },
                                     );
@@ -4981,24 +5034,56 @@ fn App() -> impl IntoView {
     };
 
     let on_drag_over = move |ev: web_sys::DragEvent| {
+        let Some(dt) = ev.data_transfer() else {
+            return;
+        };
+        if !has_drag_type(&dt, WORKSPACE_PATH_DRAG_TYPE) && !has_drag_type(&dt, "Files") {
+            return;
+        }
         ev.prevent_default();
-        if !uploading.get() {
+        ev.stop_propagation();
+        if !demo_mode.get() && !composer_scope_locked.get() && !uploading.get() {
+            dt.set_drop_effect("copy");
             drag_over.set(true);
         }
     };
 
     let on_drag_leave = move |ev: web_sys::DragEvent| {
-        ev.prevent_default();
+        if let (Some(target), Some(related)) = (ev.current_target(), ev.related_target()) {
+            if let (Some(target), Some(related)) = (
+                target.dyn_ref::<web_sys::Node>(),
+                related.dyn_ref::<web_sys::Node>(),
+            ) {
+                if target.contains(Some(related)) {
+                    return;
+                }
+            }
+        }
         drag_over.set(false);
     };
 
     let on_drop = move |ev: web_sys::DragEvent| {
         ev.prevent_default();
+        ev.stop_propagation();
         drag_over.set(false);
-        if uploading.get() {
+        if demo_mode.get() || composer_scope_locked.get() || uploading.get() {
             return;
         }
         if let Some(dt) = ev.data_transfer() {
+            if has_drag_type(&dt, WORKSPACE_PATH_DRAG_TYPE) {
+                if let Ok(path) = dt.get_data(WORKSPACE_PATH_DRAG_TYPE) {
+                    if !path.trim().is_empty() {
+                        composer_references.update(|items| {
+                            let chip = ComposerReferenceChip::FilePath { path };
+                            if !items.iter().any(|item| item.key() == chip.key()) {
+                                items.push(chip);
+                            }
+                        });
+                        focus_composer();
+                    }
+                }
+                return;
+            }
             if let Some(files) = dt.files() {
                 queue_uploads(attachments, uploading, files.into());
             }
@@ -5010,13 +5095,42 @@ fn App() -> impl IntoView {
         if uploading.get() {
             return;
         }
-        let event: JsValue = ev.clone().into();
+        let event = bindings::clipboard_paste_snapshot(ev.clone().into());
         let count = pasted_image_count(event.clone());
-        if count == 0 {
+        if count == 0 && !bindings::paste_has_files(event.clone()) {
             return;
         }
         ev.prevent_default();
-        upload_from_paste(attachments, uploading, event, count);
+        let session = active_session.get_untracked();
+        uploading.set(true);
+        spawn_local(async move {
+            let result = bindings::clipboard_file_paths(event.clone()).await;
+            uploading.set(false);
+            if active_session.get_untracked() != session {
+                return;
+            }
+            match result {
+                Ok(value) => {
+                    let paths: Vec<String> =
+                        serde_wasm_bindgen::from_value(value).unwrap_or_default();
+                    if paths.is_empty() {
+                        if count > 0 {
+                            upload_from_paste(attachments, uploading, event, count);
+                        }
+                    } else {
+                        composer_references.update(|items| {
+                            for path in paths {
+                                let chip = ComposerReferenceChip::FilePath { path };
+                                if !items.iter().any(|item| item.key() == chip.key()) {
+                                    items.push(chip);
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(error) => status.set(js_error_text(error)),
+            }
+        });
     };
 
     let composer_blocked = move || {
@@ -5398,6 +5512,8 @@ fn App() -> impl IntoView {
     let remove_specialist_fn = move |id: String| model_settings.remove_specialist(id);
 
     let start_new_session = Callback::new(move |_: ()| {
+        show_publication_workspace.set(false);
+        publication_binding_source.set(None);
         if demo_mode.get_untracked() {
             return;
         }
@@ -5701,6 +5817,10 @@ fn App() -> impl IntoView {
     );
 
     let load_session = Callback::new(move |id: String| {
+        transcript_page_error.set(None);
+        show_publication_workspace.set(false);
+        publication_binding_source.set(None);
+        show_research_graph.set(false);
         attachments.set(vec![]);
         sel_artifact.set(0);
         right_tab.set(RightTab::Artifacts);
@@ -5778,7 +5898,7 @@ fn App() -> impl IntoView {
                         TranscriptPageState {
                             next_before_seq: page.next_before_seq,
                             user_offset: page.user_offset,
-                            loading: false,
+                            loading_request: None,
                             window_user_start: usize::MAX,
                         },
                     );
@@ -5850,7 +5970,7 @@ fn App() -> impl IntoView {
             exploration_busy.set(false);
         });
     });
-    let start_exploration_from_head = Callback::new(move |turn_index: usize| {
+    let start_exploration_from_turn = Callback::new(move |turn_index: usize| {
         let Some(source_frame_id) = active_session.get_untracked() else {
             return;
         };
@@ -6087,23 +6207,28 @@ fn App() -> impl IntoView {
         let Some(id) = active_session.get_untracked() else {
             return;
         };
-        if running.with_untracked(|sessions| sessions.contains(&id)) {
-            return;
-        }
         let Some(cursor) = transcript_pages.with_untracked(|pages| {
-            pages
-                .get(&id)
-                .and_then(|page| (!page.loading).then_some(page.next_before_seq).flatten())
+            pages.get(&id).and_then(|page| {
+                page.loading_request
+                    .is_none()
+                    .then_some(page.next_before_seq)
+                    .flatten()
+            })
         }) else {
             return;
         };
+        transcript_page_error.set(None);
+        transcript_request_sequence.update_value(|sequence| *sequence += 1);
+        let request_id = transcript_request_sequence.get_value();
         transcript_pages.update(|pages| {
             if let Some(page) = pages.get_mut(&id) {
-                page.loading = true;
+                page.loading_request = Some(request_id);
             }
         });
         spawn_local(async move {
-            let value = invoke(
+            // Older pages are read-only, including while a turn is running.
+            // Keep command failures visible and leave the cursor retryable.
+            let result = invoke_checked(
                 "load_session",
                 to_value(&serde_json::json!({
                     "id": id.clone(),
@@ -6111,14 +6236,40 @@ fn App() -> impl IntoView {
                 }))
                 .unwrap(),
             )
-            .await;
-            let Ok(page) = serde_wasm_bindgen::from_value::<LoadedSessionPage>(value) else {
-                transcript_pages.update(|pages| {
-                    if let Some(page) = pages.get_mut(&id) {
-                        page.loading = false;
-                    }
-                });
+            .await
+            .map_err(js_error_text)
+            .and_then(|value| {
+                serde_wasm_bindgen::from_value::<LoadedSessionPage>(value)
+                    .map_err(|error| error.to_string())
+            });
+            // A reload/outline jump may have replaced this page while the
+            // request was in flight and started another request with the same
+            // cursor. Only the owning request can change rows or loading/errors.
+            if !transcript_pages.with_untracked(|pages| {
+                pages.get(&id).is_some_and(|page| {
+                    page.loading_request == Some(request_id) && page.next_before_seq == Some(cursor)
+                })
+            }) {
                 return;
+            }
+            let page = match result {
+                Ok(page) => page,
+                Err(error) => {
+                    transcript_pages.update(|pages| {
+                        if let Some(page) = pages.get_mut(&id) {
+                            page.loading_request = None;
+                        }
+                    });
+                    transcript_page_error.set(Some((
+                        id.clone(),
+                        tf(
+                            locale.get_untracked(),
+                            "transcript.load_failed",
+                            &[("msg", &error)],
+                        ),
+                    )));
+                    return;
+                }
             };
             let older = page
                 .items
@@ -6147,7 +6298,7 @@ fn App() -> impl IntoView {
                     TranscriptPageState {
                         next_before_seq: page.next_before_seq,
                         user_offset: page.user_offset,
-                        loading: false,
+                        loading_request: None,
                         window_user_start: 0,
                     },
                 );
@@ -6459,7 +6610,7 @@ fn App() -> impl IntoView {
                         TranscriptPageState {
                             next_before_seq: page.next_before_seq,
                             user_offset: page.user_offset,
-                            loading: false,
+                            loading_request: None,
                             window_user_start: target_local,
                         },
                     );
@@ -7298,18 +7449,17 @@ fn App() -> impl IntoView {
     let run_clock = create_rw_signal(now_secs());
     // The transfer tray needs the shared clock only while the active session
     // has an active or briefly lingering transfer. Once the last card expires,
-    // this effect reruns with `clock_active = false` and drops its run_clock
+    // this effect finds no visible transfers and drops its run_clock
     // dependency; historical progress records then stay idle between run-list
     // updates instead of rebuilding the tray every second.
+    let transfer_tray_collapsed = create_rw_signal(false);
     let transfer_tray_clock_active = create_rw_signal(false);
     let transfer_tray_now = create_rw_signal(run_clock.get_untracked());
     create_effect(move |_| {
-        let clock_active = transfer_tray_clock_active.get();
-        let now = if clock_active {
-            run_clock.get()
-        } else {
-            run_clock.get_untracked()
-        };
+        // Decide from the records before subscribing to the clock. Reading a
+        // false flag and then setting it true inside this same effect does not
+        // rerun the effect in Leptos, leaving silent transfers without ticks.
+        let now = run_clock.get_untracked();
         let has_visible_transfer = active_session.get().is_some_and(|session_id| {
             run_records.with(|records| {
                 records.iter().any(|run| {
@@ -7320,10 +7470,13 @@ fn App() -> impl IntoView {
                 })
             })
         });
+        let now = if has_visible_transfer {
+            run_clock.get()
+        } else {
+            now
+        };
         transfer_tray_now.set(now);
-        if clock_active != has_visible_transfer {
-            transfer_tray_clock_active.set(has_visible_transfer);
-        }
+        transfer_tray_clock_active.set(has_visible_transfer);
     });
     let show_add_host = create_rw_signal(false);
     let host_alias = create_rw_signal(String::new());
@@ -7699,14 +7852,11 @@ fn App() -> impl IntoView {
     });
     refresh_runtimes(runtime_infos);
     refresh_runs(run_records, locale);
+    crate::bindings::start_ui_health();
     {
-        // UI liveness heartbeat for the backend watchdog: a webview whose
-        // renderer died (process crash / WASM panic) stops beating and gets
-        // reloaded; see `run_ui_watchdog` in src-tauri/src/lib.rs.
+        // Keep liveness tied to the WASM app, while JS collects bounded metrics.
         let beat = Closure::wrap(Box::new(move || {
-            spawn_local(async move {
-                let _ = invoke("ui_heartbeat", JsValue::UNDEFINED).await;
-            });
+            crate::bindings::report_ui_health();
         }) as Box<dyn FnMut()>);
         if let Some(window) = web_sys::window() {
             let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
@@ -8035,6 +8185,18 @@ fn App() -> impl IntoView {
                         )),
                     }
                 });
+                return;
+            }
+            if action == "openBoundResourceCenter" {
+                if let Ok((path, name, kind)) = serde_json::from_str::<ModalArtifact>(&payload) {
+                    let tab = CenterFileTab::new(path.clone(), name, kind);
+                    center_files.update(|files| {
+                        if !files.iter().any(|file| file.path == path) {
+                            files.push(tab);
+                        }
+                    });
+                    center_file.set(Some(path));
+                }
                 return;
             }
             if action == "openWorkspaceFileCenter" {
@@ -8389,15 +8551,18 @@ fn App() -> impl IntoView {
         } else {
             Vec::new()
         };
-        if let Some(menu) = context_menu::build(
-            &ev,
-            loc,
-            active_session.get().is_some(),
-            center.as_deref(),
-            &quick_actions.get_untracked(),
-            project_root.as_deref(),
-            &selected_paths,
-        ) {
+        if let Some(menu) = items.with_untracked(|rows| {
+            context_menu::build(
+                &ev,
+                loc,
+                active_session.get().is_some(),
+                center.as_deref(),
+                &quick_actions.get_untracked(),
+                project_root.as_deref(),
+                &selected_paths,
+                rows,
+            )
+        }) {
             if !menu.items.is_empty() {
                 ev.prevent_default();
                 // The context menu supersedes the selection popup — never
@@ -8631,17 +8796,7 @@ fn App() -> impl IntoView {
             modal_artifact.set(None);
             return;
         }
-        if show_publication_workspace.get() {
-            ev.prevent_default();
-            show_publication_workspace.set(false);
-            publication_binding_source.set(None);
-            return;
-        }
-        if show_research_graph.get() {
-            ev.prevent_default();
-            show_research_graph.set(false);
-            return;
-        }
+
         if inbox_open.get() {
             ev.prevent_default();
             inbox_open.set(false);
@@ -8659,6 +8814,11 @@ fn App() -> impl IntoView {
         }
 
         if show_projects.get() {
+            if home_calendar_open.get() && !home_dialog_open.get() {
+                ev.prevent_default();
+                home_calendar_open.set(false);
+                return;
+            }
             if project_transfer
                 .get()
                 .is_some_and(|transfer| transfer.is_complete() || transfer.is_failed())
@@ -8719,6 +8879,13 @@ fn App() -> impl IntoView {
             return;
         }
 
+        // Research journey is a page below the window's dialogs.
+        if show_research_graph.get() {
+            ev.prevent_default();
+            show_research_graph.set(false);
+            return;
+        }
+
         // --- menus / popovers ---
         if context_usage_open.get() {
             ev.prevent_default();
@@ -8728,6 +8895,24 @@ fn App() -> impl IntoView {
         if artifact_menu.get().is_some() {
             ev.prevent_default();
             artifact_menu.set(None);
+            return;
+        }
+        // Match the drawer breakpoint in right-pane.css. Resizing can leave
+        // composer menus open underneath the Inspector's modal backdrop.
+        // Its own menus (and the floating runtime inspector) still close first;
+        // otherwise Escape dismisses the drawer, preserving the covered layer.
+        if show_right.get() && viewport_size().0 <= 960.0 {
+            ev.prevent_default();
+            if runtime_environment_pinned.get() {
+                runtime_environment.set(None);
+                runtime_environment_pinned.set(false);
+            } else if right_tab_add_menu_open.get() {
+                right_tab_add_menu_open.set(false);
+            } else if side_chat_model_menu_open.get() {
+                side_chat_model_menu_open.set(false);
+            } else {
+                show_right.set(false);
+            }
             return;
         }
         if show_proj_menu.get() {
@@ -8794,6 +8979,18 @@ fn App() -> impl IntoView {
         if conversation_outline_open.get() {
             ev.prevent_default();
             conversation_outline_open.set(false);
+            return;
+        }
+
+        if transfer_tray_clock_active.get() && !transfer_tray_collapsed.get() {
+            ev.prevent_default();
+            transfer_tray_collapsed.set(true);
+            return;
+        }
+
+        if chat_find_open.get() {
+            ev.prevent_default();
+            chat_find_open.set(false);
             return;
         }
 
@@ -9086,6 +9283,13 @@ fn App() -> impl IntoView {
                 status.set(message);
                 return;
             }
+            let calendar_day = calendar_journey_request
+                .get_untracked()
+                .filter(|(id, _)| id == &project_id)
+                .map(|(_, day)| day);
+            calendar_journey_request.set(None);
+            home_calendar_open.set(false);
+            journey_initial_day.set(None);
             let request_epoch = transition_epoch.get().wrapping_add(1);
             transition_epoch.set(request_epoch);
             *transition_target.borrow_mut() = Some(project_id.clone());
@@ -9198,7 +9402,9 @@ fn App() -> impl IntoView {
 
                 let session_id = match session_id {
                     Some(session_id) => Some(session_id),
-                    None if settings.get_untracked().resume_last_session => {
+                    None if calendar_day.is_none()
+                        && settings.get_untracked().resume_last_session =>
+                    {
                         invoke_latest_used_session().await
                     }
                     None => None,
@@ -9212,6 +9418,11 @@ fn App() -> impl IntoView {
                     return;
                 }
                 project_info.set(Some(project));
+                if let Some(day) = calendar_day {
+                    journey_initial_day.set(Some(day));
+                    show_research_graph.set(true);
+                    refresh_research_graph(research_graph);
+                }
                 if let Some(session_id) = session_id {
                     load_session.call(session_id);
                 }
@@ -10015,11 +10226,16 @@ fn App() -> impl IntoView {
         let Some(ev) = ev.dyn_ref::<web_sys::KeyboardEvent>() else {
             return;
         };
-        if ime_composing(ev) || !(ev.ctrl_key() || ev.meta_key()) {
+        if ev.default_prevented() || ime_composing(ev) || !(ev.ctrl_key() || ev.meta_key()) {
             return;
         }
         let key = ev.key().to_lowercase();
         match key.as_str() {
+            "f" if !ev.alt_key() && !ev.shift_key() && chat_find::can_find_chat() => {
+                ev.prevent_default();
+                chat_find_open.set(true);
+                chat_find::focus_chat_find();
+            }
             "p" => {
                 ev.prevent_default();
                 command_palette_open.set(false);
@@ -10380,10 +10596,14 @@ fn App() -> impl IntoView {
                 demos, modal_artifact, locale, running, approval_pending,
                 sync_actions_available, command_palette_open, project_transfer,
                 privacy_mode_active, privacy_hidden_project_ids,
-                menu_new_project, menu_import_project,
+                menu_new_project, menu_import_project, home_calendar_open, home_dialog_open,
             }
             open_project=switch_project
             open_project_session=palette_open_session
+            open_project_journey=Callback::new(move |(id, day): (String, i64)| {
+                calendar_journey_request.set(Some((id.clone(), day)));
+                open_project_transition.call((id, None));
+            })
             open_scratch=open_scratch
             open_settings=Callback::new(move |section: Option<String>| open_settings_fn(section))
             open_library=Callback::new(move |_| show_library.set(true))
@@ -10419,21 +10639,19 @@ fn App() -> impl IntoView {
                 can_insert=Signal::derive(move || !show_projects.get())
             />
         })}
-        {move || show_research_graph.get().then(|| view! {
-            <ResearchGraphModal
-                locale=locale.read_only()
+        {move || (!show_projects.get() && show_research_graph.get()).then(|| view! {
+            <ResearchJourneyView
+                locale=locale
+                project_name=project_info.get().map(|p|p.name.clone()).unwrap_or_default()
+                initial_day=journey_initial_day.get_untracked()
+                left=Signal::derive(move || if show_sidebar.get() { sidebar_w.get() } else { 0.0 })
                 graph=research_graph.read_only()
+                artifact_open=Signal::derive(move || modal_artifact.get().is_some()
+                    || show_settings.get() || show_library.get() || show_publication_workspace.get()
+                    || show_proj_settings.get() || show_capabilities.get())
                 on_close=Callback::new(move |_| show_research_graph.set(false))
-            />
-        })}
-        {move || show_publication_workspace.get().then(|| view! {
-            <PublicationWorkspaceModal
-                locale=locale.read_only()
-                binding_source=publication_binding_source
-                on_close=Callback::new(move |_| {
-                    publication_binding_source.set(None);
-                    show_publication_workspace.set(false);
-                })
+                on_artifact=Callback::new(move |target| modal_artifact.set(Some(target)))
+                on_session=Callback::new(move |id| { show_research_graph.set(false); load_session.call(id); })
             />
         })}
         <SshConnectivityOverlay
@@ -10469,19 +10687,24 @@ fn App() -> impl IntoView {
             })
             toggle_proj_menu=Callback::new(toggle_proj_menu)
             open_proj_settings=Callback::new(open_proj_settings)
-            switch_project=switch_project
-            new_session=Callback::new(new_session)
+            switch_project=Callback::new(move |id| { show_publication_workspace.set(false); publication_binding_source.set(None); switch_project.call(id); })
+            new_session=Callback::new(move |ev| { show_research_graph.set(false); new_session(ev); })
             open_search=Callback::new(move |_| {
                 action_palette_open.set(false);
                 command_palette_open.set(true);
             })
             new_folder=Callback::new(new_folder)
-            open_files=Callback::new(open_files)
+            open_files=Callback::new(move |ev| { show_publication_workspace.set(false); show_research_graph.set(false); open_files(ev); })
+            research_journey_open=show_research_graph.read_only()
             open_research_graph=Callback::new(move |_| {
+                show_publication_workspace.set(false);
+                journey_initial_day.set(None);
                 show_research_graph.set(true);
                 refresh_research_graph(research_graph);
             })
+            publication_open=show_publication_workspace.read_only()
             open_publication_workspace=Callback::new(move |_| {
+                show_research_graph.set(false);
                 publication_binding_source.set(None);
                 show_publication_workspace.set(true);
             })
@@ -10548,7 +10771,18 @@ fn App() -> impl IntoView {
             on_sidebar_resize_start=Callback::new(on_sidebar_resize_start)
         />
 
-        <div class="workspace-area">
+        <div class="workspace-area" class:publication-active=move || show_publication_workspace.get()>
+        {move || show_publication_workspace.get().then(|| view! {
+            <PublicationWorkspacePage
+                locale=locale.read_only()
+                binding_source=publication_binding_source
+                on_close=Callback::new(move |_| {
+                    publication_binding_source.set(None);
+                    show_publication_workspace.set(false);
+                })
+            />
+        })}
+
         <div class="workspace-main">
         <main class="center" class:split=move || center_split_on.get()
             style=move || center_chat_w.get()
@@ -10626,16 +10860,6 @@ fn App() -> impl IntoView {
                                 </button>
                             </span>
                         }.into_view())
-                    } else if compaction_active.get() {
-                        Some(view! {
-                            <div class="context-compaction-live" role="status" data-testid="context-compaction-live">
-                                <span class="context-compaction-spectrum" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-                                <span class="context-compaction-live-copy">
-                                    <strong>{move || t(locale.get(), "chat.compacting_title")}</strong>
-                                    <span>{move || t(locale.get(), "chat.compacting_note")}</span>
-                                </span>
-                            </div>
-                        }.into_view())
                     } else if active_session
                         .get()
                         .is_some_and(|id| reviewing.with(|ids| ids.contains(&id)))
@@ -10645,7 +10869,7 @@ fn App() -> impl IntoView {
                                 <span class="review-live-lens" aria-hidden="true">
                                     <i></i><i></i><i></i>
                                 </span>
-                                <span class="context-compaction-live-copy">
+                                <span class="review-live-copy">
                                     <strong>{move || t(locale.get(), "chat.reviewing_title")}</strong>
                                     <span>{move || t(locale.get(), "chat.reviewing_note")}</span>
                                 </span>
@@ -10660,6 +10884,24 @@ fn App() -> impl IntoView {
                 }}
                 <div class="spacer"></div>
                 <div class="topbar-actions">
+                {move || {
+                    let count = conversation_outline.with(|rows| rows.len());
+                    (count > 0 && (!center_file_open.get() || center_split.get())).then(|| view! {
+                        <button type="button" class="icon-btn conversation-outline-toggle"
+                            class:active=move || conversation_outline_open.get()
+                            data-testid="conversation-outline-toggle"
+                            title=move || format!("{} · {}",
+                                t(locale.get(), "outline.show"),
+                                tf(locale.get(), "outline.questions_n", &[("n", &count.to_string())]))
+                            aria-label=move || t(locale.get(), "outline.show")
+                            aria-expanded=move || conversation_outline_open.get().to_string()
+                            aria-controls="conversation-outline-panel"
+                            on:click=move |_| conversation_outline_open.update(|open| *open = !*open)>
+                            {compose_icon("list")}
+                            <span class="conversation-outline-count" aria-hidden="true">{count}</span>
+                        </button>
+                    })
+                }}
                 <button type="button" class="icon-btn" data-testid="share-topbar"
                     title=move || {
                         if can_share.get() {
@@ -11381,6 +11623,9 @@ fn App() -> impl IntoView {
                 aria-label=move || t(locale.get(), "center.resize_split")
                 on:mousedown=on_center_split_resize_start></div>
             <div class="chat-stage" class:center-hidden=move || center_file_open.get() && !center_split.get()>
+            <Show when=move || chat_find_open.get()>
+                <chat_find::ChatFindBar open=chat_find_open locale=locale />
+            </Show>
             <div class="chat" id=CHAT_SCROLLER_ID
                 on:mouseup=move |ev| {
                     // Primary button only: a right-click mouseup would re-raise
@@ -11460,14 +11705,9 @@ fn App() -> impl IntoView {
                                         )
                                 })
                                 .count();
-                            let latest_turn_index = items.with(|rows| {
-                                rows.iter()
-                                    .filter(|item| matches!(item, ChatItem::User(_)))
-                                    .count()
-                                    .saturating_sub(1)
-                            }) + transcript_pages
-                                .with(|pages| pages.get(&frame_id).copied())
-                                .map_or(0, |page| page.user_offset);
+                            let checkpoint_turn_index = rows.iter()
+                                .find(|row| row.source_frame_id == frame_id)
+                                .map_or(0, |row| row.checkpoint_user_index);
                             (active_count > 0).then(|| view! {
                                 <section class="exploration-banner mainline" data-testid="mainline-exploration-banner">
                                     <div class="exploration-banner-copy">
@@ -11475,10 +11715,15 @@ fn App() -> impl IntoView {
                                         <strong>{tf(locale.get(), "exploration.mainline_count", &[("n", &active_count.to_string())])}</strong>
                                         <span>{t(locale.get(), "exploration.mainline_warning")}</span>
                                     </div>
-                                    <button type="button" on:click=move |_| start_exploration_from_head.call(latest_turn_index)>{t(locale.get(), "exploration.start_another")}</button>
+                                    <button type="button" on:click=move |_| start_exploration_from_turn.call(checkpoint_turn_index)>{t(locale.get(), "exploration.start_another")}</button>
                                 </section>
                             }.into_view())
                         }
+                    })}
+                    {move || transcript_page_error.get().and_then(|(id, message)| {
+                        (active_session.get().as_deref() == Some(id.as_str())).then(|| view! {
+                            <div class="transcript-page-control" role="alert">{message}</div>
+                        })
                     })}
                     {move || active_session.get().and_then(|id| {
                         transcript_pages.get().get(&id).copied().and_then(|page| {
@@ -11503,7 +11748,7 @@ fn App() -> impl IntoView {
                                 })
                             } else {
                                 page.next_before_seq.map(|_| {
-                                let loading = page.loading;
+                                let loading = page.loading_request.is_some();
                                 view! {
                                     <div class="transcript-page-control">
                                         <button
@@ -11571,16 +11816,15 @@ fn App() -> impl IntoView {
                             let user_offset = transcript_pages
                                 .with(|pages| pages.get(&thread_session_id).copied())
                                 .map_or(0, |page| page.user_offset);
-                            let requested_start = if busy_now {
-                                usize::MAX
-                            } else {
-                                transcript_pages.with(|pages| {
-                                    pages
-                                        .get(&thread_session_id)
-                                        .map(|page| page.window_user_start)
-                                        .unwrap_or(usize::MAX)
-                                })
-                            };
+                            // Sending a turn already selects the latest window.
+                            // Once the user requests history, keep that window
+                            // visible even while new response events arrive.
+                            let requested_start = transcript_pages.with(|pages| {
+                                pages
+                                    .get(&thread_session_id)
+                                    .map(|page| page.window_user_start)
+                                    .unwrap_or(usize::MAX)
+                            });
                             // Rows carry message indices, never cloned messages;
                             // `children` clones lazily, so a flush only pays for
                             // rows whose fingerprint key actually changed.
@@ -11880,12 +12124,7 @@ fn App() -> impl IntoView {
                                         let Some(frame_id) = active_session.get() else {
                                             return false;
                                         };
-                                        let is_latest_completed = items.with(|rows| {
-                                            rows.iter().rposition(|item| {
-                                                matches!(item, ChatItem::Assistant { text, .. } if !text.trim().is_empty())
-                                            }) == Some(i)
-                                        });
-                                        is_latest_completed && !explorations.with(|rows| {
+                                        !explorations.with(|rows| {
                                             rows.iter().any(|row| {
                                                 row.exploration.frame_id == frame_id
                                             })
@@ -11903,10 +12142,11 @@ fn App() -> impl IntoView {
                                                 .find(|row| {
                                                     matches!(
                                                         row.exploration.status.as_str(),
-                                                        "creating" | "active" | "promoting"
+                                                        "creating" | "active" | "promoting" | "failed"
                                                     )
                                                 })
-                                                .is_none_or(|row| row.source_frame_id == frame_id)
+                                                .is_none_or(|row| row.source_frame_id == frame_id
+                                                    && Some(row.checkpoint_user_index) == explore_turn_index)
                                         });
                                         if !joins_current_round {
                                             return false;
@@ -11944,7 +12184,7 @@ fn App() -> impl IntoView {
                                                     run_records, run_clock.read_only(), busy.read_only(), compact_assistant,
                                                     active_acp_agent_id.get().is_none()
                                                         && !matches!(active_branch_state.get_untracked().as_deref(), Some("merged" | "orphaned")),
-                                                    can_branch, show_actions, can_undo, show_explore, can_explore, edit_message, branch_message, undo_message, explore_turn_index.unwrap_or_default(), start_exploration_from_head, session_id,
+                                                    can_branch, show_actions, can_undo, show_explore, can_explore, edit_message, branch_message, undo_message, explore_turn_index.unwrap_or_default(), start_exploration_from_turn, session_id,
                                                     request_turn_memory, request_session_review, respond_confirm, on_resume,
                                                     step_disclosure_state,
                                                     plan_mode_active, plan_compat, on_plan_decision,
@@ -12070,6 +12310,16 @@ fn App() -> impl IntoView {
                             }
                         }
                     />
+                    {move || compaction_active.get().then(|| view! {
+                        <div class="context-compaction-live context-compaction-status" role="status" aria-live="polite" data-testid="context-compaction-live">
+                            <span class="context-compaction-mark" aria-hidden="true">{compose_icon("context-compact")}</span>
+                            <span class="context-compaction-copy">
+                                <strong>{move || t(locale.get(), "chat.compacting_title")}</strong>
+                                <span class="context-compaction-detail">{move || t(locale.get(), "chat.compacting_note")}</span>
+                            </span>
+                            <span class="context-compaction-rule" aria-hidden="true"></span>
+                        </div>
+                    })}
                     {move || (!busy.get()).then(|| active_session.get()).flatten().and_then(|frame_id| {
                         follow_up_questions.with(|all| all.get(&frame_id).cloned()).map(|questions| {
                             let close_frame_id = frame_id.clone();
@@ -12105,7 +12355,7 @@ fn App() -> impl IntoView {
                             }
                         })
                     })}
-                    {move || (!busy.get()).then(|| active_session.get()).flatten().and_then(|id| {
+                    {move || active_session.get().and_then(|id| {
                         transcript_pages.get().get(&id).copied().and_then(|page| {
                             let (_, start, total) = items.with(|rows| {
                                 transcript_render_window(
@@ -12132,7 +12382,14 @@ fn App() -> impl IntoView {
             // Static element; scroll.js toggles `.visible` — no reactive rebuild.
             <button type="button" id="chat-jump-pill" class="chat-jump-pill"
                 aria-label=move || t(locale.get(), "chat.jump_bottom")
-                on:click=move |_| force_chat_bottom()>
+                on:click=move |_| {
+                    if let Some(id) = active_session.get_untracked() {
+                        transcript_pages.update(|pages| {
+                            pages.entry(id).or_default().window_user_start = usize::MAX;
+                        });
+                    }
+                    force_chat_bottom();
+                }>
                 {compose_icon("chevron-down")}
                 {move || t(locale.get(), "chat.jump_bottom")}
             </button>
@@ -12161,6 +12418,7 @@ fn App() -> impl IntoView {
                                     type="button"
                                     class="conversation-outline-item"
                                     class:active=move || conversation_outline_selected.get() == Some(target)
+                                    aria-current=move || if conversation_outline_selected.get() == Some(target) { "location" } else { "false" }
                                     aria-label=aria_label
                                     title=title
                                     prop:disabled=move || {
@@ -12201,38 +12459,10 @@ fn App() -> impl IntoView {
                             }
                         })
                         .collect_view();
-                    let stride = (rows.len() + 27) / 28;
-                    let marks = rows
-                        .iter()
-                        .step_by(stride.max(1))
-                        .map(|entry| {
-                            let width = 45 + entry.text.chars().count().min(40);
-                            let target = entry.user_index;
-                            view! {
-                                <span
-                                    class="conversation-outline-mark"
-                                    class:active=move || conversation_outline_selected.get() == Some(target)
-                                    style=format!("width:{width}%")
-                                ></span>
-                            }
-                        })
-                        .collect_view();
                     view! {
-                        <button
-                            type="button"
-                            class="conversation-outline-toggle"
-                            class:is-hidden=move || conversation_outline_mounted.get()
-                            data-testid="conversation-outline-toggle"
-                            title=move || t(locale.get(), "outline.show")
-                            aria-label=move || t(locale.get(), "outline.show")
-                            aria-expanded=move || conversation_outline_open.get().to_string()
-                            aria-hidden=move || conversation_outline_mounted.get().to_string()
-                            on:click=move |_| conversation_outline_open.set(true)
-                        >
-                            <span class="conversation-outline-marks" aria-hidden="true">{marks}</span>
-                        </button>
                         {conversation_outline_mounted.get().then(|| view! {
                             <nav
+                                id="conversation-outline-panel"
                                 class="conversation-outline-panel"
                                 class:is-open=move || conversation_outline_open.get()
                                 data-testid="conversation-outline"
@@ -12241,6 +12471,7 @@ fn App() -> impl IntoView {
                                 prop:inert=move || !conversation_outline_open.get()
                             >
                                 <header>
+                                    <span class="conversation-outline-heading-icon" aria-hidden="true">{compose_icon("list")}</span>
                                     <div>
                                         <strong>{move || t(locale.get(), "outline.title")}</strong>
                                         <span>{move || tf(locale.get(), "outline.questions_n", &[("n", &count)])}</span>
@@ -12280,8 +12511,18 @@ fn App() -> impl IntoView {
                         .collect::<Vec<_>>()
                 });
                 (!transfers.is_empty()).then(|| view! {
-                    <div class="transfer-tray" aria-live="polite">
-                        {transfers.into_iter().map(|(run, progress)| {
+                    <div class="transfer-tray" class:collapsed=transfer_tray_collapsed.get()>
+                        {if transfer_tray_collapsed.get() {
+                            view! {
+                                <button type="button" class="transfer-summary"
+                                    aria-label=t(locale.get(), "transfer.expand") aria-expanded="false"
+                                    on:click=move |_| transfer_tray_collapsed.set(false)>
+                                    {compose_icon("sync")}
+                                    <span>{tf(locale.get(), "transfer.count", &[("n", &transfers.len().to_string())])}</span>
+                                    {compose_icon("expand")}
+                                </button>
+                            }.into_view()
+                        } else { transfers.into_iter().map(|(run, progress)| {
                             let run_id = run.id.clone();
                             let cancellable = matches!(
                                 run.status.as_str(),
@@ -12294,16 +12535,25 @@ fn App() -> impl IntoView {
                             };
                             let direction = progress.direction.clone();
                             let icon = match direction.as_str() {
-                                "download" => "↓",
-                                "relay" => "↔",
-                                _ => "↑",
+                                "download" => "download",
+                                "relay" => "sync",
+                                _ => "upload",
                             };
                             view! {
                                 <section class="transfer-card" data-run-id=run.id>
                                     <div class="transfer-card-head">
-                                        <span class="transfer-card-icon">{icon}</span>
-                                        <strong>{run.title}</strong>
-                                        <span>{run.context_id}</span>
+                                        <span class="transfer-card-icon" aria-hidden="true">{compose_icon(icon)}</span>
+                                        <strong title=run.context_id>{run.title}</strong>
+                                        <span class="transfer-elapsed">{tf(locale.get(), "transfer.elapsed", &[("time", &transfer_duration(
+                                            run.ended_at.filter(|_| !cancellable).unwrap_or(now)
+                                                .saturating_sub(run.started_at.unwrap_or(run.created_at)).max(0) as u64
+                                        ))])}</span>
+                                        <button type="button" class="icon-btn transfer-collapse"
+                                            title=t(locale.get(), "transfer.collapse")
+                                            aria-label=t(locale.get(), "transfer.collapse") aria-expanded="true"
+                                            on:click=move |_| transfer_tray_collapsed.set(true)>
+                                            {compose_icon("chevron-down")}
+                                        </button>
                                         {cancellable.then(|| {
                                             let tip = cancel_label.clone();
                                             view! {
@@ -12324,7 +12574,7 @@ fn App() -> impl IntoView {
                                     {run_progress_meter(progress, locale.get())}
                                 </section>
                             }
-                        }).collect_view()}
+                        }).collect_view()}}
                     </div>
                 })
             })}
@@ -12752,6 +13002,7 @@ fn App() -> impl IntoView {
                                 let label = reference.label();
                                 let kind = reference.kind();
                                 let (icon, meta_key) = match kind {
+                                    "file-path" => ("doc", "attachment.file_path"),
                                     "skill" => ("skill", "attachment.skill"),
                                     "session" => ("chat", "attachment.session"),
                                     "project" => ("folder", "attachment.project"),
@@ -12761,7 +13012,7 @@ fn App() -> impl IntoView {
                                 };
                                 view! {
                                     <div class=format!("composer-attachment-row composer-reference-card {kind}")
-                                        data-reference-kind=kind title=label.clone()>
+                                        data-reference-kind=kind title=match &reference { ComposerReferenceChip::FilePath { path } => path.clone(), _ => label.clone() }>
                                         <span class="composer-attachment-icon">{compose_icon(icon)}</span>
                                         <span class="composer-attachment-copy">
                                             <span class="composer-attachment ready">{label}</span>
@@ -14856,10 +15107,14 @@ fn App() -> impl IntoView {
                                                                 }.into_view()
                                                             } else {
                                                                 let path_open = path.clone();
+                                                                let path_drag = path.clone();
                                                                 let path_selected = path.clone();
                                                                 let path_pressed = path.clone();
                                                                 view! {
                                                                     <button class="fb-row" data-workspace-path=path.clone()
+                                                                        draggable="true"
+                                                                        on:dragstart=move |ev| start_workspace_path_drag(&ev, &path_drag)
+                                                                        on:dragend=move |_| drag_over.set(false)
                                                                         class:selected=move || selected_workspace_paths.get().contains(&path_selected)
                                                                         attr:aria-pressed=move || selecting_workspace_entries.get().then(|| {
                                                                             selected_workspace_paths.get().contains(&path_pressed).to_string()
@@ -14929,10 +15184,14 @@ fn App() -> impl IntoView {
                                                                 }.into_view()
                                                             } else {
                                                                 let full_open = full.clone();
+                                                                let full_drag = full.clone();
                                                                 let full_selected = full.clone();
                                                                 let full_pressed = full.clone();
                                                                 view! {
                                                                     <button class="fb-row" data-workspace-path=full.clone()
+                                                                        draggable="true"
+                                                                        on:dragstart=move |ev| start_workspace_path_drag(&ev, &full_drag)
+                                                                        on:dragend=move |_| drag_over.set(false)
                                                                         class:selected=move || selected_workspace_paths.get().contains(&full_selected)
                                                                         attr:aria-pressed=move || selecting_workspace_entries.get().then(|| {
                                                                             selected_workspace_paths.get().contains(&full_pressed).to_string()
@@ -15536,6 +15795,7 @@ fn App() -> impl IntoView {
                                         })}
                                     </div>
                                     <div class="sidechat-composer">
+                                      <div class="sidechat-composer-inner">
                                         {move || (!side_chat_quotes.get().is_empty()).then(|| view! {
                                             <div class="composer-attachments composer-reference-chips sidechat-quotes">
                                                 {side_chat_quotes.get().into_iter().enumerate().map(|(idx, quote)| {
@@ -15568,6 +15828,7 @@ fn App() -> impl IntoView {
                                         })}
                                         <textarea
                                             id=SIDE_CHAT_INPUT_ID
+                                            rows="2"
                                             prop:value=move || side_chat_input.get()
                                             prop:placeholder=move || t(locale.get(), "sidechat.placeholder")
                                             on:input=move |ev| side_chat_input.set(event_target_value(&ev))
@@ -15589,7 +15850,7 @@ fn App() -> impl IntoView {
                                                     <button type="button" class="sidechat-model-btn"
                                                         class:active=move || side_chat_model_menu_open.get()
                                                         on:click=move |_| side_chat_model_menu_open.update(|o| *o = !*o)>
-                                                        {move || {
+                                                        <span class="model-picker-label">{move || {
                                                             if let Some(id) = side_chat_acp_agent.get() {
                                                                 acp_agents.get().into_iter().find(|agent| agent.id == id).map(|agent| agent.label).unwrap_or_else(|| "ACP Agent".into())
                                                             } else {
@@ -15600,8 +15861,8 @@ fn App() -> impl IntoView {
                                                                     .map(|m| m.label.clone())
                                                                     .unwrap_or_default()
                                                             }
-                                                        }}
-                                                        <span>"▾"</span>
+                                                        }}</span>
+                                                        {compose_icon("chevron-down")}
                                                     </button>
                                                     {move || side_chat_model_menu_open.get().then(|| view! {
                                                         <div class="sidechat-model-backdrop" on:click=move |_| side_chat_model_menu_open.set(false)></div>
@@ -15625,7 +15886,7 @@ fn App() -> impl IntoView {
                                                                             });
                                                                         }>
                                                                         <span>{m.label.clone()}</span>
-                                                                        {is_active.then(|| view! { <span>"✓"</span> })}
+                                                                        {is_active.then(|| compose_icon("check"))}
                                                                     </button>
                                                                 }
                                                             }).collect_view()}
@@ -15641,7 +15902,7 @@ fn App() -> impl IntoView {
                                                                                 side_chat_acp_agent.set(Some(id.clone()));
                                                                             }>
                                                                             <span>{agent.label.clone()}</span>
-                                                                            {selected.then(|| view! { <span>"✓"</span> })}
+                                                                            {selected.then(|| compose_icon("check"))}
                                                                         </button>
                                                                     }
                                                                 }).collect_view()}
@@ -15662,6 +15923,7 @@ fn App() -> impl IntoView {
                                                 {move || t(locale.get(), "composer.send")}
                                             </button>
                                         </div>
+                                      </div>
                                     </div>
                                 </div>
                             }.into_view()
@@ -16249,6 +16511,7 @@ fn App() -> impl IntoView {
             refresh_conns=Callback::new(move |_: ()| refresh_conns())
             refresh_skills=Callback::new(move |_: ()| refresh_skills())
             reload_skills=reload_skills
+            skills_reloading=extensions.skills_reloading
             refresh_approval_grants=Callback::new(move |_: ()| refresh_approval_grants())
             load_memory_file=Callback::new(load_memory_file)
             load_custom_conn_tools=Callback::new(load_custom_conn_tools)
@@ -16408,6 +16671,8 @@ fn App() -> impl IntoView {
             runtime_interpreter_form=runtime_interpreter_form object_states=runtime_object_states
             locale=locale selection_popup=selection_popup
             on_use_in_publication=Callback::new(move |source| {
+                context_details_modal.set(None);
+                show_research_graph.set(false);
                 publication_binding_source.set(Some(source));
                 show_publication_workspace.set(true);
             })

@@ -140,7 +140,7 @@ class DepMapApiTests(unittest.TestCase):
                     "tcga_project": ["TCGA-BRCA", "TCGA-BRCA"],
                     "depmap_lineage": ["Breast", "Breast"],
                     "expression_available": [True, True],
-                    "expression_mapping_basis": ["ensembl_gene_id", "symbol_fallback"],
+                    "expression_mapping_basis": ["gene_symbol", "ensembl_fallback"],
                     "expression_n": [1090, 20],
                     "expression_median_log2_tpm": [5.25, 0.1],
                     "expression_os_n": [1041, 20],
@@ -349,7 +349,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(payload["gene"], "ESR1")
         self.assertEqual(payload["endpoint"], "OS")
         self.assertEqual(payload["rows"][0]["tcga_project"], "TCGA-BRCA")
-        self.assertEqual(payload["rows"][0]["expression_mapping_basis"], "ensembl_gene_id")
+        self.assertEqual(payload["rows"][0]["expression_mapping_basis"], "gene_symbol")
         self.assertEqual(payload["rows"][0]["expression_os_events"], 153)
         self.assertEqual(payload["manifest"]["multiple_testing"], "BH FDR within TCGA project and survival endpoint")
 
@@ -622,6 +622,7 @@ class DepMapApiTests(unittest.TestCase):
             family="effect_correlation",
             lineage="Bowel",
             lineage_sample_n=63,
+            min_n=10,
         )
         pq.write_table(
             pa.table(
@@ -663,6 +664,98 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(payload["topic_candidates"][0]["topic_type"], "reciprocal_dependency_pair")
         self.assertEqual(payload["topic_candidates"][0]["anchors"]["target_gene"], "TSC2")
         self.assertFalse(payload["new_analysis_started"])
+
+    def _write_direction_network(self, family, min_n, cohort_n=25, status="complete"):
+        root = (
+            self.settings.knowledge_root / "depmap-26q1-full"
+            / "lineage_sparse_networks" / family / "Liver"
+        )
+        manifest = dict(status=status, lineage="Liver", lineage_sample_n=cohort_n)
+        if min_n is not None:
+            manifest["min_n"] = min_n
+        self._write_manifest(root, **manifest)
+        boundary = min_n if type(min_n) is int and min_n > 0 else 10
+        rows = {
+            "family": [family] * 4,
+            "lineage": ["Liver"] * 4,
+            "source_gene": ["TOO_SMALL", "BOUNDARY", "SUPPORTED", "NOISE"],
+            "target_gene": ["TARGET"] * 4,
+            "correlation": [0.99, 0.85, 0.75, 0.95],
+            "pair_n": [boundary - 1, boundary, cohort_n, cohort_n],
+            "p_value": [1e-8, 1e-8, 1e-8, 0.1],
+            "fdr": [1e-6, 1e-6, 1e-6, 0.8],
+        }
+        if family == "expression_dependency":
+            rows["rank_absolute"] = [1, 2, 3, 4]
+            path = root / "blocks" / "block_00001_00004.parquet"
+            path.parent.mkdir()
+        else:
+            rows.update(
+                direction=["positive"] * 4,
+                reverse_correlation=rows["correlation"],
+                reciprocal_rank_max=[1, 2, 3, 4],
+                reciprocal_score=rows["correlation"],
+            )
+            path = root / "reciprocal_pairs.parquet"
+        pq.write_table(pa.table(rows), path)
+
+    def _direction_payload(self):
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "lineage_directions", "lineage": "Liver", "limit": 5},
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_directions_use_each_network_manifest_minimum_for_small_cohorts(self):
+        minima = {"effect_correlation": 10, "expression_correlation": 12, "expression_dependency": 15}
+        for family, min_n in minima.items():
+            self._write_direction_network(family, min_n)
+        payload = self._direction_payload()
+        self.assertEqual(payload["selection_policy"]["network_pair_n_min_by_family"], minima)
+        self.assertEqual(payload["selection_policy"]["network_pair_n_min"], 10)
+        for section in payload["sections"]:
+            if section["label"] not in minima:
+                continue
+            self.assertEqual(section["status"], "FOUND")
+            self.assertEqual(section["selection_filters"]["pair_n_min"], minima[section["label"]])
+            self.assertEqual(section["selection_filters"]["pair_n_min_source"], "manifest.min_n")
+            self.assertEqual(section["eligible_retained_row_count"], 2)
+            self.assertEqual([r["source_gene"] for r in section["rows"]], ["BOUNDARY", "SUPPORTED"])
+        self.assertFalse(payload["new_analysis_started"])
+
+    def test_directions_preserve_a_stricter_manifest_minimum(self):
+        self._write_direction_network("effect_correlation", 35, cohort_n=40)
+        section = self._direction_payload()["sections"][0]
+        self.assertEqual(section["selection_filters"]["pair_n_min"], 35)
+        self.assertEqual([r["pair_n"] for r in section["rows"]], [35, 40])
+
+    def test_directions_report_invalid_minimum_without_blocking_other_networks(self):
+        self._write_direction_network("expression_dependency", 10)
+        for min_n in (None, 0, -1, True, "10", 10.5):
+            with self.subTest(min_n=min_n):
+                self._write_direction_network("effect_correlation", min_n)
+                payload = self._direction_payload()
+                section = payload["sections"][0]
+                self.assertEqual(section["status"], "MODULE_UNAVAILABLE")
+                self.assertIn("manifest.min_n", section["reason"])
+                self.assertEqual(section["rows"], [])
+                self.assertNotIn("effect_correlation", payload["selection_policy"]["network_pair_n_min_by_family"])
+                self.assertEqual(payload["sections"][2]["status"], "FOUND")
+
+    def test_directions_report_cohort_below_manifest_minimum_as_ineligible(self):
+        self._write_direction_network("effect_correlation", 30, cohort_n=25)
+        section = self._direction_payload()["sections"][0]
+        self.assertEqual(section["status"], "INELIGIBLE")
+        self.assertIn("lineage_sample_n", section["reason"])
+        self.assertEqual(section["rows"], [])
+
+    def test_directions_do_not_query_incomplete_expression_dependency_modules(self):
+        self._write_direction_network("expression_dependency", 10, status="building")
+        section = self._direction_payload()["sections"][2]
+        self.assertEqual(section["status"], "NOT_COMPUTED")
+        self.assertEqual(section["rows"], [])
 
     def test_lineage_statuses_distinguish_ineligible_not_computed_and_unavailable(self):
         cnv = (

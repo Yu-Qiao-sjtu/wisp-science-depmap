@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
     assert!(res.success);
     assert_eq!(res.content, "echo: hello mcp");
     let _ = ToolResult::ok(""); // touch ToolResult import
+    client.shutdown().await?;
     println!("wisp-mcp smoke OK");
     Ok(())
 }

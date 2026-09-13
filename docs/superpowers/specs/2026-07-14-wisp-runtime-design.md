@@ -645,7 +645,10 @@ picker's displayed context and the context a run is sent to never disagree. When
 no context can host the language there is no binding or runtime inspector.
 
 The source pane is directly editable for `.R`/`.py` workspace files: a
-highlighted mirror sits under a transparent textarea, unsaved drafts are held
+highlighted mirror sits under a transparent textarea. The input, highlighted
+text, line numbers, and selection layer use the same code font, size, and line
+height from Appearance settings; the toolbar keeps the separate UI size.
+Unsaved drafts are held
 outside the component so an agent `FileChanged` remount cannot drop them, and
 Ctrl+S (or the Save chip) persists through the workspace-scoped `save_file`
 command — user-driven like `execute_runtime`, outside agent tool approval.
@@ -754,6 +757,13 @@ artifacts, not hidden runtime checkpoints.
   budget for one stop request is shared across the runtimes it covers: a worker that
   refuses to exit must never block an Agent turn, a project switch, or app exit.
   Stopping therefore also reclaims a background process a cell left running.
+- On macOS, a process group containing only unreaped zombies can make `killpg`
+  return `EPERM`. The shared process-tree boundary used by runtimes and MCP
+  checks complete group membership and zombie status before treating this case
+  as stopped. Permission errors, failed queries, and changing membership remain
+  errors; live descendants still receive TERM/KILL before the leader is reaped.
+  This lets an EOF-only MCP server close normally and preserves a crashed
+  runtime worker's original exit status in its startup diagnostic.
 - Arbitrary Python/R execution continues to use the existing approval system.
 - Code travels over inherited local/WSL/SSH stdio, not an unauthenticated listening
   port.

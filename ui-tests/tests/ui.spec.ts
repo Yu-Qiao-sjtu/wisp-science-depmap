@@ -28,6 +28,18 @@ async function expectInsideViewport(locator: Locator, width: number, height: num
   expect(box!.y + box!.height).toBeLessThanOrEqual(height);
 }
 
+async function waitForTranscriptFonts(page: Page) {
+  // font-display: swap can change wrapping after the transcript is visible.
+  // Let font layout and scroll anchoring settle before recording a pixel
+  // bookmark; a later, correctly compensated scrollTop is a different value.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+}
+
 async function openModelsSettings(page: Page) {
   await globalSettingsButton(page).click();
   await page.getByRole("button", { name: "Models" }).click();
@@ -4091,6 +4103,44 @@ test("side chat answers in a temporary side panel and can switch model", async (
   });
 });
 
+test("side chat composer matches the main input and keeps long drafts contained", async ({ page }, testInfo) => {
+  await enterApp(page);
+  await composer(page).fill("Check analysis progress");
+  await page.getByRole("button", { name: "Message options" }).click();
+  await page.getByRole("button", { name: "Side chat" }).click();
+  const panel = page.locator(".rightpane");
+  const input = panel.getByPlaceholder("Follow up…");
+  const frame = panel.locator(".sidechat-composer-inner");
+  await expect(frame).toBeVisible();
+  await expect(input).toHaveCSS("resize", "none");
+  await expect(input).toHaveCSS("border-top-width", "0px");
+  await expect(input).toHaveCSS("font-family", await composer(page).evaluate(el => getComputedStyle(el).fontFamily));
+  await expect(frame).toHaveCSS("border-radius", await page.locator(".composer-inner").evaluate(el => getComputedStyle(el).borderRadius));
+  await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+
+  // Escape must dismiss the menu immediately, while keeping the side panel open.
+  await panel.locator(".sidechat-model-btn").click();
+  await expect(panel.locator(".sidechat-model-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel.locator(".sidechat-model-menu")).toHaveCount(0);
+  await expect(frame).toBeVisible();
+
+  await input.fill(Array.from({ length: 30 }, (_, i) => `Analysis step ${i}`).join("\n"));
+  await expect.poll(() => input.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect((await input.boundingBox())!.height).toBeLessThanOrEqual(180);
+  await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+  await input.fill("Follow-up draft");
+  await expect.poll(async () => (await input.boundingBox())!.height).toBeLessThan(80);
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("Follow-up draft\n");
+  await page.setViewportSize({ width: 960, height: 720 });
+  expect(await frame.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("side-chat-composer.png") });
+  await input.press("Enter");
+  await expect(panel.getByText("Side answer: Follow-up draft")).toBeVisible();
+  await expect(input).toHaveValue("");
+});
+
 test("side chat reports when the frozen conversation has no evidence", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("NO_EVIDENCE_TEST");
@@ -4897,6 +4947,8 @@ test("Generated artifacts survive follow-up tool commentary and ignore mentioned
   });
   await expect(reply).toBeVisible({ timeout: 10_000 });
   await expect(reply.locator(".message-artifacts-label")).toHaveText("Generated · 1");
+  await reply.locator(".message-artifacts-label").click();
+  await reply.locator(".generated-directory > summary").filter({ hasText: "results" }).click();
   await expect(reply.locator('.message-artifact-card[data-artifact-name="new.png"]')).toBeVisible();
   await expect(reply.locator('.message-artifact-card[data-artifact-name="old.csv"]')).toHaveCount(0);
   await expect(reply.locator('.message-artifact-card[data-artifact-name="old.png"]')).toHaveCount(0);
@@ -5041,6 +5093,81 @@ test("dropped local file uploads and attaches to the composer", async ({ page })
     el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
   });
   await expect(page.locator(".composer-attachment.ready")).toHaveText("dropped.csv");
+});
+
+for (const mode of ["list", "grid", "search"]) {
+  test(`workspace file drag attaches path context without upload (${mode})`, async ({ page }) => {
+    await enterApp(page);
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    if (mode === "grid") await page.getByRole("button", { name: "Grid view" }).click();
+    if (mode === "search") await page.locator(".fb-search").fill("counts");
+    const path = mode === "search" ? "counts.csv" : "report.csv";
+    const file = page.locator(`.fb-row[data-workspace-path="${path}"]`);
+    await expect(file).toHaveAttribute("draggable", "true");
+    await composer(page).fill("Inspect this file");
+    await file.dragTo(composer(page));
+    const cards = page.locator('[data-reference-kind="file-path"]');
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toHaveAttribute("title", path);
+    await expect(composer(page)).toHaveValue("Inspect this file");
+    await expect(composer(page)).toBeFocused();
+    await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
+    await page.screenshot({ path: test.info().outputPath(`workspace-drag-${mode}.png`) });
+    await file.dragTo(composer(page));
+    await expect(cards).toHaveCount(1);
+    await cards.getByRole("button").click();
+    await expect(cards).toHaveCount(0);
+    await file.dragTo(composer(page));
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+      message: `Inspect this file\n\nReferenced local file paths (not imported): ${JSON.stringify(path)}`,
+      attachments: [], references: [],
+    });
+    expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
+    await expect(cards).toHaveCount(0);
+  });
+}
+
+test("workspace path drops preserve native paths and never upload accompanying bytes", async ({ page }) => {
+  await enterApp(page);
+  const paths = [String.raw`C:\研究 数据\photo.png`, "/Users/alice/研究 数据/photo.png"];
+  for (const path of paths) {
+    await composer(page).evaluate((el, path) => {
+      const data = new DataTransfer();
+      data.setData("application/x-wisp-workspace-path", path);
+      data.items.add(new File(["image bytes"], "photo.png", { type: "image/png" }));
+      el.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+      el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+    }, path);
+  }
+  const cards = page.locator('[data-reference-kind="file-path"]');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.first()).toHaveAttribute("title", paths[0]);
+  await expect(cards.last()).toHaveAttribute("title", paths[1]);
+  await expect(cards.locator("img")).toHaveCount(0);
+  expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
+});
+
+test("workspace drag hover clears on cancellation and ignores text drags", async ({ page }) => {
+  await enterApp(page);
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  const file = page.locator('.fb-row[data-workspace-path="report.csv"]');
+  const data = await page.evaluateHandle(() => new DataTransfer());
+  await file.dispatchEvent("dragstart", { dataTransfer: data });
+  await composer(page).dispatchEvent("dragover", { dataTransfer: data });
+  await expect(page.locator(".composer-inner")).toHaveClass(/composer-dragover/);
+  await file.dispatchEvent("dragend", { dataTransfer: data });
+  await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
+  await composer(page).evaluate(el => {
+    const data = new DataTransfer();
+    data.setData("text/plain", "session-id");
+    el.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+    el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+  });
+  await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
+  await expect(page.locator('[data-reference-kind="file-path"]')).toHaveCount(0);
+  expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
+  await data.dispose();
 });
 
 test("workspace file context menu attaches its path to the composer", async ({ page }) => {
@@ -5264,33 +5391,6 @@ test("Files creates, renames, deletes, and refreshes local entries", async ({ pa
 
   await files.getByRole("button", { name: "Refresh" }).click();
   await expect.poll(() => lastInvokeArgs(page, "list_dir")).toMatchObject({ path: "." });
-});
-
-test("Files sorts by size and modified time and Escape closes only the sort menu", async ({ page }) => {
-  await enterApp(page);
-  await page.getByRole("button", { name: "Files" }).click();
-  const files = page.locator(".rp-files");
-  const fileRows = files.locator(".fb-row:not(.dir)");
-
-  await expect(files.locator('.fb-row[data-workspace-path="report.csv"] .fb-size')).toHaveText("4.0 KB");
-
-  await files.getByTestId("files-sort").click();
-  const sortMenu = files.locator(".fb-sort-menu");
-  await expect(sortMenu).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(sortMenu).toHaveCount(0);
-  await expect(files).toBeVisible();
-
-  await files.getByTestId("files-sort").click();
-  await sortMenu.getByRole("menuitem", { name: "Size" }).click();
-  await expect(fileRows.first()).toHaveAttribute("data-workspace-path", "manuscript.docx");
-  await expect(fileRows.first().locator(".fb-size")).toHaveText("11.1 KB");
-
-  await files.getByTestId("files-sort").click();
-  await sortMenu.getByRole("menuitem", { name: "Modified" }).click();
-  await expect(fileRows.first()).toHaveAttribute("data-workspace-path", "report.csv");
-  await expect(fileRows.first().locator(".fb-size")).toHaveText(/^\d{2}:\d{2}$/);
-  await expect(files.locator('.fb-row.dir[data-workspace-path="DEG"] .fb-size')).toHaveText(/\d/);
 });
 
 test("text entries keep the native context menu", async ({ page }) => {
@@ -6031,6 +6131,65 @@ test("Files uploads local paths to the selected SSH folder", async ({ page }) =>
   await expect(page.locator("#copy-toast")).toContainText("Uploading 1 item");
 });
 
+for (const shortcut of ["Control+v", "Meta+v"]) {
+  test(`copied system files paste as removable path context without upload (${shortcut})`, async ({ page }) => {
+    await enterApp(page);
+    const paths = [String.raw`C:\研究 数据\mcp.html`, String.raw`C:\研究 数据\photo.png`];
+    await page.evaluate(paths => { (window as any).__clipboardFilePaths = paths; }, paths);
+    // Windows can deliver only keydown when CF_HDROP is on the clipboard.
+    // Dispatch the shortcut without pasting the test machine's real clipboard:
+    // parallel clipboard tests may have written unrelated text there.
+    await composer(page).evaluate((el, shortcut) => {
+      el.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "v", code: "KeyV", bubbles: true, cancelable: true,
+        ctrlKey: shortcut === "Control+v", metaKey: shortcut === "Meta+v",
+      }));
+    }, shortcut);
+    const cards = page.locator('[data-reference-kind="file-path"]');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.first()).toHaveAttribute("title", paths[0]);
+    await expect(cards.first()).toContainText("mcp.html");
+    await expect(cards.locator("img")).toHaveCount(0);
+    // Some WebViews also expose an image paste event for a copied image file.
+    await composer(page).evaluate(el => {
+      const data = new DataTransfer();
+      data.items.add(new File(["image"], "photo.png", { type: "image/png" }));
+      el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+    });
+    await expect(cards).toHaveCount(2);
+    await cards.first().getByRole("button").click();
+    await expect(cards).toHaveCount(1);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+      message: `Referenced local file paths (not imported): ${JSON.stringify(paths[1])}`,
+      attachments: [], references: [],
+    });
+    await expect.poll(() => page.evaluate(() =>
+      ((window as any).__skillInvokeLog ?? []).filter((c: any) => c.cmd === "upload_file").length
+    )).toBe(0);
+    await expect(cards).toHaveCount(0);
+  });
+
+}
+
+test("file URI paste decodes paths while ordinary text paste stays native", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).evaluate(el => {
+    const data = new DataTransfer();
+    data.setData("text/uri-list", "# file reference\r\nfile:///home/alice/my%20data.csv\r\nhttps://example.com");
+    el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+  await expect(page.locator('[data-reference-kind="file-path"]')).toHaveAttribute("title", "/home/alice/my data.csv");
+  expect(await composer(page).evaluate(el => {
+    const data = new DataTransfer();
+    data.setData("text/plain", "plain text");
+    data.setData("text/uri-list", "https://example.com");
+    const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+    el.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(false);
+});
+
 test("pasted image attaches to the composer", async ({ page }) => {
   await enterApp(page);
   await composer(page).evaluate((el) => {
@@ -6549,60 +6708,29 @@ test("agent menu updates review, reviewer model, and memory preferences", async 
   await expect(page.getByRole("menu", { name: "Reviewer model" })).toBeVisible();
 });
 
-test("project research graph opens from the sidebar in list and graph views", async ({ page }) => {
+test("research relationships remain available inside the daily journey", async ({ page }) => {
   await enterApp(page);
-
-  const sidebar = page.locator(".sidebar");
-  const navLabels = await sidebar.locator(".nav > .side-btn").allTextContents();
-  expect(navLabels.indexOf("Research graph")).toBe(navLabels.indexOf("Publication") - 1);
-  expect(navLabels.indexOf("Publication")).toBe(navLabels.indexOf("Library") - 1);
-
-  await sidebar.getByRole("button", { name: "Research graph", exact: true }).click();
-  const modal = page.getByTestId("research-graph-modal");
-  await expect(modal).toBeVisible();
+  await page.locator(".sidebar").getByRole("button", { name: "Research journey", exact: true }).click();
+  const journey = page.getByTestId("research-journey");
+  await expect(journey).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
-
-  await sidebar.getByRole("button", { name: "Research graph", exact: true }).click();
-  await expect(modal).toBeVisible();
-  await expect(modal.locator(".research-graph-heading h2")).toHaveCSS("font-family", /Source Serif/);
-  await expect(modal).toContainText("5 nodes · 3 relationships");
-  await expect(modal.getByTestId("research-graph-list")).toBeVisible();
-  await expect(modal.getByText("Use DESeq2 over edgeR")).toBeVisible();
-  await expect(modal).toContainText("applies to");
-  await expect(modal).toContainText("confidence: high");
-  await modal.getByRole("button", { name: "cites: Love et al. 2014" }).click();
-  const edgeDetail = modal.getByTestId("research-edge-detail");
-  await expect(edgeDetail).toContainText("Use DESeq2 over edgeR → Love et al. 2014");
-  await expect(edgeDetail).toContainText("confidence");
-  await expect(edgeDetail).toContainText("high");
+  await expect(journey).toHaveCount(0);
+  await page.locator(".sidebar").getByRole("button", { name: "Research journey", exact: true }).click();
+  await journey.getByRole("tab", { name: "Relationships", exact: true }).click();
+  await expect(journey).toContainText("5 nodes · 3 relationships");
+  await journey.getByRole("button", { name: "cites: Love et al. 2014" }).click();
+  await expect(journey.getByTestId("research-edge-detail")).toContainText("Methods section");
   await page.keyboard.press("Escape");
-  await expect(edgeDetail).toHaveCount(0);
-  await expect(modal).toBeVisible();
-  await expect.poll(async () => (await invokeArgsList(page, "get_research_graph")).length).toBe(2);
-
-  await modal.getByRole("tab", { name: "Graph", exact: true }).click();
-  const canvas = modal.getByTestId("research-graph-canvas");
-  await expect(canvas).toBeVisible();
-  await expect(canvas.locator(".research-graph-node")).toHaveCount(5);
-  await expect(canvas.locator(".research-graph-edge")).toHaveCount(3);
-  const metadataEdge = canvas.getByRole("button", { name: /cites.*confidence: high/ });
-  await expect(metadataEdge.locator("title")).toContainText("evidence: Methods section");
-  await metadataEdge.click();
-  await expect(modal.getByTestId("research-edge-detail")).toContainText("Methods section");
-
+  await expect(journey.getByTestId("research-edge-detail")).toHaveCount(0);
+  await expect(journey).toBeVisible();
+  await journey.getByRole("button", { name: "Graph", exact: true }).click();
+  await expect(journey.locator(".research-graph-node")).toHaveCount(5);
+  await journey.getByTestId("research-graph-canvas").getByRole("button", { name: /cites.*confidence: high/ }).click();
   await page.keyboard.press("Escape");
-  await expect(modal.getByTestId("research-edge-detail")).toHaveCount(0);
-  await expect(modal).toBeVisible();
-
+  await expect(journey.getByTestId("research-edge-detail")).toHaveCount(0);
+  await expect(journey).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Toggle panel" }).click();
-  const rightPanel = page.locator(".rightpane");
-  await rightPanel.getByRole("button", { name: "Add panel" }).click();
-  await expect(rightPanel.locator(".rp-tab-add-menu")
-    .getByRole("button", { name: /Research graph/ })).toHaveCount(0);
+  await expect(journey).toHaveCount(0);
 });
 
 test("registered Artifact opens publication binding and Escape keeps Workspace open", async ({ page }) => {
@@ -6635,7 +6763,8 @@ test("Run surface binds an exact publication evidence source", async ({ page }) 
   await expect(run.locator(".run-use-publication")).toBeVisible();
   await run.getByRole("button", { name: "Use in publication" }).click();
   const dialog = page.getByTestId("publication-binding-dialog");
-  await expect(dialog).toContainText("run-kinase-001");
+  await expect(dialog).toContainText("Kinase screen QC");
+  await expect(runsModal).toHaveCount(0);
   await dialog.locator("textarea").fill("Methods parameters and QC evidence");
   await dialog.getByRole("button", { name: "Bind exact evidence" }).click();
 
@@ -6645,7 +6774,7 @@ test("Run surface binds an exact publication evidence source", async ({ page }) 
       sourceId: "run-kinase-001",
       purpose: "Methods parameters and QC evidence",
       selectionState: "selected",
-      visibility: "public",
+      visibility: "private",
     },
   });
   await expect(dialog).toHaveCount(0);
@@ -6834,11 +6963,97 @@ test("method-search Run reviews the frozen contract before start and exposes con
   await expect(details).toContainText("Cancelled");
 });
 
+test("publication is an independent project page and source selection binds an exact version", async ({ page }) => {
+  await enterApp(page, "/?mockPublication=draft");
+  await page.locator(".sidebar").getByRole("button", { name: "Publication", exact: true }).click();
+  const workspace = page.getByTestId("publication-workspace");
+  await expect(workspace).toHaveAttribute("role", "region");
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator(".workspace-main")).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(workspace).toBeVisible();
+  await workspace.getByTestId("add-publication-evidence").click();
+  await page.locator(".publication-source-choice", {hasText:"figure2b.png"}).click();
+  await page.getByTestId("publication-source-continue").click();
+  const binding = page.getByTestId("publication-binding-dialog");
+  await binding.locator("textarea").fill("Use the reviewed version for Figure 2B");
+  await binding.getByRole("button", { name: "Bind exact evidence" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "bind_publication_evidence")).toMatchObject({input:{sourceKind:"artifact_version",sourceId:"artifact-version-original-v3",visibility:"private"}});
+  await expect(page.getByTestId("publication-evidence-card")).toContainText("Use the reviewed version");
+  await page.locator('[data-session-id="publication-session"]').click();
+  await expect(workspace).toHaveCount(0);
+  await expect(page.locator(".workspace-main")).toBeVisible();
+});
+
+test("publication conversation picker translates selected Chinese and emoji to UTF-8 bytes", async ({ page }) => {
+  await enterApp(page, "/?mockPublication=draft");
+  await page.locator(".sidebar").getByRole("button", { name: "Publication", exact: true }).click();
+  await page.getByTestId("add-publication-evidence").click();
+  await page.getByRole("button", { name: "Research conversations", exact: true }).click();
+  await page.locator(".publication-source-choice").click();
+  const preview=page.getByRole("textbox",{name:"Persisted message text"});
+  await preview.evaluate((element: HTMLTextAreaElement) => {
+    element.focus(); element.setSelectionRange(1,5); element.dispatchEvent(new Event("select",{bubbles:true}));
+  });
+  await page.getByTestId("publication-source-continue").click();
+  const binding = page.getByTestId("publication-binding-dialog");
+  await binding.locator("textarea").fill("The original decision passage");
+  await binding.getByRole("button", { name: "Bind exact evidence" }).click();
+  await expect.poll(async () => {
+    const args=await lastInvokeArgs(page,"bind_publication_evidence");
+    return args?.input?.sourceId ? JSON.parse(args.input.sourceId) : null;
+  }).toEqual({byte_start:1,byte_end:11,frame_id:"publication-session",message_seq:7});
+});
+
+test("publication checks before locking and policy changes invalidate the check", async ({ page }) => {
+  await enterApp(page, "/?mockPublication=draft");
+  await page.locator(".sidebar").getByRole("button", { name: "Publication", exact: true }).click();
+  await page.getByRole("button", { name: "Finalization check", exact: true }).click();
+  const confirm=page.getByTestId("freeze-publication");
+  await expect(confirm).toBeDisabled();
+  await page.getByTestId("check-publication").click();
+  await expect(confirm).toBeEnabled();
+  expect(await invokeArgsList(page,"freeze_publication_revision")).toHaveLength(0);
+  await expect(page.locator(".publication-toolbar .publication-state")).toHaveText("Draft");
+  await page.locator(".publication-policy-inline select").selectOption("public");
+  await expect(confirm).toBeDisabled();
+  await page.locator(".publication-policy-inline input[type=checkbox]").nth(0).check();
+  await page.locator(".publication-policy-inline input[type=checkbox]").nth(1).check();
+  await page.getByTestId("check-publication").click();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect.poll(() => lastInvokeArgs(page,"freeze_publication_revision")).toMatchObject({policy:{target_visibility:"public",phi_pii_reviewed:true,redistribution_reviewed:true}});
+  await expect(page.locator(".publication-toolbar .publication-state")).toHaveText("Frozen");
+  await page.getByRole("button", { name: "Version history", exact: true }).click();
+  await expect(page.locator(".publication-version-row")).toContainText("Submission");
+});
+
+test("publication page keeps its evidence and actions within the available width", async ({ page }) => {
+  await enterApp(page, "/?mockPublication=frozen");
+  await page.locator(".sidebar").getByRole("button", { name: "Publication", exact: true }).click();
+  for (const width of [1280, 900, 600]) {
+    await page.setViewportSize({width,height:900});
+    await expect(page.getByTestId("publication-workspace")).toBeVisible();
+    expect(await page.locator(".publication-page").evaluate(el => el.scrollWidth <= el.clientWidth+1)).toBe(true);
+  }
+  await page.setViewportSize({width:1280,height:900});
+  if (process.env.WISP_PUBLICATION_SHOTS) {
+    mkdirSync(process.env.WISP_PUBLICATION_SHOTS,{recursive:true});
+    await page.screenshot({path:resolve(process.env.WISP_PUBLICATION_SHOTS,"publication-evidence.png")});
+    await page.getByRole("button",{name:"Finalization check",exact:true}).click();
+    await page.screenshot({path:resolve(process.env.WISP_PUBLICATION_SHOTS,"publication-check.png")});
+    await page.getByRole("button",{name:"Version history",exact:true}).click();
+    await page.screenshot({path:resolve(process.env.WISP_PUBLICATION_SHOTS,"publication-versions.png")});
+  }
+});
+
 test("precise message evidence uses a stable locator and Escape closes only the top layer", async ({ page }) => {
   await enterApp(page, "/?mockPublication=draft");
   await page.locator(".sidebar").getByRole("button", { name: "Publication", exact: true }).click();
 
   const workspace = page.getByTestId("publication-workspace");
+  await workspace.getByTestId("add-publication-evidence").click();
+  await workspace.locator(".publication-advanced summary").click();
   await workspace.getByTestId("add-precise-publication-evidence").click();
   await expect(page.getByTestId("publication-anchor-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
@@ -6877,6 +7092,7 @@ test("Frozen Publication is read-only and exposes exact source plus late-capture
 
   const workspace = page.getByTestId("publication-workspace");
   await expect(workspace).toBeVisible();
+  await workspace.locator(".publication-technical summary").click();
   await expect(workspace.getByTestId("publication-exact-source"))
     .toHaveText("artifact-version-late-v4");
   await expect(workspace).toContainText("historical_content_unverified");
@@ -7072,6 +7288,92 @@ test("active SSH transfer shows a live progress card and can be cancelled", asyn
   await expect.poll(() => lastInvokeArgs(page, "cancel_run")).toMatchObject({
     runId: "run-local-002",
   });
+});
+
+test("unmeasured relay shows elapsed activity and collapses without cancelling", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    Object.assign(run, {
+      frame_id: "s-complete", context_id: "ssh:gpu-server", title: "Relay source to destination",
+      kind: "file_transfer", status: "running", started_at: now - 65, ended_at: null,
+      progress_json: JSON.stringify({
+        phase: "uploading", direction: "relay", indeterminate: true,
+        completed_bytes: 0, total_bytes: Math.floor(2.58 * 1024 ** 3),
+        files_completed: 0, files_total: 1, current_file: "reads.fastq.gz",
+        bytes_per_second: null, eta_seconds: null, updated_at: now - 65,
+      }),
+    });
+  });
+  await page.getByTestId("recent-session-card").nth(1).click();
+  const card = page.locator('.transfer-card[data-run-id="run-local-002"]');
+  await expect(card).toContainText("2.58 GB total");
+  await expect(card).toContainText("byte progress unavailable");
+  await expect(card).not.toContainText("0%");
+  await expect(card).not.toContainText("ETA");
+  await expect(card.locator("progress")).not.toHaveAttribute("value");
+  const elapsed = await card.locator(".transfer-elapsed").innerText();
+  await expect.poll(() => card.locator(".transfer-elapsed").innerText()).not.toBe(elapsed);
+  await card.screenshot({ path: test.info().outputPath("relay-expanded.png") });
+  // A higher surface consumes Escape first; the transfer tray stays expanded.
+  await composer(page).press("@");
+  await expect(page.locator(".mention-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".mention-menu")).toBeHidden();
+  await expect(card).toBeVisible();
+  const fullHeight = (await card.boundingBox())!.height;
+  await card.getByRole("button", { name: "Collapse transfers" }).click();
+  const summary = page.getByRole("button", { name: "Expand transfers" });
+  await expect(summary).toBeVisible();
+  await expect(summary).toContainText("Transfers (1)");
+  expect((await summary.boundingBox())!.height).toBeLessThan(fullHeight);
+  await expect(card).toBeHidden();
+  // Polls and the one-second clock must preserve the user's collapsed state.
+  await page.waitForTimeout(2200);
+  await expect(summary).toBeVisible();
+  await summary.click();
+  await expect(card).toBeVisible();
+  // No focus movement into the newly expanded tray before Escape.
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeVisible();
+  await expect(newSessionButton(page)).toBeVisible();
+  expect(await lastInvokeArgs(page, "cancel_run")).toBeNull();
+  await summary.click();
+  await card.getByRole("button", { name: "Cancel run" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "cancel_run")).toMatchObject({ runId: "run-local-002" });
+});
+
+test("unknown-size download is indeterminate and completion restores measured progress", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    Object.assign(run, {
+      frame_id: "s-complete", kind: "file_transfer", status: "running", ended_at: null,
+      progress_json: JSON.stringify({
+        phase: "downloading", direction: "download", indeterminate: true,
+        completed_bytes: 0, total_bytes: 0, files_completed: 0, files_total: 0,
+        current_file: null, bytes_per_second: null, eta_seconds: null,
+        updated_at: Math.floor(Date.now() / 1000),
+      }),
+    });
+  });
+  await page.getByTestId("recent-session-card").nth(1).click();
+  const card = page.locator('.transfer-card[data-run-id="run-local-002"]');
+  await expect(card).toContainText("Byte progress unavailable");
+  await expect(card.locator("progress")).not.toHaveAttribute("value");
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    run.status = "succeeded";
+    run.ended_at = Math.floor(Date.now() / 1000);
+    run.progress_json = JSON.stringify({ ...JSON.parse(run.progress_json),
+      phase: "downloaded", indeterminate: false, total_bytes: 1024, completed_bytes: 1024,
+      updated_at: run.ended_at,
+    });
+  });
+  await expect(card).toContainText("1.00 KB / 1.00 KB · 100%");
+  await expect(card.locator("progress")).toHaveAttribute("value", "100");
+  await expect(card).toBeHidden({ timeout: 5000 });
 });
 
 test("completed SSH transfer cards leave the composer tray promptly", async ({ page }) => {
@@ -8715,12 +9017,68 @@ test("settings page shows the saved protocol", async ({ page }) => {
   await page.locator(".settings-footer").getByRole("button", { name: "Cancel" }).click();
 });
 
+for (const locale of ["en", "zh"]) {
+  test(`model explanations stay with their controls in ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.getByRole("button", { name: locale === "zh" ? "设置" : "Settings", exact: true }).click();
+    await page.locator(".settings-nav").getByRole("button", { name: locale === "zh" ? "模型" : "Models", exact: true }).click();
+    await page.locator(".settings-list-row").first().click();
+    await providerSelect(page).selectOption("anthropic");
+    await page.getByRole("textbox", { name: locale === "zh" ? "模型 ID" : "Model ID", exact: true }).fill("glm-5.3");
+    const form = page.locator(".model-form");
+    const effort = page.getByRole("combobox", { name: locale === "zh" ? "推理强度" : "Reasoning effort", exact: true });
+    await expect(effort).toHaveAccessibleDescription(/.+/);
+    const image = page.getByTestId("use-for-image-generation");
+    const video = page.getByTestId("use-for-video-generation");
+    await expect(image).toHaveAccessibleDescription(locale === "zh" ? /自定义模型 ID/ : /Custom model IDs/);
+    await expect(video).toHaveAccessibleDescription(/grok-imagine-video/);
+    for (const width of [1440, 640]) {
+      await page.setViewportSize({ width, height: 1200 });
+      const control = (await effort.boundingBox())!;
+      const hint = (await page.locator("#model-reasoning-hint").boundingBox())!;
+      expect(Math.abs(control.x - hint.x)).toBeLessThan(2);
+      expect(hint.y - control.y - control.height).toBeGreaterThanOrEqual(0);
+      expect(hint.y - control.y - control.height).toBeLessThan(12);
+      const groups = form.locator(".model-capability");
+      await expect(groups).toHaveCount(3);
+      for (const group of await groups.all()) {
+        const explanation = group.locator(":scope > .hint");
+        const bounds = (await group.boundingBox())!;
+        const text = (await explanation.boundingBox())!;
+        expect(text.x).toBeGreaterThan(bounds.x);
+        expect(text.x + text.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(text.y + text.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+      }
+      const imageGroup = (await groups.nth(1).boundingBox())!;
+      const videoGroup = (await groups.nth(2).boundingBox())!;
+      if (width === 1440) {
+        expect(Math.abs(imageGroup.y - videoGroup.y)).toBeLessThan(2);
+      } else {
+        expect(videoGroup.y).toBeGreaterThanOrEqual(imageGroup.y + imageGroup.height);
+      }
+      expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+      await form.screenshot({ animations: "disabled", path: testInfo.outputPath(`model-explanations-${locale}-${width}.png`) });
+    }
+    await video.check();
+    await image.check();
+    // Explicit image intent now switches arbitrary IDs to the image-only form.
+    await expect(image).toBeChecked();
+    await expect(video).toHaveCount(0);
+    await image.uncheck();
+    await expect(video).not.toBeChecked();
+    await video.check();
+    await expect(image).not.toBeChecked();
+    await expect(video).toBeChecked();
+  });
+}
+
 test("model settings updates activation and confirms removal", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Models");
 
   const opus = page.locator(".settings-list-row").filter({ hasText: "opus-4.8" });
-  await opus.getByRole("button", { name: "Use" }).click();
+  await opus.getByRole("button", { name: "Set as default" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_active_model")).toMatchObject({ id: "opus" });
   await expect(opus).toHaveClass(/settings-list-row-active/);
 
@@ -8969,6 +9327,155 @@ test("UI font size setting scales Chinese chat markdown and composer", async ({ 
 
   await expect.poll(bodyFontSize).toBe("19.5px");
   await expect.poll(composerFontSize).toBe("18px");
+});
+
+
+test("OpenCode preset defaults to Go and saves only user-configured models", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByTestId("model-presets").getByRole("button", { name: "OpenCode", exact: true }).click();
+  await expect(page.getByTestId("provider-api-url")).toHaveValue("https://opencode.ai/zen/go/v1");
+  const rows = page.getByTestId("provider-model-row");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByTestId("provider-model-id")).toHaveValue("");
+  await rows.first().getByTestId("provider-model-id").fill("custom-model");
+  await rows.first().getByTestId("provider-model-protocol").selectOption("anthropic");
+  await page.getByTestId("provider-api-key").fill("fake-go-key");
+  await page.getByTestId("save-provider").click();
+  await expect(page.getByTestId("provider-add-form")).toBeHidden();
+  const profiles = await page.evaluate(async () => {
+    const models: any[] = await (window as any).__TAURI__.core.invoke("list_models");
+    return models.filter(m => m.api_url === "https://opencode.ai/zen/go/v1")
+      .map(m => [m.model, m.provider]);
+  });
+  expect(profiles).toEqual([["custom-model", "anthropic"]]);
+});
+
+test("OpenCode Go and Zen URLs never populate models or overwrite user entries", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByRole("button", { name: /Add API access/i }).click();
+  for (const url of ["https://opencode.ai/zen/go/v1", "https://opencode.ai/zen/v1"]) {
+    await page.getByTestId("provider-api-url").fill(url);
+    await expect(page.getByTestId("provider-model-row")).toHaveCount(1);
+    await expect(page.getByTestId("provider-model-id")).toHaveValue("");
+  }
+  await page.getByTestId("provider-model-id").fill("custom-model");
+  await page.getByTestId("provider-model-protocol").selectOption("openai_responses");
+  await page.getByTestId("provider-api-url").fill("https://opencode.ai/zen/go/v1");
+  await expect(page.getByTestId("provider-model-id")).toHaveValue("custom-model");
+  await expect(page.getByTestId("provider-model-protocol")).toHaveValue("openai_responses");
+});
+
+test("advanced identity controls persist and validate a custom session header", async ({ page }) => {
+  await enterApp(page);
+  await openModelsSettings(page);
+  const advanced = page.getByTestId("model-advanced-options");
+  await advanced.locator("summary").click();
+  await expect(page.getByTestId("model-send-user-agent")).toBeChecked();
+  await expect(page.getByTestId("model-send-session-id")).not.toBeChecked();
+  await expect(page.getByTestId("model-session-header-name")).toBeDisabled();
+  await page.getByTestId("model-send-user-agent").uncheck();
+  await expect(page.getByTestId("model-user-agent")).toBeDisabled();
+  await page.getByTestId("model-send-session-id").check();
+  await page.getByTestId("model-session-header-name").fill("x-custom-session");
+  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "validate_settings")).toMatchObject({ settings: {
+    send_user_agent: false, send_session_id: true, session_header_name: "x-custom-session",
+  }});
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({ profile: {
+    send_user_agent: false, send_session_id: true, session_header_name: "x-custom-session",
+  }});
+  await page.locator(".settings-list-row").first().click();
+  await advanced.locator("summary").click();
+  await expect(page.getByTestId("model-send-user-agent")).not.toBeChecked();
+  await expect(page.getByTestId("model-send-session-id")).toBeChecked();
+  await expect(page.getByTestId("model-session-header-name")).toHaveValue("x-custom-session");
+  await page.getByTestId("model-send-session-id").uncheck();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({ profile: {
+    send_session_id: false, session_header_name: "x-custom-session",
+  }});
+});
+
+test("OpenCode defaults to session identity but permits disabling both headers", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByTestId("model-presets").getByRole("button", { name: "OpenCode", exact: true }).click();
+  await page.getByTestId("model-advanced-options").locator("summary").click();
+  await expect(page.getByTestId("model-send-user-agent")).toBeChecked();
+  await expect(page.getByTestId("model-send-session-id")).toBeChecked();
+  await page.getByTestId("provider-api-url").fill("https://OPENCODE.AI:443/zen/go/v1");
+  await expect(page.getByTestId("model-send-session-id")).toBeChecked();
+  await page.getByTestId("provider-api-url").fill("https://opencode.ai.evil.test/zen/go/v1");
+  await expect(page.getByTestId("model-send-session-id")).not.toBeChecked();
+  await page.getByTestId("provider-api-url").fill("https://opencode.ai/zen/go/v1");
+  await expect(page.getByTestId("model-send-session-id")).toBeChecked();
+  await expect(page.getByTestId("model-session-header-name")).toHaveValue("");
+  await expect(page.getByTestId("model-session-header-name")).toHaveAttribute("placeholder", "x-opencode-session");
+  await page.getByTestId("model-send-session-id").uncheck();
+  await page.getByTestId("model-send-user-agent").uncheck();
+  await page.getByTestId("provider-model-id").fill("user-selected-model");
+  await page.getByTestId("provider-api-key").fill("fake-key");
+  await page.getByTestId("save-provider").click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({ profile: {
+    api_url: "https://opencode.ai/zen/go/v1", send_user_agent: false, send_session_id: false,
+  }});
+});
+
+test("model User-Agent advanced option validates, persists, and resets", async ({ page }) => {
+  await enterApp(page);
+  await openModelsSettings(page);
+  const advanced = page.getByTestId("model-advanced-options");
+  const userAgent = page.getByTestId("model-user-agent");
+  await expect(advanced).not.toHaveAttribute("open", "");
+  await expect(userAgent).toBeHidden();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("");
+  await expect(userAgent).toHaveAttribute("placeholder", "wisp-science");
+  await userAgent.fill("research-client/1.0");
+  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
+    .toMatchObject({ settings: { user_agent: "research-client/1.0" } });
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model"))
+    .toMatchObject({ profile: { user_agent: "research-client/1.0" } });
+  await page.locator(".settings-list-row").first().click();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("research-client/1.0");
+  await userAgent.fill("");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "save_model"))
+    .toMatchObject({ profile: { user_agent: "" } });
+  await page.locator(".settings-list-row").first().click();
+  await advanced.locator("summary").click();
+  await expect(userAgent).toHaveValue("");
+});
+
+test("new API access applies its advanced User-Agent to every added model", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByRole("button", { name: /Add API access/i }).click();
+  await page.getByLabel("Base URL").fill("https://research.example/v1");
+  await page.getByLabel("API key (stored in OS keyring)").fill("test-key");
+  await page.getByTestId("provider-model-row").first().getByLabel("Model ID").fill("research-one");
+  await page.getByTestId("provider-add-model").click();
+  await page.getByTestId("provider-model-row").last().getByLabel("Model ID").fill("research-two");
+  await expect(page.getByTestId("model-user-agent")).toBeHidden();
+  await page.getByTestId("model-advanced-options").locator("summary").click();
+  await page.getByTestId("model-user-agent").fill("research-client/2.0");
+  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
+    .toMatchObject({ settings: { user_agent: "research-client/2.0" } });
+  await page.getByTestId("save-provider").click();
+  await expect(page.getByTestId("provider-add-form")).toBeHidden();
+  const models = await page.evaluate(async () => {
+    const models: any[] = await (window as any).__TAURI__.core.invoke("list_models");
+    return models.filter(m => m.api_url === "https://research.example/v1");
+  });
+  expect(models).toHaveLength(2);
+  expect(models.every((m: any) => m.user_agent === "research-client/2.0")).toBe(true);
 });
 
 test("vision assignment keeps model fields and stored key placeholder untouched", async ({ page }) => {
@@ -9341,6 +9848,41 @@ test("API access on xAI suggests grok chat and imagine image", async ({ page }) 
   await expect(page.getByTestId("provider-model-row").nth(1).getByTestId("provider-use-for-image")).toBeChecked();
 });
 
+for (const modelId of ["gpt-image-2.5", "gateway/custom-image-v3"]) {
+  test(`custom image model ${modelId} validates with image intent and stays out of chat`, async ({ page }) => {
+    await enterApp(page);
+    await openSettingsSection(page, "Models");
+    await page.locator(".settings-list-row", { hasText: "opus-4.8" }).click();
+    await providerSelect(page).selectOption("openai");
+    await page.getByLabel("Model").fill(modelId);
+    await page.getByTestId("use-for-image-generation").check();
+    await expect(page.getByLabel("Max output tokens")).toHaveCount(0);
+    await expect(page.getByTestId("image-size")).toBeVisible();
+    await page.getByTestId("image-size").selectOption("1536x1024");
+    await page.getByRole("button", { name: "Valid" }).click();
+    await expect.poll(() => lastInvokeArgs(page, "validate_settings")).toMatchObject({
+      useForImageGeneration: true,
+      settings: { provider: "openai", model: modelId, supports_vision: false },
+    });
+    await expect(page.locator(".settings-status")).toHaveText(`Validated openai with ${modelId}`);
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({
+      useForImageGeneration: true,
+      profile: { model: modelId, image_size: "1536x1024" },
+    });
+    const row = page.locator(".settings-list-row", { hasText: "opus-4.8" });
+    await expect(row.getByRole("button", { name: "Set as default" })).toHaveCount(0);
+    await row.click();
+    await page.getByTestId("use-for-image-generation").uncheck();
+    await expect(page.getByTestId("image-size")).toBeVisible();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(row.getByRole("button", { name: "Set as default" })).toHaveCount(0);
+    await page.locator(".settings-head-close").click();
+    await page.locator(".model-picker-btn").click();
+    await expect(page.locator(".model-menu")).not.toContainText(modelId);
+  });
+}
+
 test("gpt-image-2 can be assigned for generation but not selected for chat", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Models");
@@ -9377,8 +9919,8 @@ test("gpt-image-2 can be assigned for generation but not selected for chat", asy
 
   const imageModel = page.locator(".settings-list-row", { hasText: "opus-4.8" });
   await expect(imageModel).toContainText("gpt-image-2");
-  await expect(imageModel).toContainText("image gen");
-  await expect(imageModel.getByRole("button", { name: "Use" })).toHaveCount(0);
+  await expect(imageModel).toContainText("Image generation");
+  await expect(imageModel.getByRole("button", { name: "Set as default" })).toHaveCount(0);
 
   await page.locator(".settings-head-close").click();
   await page.locator(".model-picker-btn").click();
@@ -9426,8 +9968,8 @@ test("grok-imagine-image-2.0 can be assigned for generation but not selected for
 
   const imageModel = page.locator(".settings-list-row", { hasText: "opus-4.8" });
   await expect(imageModel).toContainText("grok-imagine-image-2.0");
-  await expect(imageModel).toContainText("image gen");
-  await expect(imageModel.getByRole("button", { name: "Use" })).toHaveCount(0);
+  await expect(imageModel).toContainText("Image generation");
+  await expect(imageModel.getByRole("button", { name: "Set as default" })).toHaveCount(0);
 
   await page.locator(".settings-head-close").click();
   await page.locator(".model-picker-btn").click();
@@ -9475,8 +10017,8 @@ test("grok-imagine-video can be assigned for generation but not selected for cha
 
   const videoModel = page.locator(".settings-list-row", { hasText: "opus-4.8" });
   await expect(videoModel).toContainText("grok-imagine-video");
-  await expect(videoModel).toContainText("video gen");
-  await expect(videoModel.getByRole("button", { name: "Use" })).toHaveCount(0);
+  await expect(videoModel).toContainText("Video generation");
+  await expect(videoModel.getByRole("button", { name: "Set as default" })).toHaveCount(0);
 
   await page.locator(".settings-head-close").click();
   await page.locator(".model-picker-btn").click();
@@ -10613,6 +11155,117 @@ test("large image approval warns before resizing and cannot be remembered", asyn
   });
 });
 
+test("execution plan shows real steps and keeps tool metadata in details", async ({ page }) => {
+  await enterApp(page, "/?mockSessionModels=1");
+  await page.locator('[data-session-id="s-model-a"]').click();
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolCall", frame_id: "s-model-a", name: "update_plan", preview: "0/4 steps done",
+  });
+  await page.locator(".steps-head").last().click();
+  const card = page.getByTestId("execution-plan").last();
+  await expect(card).toContainText("Updating plan…");
+  await expect(card.locator(".execution-plan-count")).toHaveText("0 / 4 completed");
+  await expect(card.locator("li")).toHaveCount(0);
+  await expect(card.locator("pre")).toHaveCount(0);
+
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolResult", frame_id: "s-model-a", name: "update_plan", ok: true, duration_ms: 12,
+    content: "Plan (4 steps):\n[x] Inspect input data\n[~] Run analysis\n[ ] Write report\n[-] Optional comparison",
+  });
+  await expect(card.locator(".execution-plan-count")).toHaveText("1 / 4 completed");
+  await expect(card.locator("li")).toHaveCount(4);
+  await expect(card.locator('li[data-status="running"]')).toContainText("In progress");
+  await expect(card.locator('li[data-status="cancelled"]')).toContainText("Cancelled");
+  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+  await expect(card).not.toContainText("update_plan");
+  await expect(card).not.toContainText("12ms");
+  await expect(card.locator(".execution-plan-head")).toHaveAttribute("aria-expanded", "true");
+  await card.getByRole("button", { name: "Tool details" }).click();
+  await expect(card.locator(".execution-plan-meta")).toContainText("Plan updated");
+  await expect(card.locator(".execution-plan-meta")).toContainText("update_plan");
+  await expect(card.locator("pre")).toHaveCount(2);
+  await card.getByRole("button", { name: "Tool details" }).click();
+  await expect(card.locator("pre")).toHaveCount(0);
+
+  // Explicitly collapsed cards stay collapsed across later transcript updates.
+  await card.locator(".execution-plan-head").click();
+  await expect(card.locator(".execution-plan-body")).toHaveCount(0);
+  await emitTauriEvent(page, "agent", { kind: "Reasoning", frame_id: "s-model-a", delta: "Checking the next step" });
+  await expect(card.locator(".execution-plan-head")).toHaveAttribute("aria-expanded", "false");
+  await card.locator(".execution-plan-head").click();
+  await expect(card.locator("li")).toHaveCount(4);
+});
+
+test("execution plan automatically collapses only when every step completes", async ({ page }) => {
+  await enterApp(page, "/?mockSessionModels=1");
+  await page.locator('[data-session-id="s-model-a"]').click();
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolCall", frame_id: "s-model-a", name: "update_plan", preview: "2/2 steps done",
+  });
+  await page.locator(".steps-head").last().click();
+  const card = page.getByTestId("execution-plan").last();
+  await expect(card.locator(".execution-plan-head")).toHaveAttribute("aria-expanded", "true");
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolResult", frame_id: "s-model-a", name: "update_plan", ok: true, duration_ms: 1,
+    content: "Plan (2 steps):\n[x] Inspect data\n[x] Write report",
+  });
+  await expect(card.locator(".execution-plan-head")).toHaveAttribute("aria-expanded", "false");
+  await expect(card).toContainText("Plan completed");
+  await expect(card.locator(".execution-plan-body")).toHaveCount(0);
+  // Native keyboard activation opens the collapsed header.
+  await card.locator(".execution-plan-head").focus();
+  await page.keyboard.press("Enter");
+  await expect(card.locator("li")).toHaveCount(2);
+  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "2");
+});
+
+test("execution plan failures remain visible and never claim completion", async ({ page }) => {
+  await enterApp(page, "/?mockSessionModels=1");
+  await page.locator('[data-session-id="s-model-a"]').click();
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolCall", frame_id: "s-model-a", name: "update_plan", preview: "4/4 steps done",
+  });
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolResult", frame_id: "s-model-a", name: "update_plan", ok: false,
+    content: "Plan rejected by the user. Revise the plan.",
+  });
+  await page.locator(".steps-head").last().click();
+  const card = page.getByTestId("execution-plan").last();
+  await expect(card.getByRole("alert")).toContainText("Plan rejected by the user");
+  await expect(card).toContainText("Plan update failed");
+  await expect(card.locator(".execution-plan-count")).toHaveCount(0);
+  await expect(card.getByRole("progressbar")).toHaveCount(0);
+  await expect(card.locator(".execution-plan-head")).toHaveAttribute("aria-expanded", "true");
+});
+
+test("execution plan fits narrow panes in light and dark themes", async ({ page }, testInfo) => {
+  await page.goto("/?mockSessionModels=1&mockLocale=zh");
+  await page.locator(".proj-card-main").first().click();
+  await page.locator('[data-session-id="s-model-a"]').click();
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolResult", frame_id: "s-model-a", name: "update_plan", ok: true,
+    content: "Plan (4 steps):\n[x] 检查输入数据\n[~] 执行分析流程\n[ ] 整理结果与报告\n[-] 可选对照分析",
+  });
+  await page.locator(".steps-head").last().click();
+  const card = page.getByTestId("execution-plan").last();
+  await expect(card.locator("li")).toHaveCount(4);
+  await expect(card.locator(".execution-plan-title")).toHaveText("执行计划");
+  await expect(card.locator(".execution-plan-count")).toHaveText("1 / 4 已完成");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+    for (const width of [600, 320]) {
+      // Exercise the component's container width independently of desktop chrome.
+      await card.evaluate((element, width) => { (element as HTMLElement).style.width = `${width}px`; }, width);
+      const box = await card.boundingBox();
+      expect(box).not.toBeNull();
+      for (const row of await card.locator(".execution-plan-head, li").all()) {
+        expect(await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      }
+      await card.screenshot({ path: testInfo.outputPath(`plan-${theme}-${width}.png`) });
+    }
+  }
+});
+
 test("update_plan approval renders structured multiline Markdown", async ({ page }) => {
   await enterApp(page, "/?mockSessionModels=1");
   await page.locator('[data-session-id="s-model-a"]').click();
@@ -11214,6 +11867,7 @@ test("closing a center-file tab restores the conversation reading position", asy
   await page.locator(".proj-card-main").first().click();
   const scroller = page.locator("#chat-scroller");
   await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+  await waitForTranscriptFonts(page);
   await scroller.evaluate((element) => {
     element.scrollTop = Math.max(120, element.scrollHeight / 3);
     element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
@@ -11385,7 +12039,7 @@ test("home search opens artifacts, sessions, and settings", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Back to app" })).toBeVisible();
   await page.locator(".settings-head-close").click();
 
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await expect(search).toBeVisible();
   await expect(page.locator(".project-search-row", { hasText: "nif3.treefile" })).toBeVisible();
@@ -11400,7 +12054,7 @@ test("home search opens artifacts, sessions, and settings", async ({ page }) => 
   await expect(page.locator(".am-name")).toHaveText("nif3.treefile");
   await page.locator(".artifact-modal").getByRole("button", { name: "Close panel" }).click();
 
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await search.fill("Enumerate");
   await expect(page.locator(".project-search-row", { hasText: "Enumerate MCP bio-tools databases" })).toBeVisible();
   await search.press("Enter");
@@ -11411,6 +12065,195 @@ test("home search opens artifacts, sessions, and settings", async ({ page }) => 
     }));
     return calls.find((c: any) => c.cmd === "load_session") ?? null;
   })).toMatchObject({ cmd: "load_session", args: { id: "s-complete" } });
+});
+
+test("a recent conversation in another project opens at the latest message (#1197)", async ({ page }) => {
+  await page.goto("/?mockLongPages=8");
+  await page.locator(".proj-card-main").first().click();
+  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+  const scroller = page.locator("#chat-scroller");
+  await scroller.evaluate((el) => {
+    el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    el.scrollTop = 100;
+  });
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    core.invoke = async (cmd: string, args: any) => {
+      const result = await original(cmd, args);
+      return cmd === "list_recent_sessions"
+        ? result.map((row: any) => ({ ...row, project_id: "other" }))
+        : result;
+    };
+  });
+  await page.getByRole("button", { name: "Back to projects", exact: true }).click();
+  await page.getByTestId("recent-session-card").nth(1).click();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "other" });
+  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+  await expect.poll(() => scroller.evaluate((el) =>
+    el.scrollHeight - el.clientHeight - el.scrollTop,
+  )).toBeLessThan(8);
+});
+
+for (const failure of ["command", "payload"]) {
+  test(`earlier history reports ${failure} failures and can retry (#1199)`, async ({ page }) => {
+    await page.goto("/?mockLongSession=1");
+    await page.locator(".proj-card-main").first().click();
+    const loadEarlier = page.getByRole("button", { name: "Load earlier messages", exact: true });
+    await expect(loadEarlier).toBeVisible();
+    await page.evaluate((failure) => {
+      const core = (window as any).__TAURI__.core;
+      const original = core.invoke;
+      let fail = true;
+      core.invoke = async (cmd: string, args: any) => {
+        const before = args instanceof Map ? args.get("beforeSeq") : args?.beforeSeq;
+        if (cmd === "load_session" && before != null && fail) {
+          fail = false;
+          await new Promise((resolve) => { (window as any).__releaseHistory = resolve; });
+          if (failure === "command") throw new Error("History read failed");
+          return { items: "invalid transcript" };
+        }
+        return original(cmd, args);
+      };
+    }, failure);
+    await loadEarlier.click();
+    await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toBeDisabled();
+    await page.evaluate(() => (window as any).__releaseHistory());
+    await expect(page.getByRole("alert")).toContainText("Could not load earlier messages:");
+    await expect(loadEarlier).toBeEnabled();
+    await loadEarlier.click();
+    await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}
+
+test("earlier history remains available while the current turn is running (#1199)", async ({ page }) => {
+  await page.goto("/?mockLongSession=1");
+  await page.locator(".proj-card-main").first().click();
+  await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    core.invoke = (cmd: string, args: any) => cmd === "send_message"
+      ? new Promise(() => {})
+      : original(cmd, args);
+  });
+  await composer(page).fill("Keep working while I read the earlier context");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
+  await expect.poll(() => page.evaluate(() => (window as any).__transcriptPageCalls)).toEqual([null, 41]);
+  await emitTauriEvent(page, "agent", {
+    kind: "Text", frame_id: "long-session", delta: "Still working on the latest answer",
+  });
+  await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
+  await page.getByRole("button", { name: "Show newer messages", exact: true }).click();
+  await expect(page.getByText("Still working on the latest answer", { exact: true })).toBeAttached();
+  await page.getByRole("button", { name: "Show earlier loaded messages", exact: true }).click();
+  await page.locator("#chat-scroller").evaluate((el) => {
+    el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    el.scrollTop = 100;
+  });
+  await page.locator("#chat-jump-pill").click();
+  await expect(page.getByText("Still working on the latest answer", { exact: true })).toBeAttached();
+  await expect.poll(() => page.locator("#chat-scroller").evaluate((el) =>
+    el.scrollHeight - el.clientHeight - el.scrollTop,
+  )).toBeLessThan(8);
+});
+
+test("a stale earlier page does not duplicate history after reloading a session (#1199)", async ({ page }) => {
+  await page.goto("/?mockLongSession=1");
+  await page.locator(".proj-card-main").first().click();
+  await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    core.invoke = async (cmd: string, args: any) => {
+      const before = args instanceof Map ? args.get("beforeSeq") : args?.beforeSeq;
+      if (cmd === "load_session" && before != null) {
+        await new Promise((resolve) => { (window as any).__releaseHistory = resolve; });
+      }
+      return original(cmd, args);
+    };
+  });
+  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toBeDisabled();
+  await newSessionButton(page).click();
+  await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
+  await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toBeEnabled();
+  await page.evaluate(() => (window as any).__releaseHistory());
+  await expect.poll(() => page.evaluate(() => (window as any).__transcriptPageCalls)).toEqual([null, null, 41]);
+  await expect(page.getByText("Oldest loaded question", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".msg.user")).toHaveCount(10);
+});
+
+for (const staleOutcome of ["success", "failure"]) {
+  test(`reloaded history rejects an old ${staleOutcome} while the same cursor is requested again`, async ({ page }) => {
+    await enterApp(page, "/?mockLongSession=1");
+    await page.evaluate((staleOutcome) => {
+      const core = (window as any).__TAURI__.core;
+      const original = core.invoke;
+      (window as any).__historyRequests = [];
+      core.invoke = async (cmd: string, args: any) => {
+        const before = args instanceof Map ? args.get("beforeSeq") : args?.beforeSeq;
+        if (cmd === "load_session" && before != null) {
+          const index = (window as any).__historyRequests.length;
+          await new Promise((resolve) => (window as any).__historyRequests.push(resolve));
+          if (index === 0 && staleOutcome === "failure") throw new Error("Obsolete history failure");
+          const result = await original(cmd, args);
+          if (index === 0) result.items[0].text = "Obsolete historical question";
+          return result;
+        }
+        return original(cmd, args);
+      };
+    }, staleOutcome);
+    const loadEarlier = page.getByRole("button", { name: "Load earlier messages", exact: true });
+    const loading = page.getByRole("button", { name: "Loading earlier messages…", exact: true });
+    await loadEarlier.click();
+    await expect(loading).toBeDisabled();
+    await newSessionButton(page).click();
+    await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
+    await loadEarlier.click();
+    await expect.poll(() => page.evaluate(() => (window as any).__historyRequests.length)).toBe(2);
+    await page.evaluate(() => (window as any).__historyRequests[0]());
+    // Flush the rejected promise / decoded response and the browser render.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("Obsolete historical question", { exact: true })).toHaveCount(0);
+    await expect(loading).toBeDisabled();
+    await page.evaluate(() => (window as any).__historyRequests[1]());
+    await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(loading).toHaveCount(0);
+  });
+}
+
+test("a 62-turn history with a large message reaches its first question (#1199)", async ({ page }) => {
+  await page.goto("/?mockLongPages=4&mockLongRows=40");
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    core.invoke = async (cmd: string, args: any) => {
+      const result = await original(cmd, args);
+      if (cmd === "load_session") {
+        const before = args instanceof Map ? args.get("beforeSeq") : args?.beforeSeq;
+        const index = Number(before ?? 0);
+        result.user_offset = Math.max(0, 62 - (index + 1) * 20);
+        if (index === 3) result.items = result.items.slice(0, 4);
+        if (index === 2) result.items[1].text = "Large historical answer " + "x".repeat(380_000);
+      }
+      return result;
+    };
+  });
+  await page.locator(".proj-card-main").first().click();
+  for (let index = 1; index <= 3; index++) {
+    await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+    await expect(page.getByText(new RegExp(`Window page ${index} row 0 `))).toBeAttached();
+  }
+  await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__transcriptPageCalls)).toEqual([null, 1, 2, 3]);
+  await expect(page.locator(".msg.user")).toHaveCount(20);
 });
 
 test("long transcripts load earlier turns without jumping to the new top", async ({ page }) => {
@@ -11486,27 +12329,42 @@ test("opening a long conversation lands at the latest message and stays stable o
     .toBeGreaterThan(readingPosition + 400);
 });
 
-test("switching conversations restores each reading position (#849)", async ({ page }) => {
-  await page.goto("/?mockLongPages=8");
-  await page.locator(".proj-card-main").first().click();
+for (const delayedFont of [false, true]) {
+  test(`switching conversations restores each reading position (#849)${delayedFont ? " with delayed fonts" : ""}`, async ({ page }) => {
+    let releaseFont = () => {};
+    if (delayedFont) {
+      const fontGate = new Promise<void>((resolve) => { releaseFont = resolve; });
+      await page.route("**/fonts/source-serif-4-latin.woff2", async (route) => {
+        await fontGate;
+        await route.continue();
+      });
+    }
+    await page.goto("/?mockLongPages=8", { waitUntil: "domcontentloaded" });
+    await page.locator(".proj-card-main").first().click();
 
-  const scroller = page.locator("#chat-scroller");
-  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
-  await scroller.evaluate((element) => {
-    element.scrollTop = Math.max(120, element.scrollHeight / 3);
-    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+    const scroller = page.locator("#chat-scroller");
+    await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+    if (delayedFont) {
+      await expect.poll(() => page.evaluate(() => document.fonts.status)).toBe("loading");
+    }
+    releaseFont();
+    await waitForTranscriptFonts(page);
+    await scroller.evaluate((element) => {
+      element.scrollTop = Math.max(120, element.scrollHeight / 3);
+      element.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+    });
+    const readingTop = await scroller.evaluate((element) => element.scrollTop);
+
+    await newSessionButton(page).click();
+    await expect(page.locator(".empty")).toBeVisible();
+    await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
+    await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(readingTop - 40);
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeLessThan(readingTop + 40);
   });
-  const readingTop = await scroller.evaluate((element) => element.scrollTop);
-
-  await newSessionButton(page).click();
-  await expect(page.locator(".empty")).toBeVisible();
-  await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
-  await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
-  await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(readingTop - 40);
-  await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-    .toBeLessThan(readingTop + 40);
-});
+}
 
 test("a thread rebuild clamp does not park a followed view at the top (#927)", async ({ page }) => {
   await page.goto("/?mockLongPages=8");
@@ -11613,6 +12471,7 @@ test("conversation outline loads and jumps to an older user question", async ({ 
   );
   await expect(oldestOutline.locator(".conversation-outline-time")).not.toBeEmpty();
   await oldestOutline.click();
+  await expect(oldestOutline).toHaveAttribute("aria-current", "location");
 
   await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({
     id: "long-session",
@@ -11763,7 +12622,7 @@ test("branching from a paged transcript uses the global user-turn index", async 
 
 test("HTML artifact modal uses a desktop preview viewport", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("dashboard");
   await search.press("Enter");
@@ -12331,7 +13190,7 @@ test("real SnapGene annotations render in the real Motif MCP App", async ({ page
 
 test("Markdown artifact modal opens its rendered preview in center", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");
@@ -12350,7 +13209,7 @@ test("Markdown artifact modal opens its rendered preview in center", async ({ pa
 
 test("reverse preview selections anchor the action popup above the first selected line (#779)", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");
@@ -12392,9 +13251,68 @@ test("reverse preview selections anchor the action popup above the first selecte
     .toBeLessThan(selection.top);
 });
 
+test("bound report links own file actions and copy file paths", async ({ page }) => {
+  await page.goto("/?mockResourceSession=1");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const search = commandPalette(page);
+  await search.fill("Enumerate");
+  await search.press("Enter");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: async (text: string) => { (window as any).__copiedResourcePath = text; },
+    });
+  });
+  const link = page.getByRole("link", { name: "quality_report.html", exact: true });
+  await expect(link).toHaveAttribute("href", "#");
+  const menu = page.locator(".ctx-menu");
+  await link.click({ button: "right" });
+  await expect(menu.getByRole("button", { name: "Open with default app" })).toBeVisible();
+  await expect(menu.getByRole("button", { name: "Copy message" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(link).toBeVisible();
+
+  // A leftover text selection must not replace the file menu.
+  await link.evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  for (const [label, expected] of [
+    ["Copy relative path", "results/quality report.html"],
+    ["Copy absolute path", "/mock/root/results/quality report.html"],
+  ]) {
+    await link.click({ button: "right" });
+    await menu.getByRole("button", { name: label, exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__copiedResourcePath)).toBe(expected);
+  }
+  for (const [label, command] of [
+    ["Open with default app", "open_workspace_path"],
+    ["Show in file manager", "reveal_in_file_manager"],
+  ]) {
+    await link.click({ button: "right" });
+    await menu.getByRole("button", { name: label }).click();
+    await expect.poll(() => lastInvokeArgs(page, command)).toMatchObject({ path: "results/quality report.html" });
+  }
+  await link.click({ button: "right" });
+  await menu.getByRole("button", { name: "Download", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "download_artifact_version"))
+    .toMatchObject({ versionId: "resource-version-html" });
+
+  const references = page.getByRole("link", { name: "Open bound references" });
+  await references.click({ button: "right" });
+  await menu.getByRole("button", { name: "Open in center" }).click();
+  await expect(page.locator('.center-tab[data-center-path="artifact-version:resource-version-bib"]'))
+    .toContainText("references.bib");
+  await expect.poll(() => lastInvokeArgs(page, "read_artifact_version"))
+    .toMatchObject({ versionId: "resource-version-bib" });
+});
+
 test("bound Markdown resources use immutable versions and a scrollable center preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12433,7 +13351,7 @@ test("bound Markdown resources use immutable versions and a scrollable center pr
 
 test("bound DOCX resources open their immutable preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12453,7 +13371,7 @@ test("bound DOCX resources open their immutable preview", async ({ page }) => {
 
 test("bound Python resources open their immutable code preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12489,7 +13407,7 @@ test("bound Python resources open their immutable code preview", async ({ page }
 
 test("bound R resources open their immutable code preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12529,7 +13447,7 @@ test("bound R resources open their immutable code preview", async ({ page }) => 
 
 test("bound BibTeX resources open their immutable text preview", async ({ page }) => {
   await page.goto("/?mockResourceSession=1");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("Enumerate");
   await search.press("Enter");
@@ -12566,7 +13484,7 @@ async function selectCenterPreviewText(page: Page) {
 
 test("selecting preview text quotes it into chat and saves a review annotation", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = commandPalette(page);
   await search.fill("analysis-report");
   await search.press("Enter");
@@ -13068,6 +13986,77 @@ test("import can open an existing folder in place without copying it", async ({ 
   });
   await expect.poll(() => lastInvokeArgs(page, "import_project")).toBeNull();
 });
+
+test("opening a registered folder offers every project identity before switching", async ({ page }) => {
+  await page.goto("/?mockWorkspaceProjects=multiple");
+  const openFolder = async () => {
+    await page.getByRole("button", { name: "Import project" }).click();
+    await page.getByTestId("project-import-options")
+      .getByRole("button", { name: "Open a folder in place" }).click();
+  };
+  await openFolder();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker).toBeVisible();
+  await expect(picker.locator("[data-project-id]")).toHaveCount(4);
+  await expect(picker.locator('[data-project-id="P15"]')).toContainText("31 sessions");
+  await expect(picker.locator('[data-project-id="P37"]')).toContainText("9 sessions");
+  await expect(picker.locator('[data-project-id="P15"]')).toContainText("ID: P15");
+  await expect.poll(() => lastInvokeArgs(page, "list_workspace_projects"))
+    .toMatchObject({ workspaceDir: "/mock/root/new-project" });
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
+  await expect(page.locator(".projects-screen")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+
+  await openFolder();
+  await picker.locator('[data-project-id="P15"]').click();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "P15" });
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+  await expect.poll(() => lastInvokeArgs(page, "recover_workspace_sessions")).toBeNull();
+});
+
+test("opening a folder with one existing project reuses its identity", async ({ page }) => {
+  await page.goto("/?mockWorkspaceProjects=single");
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page.getByTestId("project-import-options")
+    .getByRole("button", { name: "Open a folder in place" }).click();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker.locator("[data-project-id]")).toHaveCount(1);
+  await picker.locator('[data-project-id="P37"]').click();
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "P37" });
+  await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+});
+
+test("registered folder chooser respects hidden project identities", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("wisp-privacy-mode-active", "1");
+    localStorage.setItem("wisp-privacy-mode-projects", JSON.stringify(["P15"]));
+  });
+  await page.goto("/?mockWorkspaceProjects=multiple");
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page.getByTestId("project-import-options")
+    .getByRole("button", { name: "Open a folder in place" }).click();
+  const picker = page.getByTestId("workspace-project-picker");
+  await expect(picker.locator("[data-project-id]")).toHaveCount(3);
+  await expect(picker.locator('[data-project-id="P15"]')).toHaveCount(0);
+  await expect(picker).toContainText("Projects hidden by Privacy mode are omitted");
+});
+
+for (const mode of ["error", "malformed"]) {
+  test(`workspace lookup ${mode} does not fall through to registration`, async ({ page }) => {
+    await page.goto(`/?mockWorkspaceProjects=${mode}`);
+    await page.getByRole("button", { name: "Import project" }).click();
+    await page.getByTestId("project-import-options")
+      .getByRole("button", { name: "Open a folder in place" }).click();
+    await expect(page.locator(".project-open-error")).toBeVisible();
+    await expect(page.locator("#new-project-name")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-project-picker")).toHaveCount(0);
+    await expect.poll(() => lastInvokeArgs(page, "create_project")).toBeNull();
+    await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+  });
+}
 
 test("workspace recovery previews archived conversations before transactional import", async ({ page }) => {
   await page.goto("/");
@@ -13635,7 +14624,15 @@ test("context compaction leaves a visible timeline flag", async ({ page }) => {
     frame_id: frameId,
     strategy: "auto",
   });
-  await expect(page.getByTestId("context-compaction-live")).toContainText("Centrifuging context");
+  const live = page.getByTestId("context-compaction-live");
+  await expect(live).toContainText("Compacting context");
+  await expect(live).toHaveAttribute("role", "status");
+  await expect(page.locator(".topbar")).not.toContainText(/compacting|centrifuging/i);
+  const animatedPath = live.locator("svg path").first();
+  await expect(animatedPath).toHaveCSS("animation-name", "context-gather-top");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(animatedPath).toHaveCSS("animation-name", "none");
+  await expect(live).toBeVisible();
 
   await emitTauriEvent(page, "agent", {
     kind: "Compaction",
@@ -13648,7 +14645,58 @@ test("context compaction leaves a visible timeline flag", async ({ page }) => {
   const flag = page.getByTestId("context-compaction-flag");
   await expect(page.getByTestId("context-compaction-live")).toBeHidden();
   await expect(flag).toContainText("Context automatically compacted");
-  await expect(flag).toContainText("812.0k → 236.0k");
+  await expect(flag).toContainText("812.0k → 236.0k tokens");
+  await expect(flag).toContainText("71% smaller");
+  await expect(flag).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".topbar")).not.toContainText(/compact|812000|236000/i);
+});
+
+for (const locale of ["en", "zh"]) {
+  test(`context compaction presentation fits narrow and dark layouts (${locale})`, async ({ page }) => {
+    await page.goto(`/?mockLocale=${locale}`);
+    await page.locator(".proj-card-main").first().click();
+    await expect(composer(page)).toBeVisible();
+    await composer(page).fill("Summarize the plant single-cell analysis");
+    await page.getByRole("button", { name: locale === "zh" ? "发送" : "Send", exact: true }).click();
+    await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+    const frameId = String((await lastInvokeArgs(page, "send_message")).sessionId);
+    await emitTauriEvent(page, "agent", { kind: "CompactionStarted", frame_id: frameId, strategy: "manual" });
+    const live = page.getByTestId("context-compaction-live");
+    await expect(live).toContainText(locale === "zh" ? "正在压缩上下文" : "Compacting context");
+    await waitForTranscriptFonts(page);
+    await live.screenshot({ path: test.info().outputPath(`compacting-${locale}.png`), animations: "disabled" });
+    await emitTauriEvent(page, "agent", { kind: "Compaction", frame_id: frameId, before: 682749, after: 355570, strategy: "manual" });
+    const flag = page.getByTestId("context-compaction-flag");
+    await expect(flag).toContainText(locale === "zh" ? "上下文已压缩" : "Context compacted");
+    await expect(flag).toContainText(locale === "zh" ? "减少 48%" : "48% smaller");
+    await expect(page.locator(".topbar")).not.toContainText(/压缩|compact|682749|355570/i);
+    await page.screenshot({ path: test.info().outputPath(`compacted-${locale}-light.png`), animations: "disabled" });
+    await page.setViewportSize({ width: 760, height: 800 });
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+    await expectInsideViewport(flag, 760, 800);
+    expect(await flag.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`compacted-${locale}-dark-narrow.png`), animations: "disabled" });
+    for (const [before, after] of [[0, 0], [100, 120]]) {
+      await emitTauriEvent(page, "agent", { kind: "Compaction", frame_id: frameId, before, after, strategy: "manual" });
+      await expect(flag.last()).toContainText(`${before} → ${after} tokens`);
+      await expect(flag.last().locator(".context-compaction-reduction")).toHaveCount(0);
+    }
+  });
+}
+
+test("context compaction stays with its session and clears on failure", async ({ page }) => {
+  await enterApp(page, "/?mockSessionModels=1");
+  const frameId = "s-model-a";
+  await page.locator(`[data-session-id="${frameId}"]`).click();
+  await emitTauriEvent(page, "agent", { kind: "CompactionStarted", frame_id: frameId, strategy: "auto" });
+  await expect(page.getByTestId("context-compaction-live")).toBeVisible();
+  await page.locator('[data-session-id="s-model-b"]').click();
+  await expect(page.getByTestId("context-compaction-live")).toHaveCount(0);
+  await page.locator(`[data-session-id="${frameId}"]`).click();
+  await expect(page.getByTestId("context-compaction-live")).toBeVisible();
+  await emitTauriEvent(page, "agent", { kind: "Error", frame_id: frameId, message: "Compaction interrupted" });
+  await expect(page.getByTestId("context-compaction-live")).toHaveCount(0);
+  await expect(page.getByTestId("context-compaction-flag")).toHaveCount(0);
 });
 
 test("context-limit recovery offers three actions and owns the first Escape", async ({ page }) => {
@@ -15725,4 +16773,80 @@ test("local environment manual paths save, survive reopening, and preserve faile
   await env.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(env).toContainText("C:\\Custom Python\\python.exe");
   expect(await lastInvokeArgs(page, "send_message")).toBeNull();
+});
+
+
+test("Generated outputs use a collapsed nested directory tree with working previews", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("GENERATEDTREE");
+  await page.getByRole("button", { name: "Send" }).click();
+  const reply = page.locator(".msg.assistant", { hasText: "Generated tree fixture complete." });
+  const summary = reply.locator(".message-artifacts-label");
+  await expect(summary).toHaveText("Generated · 66");
+  const tree = reply.locator(".generated-artifact-tree");
+  await expect(tree).not.toBeVisible();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(tree).toBeVisible();
+  await expect(tree.locator(".generated-directory > summary").filter({ hasText: "@analysis" })).toBeVisible();
+  await expect(tree.locator('[data-artifact-name="notes.md"]')).not.toBeVisible();
+  const results = tree.locator(".generated-directory").filter({ has: page.locator(":scope > summary .generated-directory-name", { hasText: /^results$/ }) });
+  await expect(results.locator(":scope > summary")).toContainText("63");
+  await expect(tree.locator('[data-artifact-name="new.png"]')).not.toBeVisible();
+  await results.locator(":scope > summary").click();
+  const batch = results.locator(".generated-directory > summary").filter({ hasText: "batch" });
+  await expect(batch).toContainText("62");
+  await expect(tree.locator('[data-artifact-name="output-0.csv"]')).not.toBeVisible();
+  await batch.click();
+  await expect(tree.locator('[data-artifact-name="output-0.csv"]')).toBeVisible();
+  await expect.poll(() => tree.evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(375);
+  await results.locator(":scope > summary").click();
+  await expect(tree.locator('[data-artifact-name="output-0.csv"]')).not.toBeVisible();
+  const reports = tree.locator('[data-artifact-name="report.md"]');
+  await expect(reports).toHaveCount(2);
+  await expect(reports.filter({ visible: true })).toHaveCount(1);
+  await tree.locator(".generated-directory > summary").filter({ hasText: "docs" }).click();
+  await expect(reports.filter({ visible: true })).toHaveCount(2);
+  await summary.click();
+  await expect(tree).not.toBeVisible();
+  await summary.click();
+  await results.locator(":scope > summary").click();
+  await tree.locator('[data-artifact-name="new.png"]').click();
+  await expect(page.locator(".artifact-modal")).toBeVisible();
+});
+
+test("Generated folders stay open when another reply updates an existing artifact", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("GENERATEDTREE");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const reply = page.locator(".msg.assistant", { hasText: "Generated tree fixture complete." });
+  await reply.locator(".message-artifacts-label").click();
+  const results = reply.locator(".generated-directory").filter({ has: page.locator(":scope > summary .generated-directory-name", { hasText: /^results$/ }) });
+  await results.locator(":scope > summary").click();
+  await results.locator(".generated-directory > summary").filter({ hasText: "batch" }).click();
+  const output = reply.locator('[data-artifact-name="output-1.csv"]');
+  await expect(output).toBeVisible();
+  const frameId = await page.locator(".side-item.ses.active").getAttribute("data-session-id");
+  expect(frameId).toBeTruthy();
+  await emitTauriEvent(page, "agent", { kind: "User", frame_id: frameId, text: "Update the first result" });
+  await emitTauriEvent(page, "agent", { kind: "ToolCall", frame_id: frameId, name: "write", preview: "Update output-0.csv" });
+  await emitTauriEvent(page, "agent", { kind: "FileChanged", frame_id: frameId, path: "/mock/root/results/batch/output-0.csv" });
+  await emitTauriEvent(page, "agent", { kind: "ToolResult", frame_id: frameId, name: "write", ok: true, content: "Updated." });
+  await emitTauriEvent(page, "agent", { kind: "Text", frame_id: frameId, delta: "Result updated." });
+  await emitTauriEvent(page, "agent", { kind: "Done", frame_id: frameId });
+  await expect(reply.locator(".message-artifacts-label")).toHaveText("Generated · 65");
+  await expect(reply.locator('[data-artifact-name="output-0.csv"]')).toHaveCount(0);
+  await expect(reply.locator(".message-artifacts")).toHaveJSProperty("open", true);
+  await expect(results).toHaveJSProperty("open", true);
+  await expect(output).toBeVisible();
+  // The old reply remains independently collapsible after the update.
+  await results.locator(":scope > summary").click();
+  await expect(output).not.toBeVisible();
+  await results.locator(":scope > summary").focus();
+  await page.keyboard.press("Space");
+  await expect(output).toBeVisible();
+  const newReply = page.locator(".msg.assistant", { hasText: "Result updated." });
+  await expect(newReply.locator(".generated-artifact-tree")).not.toBeVisible();
+  await page.locator("#chat-scroller").evaluate(el => el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+  await reply.locator(".message-artifacts").screenshot({ path: test.info().outputPath("generated-folders-after-update.png") });
 });

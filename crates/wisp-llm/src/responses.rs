@@ -95,9 +95,8 @@ impl OpenAiResponsesProvider {
             "llm_request_dispatch"
         );
         let resp = self
-            .client
-            .post(endpoint)
-            .headers(self.headers())
+            .cfg
+            .request_headers(self.client.post(endpoint).headers(self.headers()))
             .json(&body)
             .send()
             .await?;

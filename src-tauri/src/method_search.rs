@@ -901,7 +901,7 @@ async fn method_search_details(
 #[tauri::command]
 pub(crate) async fn get_method_search_run(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<MethodSearchRunDetails, String> {
     let project = state.require_active(window.label())?;
@@ -911,7 +911,7 @@ pub(crate) async fn get_method_search_run(
 #[tauri::command]
 pub(crate) async fn pause_method_search(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<MethodSearchRunDetails, String> {
     let project = state.require_active(window.label())?;
@@ -968,7 +968,7 @@ async fn continue_recovered_workflow(
 #[tauri::command]
 pub(crate) async fn start_method_search(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<MethodSearchRunDetails, String> {
     let (project, scope) =
@@ -994,6 +994,7 @@ pub(crate) async fn start_method_search(
     let generator = crate::method_search_coordinator::ProviderCandidateGenerator::from_profile(
         &state.store,
         &model_profile_id,
+        &run_id,
     )
     .await?;
     if crate::method_search_coordinator::method_search_is_active(&run_id) {
@@ -1069,7 +1070,7 @@ pub(crate) async fn start_method_search(
 #[tauri::command]
 pub(crate) async fn resume_method_search(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<MethodSearchRunDetails, String> {
     let (project, scope) =
@@ -1104,6 +1105,7 @@ pub(crate) async fn resume_method_search(
     let generator = crate::method_search_coordinator::ProviderCandidateGenerator::from_profile(
         &state.store,
         &model_profile_id,
+        &run_id,
     )
     .await?;
     let guard = crate::method_search_coordinator::ActiveMethodSearchGuard::claim(&run_id)?;
@@ -1168,7 +1170,7 @@ pub(crate) async fn resume_method_search(
 #[tauri::command]
 pub(crate) async fn cancel_method_search(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<MethodSearchRunDetails, String> {
     let project = state.require_active(window.label())?;

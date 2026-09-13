@@ -182,6 +182,8 @@ fn rejects_unbounded_or_malformed_arguments() {
         json!({"brand": "SYNTHAPRIL", "pharm_class_type": "atc"}),
         json!({"brand": "SYNTHAPRIL", "submission_date_from": "2020-01-01"}),
         json!({"brand": "SYNTHAPRIL", "submission_date_from": "20201301", "submission_date_to": "20200101"}),
+        json!({"brand": "SYNTHAPRIL", "submission_date_from": "2023-02-29", "submission_date_to": "2023-03-01"}),
+        json!({"brand": "SYNTHAPRIL", "submission_date_from": "2024-04-31", "submission_date_to": "2024-05-01"}),
         json!({"raw_search": "sponsor_name:X", "brand": "SYNTHAPRIL"}),
         json!({"brand": "SYNTHAPRIL", "api_key": "secret"}),
     ] {

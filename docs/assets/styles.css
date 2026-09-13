@@ -984,6 +984,11 @@ html:not([data-lang="en"]) .lang-en {
   html[data-lang="en"] .btn-label-short { display: inline; }
 }
 
+/* Leave room for the tutorial entry before switching to the compact header. */
+@media (max-width: 1100px) {
+  .nav-links { display: none; }
+}
+
 @media (max-width: 960px) {
   .hero-mock { grid-template-columns: 1fr; }
   .mock-sidebar, .mock-artifacts { display: none; }

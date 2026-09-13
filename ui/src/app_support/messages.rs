@@ -188,6 +188,13 @@ pub(crate) fn SessionStatusBadge(
 /// never font glyphs whose shape varies by platform and fallback font.
 pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
     let body = match kind {
+        "calendar" => view! { <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h2M14 15h2"/> }.into_view(),
+        "external-link" => view! { <path d="M15 3h6v6M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/> }.into_view(),
+        "table" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/> }.into_view(),
+        "research-trail" => view! { <path d="M3 3v18h18"/><path d="m7 14 4-4 4 3 5-7"/><circle cx="7" cy="14" r="1"/><circle cx="11" cy="10" r="1"/><circle cx="15" cy="13" r="1"/> }.into_view(),
+        "lightbulb" => view! { <path d="M9 18h6M9 21h6"/><path d="M9 15a6 6 0 1 1 6 0v3H9z"/> }.into_view(),
+        "note-plus" => view! { <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M12 11v6M9 14h6"/> }.into_view(),
+        "refresh" => view! { <path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 2M18 18a8 8 0 0 1-13-2"/> }.into_view(),
         "attach" => view! { <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/> }.into_view(),
         "folder" => view! { <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/> }.into_view(),
         "plan" => view! { <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6l1 1 2-2"/><path d="M3 12l1 1 2-2"/><path d="M3 18l1 1 2-2"/> }.into_view(),
@@ -205,6 +212,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "panel" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/> }.into_view(),
         "dock" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/> }.into_view(),
         "chevron-down" => view! { <path d="m6 9 6 6 6-6"/> }.into_view(),
+        "chevron-up" => view! { <path d="m6 15 6-6 6 6"/> }.into_view(),
         "chevron-left" => view! { <path d="m15 18-6-6 6-6"/> }.into_view(),
         "chevron-right" => view! { <path d="m9 18 6-6-6-6"/> }.into_view(),
         "expand" => view! { <path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="M9 21H3v-6"/><path d="m3 21 7-7"/> }.into_view(),
@@ -245,6 +253,12 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "controls" => view! { <path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/> }.into_view(),
         "adjustments" => view! { <path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/> }.into_view(),
         "check" => view! { <path d="m20 6-11 11-5-5"/> }.into_view(),
+        "activity-orbit" => view! { <circle cx="12" cy="12" r="9" opacity="0.18"/><path d="M12 3a9 9 0 0 1 9 9"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/> }.into_view(),
+        "circle" => view! { <circle cx="12" cy="12" r="9"/> }.into_view(),
+        "circle-check" => view! { <circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/> }.into_view(),
+        "circle-minus" => view! { <circle cx="12" cy="12" r="9"/><path d="M8 12h8"/> }.into_view(),
+        "context-compact" => view! { <path d="M6 5h12"/><path d="M4 12h16"/><path d="M6 19h12"/> }.into_view(),
+        "lock" => view! { <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/> }.into_view(),
         "hand" => view! { <path d="M8 13V5a2 2 0 0 1 4 0v7"/><path d="M12 6a2 2 0 0 1 4 0v6"/><path d="M16 8a2 2 0 0 1 4 0v7a7 7 0 0 1-7 7h-1c-2 0-3.5-1-4.5-2.5L3 13a2 2 0 0 1 3-2l2 2"/> }.into_view(),
         "ban" => view! { <circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/> }.into_view(),
         "skill" => view! { <path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/> }.into_view(),
@@ -293,14 +307,19 @@ pub(crate) fn ImageGenerationCard(
     on_file: Callback<ModalArtifact>,
 ) -> impl IntoView {
     let locale = use_locale();
+    let dom_id = unique_dom_id("generated-media");
     let source = create_rw_signal(None::<String>);
     let preview_failed = create_rw_signal(false);
     if ok == Some(true) {
         let load_path = path.clone();
+        let owner_id = dom_id.clone();
         spawn_local(async move {
             // Full-resolution blob object URL from the shared cache — a data
             // URL here meant ~1.33x the file size as a string in the DOM.
-            match crate::bindings::media_url(&load_path).await.as_string() {
+            match crate::bindings::media_url(&load_path, &owner_id)
+                .await
+                .as_string()
+            {
                 Some(url) => {
                     let _ = source.try_set(Some(url));
                 }
@@ -330,6 +349,7 @@ pub(crate) fn ImageGenerationCard(
     view! {
         <article
             class="image-generation-card"
+            id=dom_id
             data-testid="image-generation-card"
             data-status=status
             data-path=path
@@ -407,15 +427,20 @@ pub(crate) fn ImageGenerationCard(
 #[component]
 pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String) -> impl IntoView {
     let locale = use_locale();
+    let dom_id = unique_dom_id("generated-media");
     let source = create_rw_signal(None::<String>);
     let preview_failed = create_rw_signal(false);
     if ok == Some(true) {
         let load_path = path.clone();
+        let owner_id = dom_id.clone();
         spawn_local(async move {
             // Blob object URL streamed by the browser's media stack. A 64 MB
             // MP4 inlined as base64 was ~85 MB of string in the DOM — the
             // worst offender of the renderer OOM reports.
-            match crate::bindings::media_url(&load_path).await.as_string() {
+            match crate::bindings::media_url(&load_path, &owner_id)
+                .await
+                .as_string()
+            {
                 Some(url) => {
                     let _ = source.try_set(Some(url));
                 }
@@ -443,6 +468,7 @@ pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String
     view! {
         <article
             class="video-generation-card"
+            id=dom_id
             data-testid="video-generation-card"
             data-status=status
             data-path=path
@@ -508,18 +534,21 @@ pub(crate) fn VideoGenerationCard(path: String, ok: Option<bool>, output: String
 #[component]
 pub(crate) fn AttachmentThumbnail(path: String, alt: String) -> impl IntoView {
     let source = create_rw_signal(None::<String>);
+    let dom_id = unique_dom_id("attachment-thumb");
+    let owner_id = dom_id.clone();
     let path_for_effect = path;
     create_effect(move |_| {
         let path = path_for_effect.clone();
+        let owner_id = owner_id.clone();
         spawn_local(async move {
-            let url = crate::bindings::media_thumbnail_url(&path)
+            let url = crate::bindings::media_thumbnail_url(&path, &owner_id)
                 .await
                 .as_string();
             let _ = source.try_set(url);
         });
     });
     view! {
-        <span class="attachment-thumbnail">
+        <span class="attachment-thumbnail" id=dom_id>
             {move || source.get().map_or_else(
                 || view! { <span class="attachment-thumbnail-placeholder">{compose_icon("image")}</span> }.into_view(),
                 |src| view! { <img src=src alt=alt.clone() /> }.into_view(),
@@ -546,7 +575,7 @@ fn ArtifactThumb(path: Option<String>, kind: &'static str) -> impl IntoView {
         // the artifact:/version:/ssh:// spellings `load_file_content` does.
         let dom_id_for_load = dom_id.clone();
         spawn_local(async move {
-            let url = crate::bindings::media_thumbnail_url(&path)
+            let url = crate::bindings::media_thumbnail_url(&path, &dom_id_for_load)
                 .await
                 .as_string();
             let Some(url) = url else { return };
@@ -884,6 +913,67 @@ pub(crate) fn UserMessage(
     }
 }
 
+#[derive(Clone, Default, PartialEq)]
+struct GeneratedDirectory {
+    directories: std::collections::BTreeMap<String, GeneratedDirectory>,
+    files: Vec<(usize, String, &'static str, bool, Option<String>)>,
+}
+
+impl GeneratedDirectory {
+    fn count(&self) -> usize {
+        self.files.len() + self.directories.values().map(Self::count).sum::<usize>()
+    }
+}
+
+fn generated_directory_view(
+    node: GeneratedDirectory,
+    on_artifact: Callback<usize>,
+    disclosures: RwSignal<std::collections::HashMap<String, bool>>,
+    parent: String,
+) -> View {
+    let locale = use_locale();
+    let folders = node
+        .directories
+        .into_iter()
+        .map(|(name, child)| {
+            let count = child.count();
+            let path = format!("{parent}/{name}");
+            let open_path = path.clone();
+            let toggle_path = path.clone();
+            view! {
+                <details class="generated-directory"
+                    open=move || crate::chat_render::disclosure_open(disclosures, &open_path, false)>
+                    <summary on:click=move |event| {
+                        event.prevent_default();
+                        crate::chat_render::toggle_disclosure(disclosures, &toggle_path, false);
+                    }>
+                        {compose_icon("chevron-right")}
+                        {compose_icon("folder")}
+                        <span class="generated-directory-name">{name}</span>
+                        <span class="generated-directory-count">{count}</span>
+                    </summary>
+                    <div class="generated-directory-children">
+                        {generated_directory_view(child, on_artifact, disclosures, path)}
+                    </div>
+                </details>
+            }
+        })
+        .collect_view();
+    let files = node.files.into_iter().map(|(index, name, kind, superseded, path)| {
+        let title = path.clone().unwrap_or_else(|| name.clone());
+        view! {
+            <button type="button" class="message-artifact-card" class:superseded=superseded
+                disabled=superseded data-artifact-name=name.clone() title=title
+                on:click=move |_| on_artifact.call(index)>
+                <ArtifactThumb path=path kind=kind />
+                <span class="message-artifact-name">{name}</span>
+                {superseded.then(|| view! { <span class="message-artifact-status">{move || t(locale.get(), "artifact.updated")}</span> })}
+            </button>
+        }
+    }).collect_view();
+    view! { <div class="generated-directory-content">{folders}{files}</div> }.into_view()
+}
+
 #[component]
 pub(crate) fn AssistantMessage(
     text: String,
@@ -953,7 +1043,7 @@ pub(crate) fn AssistantMessage(
                 // repeated mounts of the same image reuse one blob instead of
                 // re-fetching and re-inlining its base64.
                 let path = format!("artifact-version:{version_id}");
-                let Some(url) = crate::bindings::media_url(&path).await.as_string() else {
+                let Some(url) = crate::bindings::media_url(&path, &dom_id).await.as_string() else {
                     continue;
                 };
                 let selector = format!(r#"#{dom_id} [data-resource-id="{}"]"#, resource.id);
@@ -971,53 +1061,44 @@ pub(crate) fn AssistantMessage(
     let on_artifact_for_cards = on_artifact.clone();
     let on_file = on_file.clone();
     let resources_for_click = resources.clone();
+    // Artifact updates rebuild the tree (including when an output moves to a
+    // later reply). Keep disclosure choices by folder path for this mounted row.
+    let generated_disclosures = create_rw_signal(std::collections::HashMap::new());
     let generated = create_memo(move |_| {
+        let root = project
+            .and_then(|project| project.get().map(|project| project.root))
+            .unwrap_or_default();
         artifacts.with(|arts| {
-            arts.iter()
+            let mut tree = GeneratedDirectory::default();
+            for (index, artifact) in arts
+                .iter()
                 .enumerate()
-                .filter(|(_, artifact)| artifact.source_item == source_item)
-                .map(|(index, artifact)| {
-                    let path = match &artifact.data {
-                        PreviewData::File { path, .. } => Some(path.clone()),
-                        _ => None,
-                    };
-                    (
-                        index,
-                        artifact.name.clone(),
-                        artifact.kind,
-                        artifact.superseded,
-                        path,
-                    )
-                })
-                .collect::<Vec<_>>()
+                .filter(|(_, a)| a.source_item == source_item)
+            {
+                let group = crate::text::artifact_group_key(artifact, &root);
+                let mut node = &mut tree;
+                // Inline outputs have no filesystem parent; keep them at the root.
+                if group != "." && matches!(&artifact.data, PreviewData::File { .. }) {
+                    for part in group.split('/').filter(|part| !part.is_empty()) {
+                        node = node.directories.entry(part.to_string()).or_default();
+                    }
+                }
+                let path = match &artifact.data {
+                    PreviewData::File { path, .. } => Some(path.clone()),
+                    _ => None,
+                };
+                node.files.push((
+                    index,
+                    artifact.name.clone(),
+                    artifact.kind,
+                    artifact.superseded,
+                    path,
+                ));
+            }
+            tree
         })
     });
-    let generated_count = move || generated.with(Vec::len);
-    // Anything past this is folded behind "+N more". Kept in step with the
-    // `nth-child(n+9)` rule in chat.css that does the hiding.
-    let generated_overflow = move || generated_count().saturating_sub(8);
-    let generated_expanded = create_rw_signal(false);
-    let generated_collapsed = move || generated_overflow() > 0 && !generated_expanded.get();
-    let generated_cards = move || {
-        generated
-            .get()
-            .into_iter()
-            .map(|(index, name, kind, superseded, path)| {
-                let on_artifact = on_artifact_for_cards.clone();
-                view! {
-                    <button type="button" class="message-artifact-card" class:superseded=superseded
-                        disabled=superseded
-                        data-artifact-name=name.clone()
-                        title=name.clone()
-                        on:click=move |_| on_artifact.call(index)>
-                        <ArtifactThumb path=path kind=kind />
-                        <span class="message-artifact-name">{name}</span>
-                        {superseded.then(|| view! { <span class="message-artifact-status">{move || t(locale.get(), "artifact.updated")}</span> })}
-                    </button>
-                }
-            })
-            .collect_view()
-    };
+    let generated_count = move || generated.with(GeneratedDirectory::count);
     let text_for_disabled = text.clone();
     let text_for_click_copy = text;
     view! {
@@ -1057,19 +1138,19 @@ pub(crate) fn AssistantMessage(
                     )
                 }></div>
             {move || (generated_count() > 0).then(|| view! {
-                <div class="message-artifacts">
-                    <div class="message-artifacts-label">{move || format!("Generated · {}", generated_count())}</div>
-                    <div class="message-artifact-cards"
-                        class:collapsed=generated_collapsed>
-                        {generated_cards}
-                        {move || generated_collapsed().then(|| view! {
-                            <button type="button" class="message-artifact-more"
-                                on:click=move |_| generated_expanded.set(true)>
-                                {move || tf(locale.get(), "artifact.more_count", &[("n", &generated_overflow().to_string())])}
-                            </button>
-                        })}
+                <details class="message-artifacts"
+                    open=move || crate::chat_render::disclosure_open(generated_disclosures, "", false)>
+                    <summary class="message-artifacts-label" on:click=move |event| {
+                        event.prevent_default();
+                        crate::chat_render::toggle_disclosure(generated_disclosures, "", false);
+                    }>
+                        {compose_icon("chevron-right")}
+                        {move || tf(locale.get(), "artifact.generated_count", &[("n", &generated_count().to_string())])}
+                    </summary>
+                    <div class="generated-artifact-tree">
+                        {move || generated_directory_view(generated.get(), on_artifact_for_cards, generated_disclosures, String::new())}
                     </div>
-                </div>
+                </details>
             })}
             {move || {
                 let text_for_disabled = text_for_disabled.clone();

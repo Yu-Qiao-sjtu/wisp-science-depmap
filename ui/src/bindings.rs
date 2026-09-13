@@ -28,6 +28,8 @@ extern "C" {
 #[wasm_bindgen(module = "/src/api.js")]
 extern "C" {
     pub(crate) async fn invoke(cmd: &str, args: JsValue) -> JsValue;
+    pub(crate) fn start_ui_health();
+    pub(crate) fn report_ui_health();
     #[wasm_bindgen(catch, js_name = invoke_strict)]
     pub(crate) async fn invoke_checked(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = invoke_timeout)]
@@ -63,14 +65,19 @@ extern "C" {
     pub(crate) fn close_mcp_app(instance_id: &str);
     #[wasm_bindgen(js_name = pasted_image_count)]
     pub(crate) fn pasted_image_count(event: JsValue) -> usize;
+    pub(crate) fn paste_has_files(event: JsValue) -> bool;
+    pub(crate) fn clipboard_paste_snapshot(event: JsValue) -> JsValue;
+    #[wasm_bindgen(catch)]
+    pub(crate) async fn clipboard_file_paths(event: JsValue) -> Result<JsValue, JsValue>;
     /// Chat media as a cached blob object URL (never a base64 data URL) —
     /// `null` when the file cannot be read, so callers paint their fallback.
+    /// `owner_id` is a unique mounted element that owns the URL until removal.
     #[wasm_bindgen(js_name = media_url)]
-    pub(crate) async fn media_url(path: &str) -> JsValue;
+    pub(crate) async fn media_url(path: &str, owner_id: &str) -> JsValue;
     /// Small canvas-downscaled variant of [`media_url`] for thumbnail-sized
     /// cards, so long histories do not keep full-size decoded bitmaps alive.
     #[wasm_bindgen(js_name = media_thumbnail_url)]
-    pub(crate) async fn media_thumbnail_url(path: &str) -> JsValue;
+    pub(crate) async fn media_thumbnail_url(path: &str, owner_id: &str) -> JsValue;
     #[wasm_bindgen(js_name = drag_has_files)]
     pub(crate) fn drag_has_files(event: JsValue) -> bool;
     #[wasm_bindgen(js_name = set_drag_copy)]

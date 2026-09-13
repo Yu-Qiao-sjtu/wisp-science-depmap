@@ -5,7 +5,7 @@ use super::*;
 #[tauri::command]
 pub(super) async fn new_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<String, String> {
     // Create a fresh frame and hand its id to the UI up front, so the UI can
     // route streamed events to the right transcript *before* the first delta
@@ -24,13 +24,20 @@ pub(super) async fn new_session(
     let id = create_session_frame(&state.store, &ap.id).await?;
     state.set_active(window.label(), ap);
     state.set_active_frame(window.label(), Some(id.clone()));
+    let store = state.store.clone();
+    let restored_frame = id.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(Some(project)) = store.frame_project_id(&restored_frame).await {
+            crate::mcp_connections::restore(&store, &project, &restored_frame).await;
+        }
+    });
     Ok(id)
 }
 
 #[tauri::command]
 pub(super) async fn branch_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     title: Option<String>,
     user_index: Option<usize>,
@@ -147,7 +154,7 @@ pub(super) async fn branch_session(
 #[tauri::command]
 pub(super) async fn preview_session_branch_merge(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<wisp_store::SessionBranchMergePreview, String> {
     let project = state.require_active(window.label())?;
@@ -205,7 +212,7 @@ fn branch_summary_payload(
 #[tauri::command]
 pub(super) async fn summarize_session_branch_merge(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     expected_guard_hash: String,
     current_version: Option<String>,
@@ -231,8 +238,19 @@ pub(super) async fn summarize_session_branch_merge(
         current_version.as_deref(),
         user_guidance.as_deref(),
     )?;
-    let (provider, api_url, model, api_key, _, reasoning_effort, service_tier) =
-        load_session_settings(&state.store, &id).await;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        _,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = load_session_settings(&state.store, &id).await;
     let config = build_provider_config(
         &provider,
         &api_url,
@@ -241,6 +259,11 @@ pub(super) async fn summarize_session_branch_merge(
         BRANCH_SUMMARY_OUTPUT_TOKENS,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&id),
     )?;
     let completion = tokio::time::timeout(
         BRANCH_SUMMARY_TIMEOUT,
@@ -262,7 +285,7 @@ pub(super) async fn summarize_session_branch_merge(
 #[tauri::command]
 pub(super) async fn merge_session_branch_summary(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     expected_guard_hash: String,
     summary: String,
@@ -368,7 +391,7 @@ async fn session_branch_is_busy(state: &AppState, ids: &[String]) -> bool {
 #[tauri::command]
 pub(super) async fn list_sessions_page(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     cursor: Option<SessionCursor>,
 ) -> Result<SessionPage, String> {
     let ap = state.require_active(window.label())?;
@@ -494,7 +517,7 @@ async fn stale_prompt_frames(
 #[tauri::command]
 pub(super) async fn reload_project_rules(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     frame_id: String,
 ) -> Result<bool, String> {
     let ap = state.require_active(window.label())?;
@@ -551,7 +574,7 @@ pub(super) async fn reload_project_rules(
 #[tauri::command]
 pub(super) async fn list_folders(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<FolderInfo>, String> {
     let ap = state.require_active(window.label())?;
     let rows = state
@@ -568,7 +591,7 @@ pub(super) async fn list_folders(
 #[tauri::command]
 pub(super) async fn create_folder(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     name: String,
 ) -> Result<FolderInfo, String> {
     let ap = state.require_active(window.label())?;
@@ -588,7 +611,7 @@ pub(super) async fn create_folder(
 #[tauri::command]
 pub(super) async fn rename_folder(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     name: String,
 ) -> Result<(), String> {
@@ -605,7 +628,7 @@ pub(super) async fn rename_folder(
 #[tauri::command]
 pub(super) async fn delete_folder(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<(), String> {
     let ap = state.require_active(window.label())?;
@@ -621,7 +644,7 @@ pub(super) async fn delete_folder(
 #[tauri::command]
 pub(super) async fn move_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     folder_id: Option<String>,
 ) -> Result<(), String> {
@@ -638,7 +661,7 @@ pub(super) async fn move_session(
 #[tauri::command]
 pub(super) async fn transfer_session_to_project(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     target_project_id: String,
     mode: String,
@@ -747,7 +770,7 @@ pub(super) async fn transfer_session_to_project(
 #[tauri::command]
 pub(super) async fn delete_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<(), String> {
     let ap = state.require_active(window.label())?;
@@ -789,6 +812,9 @@ pub(super) async fn delete_session(
         rt.cancel.store(true, Ordering::Relaxed);
     }
     acp::cancel_frame(&state, &id).await;
+    // Revoke Host ownership before waiting for a turn that may be connecting.
+    // This also fences background restore/wiring snapshots for this frame.
+    mcp_connections::host().retire_frame(&id).await;
     // Match send/Plan lock order. The tombstone prevents work already queued
     // behind these guards from restarting after the DB cascade.
     let _workflow_guard = match runtime.as_ref() {
@@ -826,7 +852,7 @@ pub(super) async fn delete_session(
 #[tauri::command]
 pub(super) async fn rename_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     title: String,
 ) -> Result<(), String> {
@@ -843,7 +869,7 @@ pub(super) async fn rename_session(
 #[tauri::command]
 pub(super) async fn set_session_pinned(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     pinned: bool,
 ) -> Result<(), String> {
@@ -867,7 +893,7 @@ pub(super) const RECENT_SESSIONS_LIMIT: i64 = 5;
 #[tauri::command]
 pub(super) async fn latest_used_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Option<String>, String> {
     let ap = state.require_active(window.label())?;
     let Some(id) = state
@@ -929,7 +955,7 @@ pub(super) async fn list_recent_sessions(
 #[tauri::command]
 pub(super) async fn rewind_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     user_index: usize,
 ) -> Result<(), String> {
@@ -1231,7 +1257,7 @@ pub(super) fn transcript_page_items(
 #[tauri::command]
 pub(super) async fn load_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     before_seq: Option<i64>,
 ) -> Result<SessionTranscriptPage, String> {
@@ -1391,7 +1417,7 @@ pub(super) async fn load_session_trajectory(
 #[tauri::command]
 pub(super) async fn set_viewed_session(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<(), String> {
     let (project, _) = exploration_commands::working_project_for_frame(&state, &id).await?;

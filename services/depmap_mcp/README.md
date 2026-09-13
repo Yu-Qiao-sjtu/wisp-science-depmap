@@ -110,6 +110,12 @@ codependency, 3D True Love pairs, omics-dependency associations, and
 lineage/pathway enrichment. All return bounded rows and their terminal
 manifests rather than opening full matrices.
 
+Network shortlists inherit each module's recorded `manifest.min_n`; no separate
+30-sample minimum is imposed by discovery. The evidence includes per-section
+`selection_filters` and reasons when a module is unavailable or ineligible.
+Small cohorts can return supported precomputed rows, with their actual pair
+counts and FDR visible for interpretation.
+
 ## Connect from Wisp Science
 
 Add an MCP connection with:

@@ -683,7 +683,21 @@ fn encode_filter(filters: &[Value]) -> Result<String> {
 }
 
 fn looks_like_sidm(value: &str) -> bool {
-    value.len() >= 4 && value[..4].eq_ignore_ascii_case("SIDM")
+    value
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("SIDM"))
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::looks_like_sidm;
+
+    #[test]
+    fn sidm_detection_handles_non_ascii_names() {
+        assert!(looks_like_sidm("sidm00001"));
+        assert!(!looks_like_sidm("aaa你"));
+        assert!(!looks_like_sidm("肿瘤模型"));
+    }
 }
 
 pub(super) fn require_label(value: &str, what: &str) -> Result<String> {

@@ -15,6 +15,11 @@ use std::sync::Arc;
 /// connection secrets stay on the host and are reused via the existing client.
 #[async_trait]
 pub trait McpAppServer: Send + Sync {
+    /// Cheap liveness probe, without sending a tool request or exposing the
+    /// connection to the guest. Implementations with weak clients override it.
+    fn is_connected(&self) -> bool {
+        true
+    }
     /// Host-readable connector identity for audit and approval UI.
     fn connector_id(&self) -> &str;
     /// Human app name for audit and approval UI.
@@ -332,7 +337,8 @@ pub trait ToolEnv: Send + Sync {
 pub struct ToolResult {
     pub success: bool,
     pub content: String,
-    pub image: Option<ImageData>,
+    /// Model-visible images accompanying (not replacing) the text result.
+    pub images: Vec<ImageData>,
     /// Code-level control flow for the agent loop. This keeps user-decision
     /// boundaries out of prompt wording: stale sibling calls can be skipped,
     /// and tools such as `ask_user` can end the turn outright.
@@ -360,7 +366,7 @@ impl ToolResult {
         Self {
             success: true,
             content: content.into(),
-            image: None,
+            images: Vec::new(),
             control: ToolControl::Continue,
         }
     }
@@ -368,7 +374,7 @@ impl ToolResult {
         Self {
             success: false,
             content: content.into(),
-            image: None,
+            images: Vec::new(),
             control: ToolControl::Continue,
         }
     }
@@ -377,7 +383,7 @@ impl ToolResult {
         Self {
             success: true,
             content: label,
-            image: Some(img),
+            images: vec![img],
             control: ToolControl::Continue,
         }
     }
