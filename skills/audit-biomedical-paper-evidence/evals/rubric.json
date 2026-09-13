@@ -42,7 +42,7 @@
     {
       "dimension_id": "output-usability",
       "name": "输出可用性",
-      "description": "输出结构清晰、与用户问题对应、下一步建议可行且不超出材料。 审读后以 ask_user 卡片选择格式并确认视觉后才导出；Mermaid 关系有证据锚点，实际渲染检查，Word 满足字体字号行距要求，MD/HTML 图片可用。"
+      "description": "输出结构清晰、与用户问题对应、下一步建议可行且不超出材料。 审读后以 格式选择提问选择格式并确认视觉后才导出；Mermaid 关系有证据锚点，实际渲染检查，Word 满足字体字号行距要求，MD/HTML 图片可用。"
     }
   ],
   "fatal_failures": [

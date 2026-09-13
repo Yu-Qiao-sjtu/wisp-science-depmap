@@ -77,11 +77,11 @@ Community store (screenshot uses test data):
 
 `audit-biomedical-paper-evidence` produces a research-design evidence diagram
 and, when the supplied material supports one, a mechanism diagram as Mermaid.
-After presenting the audit in chat, the Skill calls the existing `ask_user`
-card to select Markdown, Word, HTML, or no export. A second card requires
+After presenting the audit in chat, the Skill asks the user in chat with numbered
+options to select Markdown, Word, HTML, or no export. A second question requires
 explicit confirmation that the executing model supports image input and has
-an image-viewing tool. No export proceeds on an unanswered or cancelled card.
-This is a Skill-directed use of the existing question cards, not an automatic
+an image-viewing tool. No export proceeds on an unanswered or cancelled question.
+This is a plain conversational convention directed by the Skill, not an automatic
 post-Skill hook or a new modal.
 
 Exports render and visually inspect Mermaid figures before insertion. Markdown

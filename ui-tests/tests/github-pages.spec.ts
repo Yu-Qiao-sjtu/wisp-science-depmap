@@ -39,15 +39,18 @@ const loadI18n = () => {
   return sandbox.WISP_PAGES_I18N as { zh: Record<string, string>; en: Record<string, string> };
 };
 
-test("GitHub Pages homepage aligns with v1.12.0 and ships a language switch", () => {
+test("GitHub Pages homepage describes current capabilities and ships a language switch", () => {
   const index = readRepositoryFile("docs/index.html");
   const i18nJs = readRepositoryFile("docs/assets/i18n.js");
 
   expect(index).toContain('class="lang-switch"');
   expect(index).toContain("assets/i18n.js");
-  expect(index).toContain(`${skillCount} 个内置 SKILL`);
-  expect(index).toContain("v1.12.0");
-  expect(index).not.toContain("v1.10.0");
+  expect(index).toContain(`${skillCount} 个内置技能`);
+  for (const match of index.matchAll(/(\d+) 个内置技能/g)) {
+    expect(Number(match[1]), "homepage fallback Skill count").toBe(skillCount);
+  }
+  expect(index).not.toContain("v1.5.0");
+  expect(index).not.toContain("数据不出机器");
   expect(index).toContain("Linux");
   expect(index).toContain("Python / R");
   expect(index).not.toContain("30 个内置");
@@ -296,12 +299,21 @@ test("English links preserve language without storage and old configuration page
 });
 
 for (const readme of ["README.md", "README_zh.md"]) {
-  test(`${readme} uses the wisp-depmap-agent project identity`, () => {
-    const content = readRepositoryFile(readme);
-    expect(content).toContain("# wisp-depmap-agent");
-    expect(content).toContain("Yu-Qiao-sjtu/wisp-science-depmap");
-    expect(content).not.toContain("<picture>");
-    expect(content).not.toContain('alt="Wisp Science"');
+  test(`${readme} wordmark selects a readable asset for each color scheme`, async ({ page }) => {
+    await page.route("https://wordmark.test/**", (route) => route.fulfill({
+      contentType: "image/svg+xml",
+      body: readRepositoryFile(new URL(route.request().url()).pathname.slice(1)),
+    }));
+    const picture = readRepositoryFile(readme).match(/<picture>[\s\S]*?<\/picture>/)?.[0];
+    expect(picture).toBeTruthy();
+    await page.setContent(`<base href="https://wordmark.test/">${picture}`);
+    const logo = page.getByRole("img", { name: "Wisp Science", exact: true });
+    for (const mode of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: mode });
+      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.currentSrc))
+        .toContain(`wordmark-${mode}.svg`);
+      await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+    }
   });
 }
 
