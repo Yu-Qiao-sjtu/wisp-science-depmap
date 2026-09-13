@@ -125,7 +125,7 @@
       "rubric_id": "rubric-biomedical-paper-evidence-audit",
       "holdout": false,
       "expected_behaviors": [
-        "完成正文及两张有证据位置的 Mermaid 图后调用 ask_user 格式卡片",
+        "完成正文及两张有证据位置的 Mermaid 图后以编号选项向用户提问 格式卡片",
         "卡片提供 MD、DOCX、HTML 和暂不导出，并支持自由输入多个格式",
         "结束当前轮等待，不在回答前创建导出文件",
         "选择暂不导出后不再发视觉确认卡片"
@@ -270,7 +270,7 @@
         {
           "dimension_id": "output-usability",
           "name": "输出可用性",
-          "description": "输出结构清晰、与用户问题对应、下一步建议可行且不超出材料。 审读后以 ask_user 卡片选择格式并确认视觉后才导出；Mermaid 关系有证据锚点，实际渲染检查，Word 满足字体字号行距要求，MD/HTML 图片可用。"
+          "description": "输出结构清晰、与用户问题对应、下一步建议可行且不超出材料。 审读后以 格式选择提问选择格式并确认视觉后才导出；Mermaid 关系有证据锚点，实际渲染检查，Word 满足字体字号行距要求，MD/HTML 图片可用。"
         }
       ],
       "fatal_failures": [
