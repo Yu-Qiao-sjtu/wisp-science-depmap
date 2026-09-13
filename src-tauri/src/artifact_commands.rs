@@ -207,7 +207,7 @@ async fn register_artifact_at(
 #[tauri::command]
 pub(super) async fn upload_file(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     filename: String,
     data_base64: String,
 ) -> Result<ArtifactInfo, String> {
@@ -236,7 +236,7 @@ pub(super) async fn upload_file(
 #[tauri::command]
 pub(super) async fn register_artifact(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     path: String,
     content_type: Option<String>,
 ) -> Result<ArtifactInfo, String> {
@@ -327,7 +327,7 @@ mod tests {
 #[tauri::command]
 pub(super) async fn list_artifacts(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
 ) -> Result<Vec<ArtifactInfo>, String> {
     let frame_id = match session_id.as_deref().filter(|s| !s.is_empty()) {
@@ -374,7 +374,7 @@ pub(super) async fn list_artifacts(
 #[tauri::command]
 pub(super) async fn search_artifacts(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     query: Option<String>,
     limit: Option<i64>,
     project_id: Option<String>,
@@ -453,10 +453,10 @@ pub(super) async fn search_artifacts(
 #[tauri::command]
 pub(super) fn missing_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     Ok(paths
         .into_iter()
         .filter(|p| {
@@ -470,7 +470,7 @@ pub(super) fn missing_files(
 #[tauri::command]
 pub(super) async fn read_artifact(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<FileContent, String> {
     let (working_project, scope) =
@@ -509,7 +509,7 @@ pub(super) async fn read_artifact(
 #[tauri::command]
 pub(super) async fn read_artifact_bytes(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     max_bytes: Option<u64>,
 ) -> Result<Response, String> {
@@ -554,7 +554,7 @@ pub(super) async fn read_artifact_bytes(
 pub(super) async fn download_artifact(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -621,7 +621,7 @@ pub(super) async fn download_artifact(
 #[tauri::command]
 pub(super) async fn read_artifact_version(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     version_id: String,
 ) -> Result<FileContent, String> {
     let version = state
@@ -662,7 +662,7 @@ pub(super) async fn read_artifact_version(
 #[tauri::command]
 pub(super) async fn read_artifact_version_bytes(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     version_id: String,
     max_bytes: Option<u64>,
 ) -> Result<Response, String> {
@@ -712,7 +712,7 @@ pub(super) async fn read_artifact_version_bytes(
 pub(super) async fn download_artifact_version(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     version_id: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;

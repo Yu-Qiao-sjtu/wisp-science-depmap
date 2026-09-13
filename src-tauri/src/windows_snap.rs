@@ -13,7 +13,8 @@
 //!
 //! Geometry is platform-agnostic so tests do not need a real HWND.
 
-use tauri::WebviewWindow;
+use crate::workspace_surface::WorkspaceManager;
+use crate::workspace_surface::WorkspaceSurface;
 
 /// Must match `.window-titlebar { height }` in `ui/src/styles/base.css`.
 pub const TITLEBAR_HEIGHT: u32 = 38;
@@ -41,7 +42,7 @@ pub fn should_install_snap(window_label: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn start_window_move(window: WebviewWindow) -> Result<(), String> {
+pub fn start_window_move(window: WorkspaceSurface) -> Result<(), String> {
     #[cfg(windows)]
     {
         return start_caption_move(&window);
@@ -53,7 +54,7 @@ pub fn start_window_move(window: WebviewWindow) -> Result<(), String> {
     }
 }
 
-pub fn install_for_window(window: &WebviewWindow) {
+pub fn install_for_window(window: &WorkspaceSurface) {
     if !should_install_snap(window.label()) {
         return;
     }
@@ -66,7 +67,7 @@ pub fn install_for_window(window: &WebviewWindow) {
 }
 
 #[cfg(windows)]
-fn start_caption_move(window: &WebviewWindow) -> Result<(), String> {
+fn start_caption_move(window: &WorkspaceSurface) -> Result<(), String> {
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_SYSCOMMAND};
@@ -97,7 +98,7 @@ fn start_caption_move(window: &WebviewWindow) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn attach_maximize_overlay(window: &WebviewWindow) -> Result<(), String> {
+fn attach_maximize_overlay(window: &WorkspaceSurface) -> Result<(), String> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -165,7 +166,7 @@ fn attach_maximize_overlay(window: &WebviewWindow) -> Result<(), String> {
         let Some(state) = state(hwnd) else {
             return;
         };
-        let Some(window) = state.app.get_webview_window(&state.label) else {
+        let Some(window) = state.app.workspace_surface(&state.label) else {
             return;
         };
         if window.is_maximized().unwrap_or(false) {
@@ -175,7 +176,7 @@ fn attach_maximize_overlay(window: &WebviewWindow) -> Result<(), String> {
         }
     }
 
-    fn logical_inner_size(window: &WebviewWindow) -> Option<(u32, u32, f64)> {
+    fn logical_inner_size(window: &WorkspaceSurface) -> Option<(u32, u32, f64)> {
         let scale = window.scale_factor().ok()?;
         let size = window.inner_size().ok()?;
         let width = (f64::from(size.width) / scale).round() as u32;
@@ -183,7 +184,7 @@ fn attach_maximize_overlay(window: &WebviewWindow) -> Result<(), String> {
         Some((width, height, scale))
     }
 
-    fn place(overlay: HWND, window: &WebviewWindow) {
+    fn place(overlay: HWND, window: &WorkspaceSurface) {
         let Some((width, height, scale)) = logical_inner_size(window) else {
             return;
         };

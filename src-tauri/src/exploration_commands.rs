@@ -5,12 +5,13 @@
 use crate::exploration_workspace::{
     ExplorationWorkspaceBackend, PersistentExplorationWorkspace, WorkspaceSnapshot,
 };
+use crate::workspace_surface::WorkspaceSurface;
 use crate::{load_skill_index, ActiveProject, AppState, MemoryManager};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{State, WebviewWindow};
+use tauri::State;
 use wisp_store::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
     ExplorationBaselineEntity, ExplorationCheckpoint, ExplorationFamily, ExplorationStatus,
@@ -142,17 +143,13 @@ impl ExplorationService {
                 "finish or cancel active mainline Runs before checkpointing",
             ));
         }
-        let current_messages = self
+        let (message_seqs, mut current_messages): (Vec<_>, Vec<_>) = self
             .store
-            .load_messages(source_frame_id)
+            .load_messages_with_seq(source_frame_id)
             .await
-            .map_err(|error| error.to_string())?;
-        if !latest_native_turn_is_complete(&current_messages) {
-            return Err(coded_error(
-                ERR_SOURCE_INCOMPLETE,
-                "the source must end at a completed assistant turn",
-            ));
-        }
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .unzip();
         let current_message_head = self
             .store
             .frame_message_head(source_frame_id)
@@ -192,12 +189,69 @@ impl ExplorationService {
                 "the selected turn is outside the available conversation history",
             ));
         }
-        if selected_turn_index != current_turn_index {
+        // Compaction can renumber model rows independently of the visual history.
+        // Never silently map an old visual index onto a newer model turn.
+        let historical = selected_turn_index != current_turn_index;
+        if historical
+            && (visual_turn_count > fallback_turn_count
+                || current_messages.iter().any(|message| {
+                    let text = message.content.as_text();
+                    text.starts_with("[context summary checkpoint]")
+                }))
+        {
             return Err(coded_error(
                 ERR_HISTORY_UNAVAILABLE,
-                "explorations can only start from the current completed turn",
+                "the selected conversation context was compacted and cannot be restored safely",
             ));
         }
+        let user_positions = current_messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == wisp_llm::Role::User
+                    && message.tool_name.as_deref() != Some(AGENT_WORKFLOW_COMPLETION_TOOL)
+                    && !message.content.as_text().trim().is_empty()
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let prefix_len = if historical {
+            user_positions
+                .get(selected_turn_index as usize + 1)
+                .copied()
+                .ok_or_else(|| {
+                    coded_error(
+                        ERR_HISTORY_UNAVAILABLE,
+                        "the selected turn boundary is unavailable",
+                    )
+                })?
+        } else {
+            current_messages.len()
+        };
+        current_messages.truncate(prefix_len);
+        let selected_messages = current_messages;
+        if !latest_native_turn_is_complete(&selected_messages) {
+            return Err(coded_error(
+                ERR_SOURCE_INCOMPLETE,
+                "the selected turn has no completed assistant response",
+            ));
+        }
+        let selected_message_head = message_seqs[prefix_len - 1];
+        // Older conversations can have a model-message prefix from before UI
+        // events were persisted. Such turns have no events to inherit.
+        let legacy_turn_count = (fallback_turn_count - visual_turn_count).max(0);
+        let selected_ui_event_head = if historical && selected_turn_index < legacy_turn_count {
+            0
+        } else if historical {
+            self.store
+                .frame_ui_event_head_after_turn(
+                    source_frame_id,
+                    selected_turn_index - legacy_turn_count,
+                )
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            current_ui_event_head
+        };
         let (_, workspace_dir) = self
             .store
             .get_project(project_id)
@@ -251,6 +305,14 @@ impl ExplorationService {
             // must clone that exact checkpoint even if an external process
             // changed the live workspace, because Wisp cannot redefine an
             // already-open round's baseline.
+            if existing.source_message_seq != selected_message_head
+                || existing.source_ui_event_seq != selected_ui_event_head
+            {
+                return Err(coded_error(
+                    ERR_ROUND_ACTIVE,
+                    "finish the current exploration round before starting from another response",
+                ));
+            }
             return Ok(existing);
         }
         // Exploration V2 snapshots the live current head only when the user
@@ -281,8 +343,8 @@ impl ExplorationService {
             &self.app_data,
             &archive_path,
             source_frame_id,
-            current_message_head,
-            &current_messages,
+            selected_message_head,
+            &selected_messages,
         )?;
         let archive_bytes = std::fs::read(&archive_path).map_err(|error| error.to_string())?;
         self.store
@@ -297,8 +359,8 @@ impl ExplorationService {
             .await
             .map_err(|error| error.to_string())?;
         let source = CheckpointSource {
-            message_head: current_message_head,
-            ui_event_head: current_ui_event_head,
+            message_head: selected_message_head,
+            ui_event_head: selected_ui_event_head,
             state_generation,
             snapshot,
             context_archive_id: archive_id,
@@ -312,7 +374,7 @@ impl ExplorationService {
                 .snapshot_mainline_entities(project_id)
                 .await
                 .map_err(|error| error.to_string())?,
-            messages: current_messages,
+            messages: selected_messages,
         };
         if !latest_native_turn_is_complete(&source.messages) {
             return Err(coded_error(
@@ -330,6 +392,8 @@ impl ExplorationService {
             "mainline_frame_id": family.mainline_frame_id,
             "source_frame_id": source_frame_id,
             "source_message_head": source.message_head,
+            "source_frame_head": current_message_head,
+            "source_ui_event_head": current_ui_event_head,
             "state_generation": source.state_generation,
             "workspace_manifest": source.snapshot.manifest_sha256,
             "artifact_heads": &source.artifact_heads,
@@ -341,8 +405,9 @@ impl ExplorationService {
             project_id: project_id.to_string(),
             source_frame_id: source_frame_id.to_string(),
             source_message_seq: source.message_head,
-            source_frame_head_seq: source.message_head,
+            source_frame_head_seq: current_message_head,
             source_ui_event_seq: source.ui_event_head,
+            source_ui_event_head_seq: current_ui_event_head,
             source_family_generation: family.generation,
             source_state_generation: source.state_generation,
             workspace_snapshot_id: source.snapshot.id.clone(),
@@ -625,7 +690,8 @@ async fn materialize_checkpoint_context_archive(
     let history = workspace_root.join(".wisp").join("history");
     std::fs::create_dir_all(&history).map_err(|error| error.to_string())?;
     let legacy_history = source_workspace.join(".wisp").join("history");
-    if legacy_history.exists() {
+    if checkpoint.source_message_seq == checkpoint.source_frame_head_seq && legacy_history.exists()
+    {
         let metadata =
             std::fs::symlink_metadata(&legacy_history).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -782,7 +848,7 @@ pub(crate) async fn working_project_for_active_frame(
     match state.active_frame(window_label) {
         Some(frame_id) => working_project_for_frame(state, &frame_id).await,
         None => {
-            let project = state.active(window_label);
+            let project = state.require_active(window_label)?;
             Ok((project.clone(), StateScope::mainline(project.id.clone())))
         }
     }
@@ -882,7 +948,7 @@ pub(crate) async fn reject_private_exploration_project_mutation(
 pub(crate) async fn start_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     source_frame_id: String,
     turn_index: Option<i64>,
     name: String,
@@ -893,7 +959,7 @@ pub(crate) async fn start_exploration(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| coded_error(ERR_HISTORY_UNAVAILABLE, "source conversation not found"))?;
-    let active = state.active(window.label());
+    let active = state.require_active(window.label())?;
     if owner.project_id() != active.id || !matches!(owner, StateScope::Mainline { .. }) {
         return Err("Source conversation does not belong to the active mainline".into());
     }
@@ -962,9 +1028,9 @@ pub(crate) async fn start_exploration(
 #[tauri::command]
 pub(crate) async fn list_project_explorations(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
 ) -> Result<Vec<ExplorationSummary>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     state
         .store
         .list_project_explorations(&project.id)
@@ -975,7 +1041,7 @@ pub(crate) async fn list_project_explorations(
 #[tauri::command]
 pub(crate) async fn open_exploration(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     exploration_id: String,
 ) -> Result<Exploration, String> {
     let exploration = state
@@ -997,7 +1063,7 @@ pub(crate) async fn open_exploration(
 pub(crate) async fn abandon_exploration_round(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     source_frame_id: String,
 ) -> Result<(), String> {
     let owner = state
@@ -1202,6 +1268,206 @@ mod tests {
             .await
             .unwrap();
         (ExplorationService::new(store, app_data), base, project)
+    }
+
+    #[tokio::test]
+    async fn historical_exploration_keeps_only_selected_context_and_reuses_it_after_restart() {
+        let (service, base, project) = fixture("historical").await;
+        service
+            .store
+            .append_message("main", 8, &wisp_llm::Message::user("later question"))
+            .await
+            .unwrap();
+        service
+            .store
+            .append_message("main", 9, &wisp_llm::Message::assistant("later answer"))
+            .await
+            .unwrap();
+        for (seq, event) in [
+            (2, r#"{"kind":"Text","frame_id":"main","delta":"answer"}"#),
+            (3, r#"{"kind":"MessageBoundary","frame_id":"main","seq":2}"#),
+            (
+                4,
+                r#"{"kind":"User","frame_id":"main","text":"later question"}"#,
+            ),
+            (
+                5,
+                r#"{"kind":"Text","frame_id":"main","delta":"later answer"}"#,
+            ),
+            (6, r#"{"kind":"MessageBoundary","frame_id":"main","seq":9}"#),
+        ] {
+            service
+                .store
+                .append_session_ui_event("main", seq, event)
+                .await
+                .unwrap();
+        }
+        std::fs::write(project.join("baseline.txt"), b"current files").unwrap();
+        let checkpoint = service
+            .create_checkpoint_at("p", "main", Some(0))
+            .await
+            .unwrap();
+        assert_eq!(checkpoint.source_message_seq, 2);
+        assert_eq!(checkpoint.source_frame_head_seq, 9);
+        assert_eq!(checkpoint.source_ui_event_seq, 3);
+        assert_eq!(checkpoint.source_ui_event_head_seq, 6);
+        let exploration = service
+            .create_exploration(&checkpoint.id, "Historical")
+            .await
+            .unwrap();
+        let messages = service
+            .store
+            .load_messages(&exploration.frame_id)
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content.as_text(), "answer");
+        assert_eq!(
+            service
+                .store
+                .load_session_ui_events(&exploration.frame_id)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            std::fs::read(Path::new(&exploration.workspace_dir).join("baseline.txt")).unwrap(),
+            b"current files"
+        );
+        let archive = std::fs::read_to_string(
+            Path::new(&exploration.workspace_dir)
+                .join(".wisp/history")
+                .join(format!("{}.json", checkpoint.context_archive_id)),
+        )
+        .unwrap();
+        assert!(!archive.contains("later answer"));
+        assert!(!archive.contains("later question"));
+        assert_eq!(service.store.load_messages("main").await.unwrap().len(), 4);
+        let restarted = ExplorationService::new(
+            Store::open(&base.join("store.sqlite")).await.unwrap(),
+            base.join("app-data"),
+        );
+        std::fs::write(
+            project.join("baseline.txt"),
+            b"external edit after creation",
+        )
+        .unwrap();
+        let reused = restarted
+            .create_checkpoint_at("p", "main", Some(0))
+            .await
+            .unwrap();
+        assert_eq!(reused.id, checkpoint.id);
+        assert!(restarted
+            .create_checkpoint_at("p", "main", Some(1))
+            .await
+            .unwrap_err()
+            .contains(ERR_ROUND_ACTIVE));
+        let sibling = restarted
+            .create_exploration(&reused.id, "Sibling")
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(Path::new(&sibling.workspace_dir).join("baseline.txt")).unwrap(),
+            b"current files"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn historical_exploration_does_not_copy_later_legacy_ui_events() {
+        let (service, base, _) = fixture("historical_legacy").await;
+        // Replace the original context with an additional prefix that predates
+        // UI persistence. The only UI user event belongs to the later turn.
+        service
+            .store
+            .replace_messages(
+                "main",
+                &[
+                    wisp_llm::Message::user("legacy question"),
+                    wisp_llm::Message::assistant("legacy answer"),
+                    wisp_llm::Message::user("question"),
+                    wisp_llm::Message::assistant("answer"),
+                ],
+            )
+            .await
+            .unwrap();
+        let checkpoint = service
+            .create_checkpoint_at("p", "main", Some(0))
+            .await
+            .unwrap();
+        assert_eq!(checkpoint.source_ui_event_seq, 0);
+        assert_eq!(checkpoint.source_ui_event_head_seq, 1);
+        let exploration = service
+            .create_exploration(&checkpoint.id, "Legacy")
+            .await
+            .unwrap();
+        assert!(service
+            .store
+            .load_session_ui_events(&exploration.frame_id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            service
+                .store
+                .load_messages(&exploration.frame_id)
+                .await
+                .unwrap()[1]
+                .content
+                .as_text(),
+            "legacy answer"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn historical_exploration_rejects_missing_or_incomplete_context() {
+        let (service, base, _) = fixture("historical_invalid").await;
+        for index in [-1, 1] {
+            assert!(service
+                .create_checkpoint_at("p", "main", Some(index))
+                .await
+                .unwrap_err()
+                .contains(ERR_HISTORY_UNAVAILABLE));
+        }
+        service
+            .store
+            .append_message("main", 3, &wisp_llm::Message::user("unfinished"))
+            .await
+            .unwrap();
+        service
+            .store
+            .append_message("main", 4, &wisp_llm::Message::user("final question"))
+            .await
+            .unwrap();
+        service
+            .store
+            .append_message("main", 5, &wisp_llm::Message::assistant("final answer"))
+            .await
+            .unwrap();
+        assert!(service
+            .create_checkpoint_at("p", "main", Some(1))
+            .await
+            .unwrap_err()
+            .contains(ERR_SOURCE_INCOMPLETE));
+        for seq in 2..=4 {
+            service
+                .store
+                .append_session_ui_event(
+                    "main",
+                    seq,
+                    r#"{"kind":"User","frame_id":"main","text":"archived question"}"#,
+                )
+                .await
+                .unwrap();
+        }
+        assert!(service
+            .create_checkpoint_at("p", "main", Some(0))
+            .await
+            .unwrap_err()
+            .contains(ERR_HISTORY_UNAVAILABLE));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[tokio::test]

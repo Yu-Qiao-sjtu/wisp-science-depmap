@@ -291,12 +291,29 @@ pub struct ProviderConfig {
     /// Reasoning effort: `reasoning.effort` / `reasoning_effort` for OpenAI,
     /// `output_config.effort` for Anthropic. None = provider default.
     pub reasoning_effort: Option<String>,
+    /// DeepSeek thinking toggle. `Some(false)` sends `thinking: { type:
+    /// "disabled" }` on Chat Completions and `reasoning.effort: none` on
+    /// Responses, so a compact JSON call cannot burn its output budget on
+    /// hidden CoT. None = omit (DeepSeek V4 defaults to thinking on). Ignored
+    /// for non-DeepSeek hosts so OpenAI/local gateways are not sent an unknown
+    /// field.
+    pub thinking_enabled: Option<bool>,
     /// OpenAI-compatible top-level `service_tier`. None = omit the field.
     pub service_tier: Option<String>,
     /// HTTP proxy override. `None`/empty = follow system/env proxy settings;
     /// `"none"` = force a direct connection; otherwise a proxy URL
     /// (`http://`, `https://`, `socks5://`).
     pub proxy: Option<String>,
+    /// Per-profile User-Agent override. Empty uses the Wisp default.
+    pub user_agent: String,
+    pub send_user_agent: bool,
+    /// None follows the endpoint default (OpenCode only).
+    pub send_session_id: Option<bool>,
+    pub session_header_name: String,
+    /// Runtime conversation identity, never a model-profile setting. Hosts
+    /// should supply their durable conversation ID; standalone calls get a
+    /// fresh ID at construction, stable across requests and config clones.
+    pub session_id: String,
 }
 
 /// Shared reqwest client for all providers, honoring `cfg.proxy`.
@@ -323,7 +340,6 @@ fn http_client_from_pool(
 
 fn build_http_client(cfg: &ProviderConfig) -> reqwest::Client {
     let mut b = reqwest::Client::builder()
-        .user_agent("wisp-science")
         // A total request timeout also caps a healthy, actively streaming SSE
         // response. Long agent turns therefore used to die at five minutes
         // even while bytes were still arriving. Bound connection setup and
@@ -349,7 +365,77 @@ fn build_http_client(cfg: &ProviderConfig) -> reqwest::Client {
     })
 }
 
+/// Validate before trimming so pasted CR/LF cannot inject another header.
+pub fn normalize_user_agent(value: &str) -> std::result::Result<String, String> {
+    if value.bytes().any(|byte| !matches!(byte, 0x20..=0x7e)) {
+        return Err(
+            "User-Agent must contain only printable ASCII characters (no line breaks).".into(),
+        );
+    }
+    Ok(value.trim().to_string())
+}
+
+pub fn effective_user_agent(value: &str) -> &str {
+    match value.trim() {
+        "" => "wisp-science",
+        value => value,
+    }
+}
+
+pub fn normalize_session_header_name(value: &str) -> std::result::Result<String, String> {
+    if value.bytes().any(|byte| !matches!(byte, 0x20..=0x7e)) {
+        return Err("Session header name must be a valid HTTP header name.".into());
+    }
+    let name = value.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return Ok(name);
+    }
+    reqwest::header::HeaderName::from_bytes(name.as_bytes())
+        .map_err(|_| "Session header name must be a valid HTTP header name.".to_string())?;
+    if matches!(
+        name.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "cookie"
+            | "host"
+            | "content-length"
+            | "content-type"
+            | "transfer-encoding"
+            | "connection"
+            | "user-agent"
+            | "anthropic-version"
+    ) {
+        return Err(
+            "Session header name cannot replace authentication, transport, or User-Agent headers."
+                .into(),
+        );
+    }
+    Ok(name)
+}
+
 impl ProviderConfig {
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = session_id.into();
+        self
+    }
+
+    /// Apply identities per request: the HTTP pool is shared by conversations.
+    pub(crate) fn request_headers(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        apply_request_identity(
+            request,
+            &self.base_url,
+            &self.user_agent,
+            self.send_user_agent,
+            &self.session_id,
+            self.send_session_id,
+            &self.session_header_name,
+        )
+    }
+
     pub fn openai(
         base_url: impl Into<String>,
         api_key: impl Into<String>,
@@ -363,8 +449,14 @@ impl ProviderConfig {
             anthropic_version: "2023-06-01".into(),
             max_tokens: 8192,
             reasoning_effort: None,
+            thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
+            session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
     pub fn openai_responses(
@@ -380,8 +472,14 @@ impl ProviderConfig {
             anthropic_version: "2023-06-01".into(),
             max_tokens: 8192,
             reasoning_effort: None,
+            thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
+            session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
     pub fn anthropic(
@@ -397,10 +495,63 @@ impl ProviderConfig {
             anthropic_version: "2023-06-01".into(),
             max_tokens: 8192,
             reasoning_effort: None,
+            thinking_enabled: None,
             service_tier: None,
             proxy: None,
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
+            session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
+}
+
+/// Apply only to model API requests, not generated-media download URLs.
+pub fn apply_request_identity(
+    mut request: reqwest::RequestBuilder,
+    base_url: &str,
+    user_agent: &str,
+    send_user_agent: bool,
+    session_id: &str,
+    send_session_id: Option<bool>,
+    session_header_name: &str,
+) -> reqwest::RequestBuilder {
+    if send_user_agent {
+        request = request.header(
+            reqwest::header::USER_AGENT,
+            effective_user_agent(user_agent),
+        );
+    }
+    if send_session_id.unwrap_or_else(|| is_opencode_endpoint(base_url)) {
+        let name = if session_header_name.trim().is_empty() {
+            "x-opencode-session"
+        } else {
+            session_header_name.trim()
+        };
+        request = request.header(name, session_id);
+    }
+    request
+}
+
+/// Parse the host and path rather than matching a substring in a gateway URL.
+pub fn is_opencode_endpoint(base_url: &str) -> bool {
+    url::Url::parse(base_url).ok().is_some_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str() == Some("opencode.ai")
+            && (url.path() == "/zen" || url.path().starts_with("/zen/"))
+    })
+}
+
+/// True when the request will hit DeepSeek's thinking-mode default.
+///
+/// Match the public API host or a `deepseek-*` model id so a custom gateway
+/// that still serves V4 Flash/Pro gets the same toggle. Other OpenAI-compatible
+/// hosts must not receive `thinking`, which they reject.
+pub(crate) fn is_deepseek_endpoint(base_url: &str, model: &str) -> bool {
+    let url = base_url.to_ascii_lowercase();
+    let model = model.to_ascii_lowercase();
+    url.contains("deepseek.com") || model.starts_with("deepseek-")
 }
 
 /// Callbacks the agent loop receives while a streamed completion is in flight.
@@ -500,6 +651,327 @@ mod tests {
     use super::*;
 
     #[test]
+    fn opencode_identity_is_scoped_to_the_endpoint_and_conversation() {
+        let cfg = ProviderConfig::openai("https://opencode.ai/zen/go/v1", "key", "kimi-k3");
+        assert!(!cfg.session_id.is_empty());
+        assert_eq!(cfg.clone().session_id, cfg.session_id);
+        assert_ne!(
+            cfg.session_id,
+            ProviderConfig::openai("", "", "").session_id
+        );
+        let client = http_client(&cfg);
+        // The same connection pool serves independent conversation identities.
+        for id in ["frame-a", "frame-b", "frame-a"] {
+            let scoped = cfg.clone().with_session_id(id);
+            let request = scoped
+                .request_headers(client.post(&scoped.base_url))
+                .build()
+                .unwrap();
+            assert_eq!(request.headers()["x-opencode-session"], id);
+            assert_eq!(request.headers()["user-agent"], "wisp-science");
+        }
+        for endpoint in [
+            "https://opencode.ai/zen",
+            "https://OPENCODE.AI/zen/go/v1/messages",
+            "https://opencode.ai/zen/v1/responses",
+        ] {
+            assert!(is_opencode_endpoint(endpoint), "{endpoint}");
+        }
+        for endpoint in [
+            "https://opencode.ai.evil.test/zen/go/v1",
+            "https://opencode.ai@evil.test/zen/go/v1",
+            "https://example.test/opencode.ai/zen/go/v1",
+            "https://example.test/?url=https://opencode.ai/zen/go/v1",
+            "https://opencode.ai/zenith",
+            "https://opencode.ai/models",
+            "not a URL",
+        ] {
+            let mut scoped = cfg.clone();
+            scoped.base_url = endpoint.into();
+            assert!(!is_opencode_endpoint(endpoint), "{endpoint}");
+            let request = scoped
+                .request_headers(client.post("http://localhost/"))
+                .build()
+                .unwrap();
+            assert!(!request.headers().contains_key("x-opencode-session"));
+        }
+        let invalid = cfg.with_session_id("frame\r\nx-injected: true");
+        assert!(invalid
+            .request_headers(client.post(&invalid.base_url))
+            .build()
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn opencode_wire_headers_cover_protocols_modes_and_concurrent_sessions() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        // An explicit loopback HTTP proxy captures the real requests without
+        // DNS, credentials, or access to the external service.
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut captured = Vec::new();
+            for _ in 0..24 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut chunk = [0; 4096];
+                loop {
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&bytes[..end]);
+                    let header = |name: &str| -> String {
+                        head.lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                            .unwrap()
+                            .1
+                            .trim()
+                            .into()
+                    };
+                    let length = header("content-length").parse::<usize>().unwrap();
+                    if bytes.len() < end + 4 + length {
+                        continue;
+                    }
+                    assert_eq!(header("user-agent"), "wisp-science");
+                    let session = header("x-opencode-session");
+                    let target = head
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .to_string();
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap();
+                    assert_eq!(body["model"].as_str().unwrap(), session);
+                    captured.push((target, session));
+                    break;
+                }
+                socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            }
+            captured
+        });
+        let mut clients = Vec::new();
+        for kind in [
+            ProviderKind::OpenAiCompatible,
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAiResponses,
+        ] {
+            for id in ["session-a", "session-b"] {
+                let mut cfg =
+                    ProviderConfig::openai("http://opencode.ai/zen/go/v1", "fake-key", id)
+                        .with_session_id(id);
+                cfg.kind = kind.clone();
+                cfg.proxy = Some(proxy.clone());
+                clients.push(tokio::spawn(async move {
+                    // Rebuilding a provider (resume/model switch) retains the ID.
+                    for _ in 0..2 {
+                        let provider = build(cfg.clone());
+                        assert!(provider
+                            .complete(&[Message::user("test")], &[])
+                            .await
+                            .is_err());
+                        assert!(provider
+                            .stream(&[Message::user("test")], &[], &mut NullSink)
+                            .await
+                            .is_err());
+                    }
+                }));
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            for client in clients {
+                client.await.unwrap();
+            }
+            let mut actual = server.await.unwrap();
+            actual.sort();
+            let mut expected = Vec::new();
+            for suffix in ["chat/completions", "messages", "responses"] {
+                for id in ["session-a", "session-b"] {
+                    for _ in 0..4 {
+                        expected.push((
+                            format!("http://opencode.ai/zen/go/v1/{suffix}"),
+                            id.to_string(),
+                        ));
+                    }
+                }
+            }
+            expected.sort();
+            assert_eq!(actual, expected);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn session_header_names_are_validated_without_overwriting_controlled_headers() {
+        assert_eq!(
+            normalize_session_header_name(" X-Conversation-ID ").unwrap(),
+            "x-conversation-id"
+        );
+        assert_eq!(normalize_session_header_name("").unwrap(), "");
+        for name in [
+            "x-session\r\nx-injected",
+            "x session",
+            "x:session",
+            "会话",
+            "Authorization",
+            "User-Agent",
+            "Content-Length",
+            "x-api-key",
+        ] {
+            assert!(
+                normalize_session_header_name(name).is_err(),
+                "accepted {name}"
+            );
+        }
+        let mut config = ProviderConfig::openai("https://opencode.ai/zen/go/v1", "key", "model");
+        config.send_session_id = Some(false);
+        config.send_user_agent = false;
+        let request = config
+            .request_headers(http_client(&config).post(&config.base_url))
+            .build()
+            .unwrap();
+        assert!(!request.headers().contains_key("user-agent"));
+        assert!(!request.headers().contains_key("x-opencode-session"));
+    }
+
+    #[test]
+    fn user_agent_validation_rejects_header_injection() {
+        assert_eq!(
+            normalize_user_agent("  research-client/1.0  ").unwrap(),
+            "research-client/1.0"
+        );
+        assert_eq!(normalize_user_agent("   ").unwrap(), "");
+        for invalid in [
+            "client\r\nX-Key: value",
+            "client\n",
+            "\tclient",
+            "客户端",
+            "client\0",
+            "client\x7f",
+        ] {
+            assert!(
+                normalize_user_agent(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn request_identity_controls_each_protocol_and_request_mode() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut agents = Vec::new();
+            for _ in 0..30 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 4096];
+                loop {
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&chunk[..count]);
+                    let Some(end) = request.windows(4).position(|v| v == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&request[..end]);
+                    let length: usize = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .unwrap()
+                        .1
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    if request.len() < end + 4 + length {
+                        continue;
+                    }
+                    let values: Vec<_> = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+                        .map(|(_, value)| value.trim().to_string())
+                        .collect();
+                    let sessions: Vec<_> = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .filter(|(name, _)| {
+                            matches!(*name, "x-opencode-session" | "x-project-session")
+                        })
+                        .map(|(name, value)| (name.to_string(), value.trim().to_string()))
+                        .collect();
+                    agents.push((values, sessions));
+                    break;
+                }
+                // Deliberate rejection: exercise real request sending without
+                // depending on any model-specific completion payload.
+                socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            }
+            agents
+        });
+        for kind in [
+            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAiResponses,
+            ProviderKind::Anthropic,
+        ] {
+            for (user_agent, send_user_agent, send_session_id, header_name) in [
+                ("", true, None, ""),
+                ("research-client/1.0", true, Some(true), "x-project-session"),
+                ("research-client/1.0", false, Some(true), ""),
+                ("", false, Some(false), "x-project-session"),
+                ("", true, Some(false), ""),
+            ] {
+                let mut cfg = ProviderConfig::openai(&base, "test-key", "test-model");
+                cfg.kind = kind.clone();
+                cfg.proxy = Some("none".into());
+                cfg.user_agent = user_agent.into();
+                cfg.send_user_agent = send_user_agent;
+                cfg.send_session_id = send_session_id;
+                cfg.session_header_name = header_name.into();
+                cfg.session_id = "stable-frame".into();
+                let provider = build(cfg);
+                assert!(provider
+                    .complete(&[Message::user("test")], &[])
+                    .await
+                    .is_err());
+                assert!(provider
+                    .stream(&[Message::user("test")], &[], &mut NullSink)
+                    .await
+                    .is_err());
+            }
+        }
+        let actual = server.await.unwrap();
+        let expected: Vec<_> = (0..3)
+            .flat_map(|_| {
+                [
+                    (vec!["wisp-science".to_string()], vec![]),
+                    (
+                        vec!["research-client/1.0".to_string()],
+                        vec![("x-project-session".to_string(), "stable-frame".to_string())],
+                    ),
+                    (
+                        vec![],
+                        vec![("x-opencode-session".to_string(), "stable-frame".to_string())],
+                    ),
+                    (vec![], vec![]),
+                    (vec!["wisp-science".to_string()], vec![]),
+                ]
+                .into_iter()
+                .flat_map(|entry| [entry.clone(), entry])
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn utf8_stream_reassembles_char_split_across_chunks() {
         // "支气管" streamed with the byte boundaries falling *inside* each
         // 3-byte character — the exact case that the old per-chunk decode drops.
@@ -548,7 +1020,9 @@ mod tests {
         let initialized = shared
             .get()
             .expect("default client initializes shared pool") as *const _;
-        let _second = http_client_from_pool(&cfg, &shared);
+        let mut custom = cfg.clone();
+        custom.user_agent = "research-client/1.0".into();
+        let _second = http_client_from_pool(&custom, &shared);
         let reused = shared.get().expect("shared pool remains initialized") as *const _;
 
         assert_eq!(initialized, reused);

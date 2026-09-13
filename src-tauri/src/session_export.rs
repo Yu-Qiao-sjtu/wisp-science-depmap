@@ -382,7 +382,7 @@ pub(super) async fn capture_env(
 #[tauri::command]
 pub(super) async fn get_artifact_provenance(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     path: String,
 ) -> Result<Option<ArtifactProvenance>, String> {
@@ -391,7 +391,7 @@ pub(super) async fn get_artifact_provenance(
         None => state.active_frame(window.label()),
     };
     let Some(fid) = frame_id else { return Ok(None) };
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     artifact_provenance_for_path(&state.store, &fid, &ap.root, &path).await
 }
 
@@ -447,7 +447,7 @@ pub(super) async fn artifact_provenance_for_path(
 pub(super) async fn export_session(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     artifact_paths: Vec<String>,
 ) -> Result<Option<String>, String> {
@@ -469,7 +469,7 @@ pub(super) async fn export_session(
         return Err("No messages to export.".into());
     }
 
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     let stored_artifacts = state
         .store
         .list_artifacts(&session_id)

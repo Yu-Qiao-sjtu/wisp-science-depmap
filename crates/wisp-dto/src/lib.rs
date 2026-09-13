@@ -11,6 +11,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+mod mcp_app_child;
+pub use mcp_app_child::*;
+
+/// Identifies a stopped ACP turn in persisted errors and invoke rejections.
+/// The UI must not offer native HTTP transcript recovery for these errors.
+pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
+
+/// Bounded numeric renderer diagnostics. Never includes user or plugin content.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiHealthSnapshot {
+    pub timer_lag_ms: u32,
+    pub long_tasks: u32,
+    pub longest_task_ms: u32,
+    pub script_errors: u32,
+    pub unhandled_rejections: u32,
+    pub active_apps: u32,
+    pub parked_apps: u32,
+    pub app_messages: u32,
+    pub drag_overlays: u32,
+    pub media_blob_urls: u32,
+    pub media_blob_bytes: u64,
+    pub media_owners: u32,
+}
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct ContextUsage {
     #[serde(default)]
@@ -1157,9 +1182,14 @@ mod session_context_window_tests {
             context_window,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
+            image_generation_capable: false,
             image_size: String::new(),
             image_quality: String::new(),
             image_aspect_ratio: String::new(),
@@ -1640,6 +1670,14 @@ pub struct Settings {
     #[serde(default)]
     pub service_tier: String,
     #[serde(default)]
+    pub user_agent: String,
+    #[serde(default = "default_true")]
+    pub send_user_agent: bool,
+    #[serde(default)]
+    pub send_session_id: Option<bool>,
+    #[serde(default)]
+    pub session_header_name: String,
+    #[serde(default)]
     pub proxy_url: String,
     #[serde(default)]
     pub supports_vision: bool,
@@ -1699,6 +1737,42 @@ pub struct BrowserTabCleanupPrompt {
     pub frame_id: String,
     #[serde(default)]
     pub tabs: Vec<BrowserTabCleanupItem>,
+}
+
+/// A tab whose current page needs the user to complete a human-verification
+/// challenge before browser automation may continue.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanTab {
+    #[serde(default)]
+    pub session: String,
+    pub tab_id: i64,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub frame_id: String,
+    #[serde(default)]
+    pub turn_id: String,
+}
+
+/// Live set of tabs waiting on human verification. Replaces the previous
+/// snapshot each time it is emitted.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanPrompt {
+    #[serde(default)]
+    pub tabs: Vec<BrowserNeedsHumanTab>,
+}
+
+/// Result of re-scanning tabs the user marked as completed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserNeedsHumanConfirmResult {
+    #[serde(default)]
+    pub still_required: Vec<BrowserNeedsHumanTab>,
+    #[serde(default)]
+    pub cleared: Vec<BrowserNeedsHumanTab>,
 }
 
 /// Reply of `open_browser_extension_page`: managed extension path and whether
@@ -1899,6 +1973,10 @@ impl Default for Settings {
             max_tokens: 8192,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             proxy_url: String::new(),
             supports_vision: false,
             sync_backend: "relay".into(),
@@ -2046,7 +2124,7 @@ pub struct AcpSessionUpdate {
     pub payload: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpSessionState {
     pub frame_id: String,
@@ -2402,7 +2480,8 @@ pub struct LoadedPresentation {
 pub struct TranscriptPageState {
     pub next_before_seq: Option<i64>,
     pub user_offset: usize,
-    pub loading: bool,
+    /// Identity of the active UI paging request; replacement pages clear it.
+    pub loading_request: Option<u64>,
     pub window_user_start: usize,
 }
 
@@ -2721,11 +2800,21 @@ pub struct ModelProfile {
     #[serde(default)]
     pub service_tier: String,
     #[serde(default)]
+    pub user_agent: String,
+    #[serde(default = "default_true")]
+    pub send_user_agent: bool,
+    #[serde(default)]
+    pub send_session_id: Option<bool>,
+    #[serde(default)]
+    pub session_header_name: String,
+    #[serde(default)]
     pub supports_vision: bool,
     #[serde(default)]
     pub use_for_vision: bool,
     #[serde(default)]
     pub use_for_image_generation: bool,
+    #[serde(default)]
+    pub image_generation_capable: bool,
     #[serde(default)]
     pub image_size: String,
     #[serde(default)]
@@ -2744,9 +2833,8 @@ pub struct ModelProfile {
     pub video_resolution: Option<String>,
 }
 
-/// Raster image-generation model IDs. Gateway `vendor/model` ids match on the
-/// last path segment. Exact IDs only — a shorter family id must not absorb a
-/// longer sibling.
+/// Known image IDs used for automatic hints, never as an acceptance allowlist.
+/// Explicit image capability also supports custom IDs; catalog matching stays exact.
 pub fn is_image_generation_model(model: &str) -> bool {
     let model = model.trim();
     let tail = model.rsplit('/').next().unwrap_or(model);
@@ -2787,7 +2875,10 @@ pub const VIDEO_DURATION_DEFAULT_SECS: u32 = 5;
 
 impl ModelProfile {
     pub fn is_chat_model(&self) -> bool {
-        !is_image_generation_model(&self.model) && !is_video_generation_model(&self.model)
+        !(self.image_generation_capable
+            || self.use_for_image_generation
+            || is_image_generation_model(&self.model))
+            && !is_video_generation_model(&self.model)
     }
 }
 
@@ -2882,6 +2973,73 @@ pub struct SkillRow {
     #[serde(default)]
     pub managed_by: Option<String>,
     pub dir: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillFileContent {
+    pub path: String,
+    pub content: String,
+}
+
+/// Public directory metadata is separate from the controlled SKILL.md YAML.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CommunitySkillEntry {
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub license: String,
+    pub tags: Vec<String>,
+    pub repository: String,
+    pub git_ref: String,
+    pub package_path: String,
+    pub responsibilities: String,
+    pub when_to_use: String,
+    pub inputs: String,
+    pub outputs: String,
+    pub out_of_scope: String,
+    pub required_dependencies: Vec<String>,
+    pub optional_dependencies: Vec<String>,
+    pub operation_boundary: String,
+    pub supported_wisp: String,
+    pub verified_wisp: Option<String>,
+    pub known_limits: String,
+    pub feedback_url: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillInstallSource {
+    pub repository: String,
+    pub source_url: String,
+    pub git_ref: String,
+    pub commit: String,
+    pub package_path: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillStoreCandidate {
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub source: SkillInstallSource,
+    pub markdown: String,
+    pub format_errors: Vec<String>,
+    pub resource_errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub conflict: Option<String>,
+    pub installed_source: Option<SkillInstallSource>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CommunitySkillCatalog {
+    pub entries: Vec<CommunitySkillEntry>,
+    pub notice: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillInstallResult {
+    pub name: String,
+    pub directory: String,
+    pub notice: Option<String>,
 }
 
 #[derive(Clone, serde::Deserialize, PartialEq)]
@@ -3023,15 +3181,24 @@ pub struct ConnView {
 fn default_tool_mode() -> String {
     "allow".into()
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorTool {
     pub name: String,
     #[serde(default = "default_tool_mode")]
     pub mode: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, alias = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, alias = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConnectorLink {
+    pub label: String,
+    pub url: String,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorInfo {
     pub key: String,
     pub name: String,
@@ -3042,12 +3209,20 @@ pub struct ConnectorInfo {
     pub subtitle: String,
     #[serde(default)]
     pub auth: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub description_zh: String,
+    #[serde(default)]
+    pub maintainer: String,
+    #[serde(default)]
+    pub links: Vec<ConnectorLink>,
     pub tools: Vec<ConnectorTool>,
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorsView {
     pub connectors: Vec<ConnectorInfo>,
-    /// Global approval scope: "full" | "auto" | "ask".
+    /// This window's project approval scope, or its inherited global default.
     pub scope: String,
 }
 
@@ -3065,8 +3240,11 @@ pub struct ApprovalGrantRow {
 
 /// Editor row for a header or env secret. `value` is the typed replacement;
 /// empty keeps the stored secret when `has_value` is true.
+///
+/// `row_id` is UI-only (keyed list identity). It is not serialized.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct ConnSecretField {
+    pub row_id: u64,
     pub name: String,
     pub value: String,
     pub has_value: bool,
@@ -3075,6 +3253,7 @@ pub struct ConnSecretField {
 impl ConnSecretField {
     pub fn from_entry(entry: &McpSecretEntry) -> Self {
         Self {
+            row_id: 0,
             name: entry.name.clone(),
             value: String::new(),
             has_value: entry.has_value
@@ -3154,9 +3333,14 @@ mod image_generation_model_tests {
             context_window: 128_000,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
+            image_generation_capable: false,
             image_size: String::new(),
             image_quality: String::new(),
             image_aspect_ratio: String::new(),
@@ -3166,6 +3350,23 @@ mod image_generation_model_tests {
             video_aspect_ratio: None,
             video_resolution: None,
         }
+    }
+
+    #[test]
+    fn custom_image_capability_does_not_depend_on_the_current_assignment() {
+        let mut p = profile("gpt-image-2.5");
+        assert!(p.is_chat_model());
+        p.use_for_image_generation = true;
+        assert!(!p.is_chat_model());
+        p.image_generation_capable = true;
+        p.use_for_image_generation = false;
+        assert!(!p.is_chat_model());
+        let form = super::ModelForm {
+            model: p.model,
+            image_generation_capable: true,
+            ..Default::default()
+        };
+        assert!(form.is_image_model());
     }
 
     #[test]
@@ -3207,9 +3408,14 @@ mod video_generation_model_tests {
             context_window: 128_000,
             reasoning_effort: String::new(),
             service_tier: String::new(),
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
             use_for_image_generation: false,
+            image_generation_capable: false,
             image_size: String::new(),
             image_quality: String::new(),
             image_aspect_ratio: String::new(),
@@ -3274,9 +3480,14 @@ pub struct ModelForm {
     pub context_window: u64,
     pub reasoning_effort: String,
     pub service_tier: String,
+    pub user_agent: String,
+    pub send_user_agent: bool,
+    pub send_session_id: Option<bool>,
+    pub session_header_name: String,
     pub supports_vision: bool,
     pub use_for_vision: bool,
     pub use_for_image_generation: bool,
+    pub image_generation_capable: bool,
     pub image_size: String,
     pub image_quality: String,
     pub image_aspect_ratio: String,
@@ -3288,6 +3499,14 @@ pub struct ModelForm {
     /// Used only when adding a provider (`id` is `None`): one row per model
     /// that should be created with the shared API URL and key.
     pub entries: Vec<ModelFormEntry>,
+}
+
+impl ModelForm {
+    pub fn is_image_model(&self) -> bool {
+        self.image_generation_capable
+            || self.use_for_image_generation
+            || is_image_generation_model(&self.model)
+    }
 }
 
 /// `model_catalog_lookup` projection of one baked catalog entry.
@@ -3364,15 +3583,24 @@ pub struct TurnMemoryProposal {
     pub global_memories: Vec<GlobalMemory>,
 }
 
-#[derive(Deserialize, Clone)]
+/// Paths found without launching interpreters or installing packages.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct LocalEnvironmentStatus {
+    pub paths: std::collections::BTreeMap<String, String>,
+    pub warning: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BootstrapStatus {
     pub skills_loaded: usize,
     pub python_ok: bool,
     #[serde(default)]
-    pub python_initializing: bool,
+    pub local_environment: Option<LocalEnvironmentStatus>,
     pub mcp_catalog: usize,
     pub uv_ok: bool,
     pub node_ok: bool,
+    #[serde(default)]
+    pub npm_ok: bool,
     pub sci_ok: bool,
     pub pixi_ok: bool,
     pub app_version: String,
@@ -3465,6 +3693,27 @@ pub struct PublicationInfo {
     pub project_id: String,
     pub title: String,
     pub description: String,
+}
+
+/// A bounded, project-scoped source choice. File choices name an immutable
+/// ArtifactVersion; message previews start at byte zero of persisted text.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PublicationSourceChoice {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub text: Option<String>,
+    #[serde(default)]
+    pub text_sha256: Option<String>,
+    pub frame_id: Option<String>,
+    pub message_seq: Option<i64>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublicationSourcePage {
+    pub sources: Vec<PublicationSourceChoice>,
+    pub has_more: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -3588,6 +3837,12 @@ pub struct PublicationLineageInfo {
     pub checksum: Option<String>,
     pub capture_timing: Option<String>,
     pub producing_run_id: Option<String>,
+    #[serde(default)]
+    pub producing_run_title: Option<String>,
+    #[serde(default)]
+    pub input_labels: Vec<String>,
+    #[serde(default)]
+    pub code_labels: Vec<String>,
     pub run_input_count: usize,
     pub run_output_count: usize,
     pub code_snapshot_count: usize,
@@ -4251,6 +4506,10 @@ pub struct RuntimeKeyDto {
     pub project_id: String,
     pub context_id: String,
     pub language: String,
+    #[serde(default)]
+    pub scope_key: String,
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Deserialize, Clone, PartialEq, Eq)]
@@ -4549,6 +4808,9 @@ pub struct MethodSearchProgressView {
 
 #[derive(Deserialize, Clone)]
 pub struct RunProgress {
+    /// The transport cannot report byte-level progress for this phase.
+    #[serde(default)]
+    pub indeterminate: bool,
     pub phase: String,
     pub direction: String,
     pub completed_bytes: u64,
@@ -4832,4 +5094,28 @@ mod mcp_secret_entry_tests {
         assert_eq!(entry.value.as_deref(), Some("secret-value"));
         assert!(entry.has_value);
     }
+}
+/// Independently saved network preferences. Empty proxies inherit platform /
+/// environment defaults; `none` forces direct connections. Mirrors are agent
+/// installation guidance, not a network access policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkSettings {
+    pub model_proxy_url: String,
+    pub mcp_proxy_url: String,
+    pub command_proxy_url: String,
+    pub conda_mirror_url: String,
+    pub pip_index_url: String,
+    pub ca_bundle_path: String,
+}
+
+mod research_journey;
+pub use research_journey::*;
+/// Host-authored logical binding. Never accepts an iframe-supplied connector.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpAppBinding {
+    pub version: u32,
+    pub project_id: String,
+    pub frame_id: String,
+    pub connector_id: String,
 }

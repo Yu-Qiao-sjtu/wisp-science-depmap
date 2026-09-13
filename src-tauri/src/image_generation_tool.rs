@@ -1,6 +1,6 @@
 //! `generate_image` — one configured image-model request that writes a PNG
-//! into the current project. Supports OpenAI `gpt-image-2` and xAI
-//! `grok-imagine-image-2.0`.
+//! into the current project through an OpenAI-compatible Images API.
+//! Configured model IDs are opaque; known xAI IDs have a parameter adapter.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -61,6 +61,7 @@ pub struct GenerateImageTool {
     api_key: String,
     model: String,
     proxy: Option<String>,
+    session_id: String,
     options: crate::models::ImageGenerationOptions,
 }
 
@@ -71,6 +72,7 @@ impl GenerateImageTool {
             api_key,
             model,
             proxy,
+            session_id: uuid::Uuid::new_v4().to_string(),
             options: crate::models::ImageGenerationOptions::default(),
         }
     }
@@ -78,6 +80,23 @@ impl GenerateImageTool {
     pub fn with_options(mut self, options: crate::models::ImageGenerationOptions) -> Self {
         self.options = options;
         self
+    }
+
+    pub fn with_session_id(mut self, session_id: &str) -> Self {
+        self.session_id = session_id.to_string();
+        self
+    }
+
+    fn request_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        wisp_llm::provider::apply_request_identity(
+            request,
+            &self.api_url,
+            &self.options.user_agent,
+            self.options.send_user_agent,
+            &self.session_id,
+            self.options.send_session_id,
+            &self.options.session_header_name,
+        )
     }
 
     fn api_root(&self) -> String {
@@ -153,7 +172,7 @@ impl GenerateImageTool {
                 _ => {}
             }
             body
-        } else {
+        } else if crate::models::is_image_generation_model(self.configured_model()) {
             json!({
                 "model": self.configured_model(),
                 "prompt": prompt,
@@ -162,6 +181,20 @@ impl GenerateImageTool {
                 "quality": quality,
                 "output_format": "png",
             })
+        } else {
+            // Custom aliases/future models need not support GPT-Image-specific
+            // defaults. Send portable fields and only explicit size/quality.
+            // Both URL and base64 responses are already converted to PNG.
+            let mut body = json!({
+                "model": self.configured_model(), "prompt": prompt, "n": 1,
+            });
+            if size != "auto" {
+                body["size"] = json!(size);
+            }
+            if quality != "auto" {
+                body["quality"] = json!(quality);
+            }
+            body
         }
     }
 
@@ -172,12 +205,13 @@ impl GenerateImageTool {
         )
     }
 
-    fn model_endpoint(&self) -> String {
-        format!(
-            "{}/models/{}",
-            self.api_root().trim_end_matches('/'),
-            self.model.trim()
-        )
+    fn model_endpoint(&self) -> Result<String, String> {
+        let mut url = reqwest::Url::parse(&self.models_endpoint())
+            .map_err(|error| format!("invalid image API URL: {error}"))?;
+        url.path_segments_mut()
+            .map_err(|_| "image API URL cannot contain path segments".to_string())?
+            .push(self.configured_model());
+        Ok(url.into())
     }
 
     fn models_endpoint(&self) -> String {
@@ -185,9 +219,12 @@ impl GenerateImageTool {
     }
 
     fn client(&self) -> Result<reqwest::Client, String> {
-        let mut builder = reqwest::Client::builder()
-            .user_agent("wisp-science")
-            .timeout(Duration::from_secs(300));
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(300));
+        if self.options.send_user_agent {
+            builder = builder.user_agent(wisp_llm::provider::effective_user_agent(
+                &self.options.user_agent,
+            ));
+        }
         match self.proxy.as_deref().map(str::trim) {
             None | Some("") => {}
             Some("none") => builder = builder.no_proxy(),
@@ -204,15 +241,15 @@ impl GenerateImageTool {
     }
 
     async fn generate(&self, prompt: &str, size: &str, quality: &str) -> Result<Vec<u8>, String> {
-        if !crate::models::is_image_generation_model(self.configured_model()) {
-            return Err(crate::models::IMAGE_GENERATION_UNSUPPORTED.into());
+        if self.configured_model().is_empty() {
+            return Err("image-generation model ID is required".into());
         }
         if self.api_key.trim().is_empty() {
             return Err("the assigned image-generation model has no API key".into());
         }
         let client = self.client()?;
-        let mut response = client
-            .post(self.endpoint())
+        let mut response = self
+            .request_headers(client.post(self.endpoint()))
             .bearer_auth(self.api_key.trim())
             .json(&self.request_body(prompt, size, quality))
             .send()
@@ -313,8 +350,8 @@ impl GenerateImageTool {
     /// Image-only models cannot be sent to Responses or Chat Completions. The
     /// provider model metadata route provides a lightweight authenticated probe.
     pub async fn validate_model_access(&self) -> Result<(), String> {
-        if !crate::models::is_image_generation_model(self.configured_model()) {
-            return Err(crate::models::IMAGE_GENERATION_UNSUPPORTED.into());
+        if self.configured_model().is_empty() {
+            return Err("image-generation model ID is required".into());
         }
         if self.api_key.trim().is_empty() {
             return Err("the assigned image-generation model has no API key".into());
@@ -325,10 +362,10 @@ impl GenerateImageTool {
             let endpoint = if list_fallback {
                 self.models_endpoint()
             } else {
-                self.model_endpoint()
+                self.model_endpoint()?
             };
-            let mut response = client
-                .get(endpoint)
+            let mut response = self
+                .request_headers(client.get(endpoint))
                 .bearer_auth(self.api_key.trim())
                 .send()
                 .await
@@ -411,7 +448,7 @@ impl Tool for GenerateImageTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "generate_image",
-            "Generate one PNG with the configured image model (OpenAI gpt-image-2 or xAI grok-imagine-image-2.0) and save it inside the project. This is the Scientific Illustrator's PNG image-model mode. Call it when the user explicitly asks for PNG, gpt-image-2, grok-imagine-image-2.0, generate_image, or image-model generation. Also call it for a Scientific Illustrator image request that names no format or method, because the presence of this tool means an image-generation model is configured. Do not call it when the user explicitly asks for SVG, vector, an editable figure, or direct SVG generation; create and visually verify that SVG directly instead. Use a project-relative path under figures/.",
+            "Generate one PNG with the explicitly configured image model through an OpenAI-compatible Images API, preserving the configured model ID, and save it inside the project. This is the Scientific Illustrator's PNG image-model mode. Call it when the user explicitly asks for PNG, generate_image, or image-model generation. Also call it for a Scientific Illustrator image request that names no format or method, because the presence of this tool means an image-generation model is configured. Do not call it when the user explicitly asks for SVG, vector, an editable figure, or direct SVG generation; create and visually verify that SVG directly instead. Use a project-relative path under figures/.",
             json!({
                 "type": "object",
                 "properties": {
@@ -650,6 +687,13 @@ mod tests {
             "gpt-image-2".into(),
             Some("none".into()),
         )
+        .with_options(crate::models::ImageGenerationOptions {
+            send_user_agent: false,
+            send_session_id: Some(true),
+            session_header_name: "x-custom-session".into(),
+            ..Default::default()
+        })
+        .with_session_id("frame-image")
         .run(
             &json!({
                 "prompt": "A precise scientific pathway diagram",
@@ -670,11 +714,38 @@ mod tests {
         ));
         let request = request.await.unwrap();
         assert!(request.starts_with("POST /v1/images/generations HTTP/1.1"));
+        assert!(!request.to_ascii_lowercase().contains("user-agent:"));
+        assert!(request.contains("x-custom-session: frame-image"));
         let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body["model"], "gpt-image-2");
         assert_eq!(body["output_format"], "png");
         assert_eq!(body["size"], "1536x1024");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn validation_honors_identity_controls_and_custom_session_name() {
+        let (api_url, captured) = serve_once(json!({"id": "gpt-image-2"}).to_string()).await;
+        GenerateImageTool::new(
+            api_url,
+            "fake-key".into(),
+            "gpt-image-2".into(),
+            Some("none".into()),
+        )
+        .with_options(crate::models::ImageGenerationOptions {
+            send_user_agent: false,
+            send_session_id: Some(true),
+            session_header_name: "x-custom-session".into(),
+            ..Default::default()
+        })
+        .with_session_id("frame-media")
+        .validate_model_access()
+        .await
+        .unwrap();
+        let request = captured.await.unwrap();
+        assert!(!request.to_ascii_lowercase().contains("user-agent:"));
+        assert!(request.contains("x-custom-session: frame-media"));
+        assert!(!request.contains("x-opencode-session:"));
     }
 
     #[tokio::test]
@@ -688,12 +759,17 @@ mod tests {
             "gpt-image-2".into(),
             Some("none".into()),
         )
+        .with_options(crate::models::ImageGenerationOptions {
+            user_agent: "research-client/1.0".into(),
+            ..Default::default()
+        })
         .validate_model_access()
         .await
         .unwrap();
 
         let request = request.await.unwrap();
         assert!(request.starts_with("GET /v1/models/gpt-image-2 HTTP/1.1"));
+        assert!(request.contains("user-agent: research-client/1.0"));
         assert!(request
             .to_ascii_lowercase()
             .contains("authorization: bearer sk-test"));
@@ -816,6 +892,10 @@ mod tests {
             Some("none".into()),
         )
         .with_options(crate::models::ImageGenerationOptions {
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             size: String::new(),
             quality: "low".into(),
             aspect_ratio: "16:9".into(),
@@ -836,6 +916,10 @@ mod tests {
             Some("none".into()),
         )
         .with_options(crate::models::ImageGenerationOptions {
+            user_agent: String::new(),
+            send_user_agent: true,
+            send_session_id: None,
+            session_header_name: String::new(),
             size: "1536x1024".into(),
             quality: "high".into(),
             aspect_ratio: String::new(),
@@ -938,17 +1022,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unsupported_image_models_before_calling_the_api() {
+    async fn rejects_empty_image_models_before_calling_the_api() {
         let result = GenerateImageTool::new(
             "http://127.0.0.1:9/v1".into(),
             "sk-test".into(),
-            "dall-e-3".into(),
+            "  ".into(),
             Some("none".into()),
         )
         .generate("diagram", "auto", "auto")
         .await;
-        assert!(result
-            .unwrap_err()
-            .contains("gpt-image-2 and xAI grok-imagine-image-2.0"));
+        assert!(result.unwrap_err().contains("model ID is required"));
+    }
+
+    #[tokio::test]
+    async fn custom_image_ids_reach_generations_unchanged_without_gpt_specific_defaults() {
+        for model in ["gpt-image-2.5", "vendor/opaque-image-vNext", "dall-e-3"] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(PNG_SIGNATURE);
+            let (url, request) =
+                serve_once(json!({"data":[{"b64_json":encoded}]}).to_string()).await;
+            GenerateImageTool::new(url, "fake-key".into(), model.into(), Some("none".into()))
+                .generate("test diagram", "auto", "auto")
+                .await
+                .unwrap();
+            let request = request.await.unwrap();
+            assert!(request.starts_with("POST /v1/images/generations HTTP/1.1"));
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body, json!({"model":model,"prompt":"test diagram","n":1}));
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_image_validation_escapes_model_id_and_never_generates_an_image() {
+        let model = "vendor/custom-image?revision=3";
+        let (url, request) = serve_once(json!({"id":model}).to_string()).await;
+        GenerateImageTool::new(url, "fake-key".into(), model.into(), Some("none".into()))
+            .validate_model_access()
+            .await
+            .unwrap();
+        let request = request.await.unwrap();
+        assert!(request.starts_with("GET /v1/models/vendor%2Fcustom-image%3Frevision=3 HTTP/1.1"));
+        assert!(!request.contains("/images/generations"));
+        assert!(!request.contains("/chat/completions"));
     }
 }

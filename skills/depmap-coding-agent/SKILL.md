@@ -60,9 +60,9 @@ the model context.
 
 ### 1. Establish the project contract
 
-In a new conversation, call `depmap_project_runs` first. Reuse or continue a
-matching active/succeeded Run instead of recomputing because the chat context is
-empty. Run identity and artifacts belong to the project cycle, not one session.
+Use `depmap_project_runs` when earlier work may be relevant. Reuse or continue a
+matching active/succeeded Run when its inputs and method fit the question.
+Run identity and artifacts belong to the project cycle, not one session.
 
 Confirm that the active project contains the expected `data/` and
 `tm00-script/scripts/` directories. Run the bundled read-only resolver before
@@ -233,11 +233,14 @@ Apply the checks in `references/result-contract.md`. At minimum verify:
 - multiple-testing correction;
 - output files and figure readability.
 
-When the native `depmap_validate_run` tool is available, call it with the
-persisted Run id and project-relative run directory after the Run succeeds.
-Only `state=run_validated` authorizes numerical interpretation. A successful R
-stdout message, the mere existence of a figure, or `result.json` by itself is
-not sufficient.
+For R analyses using this result contract, call the native `depmap_validate_run`
+tool when available, with the persisted Run id and project-relative run directory
+after the Run succeeds. Resolve its blocking failures before presenting the
+results as validated. This tool checks execution and artifact contracts; the
+scientific checks above still apply. For an explicitly requested alternative
+method, record its applicable validation and limitations rather than submitting
+it to an R-only validator or relabeling its language. A stdout success message,
+the existence of a figure, or `result.json` by itself is not sufficient.
 
 Do not describe correlation, differential dependency, or a screen-derived
 candidate as causal or synthetic lethal without independent experimental

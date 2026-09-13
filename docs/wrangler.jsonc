@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "wisp-science-docs",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-09-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [{ "pattern": "wisp-science.sfl.bio", "custom_domain": true }],
+  "assets": {
+    "directory": "./dist-cloudflare",
+    "binding": "ASSETS",
+    "run_worker_first": ["/downloads/*"]
+  },
+  "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "wisp-science-downloads" }],
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+}

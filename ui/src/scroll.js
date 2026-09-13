@@ -2,6 +2,15 @@
 
 const hooks = new Map();
 const chatPositions = new Map();
+let panelSession = null;
+
+function scrollWithin(scroller, target) {
+  const isRange = target instanceof Range;
+  if (!scroller || !scroller.contains(isRange ? target.commonAncestorContainer : target)) return;
+  scroller.scrollTop += target.getBoundingClientRect().top
+    - scroller.getBoundingClientRect().top - scroller.clientTop
+    - (isRange ? scroller.clientHeight / 2 : 0);
+}
 
 // ponytail: single chat scroller, so the jump pill id is a constant.
 const JUMP_PILL_ID = "chat-jump-pill";
@@ -39,6 +48,7 @@ export function attach_chat_scroll(scrollerId, contentId) {
   let hidden = false;
   let pointerDown = false;
   let jumping = false;
+  let followGeneration = 0;
   const setFollow = (value) => {
     follow = value;
     scroller.style.overflowAnchor = value ? "none" : "auto";
@@ -222,21 +232,26 @@ export function attach_chat_scroll(scrollerId, contentId) {
     onGrowth,
     unfollow: parkHere,
     jumpTo: (el) => {
+      // Result navigation supersedes delayed follow snaps queued before it.
+      followGeneration++;
+      lastUserScroll = -Infinity;
+      pointerDown = false;
       jumping = true;
       setFollow(false);
-      el.scrollIntoView({ block: "start" });
+      scrollWithin(scroller, el);
       parkHere();
       jumping = false;
     },
     snap: () => {
       const requested = performance.now();
+      const generation = ++followGeneration;
       setFollow(true);
       snapFollow(true);
       lastHeight = content.scrollHeight;
       syncPill();
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (lastUserScroll < requested) {
+          if (generation === followGeneration && lastUserScroll < requested) {
             setFollow(true);
             snapFollow(true);
             lastHeight = content.scrollHeight;
@@ -263,7 +278,10 @@ export function attach_chat_scroll(scrollerId, contentId) {
           if (generation !== restoreGeneration || activeSession !== sessionId) return;
           if (!saved || saved.follow) {
             setFollow(true);
-            snapFollow();
+            // A different session can have the same (or a smaller) height.
+            // Its scrollTop may have been clamped while the project changed;
+            // the streaming-growth optimization must not skip this restore.
+            snapFollow(true);
           } else {
             setFollow(false);
             readingTop = saved.top;
@@ -280,11 +298,24 @@ export function attach_chat_scroll(scrollerId, contentId) {
   snapFollow();
 }
 
+/** Navigate a find result through the same bookmark/follow contract as a turn jump. */
+export function reveal_chat_range(range) {
+  const hook = hooks.get("chat-scroller");
+  if (hook) hook.jumpTo(range);
+  else scrollWithin(document.getElementById("chat-scroller"), range);
+}
+
 /** Save the previous conversation and restore this conversation after render.
  * Calling this again for the same session reapplies its saved position after an
  * asynchronous transcript load without overwriting the saved state.
  * @param {string} scrollerId @param {string} sessionId */
 export function switch_chat_scroll(scrollerId, sessionId) {
+  if (panelSession !== sessionId) {
+    panelSession = sessionId;
+    document.querySelectorAll(".rightpane .rp-tiles, .rightpane .agents-pane, .rightpane .fb-list").forEach((el) => {
+      el.scrollTop = 0;
+    });
+  }
   hooks.get(scrollerId)?.switchSession(sessionId);
 }
 
@@ -386,7 +417,7 @@ export function jump_chat_scroll(scrollerId, selector) {
         hook.jumpTo(target);
         return;
       }
-      target.scrollIntoView({ block: "start" });
+      scrollWithin(document.getElementById(scrollerId), target);
     });
   });
 }

@@ -113,6 +113,10 @@ impl ModelSettingsState {
                     "context_window": profile.context_window,
                     "reasoning_effort": effort,
                     "service_tier": profile.service_tier,
+                    "user_agent": profile.user_agent,
+                    "send_user_agent": profile.send_user_agent,
+                    "send_session_id": profile.send_session_id,
+                    "session_header_name": profile.session_header_name,
                     "supports_vision": profile.supports_vision,
                     "use_for_vision": profile.use_for_vision,
                     "use_for_image_generation": profile.use_for_image_generation,
@@ -188,7 +192,7 @@ impl ModelSettingsState {
         // A catalog-known chat model has a documented output ceiling; saving a
         // larger max_tokens only ever surfaces as a provider 400 mid-turn.
         // Image and video models do not take token limits.
-        if !is_image_generation_model(&form.model) && !is_video_generation_model(&form.model) {
+        if !form.is_image_model() && !is_video_generation_model(&form.model) {
             if let Some(dto) = model_catalog_limits.get() {
                 if form.max_tokens > dto.max_tokens {
                     let text = tf(
@@ -218,6 +222,10 @@ impl ModelSettingsState {
             "context_window": form.context_window,
             "reasoning_effort": form.reasoning_effort.trim(),
             "service_tier": form.service_tier.trim(),
+            "user_agent": form.user_agent,
+            "send_user_agent": form.send_user_agent,
+            "send_session_id": form.send_session_id,
+            "session_header_name": form.session_header_name,
             "supports_vision": form.supports_vision,
             "use_for_vision": form.use_for_vision,
             "use_for_image_generation": form.use_for_image_generation,
@@ -367,6 +375,10 @@ impl ModelSettingsState {
                     "context_window": context_window,
                     "reasoning_effort": "",
                     "service_tier": "",
+                    "user_agent": form.user_agent,
+                    "send_user_agent": form.send_user_agent,
+                    "send_session_id": form.send_session_id,
+                    "session_header_name": form.session_header_name,
                     "supports_vision": entry.supports_vision && !media,
                     "use_for_vision": entry.use_for_vision && !media,
                     "use_for_image_generation": image,
@@ -483,7 +495,8 @@ impl ModelSettingsState {
         // The backend probes with a test image when "supports images" is on,
         // so both outcomes say which probe ran — a checked box was never
         // proof that the model takes images.
-        let vision = cfg.supports_vision;
+        let image = form.is_image_model();
+        let vision = cfg.supports_vision && !image;
         spawn_local(async move {
             let res = invoke_timeout(
                 "validate_settings",
@@ -491,6 +504,7 @@ impl ModelSettingsState {
                     "settings": cfg,
                     "key": key,
                     "profileId": profile_id,
+                    "useForImageGeneration": image,
                 }))
                 .unwrap(),
                 35_000,

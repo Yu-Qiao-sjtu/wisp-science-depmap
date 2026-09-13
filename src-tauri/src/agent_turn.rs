@@ -28,7 +28,7 @@ impl TurnOrigin {
 pub(crate) async fn send_message(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     message: String,
     attachments: Option<Vec<String>>,
@@ -87,7 +87,7 @@ pub(crate) async fn send_message_inner(
     if !resume && message.trim().is_empty() {
         return Err("message is empty".into());
     }
-    let mut ap = state.active(window_label);
+    let mut ap = state.require_active(window_label)?;
     let mut explicit_scope = None;
     // A session belongs to one project for life, but the per-window active slot
     // can drift while it keeps running (another project opened in this window,
@@ -113,6 +113,7 @@ pub(crate) async fn send_message_inner(
         explicit_scope = Some(scope);
     }
     let _project_activity = state.begin_project_activity(&ap.id)?;
+    ensure_project_live_approvals(state, &ap.id).await;
     let frame_scope = explicit_scope
         .clone()
         .unwrap_or_else(|| wisp_store::StateScope::mainline(ap.id.clone()));
@@ -191,6 +192,10 @@ pub(crate) async fn send_message_inner(
         let skills = active_skill_index(&state.store, &ap).await;
         let mut injected_context =
             resolve_composer_references(&state.store, refs, &frame_id, &ap.root, &skills).await?;
+        let package_guidance = network::package_guidance(&network::load(&state.store).await?);
+        if !package_guidance.is_empty() {
+            injected_context.push(package_guidance);
+        }
         if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
             injected_context.push(memory);
         }
@@ -226,9 +231,8 @@ pub(crate) async fn send_message_inner(
             .map(|delivery| delivery.id.clone())
             .collect::<Vec<_>>();
         let artifact_references = resolve_acp_artifact_references(&state.store, refs).await?;
-        // Record the destination before waiting for a busy session. A user can
-        // therefore send a queued desktop follow-up and immediately continue
-        // that same conversation from Feishu or WeChat.
+        // Record this project's last session. Desktop sends never move the IM
+        // target project; Feishu/WeChat keep their own `/project` destination.
         channels::record_last_message_session(&state.store, &frame_id)
             .await
             .map_err(|error| format!("Failed to update the shared last-message route: {error}"))?;
@@ -360,8 +364,8 @@ pub(crate) async fn send_message_inner(
             .await?;
     }
 
-    // Route on accepted send, not on eventual execution. In particular, a
-    // follow-up queued behind a long turn must become the target immediately.
+    // Record this project's last session on accepted send. Desktop traffic
+    // must not steal the Feishu/WeChat IM project.
     channels::record_last_message_session(&state.store, &frame_id)
         .await
         .map_err(|error| format!("Failed to update the shared last-message route: {error}"))?;
@@ -412,6 +416,12 @@ pub(crate) async fn send_message_inner(
     }
     let mut guard = rt.agent.lock().await;
     rt.discard_stale_agent(&mut guard);
+    if crate::mcp_connections::host()
+        .needs_catalog_refresh(&frame_id)
+        .await
+    {
+        *guard = None;
+    }
     let _progress_subscription =
         progress_observer_id.and_then(|id| channels::activate_progress_observer(id, &frame_id));
     if rt.deleted.load(Ordering::SeqCst) {
@@ -421,7 +431,7 @@ pub(crate) async fn send_message_inner(
     // session. A queued follow-up may have been accepted before the previous
     // turn ended; reading its profile earlier would rebuild the invalidated
     // Agent with the model that was selected at enqueue time.
-    let vision_cfg = build_vision_provider_config(&state.store).await;
+    let vision_cfg = build_vision_provider_config(&state.store, &frame_id).await;
     let fallback_max_context = state
         .store
         .get_setting("max_context")
@@ -456,13 +466,24 @@ pub(crate) async fn send_message_inner(
     let delegation_enabled =
         delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
     let plan_mode_enabled = plan_mode::session_plan_mode(&state.store, &frame_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-        match &specialist {
-            Some(spec) if !spec.model_id.trim().is_empty() => {
-                specialists::specialist_llm(&state.store, spec).await
-            }
-            _ => load_session_settings(&state.store, &frame_id).await,
-        };
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = match &specialist {
+        Some(spec) if !spec.model_id.trim().is_empty() => {
+            specialists::specialist_llm(&state.store, spec).await
+        }
+        _ => load_session_settings(&state.store, &frame_id).await,
+    };
     let cfg = build_provider_config(
         &provider,
         &api_url,
@@ -471,6 +492,11 @@ pub(crate) async fn send_message_inner(
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&frame_id),
     )?;
     let primary_supports_vision = models::supports_vision(
         &state.store,
@@ -549,11 +575,13 @@ pub(crate) async fn send_message_inner(
             &mut agent,
             models::image_generation_config(&state.store).await,
             llm_proxy(),
+            &frame_id,
         );
         add_configured_video_generation_tool(
             &mut agent,
             models::video_generation_config(&state.store).await,
             llm_proxy(),
+            &frame_id,
         );
         agent.add_tool(Box::new(browser_bridge::BrowserSetupTool::new(
             state.browser_bridge.clone(),
@@ -779,7 +807,6 @@ pub(crate) async fn send_message_inner(
             &ap.id,
             frame_scope.scope_key(),
             &frame_id,
-            &state.app_data,
             &state.store,
             None,
             connector_allow.as_ref(),
@@ -804,6 +831,11 @@ pub(crate) async fn send_message_inner(
     let agent = guard
         .as_mut()
         .ok_or_else(|| "Failed to prepare the session agent.".to_string())?;
+    if let Some(message) = agent.ctx.messages.first_mut() {
+        if let wisp_llm::Content::Text(prompt) = &mut message.content {
+            network::sync_package_guidance(prompt, &network::load(&state.store).await?);
+        }
+    }
     let (auto_continue, auto_continue_limit) = load_auto_continue_settings(&state.store).await;
     apply_live_agent_settings(
         agent,
@@ -864,7 +896,7 @@ pub(crate) async fn send_message_inner(
                     .await
                     .map_err(|error| error.to_string())?;
                 append_ui_event(&state.store, &frame_id, &mut event_seq, event.clone()).await;
-                emit_agent_event(&app, event);
+                emit_agent_event_in(&app, event, Some(ap.id.as_str()));
                 persist_and_emit_terminal_event(
                     state,
                     &app,
@@ -1010,13 +1042,14 @@ pub(crate) async fn send_message_inner(
                         )
                         .await;
                         if !resources.is_empty() {
-                            emit_agent_event(
+                            emit_agent_event_in(
                                 &resource_app,
                                 AgentEvent::Resources {
                                     frame_id: fid,
                                     seq,
                                     resources: resources.iter().map(Into::into).collect(),
                                 },
+                                Some(resource_project_id.as_str()),
                             );
                         }
                     }
@@ -1126,10 +1159,13 @@ pub(crate) async fn send_message_inner(
     let (live_event_handle, live_event_tx) = {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
         let app = app.clone();
+        let live_project_id = ap.id.clone();
         let handle = tokio::spawn(coalesce_live_agent_events(
             rx,
             LIVE_EVENT_FLUSH_INTERVAL,
-            move |event| emit_agent_event_to_surfaces(&app, event),
+            move |event| {
+                emit_agent_event_to_surfaces_in(&app, event, Some(live_project_id.as_str()))
+            },
         ));
         (handle, tx)
     };
@@ -1291,7 +1327,7 @@ pub(crate) async fn send_message_inner(
                 },
             )
             .await;
-            emit_browser_tab_cleanup(state, &app, &browser_turn_id).await;
+            emit_browser_tab_cleanup(state, &app, &browser_turn_id, &ap.id).await;
             Ok(frame_id)
         }
         Err(e) => {
@@ -1311,17 +1347,29 @@ pub(crate) async fn send_message_inner(
                 },
             )
             .await;
-            emit_browser_tab_cleanup(state, &app, &browser_turn_id).await;
+            emit_browser_tab_cleanup(state, &app, &browser_turn_id, &ap.id).await;
             Err(client_turn_error(turn_started, &message))
         }
     }
 }
 
-async fn emit_browser_tab_cleanup(state: &AppState, app: &AppHandle, turn_id: &str) {
+async fn emit_browser_tab_cleanup(
+    state: &AppState,
+    app: &AppHandle,
+    turn_id: &str,
+    project_id: &str,
+) {
     if let browser_bridge::TabCleanupAction::Prompt(prompt) =
         state.browser_bridge.complete_turn(turn_id).await
     {
-        let _ = app.emit("browser-tab-cleanup", prompt);
+        emit_to_session_surfaces_filtered(
+            app,
+            &prompt.frame_id,
+            Some(project_id),
+            "browser-tab-cleanup",
+            &prompt,
+            false,
+        );
     }
 }
 
@@ -1392,7 +1440,7 @@ pub(crate) fn spawn_queue_driver(
 pub(crate) async fn enqueue_turn(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     message: String,
@@ -1495,7 +1543,7 @@ pub(crate) fn reclaim_unconsumed_cutin(
 pub(crate) async fn queued_turn_action(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     action: String,
@@ -1567,6 +1615,11 @@ pub(crate) async fn stop_agent(
     state: State<'_, AppState>,
     session_id: Option<String>,
 ) -> Result<(), String> {
+    if let Some(id) = session_id.as_deref().filter(|s| !s.is_empty()) {
+        state.mcp_app_tool_bridges.cancel_for_frame(id);
+    } else {
+        state.mcp_app_tool_bridges.cancel_all();
+    }
     // Cancel only the named session's turn; other conversations keep running.
     let targets: Vec<(String, Arc<SessionRuntime>)> =
         match session_id.as_deref().filter(|s| !s.is_empty()) {

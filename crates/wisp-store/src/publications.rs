@@ -211,6 +211,8 @@ struct MessageSpanLocator {
     message_seq: i64,
     byte_start: usize,
     byte_end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message_content_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -466,6 +468,15 @@ async fn resolve_evidence_source(
             let content = serde_json::from_str::<wisp_llm::Content>(&content_json)
                 .map_err(|_| anyhow::anyhow!("Message content is invalid"))?
                 .as_text();
+            if locator
+                .message_content_sha256
+                .as_ref()
+                .is_some_and(|expected| {
+                    expected != &hex::encode(Sha256::digest(content.as_bytes()))
+                })
+            {
+                anyhow::bail!("Message changed after preview; select the passage again");
+            }
             if locator.byte_end > content.len()
                 || !content.is_char_boundary(locator.byte_start)
                 || !content.is_char_boundary(locator.byte_end)

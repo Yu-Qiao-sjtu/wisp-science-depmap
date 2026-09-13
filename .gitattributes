@@ -25,6 +25,8 @@
 *.gif   binary
 *.webp  binary
 *.ico   binary
+*.icns  binary
+*.car   binary
 *.woff  binary
 *.woff2 binary
 *.ttf   binary

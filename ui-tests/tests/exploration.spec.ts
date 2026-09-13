@@ -358,6 +358,43 @@ test("the latest completed native reply starts an isolated exploration", async (
   await expect(page.getByTestId("sidebar-explorations").locator(".side-exploration")).toHaveCount(3);
 });
 
+test("every historical reply exposes exploration and the selected turn anchors the round", async ({ page }) => {
+  await page.goto("/?mockExplorations=1&mockHistoricalExploration=1&mockNoExplorationRound=1");
+  await page.locator(".proj-card-main").first().click();
+  await page.locator('[data-session-id="exploration-mainline"]').click();
+  const starts = page.getByTestId("start-exploration");
+  await expect(starts).toHaveCount(3);
+  for (const start of await starts.all()) await expect(start).toBeEnabled();
+
+  // Open directly from a historical response, then Escape without moving focus.
+  await starts.nth(1).click();
+  const overlay = page.getByTestId("exploration-start-overlay");
+  await expect(overlay).toContainText("through the selected response");
+  await expect(overlay).toContainText("earlier file versions are not restored");
+  await page.keyboard.press("Escape");
+  await expect(overlay).toBeHidden();
+  await expect(page.getByText("Legacy result", { exact: true })).toBeVisible();
+
+  await starts.nth(1).click();
+  await overlay.locator("input").fill("Revisit legacy parameters");
+  await overlay.getByRole("button", { name: "Create exploration" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "start_exploration")).toMatchObject({
+    sourceFrameId: "exploration-mainline", turnIndex: 1, name: "Revisit legacy parameters",
+  });
+  await expect(page.getByText("New exploration result")).toBeVisible();
+  await page.locator('[data-session-id="exploration-mainline"]').click();
+  await expect(starts.nth(0)).toBeDisabled();
+  await expect(starts.nth(1)).toBeEnabled();
+  await expect(starts.nth(2)).toBeDisabled();
+  const checkpoint = page.getByText("Legacy result", { exact: true }).locator("xpath=ancestor::div[@data-ui-index]");
+  await expect(checkpoint.getByTestId("exploration-message-card")).toContainText("Revisit legacy parameters");
+
+  await page.getByTestId("mainline-exploration-banner").getByRole("button", { name: "Start another" }).click();
+  await overlay.getByRole("button", { name: "Create exploration" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__startExplorationCalls?.length)).toBe(2);
+  await expect.poll(() => lastInvokeArgs(page, "start_exploration")).toMatchObject({ turnIndex: 1 });
+});
+
 test("mainline stays frozen and can abandon the complete exploration round", async ({ page }) => {
   await enterExplorationProject(page);
   const mainline = page.locator('[data-session-id="exploration-mainline"]');
@@ -375,6 +412,17 @@ test("mainline stays frozen and can abandon the complete exploration round", asy
   await expect(page.locator("#composer-input")).toBeEnabled();
   await expect.poll(() => lastInvokeArgs(page, "abandon_exploration_round")).toMatchObject({
     sourceFrameId: "exploration-mainline",
+  });
+});
+
+test("historical exploration sends the absolute turn index from a paged transcript", async ({ page }) => {
+  await page.goto("/?mockExplorations=1&mockHistoricalExploration=1&mockNoExplorationRound=1&mockExplorationUserOffset=20");
+  await page.locator(".proj-card-main").first().click();
+  await page.locator('[data-session-id="exploration-mainline"]').click();
+  await page.getByTestId("start-exploration").first().click();
+  await page.getByTestId("exploration-start-overlay").getByRole("button", { name: "Create exploration" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "start_exploration")).toMatchObject({
+    sourceFrameId: "exploration-mainline", turnIndex: 20,
   });
 });
 
@@ -407,7 +455,7 @@ test("user messages offer the mature branch flow from the context menu", async (
   await userMessage.click({ button: "right" });
   const branch = page.getByRole("button", { name: "Branch to new conversation", exact: true });
   await expect(branch).toBeVisible();
-  await expect(page.getByRole("button", { name: "Start exploration", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Start exploration", exact: true })).toHaveCount(3);
   await branch.click();
   await expect(page.locator("#composer-input")).toHaveValue("");
   await expect(page.getByText("Legacy method", { exact: true })).toHaveCount(0);

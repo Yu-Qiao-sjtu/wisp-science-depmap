@@ -389,7 +389,7 @@ async fn validate_undo_session(state: &AppState, frame_id: &str) -> Result<(), S
 #[tauri::command]
 pub(super) async fn preview_turn_undo(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     user_index: usize,
 ) -> Result<TurnUndoPreview, String> {
@@ -405,7 +405,7 @@ pub(super) async fn preview_turn_undo(
 pub(super) async fn undo_turn(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     user_index: usize,
 ) -> Result<TurnUndoPreview, String> {
@@ -465,12 +465,13 @@ pub(super) async fn undo_turn(
             .await?;
     }
     for change in applied {
-        crate::emit_agent_event(
+        crate::emit_agent_event_in(
             &app,
             AgentEvent::FileChanged {
                 frame_id: frame_id.clone(),
                 path: change.path,
             },
+            Some(project.id.as_str()),
         );
     }
     Ok(preview)

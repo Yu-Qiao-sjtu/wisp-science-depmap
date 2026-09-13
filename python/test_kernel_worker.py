@@ -181,6 +181,61 @@ class KernelWorkerTests(unittest.TestCase):
         finally:
             self._close(worker)
 
+    def test_saved_script_uses_file_relative_inputs_and_successful_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            (root / "data.csv").write_text("title\nfirst\nsecond\n", encoding="utf-8")
+            source = (
+                "import csv, sys\n"
+                "from pathlib import Path\n"
+                "root = Path(__file__).resolve().parent.parent\n"
+                "with (root / 'data.csv').open(encoding='utf-8') as f:\n"
+                "    rows = list(csv.DictReader(f))\n"
+                "(root / 'browse.html').write_text(str(len(rows)), encoding='utf-8')\n"
+                "sys.exit(0)\n"
+                "raise AssertionError('unreachable')\n"
+            )
+            (root / "scripts" / "build.py").write_text(source, encoding="utf-8")
+            worker = self._spawn(cwd=tmp)
+            try:
+                result = self._exec(worker, source, source_name="scripts/build.py")
+                self.assertIsNone(result.get("error"), result.get("error"))
+                self.assertEqual((root / "browse.html").read_text(encoding="utf-8"), "2")
+                following = self._exec(worker, "print(len(rows), '__file__' in globals())")
+                self.assertEqual(following["stdout"].strip(), "2 False")
+            finally:
+                self._close(worker)
+
+    def test_saved_script_restores_file_identity_after_exit_or_error(self):
+        worker = self._spawn()
+        try:
+            self._exec(worker, "__file__ = 'previous.py'; counter = 0")
+            for exit_code, succeeds in [(None, True), (0, True), (2, False), ("failed", False), (0.0, False)]:
+                with self.subTest(exit_code=exit_code):
+                    result = self._exec(
+                        worker,
+                        f"import sys\ncounter += 1\nsys.exit({exit_code!r})\ncounter = -1",
+                        source_name="scripts/step.py",
+                    )
+                    if succeeds:
+                        self.assertIsNone(result.get("error"), result.get("error"))
+                    else:
+                        self.assertIn("SystemExit", result["error"])
+                        self.assertIn("scripts/step.py", result["error"])
+                    restored = self._exec(worker, "print(__file__)")
+                    self.assertEqual(restored["stdout"].strip(), "previous.py")
+            failed = self._exec(worker, "raise ValueError('boom')", source_name="other.py")
+            self.assertIn("ValueError: boom", failed["error"])
+            restored = self._exec(worker, "print(counter, __file__)")
+            self.assertEqual(restored["stdout"].strip(), "5 previous.py")
+            # Inline cells keep their original behavior; only named scripts
+            # interpret SystemExit(0) as successful script completion.
+            inline = self._exec(worker, "raise SystemExit(0)")
+            self.assertIn("SystemExit", inline["error"])
+        finally:
+            self._close(worker)
+
     def test_computed_name_write_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             worker = self._spawn(cwd=tmp)

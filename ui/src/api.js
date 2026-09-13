@@ -1,5 +1,7 @@
 // Tauri v2 shim + scientific preview mounts (single file so Trunk ships one snippet).
 import { highlight_root } from "./highlight.js";
+import { injectMcpAppCsp, injectMotifWispBridge } from "/mcp_app_protocol.js";
+import { isolatedApps, mountIsolatedApp, suspendIsolatedApp, closeIsolatedApp, isolatedAction, useIsolatedHost } from "/mcp_app_isolated.js";
 
 function tauriCore() {
   return window.__TAURI__?.core;
@@ -7,6 +9,58 @@ function tauriCore() {
 
 function tauriEvent() {
   return window.__TAURI__?.event;
+}
+
+let uiHealthStarted = false;
+let reportUiHealth = () => {};
+const uiHealth = { timerLagMs: 0, longTasks: 0, longestTaskMs: 0, scriptErrors: 0, unhandledRejections: 0, appMessages: 0 };
+const boundedHealthCount = (value) => Math.min(1_000_000, Math.max(0, Math.round(value) || 0));
+
+export function report_ui_health() { void reportUiHealth(); }
+
+/** Numeric diagnostics only. The heartbeat is driven by the WASM app timer,
+ * so a broken WASM callback cannot be masked by an independent healthy JS timer. */
+export function start_ui_health() {
+  if (uiHealthStarted) return;
+  uiHealthStarted = true;
+  window.addEventListener("error", () => { uiHealth.scriptErrors = boundedHealthCount(uiHealth.scriptErrors + 1); });
+  window.addEventListener("unhandledrejection", () => { uiHealth.unhandledRejections = boundedHealthCount(uiHealth.unhandledRejections + 1); });
+  if (typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        uiHealth.longTasks = boundedHealthCount(uiHealth.longTasks + 1);
+        uiHealth.longestTaskMs = Math.max(uiHealth.longestTaskMs, boundedHealthCount(entry.duration));
+      }
+    }).observe({ type: "longtask" });
+  }
+  let lastTick = performance.now();
+  let inFlight = false;
+  const beat = async () => {
+    const now = performance.now();
+    const timerLagMs = document.visibilityState === "visible" ? boundedHealthCount(now - lastTick - 5000) : 0;
+    uiHealth.timerLagMs = Math.max(uiHealth.timerLagMs, timerLagMs);
+    lastTick = now;
+    if (inFlight || !tauriCore()) return;
+    inFlight = true;
+    let activeApps = 0;
+    let parkedApps = 0;
+    for (const instance of [...mcpAppInstances.values(), ...isolatedApps.values()]) {
+      if (instance.target?.isConnected) activeApps += 1;
+      else parkedApps += 1;
+    }
+    const snapshot = { ...uiHealth, activeApps, parkedApps,
+      mediaBlobUrls, mediaBlobBytes, mediaOwners: mediaOwners.size,
+      dragOverlays: document.querySelectorAll(".drag-overlay").length };
+    // Counters are cumulative and bounded: a once-per-minute backend log cannot
+    // miss a brief error or message burst between its sampled heartbeats.
+    try { await invoke_timeout("ui_heartbeat", { snapshot }, 4000); }
+    catch { /* A failed IPC must not create its own rejection storm. */ }
+    finally { inFlight = false; }
+  };
+  reportUiHealth = beat;
+  document.addEventListener("visibilitychange", () => { lastTick = performance.now(); });
+  window.addEventListener("focus", () => { lastTick = performance.now(); });
+  void beat();
 }
 
 export function is_windows() {
@@ -1125,7 +1179,48 @@ function pastedImageName(file, index) {
   return `pasted_image_${stamp}_${index + 1}.${ext}`;
 }
 
+export function paste_has_files(event) {
+  if (event?.pasteSnapshot) return event.hasFiles;
+  const data = event?.clipboardData;
+  return Array.from(data?.types || []).includes("Files")
+    || /^file:\/\//m.test(data?.getData("text/uri-list") || "");
+}
+
+// Snapshot while the event's data store is readable, before waiting on IPC.
+export function clipboard_paste_snapshot(event) {
+  return {
+    pasteSnapshot: true,
+    hasFiles: paste_has_files(event),
+    fileUris: event?.clipboardData?.getData("text/uri-list") || "",
+    images: pastedImageFiles(event),
+  };
+}
+
+// Share the native read between keydown (WebView2 may emit no paste event for
+// CF_HDROP) and paste. Never retain clipboard paths beyond the current gesture.
+let clipboardRead = null;
+export async function clipboard_file_paths(event) {
+  const uris = event?.fileUris ?? event?.clipboardData?.getData("text/uri-list") ?? "";
+  if (!event || !clipboardRead) {
+    const read = tauriCore()?.invoke("read_clipboard_file_paths", {}) ?? Promise.resolve([]);
+    clipboardRead = read;
+    setTimeout(() => { if (clipboardRead === read) clipboardRead = null; }, 100);
+  }
+  const nativePaths = await clipboardRead;
+  if (Array.isArray(nativePaths) && nativePaths.length) return nativePaths;
+  return uris.split(/\r?\n/).filter(line => line.startsWith("file://")).flatMap(line => {
+    try {
+      const url = new URL(line);
+      let path = decodeURIComponent(url.pathname);
+      if (url.hostname && url.hostname !== "localhost") path = `//${url.hostname}${path}`;
+      else if (/^\/[a-z]:\//i.test(path)) path = path.slice(1);
+      return [path];
+    } catch { return []; }
+  });
+}
+
 function pastedImageFiles(event) {
+  if (event?.pasteSnapshot) return event.images;
   const data = event?.clipboardData;
   if (!data) return [];
   const items = Array.from(data.items || []);
@@ -1337,16 +1432,138 @@ function normalizeRawBytes(value) {
   throw new Error("Binary preview command returned an unsupported payload");
 }
 
-// Chat media (generated images/videos, attachment thumbnails, inline resource
-// images) used to inline as base64 data URLs — a 64 MB video became ~85 MB of
-// string per card, and repeated loads under row remounts pushed the WebView
-// renderer toward OOM (#dead-window). Instead, bytes are fetched through the
-// same preview command family and handed to the browser as a blob object URL:
-// decoded once by the media stack, shareable across cards with one entry per
-// path, and revocable when evicted.
-const MEDIA_URL_CACHE_LIMIT = 64;
-const mediaUrlCache = new Map(); // path -> { url, mime }
-const thumbnailJobs = new Map(); // path -> Promise<string | null>
+// Cache slots, in-flight conversions and mounted DOM owners each hold a
+// reference. Eviction releases its reference; only the last release revokes
+// the URL, so a visible video or a small thumbnail sharing its source survives.
+const mediaUrlCache = { entries: new Map(), bytes: 0, limit: 64, maxBytes: 64 * 1024 * 1024 };
+const thumbnailCache = { entries: new Map(), bytes: 0, limit: 128, maxBytes: 16 * 1024 * 1024 };
+const mediaJobs = new Map();
+const thumbnailJobs = new Map();
+const mediaOwners = new Map(); // Element -> Map<slot, entry>; actual DOM lifetime, not reactive owner lifetime
+let mediaOwnerObserver;
+let mediaSweepTimer;
+let mediaBlobUrls = 0;
+let mediaBlobBytes = 0;
+
+function createMediaEntry(blob) {
+  const entry = { url: URL.createObjectURL(blob), bytes: blob.size, refs: 1 };
+  mediaBlobUrls += 1;
+  mediaBlobBytes += entry.bytes;
+  return entry;
+}
+
+function retainMedia(entry) {
+  entry.refs += 1;
+  return entry;
+}
+
+function releaseMedia(entry) {
+  if (--entry.refs !== 0) return;
+  URL.revokeObjectURL(entry.url);
+  mediaBlobUrls -= 1;
+  mediaBlobBytes -= entry.bytes;
+}
+
+function cacheMedia(cache, key, entry) {
+  if (cache.entries.has(key)) cache.entries.delete(key);
+  else {
+    retainMedia(entry);
+    cache.bytes += entry.bytes;
+  }
+  cache.entries.set(key, entry);
+  while (cache.entries.size > cache.limit || cache.bytes > cache.maxBytes) {
+    const oldest = cache.entries.keys().next().value;
+    const removed = cache.entries.get(oldest);
+    cache.entries.delete(oldest);
+    cache.bytes -= removed.bytes;
+    releaseMedia(removed);
+  }
+}
+
+// Each caller receives one reference, including concurrent callers. The job
+// keeps its own reference until every waiter has acquired its result, even if
+// other loads evict that result from the cache in the meantime.
+async function acquireMedia(cache, jobs, key, produce) {
+  const cached = cache.entries.get(key);
+  if (cached) {
+    retainMedia(cached);
+    cacheMedia(cache, key, cached);
+    return cached;
+  }
+  let job = jobs.get(key);
+  if (!job) {
+    job = { promise: produce(), waiters: 0 };
+    jobs.set(key, job);
+  }
+  job.waiters += 1;
+  let entry;
+  try {
+    entry = await job.promise;
+    if (!entry) return null; // failures are retryable and occupy no cache slot
+    retainMedia(entry);
+    cacheMedia(cache, key, entry);
+    return entry;
+  } finally {
+    if (--job.waiters === 0) {
+      jobs.delete(key);
+      if (entry) releaseMedia(entry);
+    }
+  }
+}
+
+function sweepMediaOwners() {
+  mediaSweepTimer = undefined;
+  for (const [owner, entries] of mediaOwners) {
+    if (owner.isConnected) continue;
+    mediaOwners.delete(owner);
+    for (const entry of entries.values()) releaseMedia(entry);
+  }
+  if (!mediaOwners.size) {
+    mediaOwnerObserver?.disconnect();
+    mediaOwnerObserver = undefined;
+  }
+}
+
+async function ownedMediaUrl(path, ownerId, kind, acquire) {
+  // A CSR resource may start just before its view is inserted. Yield once;
+  // never keep loading for a card which has already left the document.
+  let owner = document.getElementById(ownerId);
+  if (!owner) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    owner = document.getElementById(ownerId);
+  }
+  if (!owner) return null;
+  const slot = `${kind}:${path}`;
+  const existing = mediaOwners.get(owner)?.get(slot);
+  if (existing) return existing.url;
+  let entry;
+  try { entry = await acquire(String(path || "")); }
+  catch { return null; }
+  if (!entry) return null;
+  if (!owner.isConnected) {
+    releaseMedia(entry);
+    return null;
+  }
+  let entries = mediaOwners.get(owner);
+  if (!entries) mediaOwners.set(owner, entries = new Map());
+  const previous = entries.get(slot);
+  if (previous) {
+    releaseMedia(entry);
+    return previous.url;
+  }
+  entries.set(slot, entry); // transfer the caller's reference to the DOM owner
+  if (!mediaOwnerObserver) {
+    mediaOwnerObserver = new MutationObserver((records) => {
+      if (mediaSweepTimer === undefined && records.some((record) => record.removedNodes.length)) {
+        // Coalesce streaming mutations; a node moved within the document keeps
+        // its lease. No full-document media scan or permanent polling timer.
+        mediaSweepTimer = setTimeout(sweepMediaOwners, 0);
+      }
+    });
+    mediaOwnerObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  return entry.url;
+}
 
 function mediaBytesCommand(path) {
   // Mirrors `previewBytes`'s command selection for the four path spellings.
@@ -1373,108 +1590,61 @@ function mediaBytesCommand(path) {
   return { command: "read_file_bytes", args: { path } };
 }
 
-export async function media_url(path) {
-  const key = String(path || "");
-  if (!key) return null;
-  const hit = mediaUrlCache.get(key);
-  if (hit) {
-    // Refresh insertion order so eviction is LRU.
-    mediaUrlCache.delete(key);
-    mediaUrlCache.set(key, hit);
-    return hit.url;
-  }
-  const { command, args } = mediaBytesCommand(key);
-  // One shot rather than invoke: a missing file must surface as null (the
-  // callers paint their fallback), not a console error.
-  const core = tauriCore();
-  if (!core) return null;
-  let bytes;
-  try {
-    bytes = normalizeRawBytes(await core.invoke(command, args));
-  } catch (_) {
-    return null;
-  }
-  const mime = blobMime(bytes);
-  const entry = { url: URL.createObjectURL(new Blob([bytes], { type: mime })), mime };
-  mediaUrlCache.set(key, entry);
-  if (mediaUrlCache.size > MEDIA_URL_CACHE_LIMIT) {
-    // Drop the lookup only. The URL may still be an <img>/<video> src
-    // (and media_thumbnail_url reuses it when the image is already small).
-    const oldest = mediaUrlCache.keys().next().value;
-    mediaUrlCache.delete(oldest);
-  }
-  return entry.url;
+function acquireFullMedia(key) {
+  return acquireMedia(mediaUrlCache, mediaJobs, key, async () => {
+    if (!key || !tauriCore()) return null;
+    const { command, args } = mediaBytesCommand(key);
+    const bytes = normalizeRawBytes(await tauriCore().invoke(command, args));
+    return createMediaEntry(new Blob([bytes], { type: blobMime(bytes) }));
+  });
 }
 
-// Thumbnails for attachment/artifact cards: a small canvas re-encode instead
-// of the full-resolution object URL, so a 20-message history of pasted photos
-// does not keep 20 decoded full-size bitmaps alive.
+/** The unique owner element must remain mounted for the returned URL's use. */
+export function media_url(path, ownerId) {
+  return ownedMediaUrl(path, ownerId, "full", acquireFullMedia);
+}
+
 const THUMB_MAX_EDGE = 384;
-// path -> downscaled blob URL. Kept (never revoked alongside the media cache)
-// because a thumbnail URL handed to the DOM must stay valid for the DOM's
-// lifetime; the thumbs are ≤384px re-encodes, so a bounded count of them is
-// the cheap side of the trade.
-const THUMB_CACHE_LIMIT = 128;
-const thumbnailCache = new Map();
 
-export async function media_thumbnail_url(path) {
-  const key = String(path || "");
-  if (!key) return null;
-  const cached = thumbnailCache.get(key);
-  if (cached !== undefined) return cached;
-  const pending = thumbnailJobs.get(key);
-  if (pending) return pending;
-  const job = (async () => {
-    const url = await media_url(key);
-    if (!url) {
-      thumbnailCache.set(key, null);
-      return null;
-    }
-    let thumb;
+export function media_thumbnail_url(path, ownerId) {
+  return ownedMediaUrl(path, ownerId, "thumb", (key) => acquireMedia(thumbnailCache, thumbnailJobs, key, async () => {
+    const source = await acquireFullMedia(key);
+    if (!source) return null;
     try {
-      thumb = await downscaleToPngBlobUrl(url, THUMB_MAX_EDGE);
-    } catch (_) {
-      thumb = url; // non-decodable or huge image: show it as-is
+      const blob = await downscaleToPngBlob(source.url, THUMB_MAX_EDGE);
+      if (blob) return createMediaEntry(blob);
+      return retainMedia(source); // small images and decode failures share the source
+    } finally {
+      releaseMedia(source);
     }
-    thumbnailCache.set(key, thumb);
-    if (thumbnailCache.size > THUMB_CACHE_LIMIT) {
-      // Drop the oldest entry's cache slot only; its URL may still be in the
-      // DOM, so revoking here would blank a live thumbnail.
-      const oldest = thumbnailCache.keys().next().value;
-      thumbnailCache.delete(oldest);
-    }
-    return thumb;
-  })();
-  thumbnailJobs.set(key, job.finally(() => thumbnailJobs.delete(key)));
-  return job;
+  }));
 }
 
-function downscaleToPngBlobUrl(url, maxEdge) {
-  return new Promise((resolve, reject) => {
+function downscaleToPngBlob(url, maxEdge) {
+  return new Promise((resolve) => {
     const img = new Image();
+    const finish = (blob) => {
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute("src");
+      resolve(blob);
+    };
     img.onload = () => {
       try {
         const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-        if (scale >= 1) {
-          resolve(url); // already small enough; reuse the media URL
-          return;
-        }
+        if (scale >= 1) { finish(null); return; }
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
         canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
         canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((blob) => {
-          if (!blob) {
-            resolve(url);
-            return;
-          }
-          resolve(URL.createObjectURL(blob));
+          canvas.width = 0;
+          canvas.height = 0;
+          finish(blob);
         }, "image/png");
-      } catch (err) {
-        reject(err);
-      }
+      } catch { finish(null); }
     };
-    img.onerror = () => reject(new Error("image decode failed"));
+    img.onerror = () => finish(null);
     img.src = url;
   });
 }
@@ -2385,249 +2555,6 @@ let mcpAppParkingRoot = null;
 let wispAppVersion = "0.0.0";
 window.__TAURI__?.app?.getVersion?.().then((version) => { wispAppVersion = version; });
 
-function injectMcpAppCsp(html, resourceMeta) {
-  const csp = resourceMeta?.ui?.csp || resourceMeta?.csp || {};
-  const safeOrigins = (values, websocket = false) => (Array.isArray(values) ? values : [])
-    .filter((value) => typeof value === "string"
-      && new RegExp(`^(?:https${websocket ? "|wss" : ""}):\\/\\/(?:\\*\\.)?[a-z0-9.-]+(?::\\d+)?$`, "i").test(value));
-  const connect = safeOrigins(csp.connectDomains, true);
-  const resources = safeOrigins(csp.resourceDomains);
-  const frames = safeOrigins(csp.frameDomains);
-  const bases = safeOrigins(csp.baseUriDomains);
-  const policy = [
-    "default-src 'none'",
-    `script-src 'unsafe-inline' 'unsafe-eval' blob: ${resources.join(" ")}`.trim(),
-    `style-src 'unsafe-inline' ${resources.join(" ")}`.trim(),
-    `img-src data: blob: ${resources.join(" ")}`.trim(),
-    `font-src data: ${resources.join(" ")}`.trim(),
-    `media-src blob: ${resources.length ? resources.join(" ") : "'none'"}`,
-    `connect-src ${connect.length ? connect.join(" ") : "'none'"}`,
-    `frame-src ${frames.length ? frames.join(" ") : "'none'"}`,
-    `base-uri ${bases.length ? bases.join(" ") : "'self'"}`,
-    "object-src 'none'",
-    "form-action 'none'",
-  ].join("; ");
-  const tag = `<meta http-equiv="Content-Security-Policy" content="${escAttr(policy)}">`;
-  if (/<head(\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}${tag}`);
-  }
-  return `<!doctype html><html><head>${tag}</head><body>${html}</body></html>`;
-}
-
-function injectMotifWispBridge(html) {
-  const script = `<script>
-(() => {
-  const reply = (method, params) => parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
-  const activeRecord = () => {
-    try { return typeof window.motifGetActiveRecord === "function" ? window.motifGetActiveRecord() : null; }
-    catch { return null; }
-  };
-  const recordSequence = (record) => typeof record?.seq === "string"
-    ? record.seq.toUpperCase()
-    : typeof record?.sequence === "string"
-      ? record.sequence.toUpperCase()
-      : "";
-  const coordinateNumber = (value) => Number(String(value || "").replace(/[^0-9]/g, ""));
-  const sequenceRange = (record, start, end, wrap = false) => {
-    const source = recordSequence(record);
-    if (!start || !end || start > source.length || end > source.length) return "";
-    return wrap || start > end
-      ? source.slice(start - 1) + source.slice(0, end)
-      : source.slice(start - 1, end);
-  };
-  const renderedSelection = (record) => {
-    const label = document.querySelector(
-      ".motif-cs-selection-bar:not([data-empty='true']) .motif-cs-selection-name",
-    )?.textContent?.trim() || "";
-    const match = label.match(/^([0-9][0-9,. ]*)-([0-9][0-9,. ]*)( wrap)? \\(([0-9][0-9,. ]*)\\)$/);
-    if (!match) return null;
-    const start = coordinateNumber(match[1]);
-    const end = coordinateNumber(match[2]);
-    const length = coordinateNumber(match[4]);
-    const sequence = sequenceRange(record, start, end, Boolean(match[3]));
-    return sequence.length === length ? { start, end, strand: "forward", sequence } : null;
-  };
-  const featureSelection = (record) => {
-    const label = document.querySelector(
-      ".motif-cs-selection-bar:not([data-empty='true']) .motif-cs-selection-name",
-    )?.textContent?.trim() || "";
-    const labelMatch = label.match(/^(.*?)\s+([0-9][0-9,. ]*)-([0-9][0-9,. ]*)(?:\s+wrap)?$/);
-    const annotations = Array.isArray(record?.annotations)
-      ? record.annotations
-      : Array.isArray(record?.features) ? record.features : [];
-    const selectedNode = document.querySelector(
-      ".motif-pm-feature[aria-pressed='true'][data-feature-id], .motif-cs-feature-block[aria-pressed='true']",
-    );
-    const selectedId = selectedNode?.getAttribute("data-feature-id") || "";
-    let feature = selectedId
-      ? annotations.find((annotation) => String(annotation?.id || "") === selectedId)
-      : null;
-    if (!feature && labelMatch) {
-      const start = coordinateNumber(labelMatch[2]);
-      const end = coordinateNumber(labelMatch[3]);
-      const name = labelMatch[1].trim();
-      feature = annotations.find((annotation) => (
-        Number(annotation?.start) + 1 === start
-        && Number(annotation?.end) === end
-        && String(annotation?.name || "").trim() === name
-      ));
-    }
-    if (!feature) return null;
-    const start = Number(feature.start) + 1;
-    const end = Number(feature.end);
-    const sequence = sequenceRange(record, start, end);
-    if (!sequence) return null;
-    return {
-      start,
-      end,
-      strand: Number(feature.strand) === -1 ? "reverse" : "forward",
-      sequence,
-      featureName: String(feature.name || "").trim() || undefined,
-    };
-  };
-  const nativeSelection = (record) => {
-    const source = recordSequence(record);
-    const raw = String(getSelection()?.toString() || "");
-    const sequence = raw.replace(/[^A-Za-z*.-]/g, "").toUpperCase();
-    if (!source || !sequence) return null;
-    const offset = source.indexOf(sequence);
-    return offset < 0 ? null : { start: offset + 1, end: offset + sequence.length, strand: "forward", sequence };
-  };
-  let lastNativeSelection = null;
-  let selectionLengthFrame = 0;
-  const updateSelectionLength = () => {
-    selectionLengthFrame = 0;
-    const bar = document.querySelector(".motif-cs-selection-bar");
-    if (!bar) return;
-    const record = activeRecord();
-    const recordId = String(record?.id || "");
-    const selection = renderedSelection(record)
-      || featureSelection(record)
-      || (bar.matches(":not([data-empty='true'])")
-        ? null
-        : nativeSelection(record)
-          || (lastNativeSelection?.recordId === recordId ? lastNativeSelection : null));
-    let badge = bar.querySelector("[data-wisp-motif-selection-length]");
-    if (!selection?.sequence) {
-      badge?.remove();
-      return;
-    }
-    const length = Array.from(selection.sequence).length;
-    const label = length.toLocaleString() + " bp";
-    if (!badge) {
-      badge = document.createElement("span");
-      badge.setAttribute("data-wisp-motif-selection-length", "");
-      badge.style.cssText = "margin-left:auto;padding-left:10px;white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums;color:currentColor;pointer-events:none";
-      bar.appendChild(badge);
-    }
-    if (badge.textContent !== label) badge.textContent = label;
-    badge.setAttribute("aria-label", "Selected sequence length: " + label);
-  };
-  const scheduleSelectionLengthUpdate = () => {
-    if (selectionLengthFrame) return;
-    selectionLengthFrame = requestAnimationFrame(updateSelectionLength);
-  };
-  const rememberNativeSelection = () => {
-    const record = activeRecord();
-    const selection = nativeSelection(record);
-    if (selection) lastNativeSelection = { recordId: String(record?.id || ""), ...selection };
-    scheduleSelectionLengthUpdate();
-  };
-  document.addEventListener("selectionchange", rememberNativeSelection);
-  document.addEventListener("pointerup", rememberNativeSelection, true);
-  document.addEventListener("keyup", rememberNativeSelection, true);
-  const scrollSelectedFeatureIntoView = () => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const block = document.querySelector(".motif-cs-feature-block[aria-pressed='true']");
-      const pane = block?.closest(".motif-cs-sequence-column");
-      if (!block || !pane) return;
-      const blockRect = block.getBoundingClientRect();
-      const paneRect = pane.getBoundingClientRect();
-      pane.scrollTop = Math.max(0, pane.scrollTop + blockRect.top - paneRect.top
-        - Math.max(0, (pane.clientHeight - blockRect.height) / 2));
-    }));
-  };
-  const scheduleFeatureFocus = (target) => {
-    if (!(target instanceof Element) || !target.closest(".motif-pm-feature[data-feature-id]")) return;
-    lastNativeSelection = null;
-    scrollSelectedFeatureIntoView();
-  };
-  document.addEventListener("click", (event) => scheduleFeatureFocus(event.target), true);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") scheduleFeatureFocus(event.target);
-  }, true);
-  const featureFocusObserver = new MutationObserver(() => {
-    if (document.querySelector(".motif-cs-feature-block[aria-pressed='true']")) {
-      scrollSelectedFeatureIntoView();
-    }
-    scheduleSelectionLengthUpdate();
-  });
-  featureFocusObserver.observe(document.body, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ["aria-pressed"],
-  });
-  scheduleSelectionLengthUpdate();
-  addEventListener("message", (event) => {
-    const message = event.data || {};
-    if (message.jsonrpc !== "2.0") return;
-    if (message.method === "wisp/motif-add-records") {
-      try {
-        if (typeof window.motifAddRecords !== "function") throw new Error("Motif record API is not ready.");
-        const records = Array.isArray(message.params?.records) ? message.params.records : [];
-        window.motifAddRecords(records);
-        reply("wisp/notifications/motif-records-added", { requestId: message.params?.requestId, count: records.length });
-      } catch (error) {
-        reply("wisp/notifications/motif-bridge-error", { requestId: message.params?.requestId, message: error instanceof Error ? error.message : String(error) });
-      }
-    }
-    if (message.method === "wisp/motif-get-selection") {
-      try {
-        const record = activeRecord();
-        const recordId = String(record?.id || "");
-        const selection = renderedSelection(record)
-          || featureSelection(record)
-          || (document.querySelector(".motif-cs-selection-bar:not([data-empty='true'])")
-            ? null
-            : nativeSelection(record)
-              || (lastNativeSelection?.recordId === recordId ? lastNativeSelection : null));
-        if (!record || !selection) throw new Error("Select a sequence range in Motif first.");
-        reply("wisp/notifications/motif-selection", {
-          requestId: message.params?.requestId,
-          recordName: String(record.name || record.id || "Motif record"),
-          recordId,
-          molecule: String(record.type || record.molecule || "dna"),
-          start: selection.start,
-          end: selection.end,
-          strand: selection.strand || "forward",
-          sequence: selection.sequence,
-          featureName: selection.featureName,
-        });
-      } catch (error) {
-        reply("wisp/notifications/motif-bridge-error", { requestId: message.params?.requestId, message: error instanceof Error ? error.message : String(error) });
-      }
-    }
-  });
-  let readyAttempts = 0;
-  const announceReady = () => {
-    if (typeof window.motifGetActiveRecord === "function") {
-      reply("wisp/notifications/motif-bridge-ready", {});
-      return;
-    }
-    readyAttempts += 1;
-    if (readyAttempts < 200) setTimeout(announceReady, 50);
-  };
-  announceReady();
-})();
-</script>`;
-  // Motif bundles may contain literal `</body>` text inside minified scripts.
-  // Never splice the document with a regex: HTML parsers accept a trailing
-  // script after </html> and place it in the document body without corrupting
-  // any of Motif's original script boundaries.
-  return `${html}${script}`;
-}
-
 function ensureMcpAppParkingRoot() {
   if (mcpAppParkingRoot?.isConnected) return mcpAppParkingRoot;
   const root = document.createElement("div");
@@ -2743,6 +2670,7 @@ function createMcpAppInstance(instanceId, payloadJson) {
   };
   instance.onMessage = (event) => {
     if (event.source !== frame.contentWindow || !event.data || event.data.jsonrpc !== "2.0") return;
+    uiHealth.appMessages = boundedHealthCount(uiHealth.appMessages + 1);
     const message = event.data;
     if (message.method?.startsWith("wisp/notifications/motif-")) {
       if (message.method === "wisp/notifications/motif-bridge-ready") {
@@ -2903,7 +2831,31 @@ function mcpAppDocumentKey(payload) {
 /** Mount one MCP App inside a host-owned center pane. The app keeps an opaque
  * origin and scripts only; filesystem, forms, popups, top navigation,
  * downloads, and same-origin access remain unavailable. */
+const legacyMcpMounts = new Map();
 export function mount_mcp_app(instanceId, elId, payloadJson) {
+  if (useIsolatedHost()) return mountIsolatedApp(instanceId, elId, payloadJson);
+  const target = document.getElementById(elId);
+  if (!target) return false;
+  const incoming = typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
+  // Legacy records remain displayable without inventing a connector binding.
+  if (!incoming?._wispMcpBinding) return mountLegacyMcpApp(instanceId, elId, payloadJson);
+  const ticket = {}; legacyMcpMounts.set(instanceId, ticket);
+  // A reconnect may only bind a newly mounted frame, never an old guest callback.
+  const old = mcpAppInstances.get(instanceId);
+  if (old) {
+    mcpAppInstances.delete(instanceId);
+    window.removeEventListener("message", old.onMessage);
+    old.requestTeardown("primary workspace remount");
+  }
+  void invoke("prepare_mcp_app", {instanceId}).then((fresh) => {
+    if (legacyMcpMounts.get(instanceId) !== ticket || !target.isConnected) return;
+    mountLegacyMcpApp(instanceId, elId, fresh ? JSON.stringify(fresh) : payloadJson);
+  }).catch((error) => {
+    if (legacyMcpMounts.get(instanceId) === ticket && target.isConnected) target.textContent = String(error);
+  });
+  return true;
+}
+function mountLegacyMcpApp(instanceId, elId, payloadJson) {
   const target = document.getElementById(elId);
   if (!target) return false;
   let instance = mcpAppInstances.get(instanceId);
@@ -2945,7 +2897,9 @@ export function mount_mcp_app(instanceId, elId, payloadJson) {
 
 /** Keep a live iframe attached off-screen while another center tab is active. */
 export function park_mcp_app(instanceId) {
-  const instance = mcpAppInstances.get(instanceId);
+  legacyMcpMounts.delete(instanceId);
+  if (useIsolatedHost()) return suspendIsolatedApp(instanceId);
+  const instance = isolatedApps.get(instanceId) || mcpAppInstances.get(instanceId);
   if (!instance) return;
   instance.resizeObserver?.disconnect();
   instance.target = null;
@@ -3194,6 +3148,7 @@ async function saveMotifSnapshot(instance, result) {
 }
 
 function motifBridgeRequest(instance, method, params = {}) {
+  if (instance.isolated) return isolatedAction(instance, method, params);
   return new Promise((resolve, reject) => {
     const requestId = ++instance.motifRequestId;
     instance.motifRequests.set(requestId, { resolve, reject });
@@ -3209,8 +3164,8 @@ function motifBridgeRequest(instance, method, params = {}) {
 }
 
 export async function import_motif_dna_file(instanceId) {
-  const instance = mcpAppInstances.get(instanceId);
-  if (!instance?.initialized || !instance.frame.contentWindow) {
+  const instance = isolatedApps.get(instanceId) || mcpAppInstances.get(instanceId);
+  if (!instance?.initialized || (!instance.isolated && !instance.frame.contentWindow)) {
     throw new Error("The Motif workbench is not ready.");
   }
   if (instance.payload?.tool?.name !== "motif_open_workbench") {
@@ -3240,13 +3195,18 @@ export async function import_motif_dna_file(instanceId) {
   );
 
   const result = await callMotifOpen(instance, motifArgs);
-  const snapshot = motifSnapshotResult(instance, result, false);
-  await saveMotifSnapshot(instance, snapshot);
-  instance.frame.contentWindow.postMessage({
-    jsonrpc: "2.0",
-    method: "ui/notifications/tool-result",
-    params: snapshot,
-  }, "*");
+  if (instance.isolated) {
+    await isolatedAction(instance, "ui/notifications/tool-result", result || { content: [] });
+    instance.payload.result = result;
+  } else {
+    const snapshot = motifSnapshotResult(instance, result, false);
+    await saveMotifSnapshot(instance, snapshot);
+    instance.frame.contentWindow.postMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: snapshot,
+    }, "*");
+  }
   return {
     imported: true,
     filename: file.name,
@@ -3257,7 +3217,7 @@ export async function import_motif_dna_file(instanceId) {
 /** Parse a project file with Motif's MCP tool, then append its records to the
  * already-open workbench without replacing the current inventory. */
 export async function add_workspace_file_to_motif(instanceId, path) {
-  const instance = mcpAppInstances.get(instanceId);
+  const instance = isolatedApps.get(instanceId) || mcpAppInstances.get(instanceId);
   if (!instance?.initialized || instance.payload?.tool?.name !== "motif_open_workbench") {
     throw new Error("Open Motif in the current conversation before adding a project file.");
   }
@@ -3273,7 +3233,7 @@ export async function add_workspace_file_to_motif(instanceId, path) {
 }
 
 export async function request_motif_selection(instanceId) {
-  const instance = mcpAppInstances.get(instanceId);
+  const instance = isolatedApps.get(instanceId) || mcpAppInstances.get(instanceId);
   if (!instance?.initialized || instance.payload?.tool?.name !== "motif_open_workbench") {
     throw new Error("The Motif workbench is not ready.");
   }
@@ -3282,6 +3242,7 @@ export async function request_motif_selection(instanceId) {
 
 /** Close a center-tab MCP App and give it a bounded graceful teardown window. */
 export function close_mcp_app(instanceId) {
+  if (useIsolatedHost()) return closeIsolatedApp(instanceId);
   mcpAppInstances.get(instanceId)?.requestTeardown("user closed the app");
 }
 

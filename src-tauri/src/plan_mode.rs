@@ -69,10 +69,10 @@ async fn ensure_project_frame(
 #[tauri::command]
 pub(crate) async fn get_session_plan_mode(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<Option<bool>, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     ensure_project_frame(&state.store, &project.id, &session_id).await?;
     if matches!(state.store.get_acp_session(&session_id).await, Ok(Some(_))) {
         return Ok(None);
@@ -83,7 +83,7 @@ pub(crate) async fn get_session_plan_mode(
 #[tauri::command]
 pub(crate) async fn set_session_plan_mode(
     state: State<'_, crate::AppState>,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     enabled: bool,
 ) -> Result<bool, String> {

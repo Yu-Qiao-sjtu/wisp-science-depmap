@@ -1,7 +1,7 @@
 # DepMap Agent 工程编排框架
 
 状态：目标架构（Agent-first），Phase 1 与 Evidence Ledger 最小闭环已实现  
-适用基座：Wisp Science v1.8.x + DepMap 26Q1  
+适用基座：Wisp Science v1.10.x + DepMap 26Q1
 最后更新：2026-08-30
 
 ## 1. 文档目的

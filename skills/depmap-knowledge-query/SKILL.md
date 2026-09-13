@@ -14,20 +14,19 @@ routing table in [references/intent-routing.md](references/intent-routing.md).
 Do not choose between expression correlation, Gene Effect co-dependency, and
 expression-to-dependency association from gene names alone.
 
-1. When the requested deliverable matches a registered Workflow, call
-   `start_workflow` before querying evidence, loading Run history, inspecting
-   files, or writing a report. Put only the user's supplied gene, cancer scope,
-   language, and requested deliverable in its context; do not preload remembered
-   statistics. If launch is blocked, report the exact blocker and stop. Never
-   reconstruct the registered Workflow manually or create an ersatz report.
-2. When the request asks what can be studied for one gene in one cancer lineage
-   and no registered Workflow applies,
-   call native `depmap_evidence` first. It verifies the fixed local/remote
+1. Choose a registered Workflow when the user requests it or its execution plan
+   helps the task. A matching template alone does not require using it. To propose
+   one, use `start_workflow` with the user's concrete scope and deliverable;
+   approval and execution are managed by Wisp. Respect a blocked launch and do not
+   duplicate a pending or running Workflow through manual execution.
+2. For questions about one gene in one cancer lineage, prefer native
+   `depmap_evidence` for a compact overview. It verifies the fixed local/remote
    provider boundary and assembles a bounded dynamic view of the relevant
    precomputed modules. Read
    [references/evidence-contract.md](references/evidence-contract.md) before
    manually reconstructing such a view. For provider inspection or a narrower
-   question, call native `depmap_query` with `mode=status` first. Otherwise
+   question, use native `depmap_query` with the relevant mode. When provider
+   health is in doubt, inspect `mode=status`. If native tools are unavailable,
    run `scripts/resolve_depmap_workspace.R --project-root .` and use its resolved
    roots. Do not assume that the active project is the knowledge directory or
    that the developer's build-time drive exists. Read
@@ -91,9 +90,10 @@ expression-to-dependency association from gene names alone.
 
 ## Grounded answer contract
 
-- Every numerical claim must be copied from a successful `depmap_evidence` or `depmap_query`
-  response in the current turn. Do not answer a numerical question from model
-  memory, directory size, a filename, or an earlier conversational summary.
+- Ground numerical claims in successful query results or validated Run artifacts.
+  Earlier evidence is reusable when its source, release, cohort, and applicability
+  can be verified. Model memory, directory size, a filename, or a conversational
+  summary alone is not a numerical source.
 - Separate `facts` (returned rows and manifest fields) from `interpretation`
   (biological meaning) and `hypotheses` (what would require validation).
 - Preserve `release`, `manifest`, cohort/sample counts, method, retention rule,
@@ -102,8 +102,9 @@ expression-to-dependency association from gene names alone.
   absence from a sparse top-K output, never as evidence of no association.
   Treat `INELIGIBLE` as a cohort/sample-size failure, never as a biological
   negative. `NOT_COMPUTED` and `MODULE_UNAVAILABLE` are coverage states.
-- If the provider or query is blocked, stop numerical interpretation. Do not
-  fill missing statistics with plausible values.
+- A blocked query supplies no numerical evidence. Explain the gap and use other
+  verified evidence only when it supports the requested scope; do not fill
+  missing statistics with plausible values.
 - Treat cancer names as labels that must resolve to the canonical lineage in
   the returned query. Do not report `NOT_COMPUTED` from an unnormalized synonym
   such as `Breast Cancer` when the provider resolves it to `Breast`.
@@ -205,8 +206,8 @@ must not enter the current evidence set.
 For inventory, discovery, or topic-ideation requests covered by the knowledge
 provider, remain query-only. Do not call shell tools, write analysis scripts, or
 start a Run unless the user explicitly asks for a new computation or a saved
-report artifact. If a registered Workflow matches the user's requested
-deliverable, start that Workflow instead of reconstructing its stages ad hoc.
+report artifact. A registered Workflow is an optional execution plan; its
+presence does not prevent a direct query or another authorized approach.
 
 For `knowledge.provider = remote`, stop at resolver status `needs_probe` unless
 the fixed `depmap_query` tool has confirmed service health. Do not translate a

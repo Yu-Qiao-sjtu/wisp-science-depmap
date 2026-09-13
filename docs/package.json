@@ -1,0 +1,14 @@
+{
+  "name": "wisp-science-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build-cloudflare.mjs",
+    "deploy": "wrangler deploy",
+    "sync-downloads": "node scripts/sync-downloads.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.131.1"
+  }
+}

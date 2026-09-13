@@ -1,17 +1,18 @@
 use crate::agent_workflows::{workflow_studio as workflow_studio_view, AgentPanelState};
 use crate::app_support::{
-    allow_drop, apply_base_url_suggestions, build_conn_json, close_details_ancestor, compose_icon,
-    conn_form_from_row, context_capability_summary, drag_session_id, endpoint_has_stored_key,
-    focus_element_soon, format_relative_time, import_custom_css_from_input, join_tags,
-    js_error_text, model_form_entry, new_acp_form, new_model_form, profile_to_form,
-    provider_entries_are_pristine, quick_action_label, reviewer_backend_key,
-    reviewer_backend_label, reviewer_missing_acp_profile_id, set_reviewer_backend,
-    settings_section_label, settings_subpage_label, show_toast, skill_matches_filter,
-    start_session_drag, DefaultAnalysisSelect, CRED_GROUPS,
+    allow_drop, apply_base_url_suggestions, blank_conn_secret_field, build_conn_json,
+    close_details_ancestor, compose_icon, conn_form_from_row, context_capability_summary,
+    drag_session_id, endpoint_has_stored_key, focus_element_soon, format_relative_time,
+    import_custom_css_from_input, join_tags, js_error_text, model_form_entry, new_acp_form,
+    new_conn_form, new_model_form, profile_to_form, provider_entries_are_pristine,
+    quick_action_label, reviewer_backend_key, reviewer_backend_label,
+    reviewer_missing_acp_profile_id, set_reviewer_backend, settings_section_label,
+    settings_subpage_label, show_toast, skill_matches_filter, start_session_drag,
+    DefaultAnalysisSelect, CRED_GROUPS,
 };
-use crate::bindings::{invoke, invoke_checked, is_mac, is_windows};
+use crate::bindings::{invoke, invoke_checked, is_mac, is_windows, open_external_url};
 use crate::dto::*;
-use crate::i18n::{localize_backend, set_document_lang, t, tf, Locale};
+use crate::i18n::{localize_backend, set_document_lang, t, tf, use_locale, Locale};
 use crate::text::{
     dom_value, endpoint_host, event_target_checked, event_target_input, event_target_value,
     format_bytes, join_api_url,
@@ -21,6 +22,279 @@ use leptos::*;
 use serde_wasm_bindgen::to_value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wasm_bindgen::JsValue;
+
+fn session_identity_enabled(form: &ModelForm) -> bool {
+    form.send_session_id.unwrap_or_else(|| {
+        web_sys::Url::new(&join_api_url(&form.api_url, &form.endpoint_suffix))
+            .ok()
+            .is_some_and(|url| {
+                matches!(url.protocol().as_str(), "http:" | "https:")
+                    && url.hostname() == "opencode.ai"
+                    && (url.pathname() == "/zen" || url.pathname().starts_with("/zen/"))
+            })
+    })
+}
+
+// Navigation metadata also supplies search aliases; page labels retain their
+// existing translations and routes.
+const SETTINGS_NAV_GROUPS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "settings.nav.preferences",
+        &[
+            ("general", "notifications updates language 通知 更新 语言"),
+            ("session", "context tokens conversation 上下文 对话"),
+            ("appearance", "theme font 主题 字体"),
+            ("pet", "companion 桌宠"),
+        ],
+    ),
+    (
+        "settings.nav.ai",
+        &[
+            ("models", "api key acp provider 模型 密钥 服务商"),
+            ("quick-actions", "shortcuts 快捷"),
+            ("workflows", "automation 自动化"),
+            ("specialists", "agents 专家 智能体"),
+            ("memory", "notes habits 笔记 习惯"),
+        ],
+    ),
+    (
+        "settings.nav.tools",
+        &[
+            ("skills", "skill 技能"),
+            ("plugins", "mcp 插件"),
+            ("browser", "web 浏览器"),
+            ("connections", "connectors integrations 连接 集成"),
+            ("channels", "sync feishu weixin device 同步 飞书 微信 设备"),
+        ],
+    ),
+    (
+        "settings.nav.system",
+        &[
+            ("credentials", "api key token secrets 密钥 令牌"),
+            ("permissions", "approval security 审批 安全"),
+            ("environments", "python ssh wsl runtime 环境 运行时"),
+            ("storage", "disk cache 磁盘 缓存"),
+            ("usage", "tokens cost 用量 费用"),
+        ],
+    ),
+];
+
+#[component]
+fn SettingsNavigation(
+    locale: RwSignal<Locale>,
+    settings_section: RwSignal<String>,
+    go_settings_section: Callback<String>,
+    show_settings: RwSignal<bool>,
+) -> impl IntoView {
+    let search = create_rw_signal(String::new());
+    view! {
+        <nav class="settings-nav" aria-label=move || t(locale.get(), "settings.title")>
+            <button type="button" class="settings-app-back settings-head-close"
+                on:click=move |_| show_settings.set(false)>
+                {compose_icon("chevron-left")}
+                <span>{move || t(locale.get(), "settings.back_to_app")}</span>
+            </button>
+            <div class="settings-nav-title">{move || t(locale.get(), "settings.title")}</div>
+            <input type="search" class="settings-nav-search"
+                aria-label=move || t(locale.get(), "settings.search")
+                placeholder=move || t(locale.get(), "settings.search")
+                prop:value=move || search.get()
+                on:input=move |ev| search.set(event_target_value(&ev)) />
+            {move || {
+                let query = search.get().trim().to_lowercase();
+                let loc = locale.get();
+                let mut count = 0;
+                let groups = SETTINGS_NAV_GROUPS.iter().filter_map(|(group, entries)| {
+                    let entries = entries.iter().filter(|(section, aliases)| {
+                        let haystack = format!("{} {} {} {aliases}", t(loc, group),
+                            settings_section_label(Locale::En, section),
+                            settings_section_label(Locale::Zh, section)).to_lowercase();
+                        query.split_whitespace().all(|word| haystack.contains(word))
+                    }).collect::<Vec<_>>();
+                    count += entries.len();
+                    (!entries.is_empty()).then(|| view! {
+                        <div class="settings-nav-group" role="group" aria-label=t(loc, group)>
+                            <span class="settings-nav-label">{t(loc, group)}</span>
+                            {entries.into_iter().map(|&(section, _)| view! {
+                                <button type="button"
+                                    data-testid=format!("settings-nav-{section}")
+                                    class:active=move || settings_section.get() == section
+                                    aria-current=move || (settings_section.get() == section).then_some("page")
+                                    on:click=move |_| go_settings_section.call(section.into())>
+                                    {settings_section_label(loc, section)}
+                                </button>
+                            }).collect_view()}
+                        </div>
+                    })
+                }).collect_view();
+                view! {
+                    {groups}
+                    {(count == 0).then(|| view! {
+                        <p class="settings-nav-empty" role="status">{t(loc, "settings.search_empty")}</p>
+                    })}
+                }
+            }}
+        </nav>
+    }
+}
+
+fn model_advanced_options(
+    locale: RwSignal<Locale>,
+    model_form: RwSignal<Option<ModelForm>>,
+) -> impl IntoView {
+    view! {
+        <details class="model-advanced-options" data-testid="model-advanced-options">
+            <summary>{move || t(locale.get(), "models.advanced_options")}</summary>
+            <p class="hint model-request-intro">{move || t(locale.get(), "models.request_headers_hint")}</p>
+            <div class="model-request-headers">
+                <div class="model-request-header">
+                <label class="settings-check">
+                    <input type="checkbox" data-testid="model-send-user-agent"
+                        aria-describedby="model-user-agent-purpose"
+                        prop:checked=move || model_form.get().is_some_and(|form| form.send_user_agent)
+                        on:change=move |ev| model_form.update(|form| if let Some(form) = form {
+                            form.send_user_agent = event_target_checked(&ev);
+                        }) />
+                    <span>{move || t(locale.get(), "models.send_user_agent")}</span>
+                </label>
+                <p class="hint" id="model-user-agent-purpose">{move || t(locale.get(), "models.user_agent_purpose")}</p>
+                <label>{move || t(locale.get(), "models.user_agent_value")}
+                    <input data-testid="model-user-agent"
+                        disabled=move || !model_form.get().is_some_and(|form| form.send_user_agent)
+                        aria-describedby="model-user-agent-hint"
+                        placeholder="wisp-science"
+                        prop:value=move || model_form.get().map(|f| f.user_agent).unwrap_or_default()
+                        on:input=move |ev| model_form.update(|form| if let Some(form) = form {
+                            form.user_agent = event_target_input(&ev).value();
+                        }) />
+                </label>
+                <span id="model-user-agent-hint" class="hint">
+                    {move || t(locale.get(), "models.user_agent_hint")}
+                </span>
+                <div class="model-request-preview">
+                    <span>{move || t(locale.get(), "models.request_header_preview")}</span>
+                    <code data-testid="model-user-agent-preview">{move || {
+                        let form = model_form.get();
+                        if let Some(form) = form.filter(|form| form.send_user_agent) {
+                            let value = form.user_agent.trim();
+                            format!("User-Agent: {}", if value.is_empty() { "wisp-science" } else { value })
+                        } else {
+                            t(locale.get(), "models.request_header_disabled").to_string()
+                        }
+                    }}</code>
+                </div>
+                </div>
+                <div class="model-request-header">
+                <label class="settings-check">
+                    <input type="checkbox" data-testid="model-send-session-id"
+                        aria-describedby="model-session-purpose"
+                        prop:checked=move || model_form.get().is_some_and(|form| session_identity_enabled(&form))
+                        on:change=move |ev| model_form.update(|form| if let Some(form) = form {
+                            form.send_session_id = Some(event_target_checked(&ev));
+                        }) />
+                    <span>{move || t(locale.get(), "models.send_session_id")}</span>
+                </label>
+                <p class="hint" id="model-session-purpose">{move || t(locale.get(), "models.session_identity_purpose")}</p>
+                <label>{move || t(locale.get(), "models.session_header_name")}
+                    <input data-testid="model-session-header-name" placeholder="x-opencode-session"
+                        aria-describedby="model-session-header-hint"
+                        disabled=move || !model_form.get().is_some_and(|form| session_identity_enabled(&form))
+                        prop:value=move || model_form.get().map(|form| form.session_header_name).unwrap_or_default()
+                        on:input=move |ev| model_form.update(|form| if let Some(form) = form {
+                            form.session_header_name = event_target_input(&ev).value();
+                        }) />
+                </label>
+                <span class="hint" id="model-session-header-hint">{move || t(locale.get(), "models.session_identity_hint")}</span>
+                <div class="model-request-preview">
+                    <span>{move || t(locale.get(), "models.request_header_preview")}</span>
+                    <code data-testid="model-session-header-preview">{move || {
+                        let form = model_form.get();
+                        if let Some(form) = form.filter(session_identity_enabled) {
+                            let name = form.session_header_name.trim();
+                            format!("{}: {}", if name.is_empty() { "x-opencode-session" } else { name },
+                                t(locale.get(), "models.session_id_generated"))
+                        } else {
+                            t(locale.get(), "models.request_header_disabled").to_string()
+                        }
+                    }}</code>
+                </div>
+                </div>
+            </div>
+        </details>
+    }
+}
+
+fn connector_parameter_type(schema: &serde_json::Value) -> String {
+    match schema.get("type") {
+        Some(serde_json::Value::String(kind)) => kind.clone(),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "),
+        _ => String::new(),
+    }
+}
+
+#[component]
+fn ConnectorToolDocumentation(locale: RwSignal<Locale>, tool: ConnectorTool) -> impl IntoView {
+    let description = if tool.description.trim().is_empty() {
+        t(locale.get(), "conn.description_missing").to_string()
+    } else {
+        tool.description
+    };
+    view! {
+        <div class="conn-tool-documentation" data-testid="connector-tool-documentation">
+            <p class="conn-tool-description">{description}</p>
+            {tool.input_schema.map(|schema| {
+                let properties = schema.get("properties").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+                let required = schema.get("required").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let examples = schema.get("examples").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                view! {
+                    <h4>{move || t(locale.get(), "conn.parameters")}</h4>
+                    {if properties.is_empty() {
+                        view! { <p class="hint">{move || t(locale.get(), "conn.no_named_parameters")}</p> }.into_view()
+                    } else {
+                        view! {
+                            <div class="conn-parameters-scroll">
+                                <table class="conn-parameters">
+                                    <thead><tr>
+                                        <th>{move || t(locale.get(), "conn.parameter")}</th>
+                                        <th>{move || t(locale.get(), "conn.parameter_type")}</th>
+                                        <th>{move || t(locale.get(), "conn.parameter_description")}</th>
+                                    </tr></thead>
+                                    <tbody>{properties.into_iter().map(|(name, property)| {
+                                        let is_required = required.iter().any(|value| value.as_str() == Some(&name));
+                                        let kind = connector_parameter_type(&property);
+                                        let description = property.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                                        let default = property.get("default").map(|value| value.to_string());
+                                        view! { <tr>
+                                            <td><code>{name}</code>{is_required.then(|| view! { <span class="conn-required">{move || t(locale.get(), "conn.required")}</span> })}</td>
+                                            <td><code>{kind}</code></td>
+                                            <td>{description}{default.map(|value| view! { <div class="hint">{move || t(locale.get(), "conn.default_value")} ": " <code>{value}</code></div> })}</td>
+                                        </tr> }
+                                    }).collect_view()}</tbody>
+                                </table>
+                            </div>
+                        }.into_view()
+                    }}
+                    <details class="conn-schema"><summary>{move || t(locale.get(), "conn.input_schema")}</summary>
+                        <pre>{serde_json::to_string_pretty(&schema).unwrap_or_default()}</pre>
+                    </details>
+                    {(!examples.is_empty()).then(|| view! {
+                        <h4>{move || t(locale.get(), "conn.examples")}</h4>
+                        <pre>{serde_json::to_string_pretty(&examples).unwrap_or_default()}</pre>
+                    })}
+                }
+            })}
+            {tool.output_schema.map(|schema| view! {
+                <details class="conn-schema"><summary>{move || t(locale.get(), "conn.output_schema")}</summary>
+                    <pre>{serde_json::to_string_pretty(&schema).unwrap_or_default()}</pre>
+                </details>
+            })}
+        </div>
+    }
+}
 
 /// Pending "确定删除?" confirmation. Both models and ACP agents route through
 /// one overlay so the confirm gate lives in a single place. The signal is owned
@@ -609,6 +883,9 @@ fn apply_catalog_limits(
     let Some(current) = model_form.get() else {
         return;
     };
+    if current.is_image_model() {
+        return;
+    }
     let (provider, api_url, model) = (
         current.provider,
         join_api_url(&current.api_url, &current.endpoint_suffix),
@@ -651,11 +928,13 @@ fn apply_catalog_limits(
     });
 }
 
-/// One-click presets for popular OpenAI-compatible providers (#334):
-/// (label, api_url, model). The user only has to paste an API key.
+/// One-click presets for popular API providers (#334):
+/// (label, api_url, model). Model suggestions are optional; OpenCode leaves
+/// model selection to the user so the preset does not track its model catalog.
 /// The "Coding" entries are the monthly coding-plan endpoints — those
 /// subscription keys only work there, not on the pay-per-token URLs.
-const MODEL_PRESETS: [(&str, &str, &str); 5] = [
+const MODEL_PRESETS: [(&str, &str, &str); 6] = [
+    ("OpenCode", "https://opencode.ai/zen/go/v1", ""),
     ("Kimi", "https://api.moonshot.cn/v1", "kimi-k3"),
     ("GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-5"),
     ("DeepSeek", "https://api.deepseek.com", "deepseek-v4-flash"),
@@ -784,9 +1063,292 @@ pub(super) struct SettingsViewState {
     pub(super) delete_confirm: RwSignal<Option<DeleteConfirm>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConnSecretKind {
+    Env,
+    Headers,
+}
+
+fn conn_secret_rows(form: &ConnForm, kind: ConnSecretKind) -> &[ConnSecretField] {
+    match kind {
+        ConnSecretKind::Env => &form.env,
+        ConnSecretKind::Headers => &form.headers,
+    }
+}
+
+fn conn_secret_rows_mut(form: &mut ConnForm, kind: ConnSecretKind) -> &mut Vec<ConnSecretField> {
+    match kind {
+        ConnSecretKind::Env => &mut form.env,
+        ConnSecretKind::Headers => &mut form.headers,
+    }
+}
+
+/// Keyed secret rows so typing a name/value does not remount the inputs.
+#[component]
+fn ConnSecretRows(
+    conn_form: RwSignal<Option<ConnForm>>,
+    kind: ConnSecretKind,
+    #[prop(into)] disabled: MaybeSignal<bool>,
+) -> impl IntoView {
+    let locale = use_locale();
+    view! {
+        <For
+            each=move || {
+                conn_form.with(|form| {
+                    form.as_ref()
+                        .map(|form| {
+                            conn_secret_rows(form, kind)
+                                .iter()
+                                .map(|row| row.row_id)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                })
+            }
+            key=|id| *id
+            let:row_id
+        >
+            {
+                let reveal = create_rw_signal(false);
+                let value_ref = create_node_ref::<leptos::html::Input>();
+                view! {
+                    <div class="conn-secret-row" data-testid="conn-secret-row">
+                        <input
+                            data-testid="conn-secret-name"
+                            autocomplete="off"
+                            placeholder=move || match kind {
+                                ConnSecretKind::Env => "NAME".to_string(),
+                                ConnSecretKind::Headers => {
+                                    if conn_form.with(|form| {
+                                        form.as_ref().is_some_and(|form| form.auth == "oauth")
+                                    }) {
+                                        "X-Custom-Header".to_string()
+                                    } else {
+                                        "Authorization".to_string()
+                                    }
+                                }
+                            }
+                            prop:value=move || {
+                                conn_form.with(|form| {
+                                    form.as_ref()
+                                        .and_then(|form| {
+                                            conn_secret_rows(form, kind)
+                                                .iter()
+                                                .find(|row| row.row_id == row_id)
+                                        })
+                                        .map(|row| row.name.clone())
+                                        .unwrap_or_default()
+                                })
+                            }
+                            prop:disabled=move || disabled.get()
+                            on:input=move |ev| {
+                                let value = event_target_input(&ev).value();
+                                conn_form.update(|form| if let Some(form) = form {
+                                    if let Some(row) = conn_secret_rows_mut(form, kind)
+                                        .iter_mut()
+                                        .find(|row| row.row_id == row_id)
+                                    {
+                                        row.name = value;
+                                    }
+                                });
+                            }
+                        />
+                        <div class="conn-secret-value">
+                            <input
+                                node_ref=value_ref
+                                data-testid="conn-secret-value"
+                                attr:type=move || if reveal.get() { "text" } else { "password" }
+                                autocomplete="new-password"
+                                placeholder=move || {
+                                    let has_value = conn_form.with(|form| {
+                                        form.as_ref()
+                                            .and_then(|form| {
+                                                conn_secret_rows(form, kind)
+                                                    .iter()
+                                                    .find(|row| row.row_id == row_id)
+                                            })
+                                            .map(|row| row.has_value)
+                                            .unwrap_or(false)
+                                    });
+                                    if has_value {
+                                        t(locale.get(), "conn.secret_keep").to_string()
+                                    } else if kind == ConnSecretKind::Headers
+                                        && conn_form.with(|form| {
+                                            form.as_ref().is_some_and(|form| form.auth == "oauth")
+                                        })
+                                    {
+                                        "value".to_string()
+                                    } else if kind == ConnSecretKind::Headers {
+                                        "Bearer token".to_string()
+                                    } else {
+                                        t(locale.get(), "conn.secret_value").to_string()
+                                    }
+                                }
+                                prop:value=move || {
+                                    conn_form.with(|form| {
+                                        form.as_ref()
+                                            .and_then(|form| {
+                                                conn_secret_rows(form, kind)
+                                                    .iter()
+                                                    .find(|row| row.row_id == row_id)
+                                            })
+                                            .map(|row| row.value.clone())
+                                            .unwrap_or_default()
+                                    })
+                                }
+                                prop:disabled=move || disabled.get()
+                                on:input=move |ev| {
+                                    let value = event_target_input(&ev).value();
+                                    conn_form.update(|form| if let Some(form) = form {
+                                        if let Some(row) = conn_secret_rows_mut(form, kind)
+                                            .iter_mut()
+                                            .find(|row| row.row_id == row_id)
+                                        {
+                                            row.value = value;
+                                        }
+                                    });
+                                }
+                            />
+                            <button
+                                type="button"
+                                class="conn-secret-reveal"
+                                data-testid="conn-secret-reveal"
+                                title=move || {
+                                    t(
+                                        locale.get(),
+                                        if reveal.get() {
+                                            "conn.secret_hide"
+                                        } else {
+                                            "conn.secret_show"
+                                        },
+                                    )
+                                }
+                                aria-label=move || {
+                                    t(
+                                        locale.get(),
+                                        if reveal.get() {
+                                            "conn.secret_hide"
+                                        } else {
+                                            "conn.secret_show"
+                                        },
+                                    )
+                                }
+                                aria-pressed=move || if reveal.get() { "true" } else { "false" }
+                                prop:disabled=move || disabled.get()
+                                on:click=move |_| {
+                                    reveal.update(|on| *on = !*on);
+                                    if let Some(input) = value_ref.get() {
+                                        let _ = input.focus();
+                                    }
+                                }
+                            >
+                                {move || compose_icon(if reveal.get() { "eye-off" } else { "eye" })}
+                            </button>
+                        </div>
+                        <button
+                            type="button"
+                            class="settings-list-remove"
+                            data-testid="conn-secret-remove"
+                            title=move || t(locale.get(), "conn.secret_remove")
+                            aria-label=move || t(locale.get(), "conn.secret_remove")
+                            prop:disabled=move || disabled.get()
+                            on:click=move |_| conn_form.update(|form| if let Some(form) = form {
+                                conn_secret_rows_mut(form, kind)
+                                    .retain(|row| row.row_id != row_id);
+                            })
+                        >{compose_icon("close")}</button>
+                    </div>
+                }
+            }
+        </For>
+    }
+}
+
+#[component]
+fn ProjectApprovalSettings(
+    locale: RwSignal<Locale>,
+    connectors: RwSignal<Option<ConnectorsView>>,
+) -> impl IntoView {
+    let busy = create_rw_signal(false);
+    let error = create_rw_signal(None::<String>);
+    let scope = create_memo(move |_| {
+        connectors.with(|view| {
+            view.as_ref()
+                .map(|view| view.scope.clone())
+                .unwrap_or_else(|| "ask".into())
+        })
+    });
+    let save = Callback::new(move |mode: &'static str| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({ "scope": mode })).unwrap();
+            match invoke_checked("set_approval_scope", args).await {
+                Ok(_) => connectors.update(|view| {
+                    if let Some(view) = view {
+                        view.scope = mode.into();
+                    }
+                }),
+                Err(err) => {
+                    error.try_set(Some(js_error_text(err)));
+                }
+            }
+            busy.try_set(false);
+        });
+    });
+    let button = move |mode: &'static str, label: &'static str| {
+        view! {
+            <button type="button" class=format!("approval-btn scope-seg scope-{mode}")
+                class:active=move || scope.get() == mode
+                aria-pressed=move || (scope.get() == mode).to_string()
+                disabled=move || busy.get() || connectors.with(Option::is_none)
+                on:click=move |_| save.call(mode)>{move || t(locale.get(), label)}</button>
+        }
+    };
+    view! {
+        <section class="project-approval-settings" data-testid="project-approval-settings"
+            aria-label=move || t(locale.get(), "permissions.mode")>
+            <div class="project-approval-row">
+                <div class="project-approval-heading">
+                    <span class="settings-list-title">{move || t(locale.get(), "permissions.mode")}</span>
+                    <span class="settings-list-sub">{move || t(locale.get(), "permissions.mode.project")}</span>
+                </div>
+                <div class="approval-seg" role="group" aria-label=move || t(locale.get(), "permissions.mode")>
+                    {button("ask", "permissions.mode.ask")}
+                    {button("auto", "permissions.mode.auto")}
+                </div>
+            </div>
+            <p class="project-approval-description" data-testid="approval-mode-description" class:full=move || scope.get() == "full">
+                <strong>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full",
+                    "auto" => "permissions.mode.auto",
+                    _ => "permissions.mode.ask",
+                })}</strong>
+                <span>{move || t(locale.get(), match scope.get().as_str() {
+                    "full" => "permissions.mode.full.desc",
+                    "auto" => "permissions.mode.auto.desc",
+                    _ => "permissions.mode.ask.desc",
+                })}</span>
+            </p>
+            <details class="project-approval-advanced" data-testid="approval-mode-advanced">
+                <summary>{move || t(locale.get(), "permissions.mode.advanced")}</summary>
+                <div class="project-approval-row">
+                    <p>{move || t(locale.get(), "permissions.mode.full.desc")}</p>
+                    <div class="approval-seg">{button("full", "permissions.mode.full")}</div>
+                </div>
+            </details>
+            {move || error.get().map(|message| view! { <p class="err" role="alert">{message}</p> })}
+        </section>
+    }
+}
+
 #[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
+    external_link_confirm: RwSignal<Option<String>>,
     open_project: Callback<String>,
     go_settings_section: Callback<String>,
     close_settings_subpage: Callback<()>,
@@ -801,6 +1363,7 @@ pub(super) fn SettingsView(
     refresh_conns: Callback<()>,
     refresh_skills: Callback<()>,
     reload_skills: Callback<()>,
+    skills_reloading: RwSignal<bool>,
     refresh_approval_grants: Callback<()>,
     load_memory_file: Callback<String>,
     load_custom_conn_tools: Callback<ConnRow>,
@@ -822,6 +1385,7 @@ pub(super) fn SettingsView(
     set_default_compute_resource: Callback<Option<String>>,
     open_terminal_session: Callback<TerminalSessionSummary>,
 ) -> impl IntoView {
+    let expanded_connector_tools = create_rw_signal(HashSet::<(String, String)>::new());
     let SettingsViewState {
         locale,
         theme_mode,
@@ -1051,6 +1615,40 @@ pub(super) fn SettingsView(
     let plugin_install_mode = create_rw_signal("local".to_string());
     let plugin_search = create_rw_signal(String::new());
     let oauth_authorizing = create_rw_signal(false);
+    let conn_testing = create_rw_signal(false);
+    let conn_test_seq = create_rw_signal(0u64);
+    let credential_page = create_rw_signal(None::<&'static str>);
+    let credential_saving = create_rw_signal(false);
+    let close_settings_subpage = Callback::new(move |()| {
+        if credential_saving.get_untracked() {
+            return;
+        }
+        if credential_page.get_untracked().is_some() {
+            credential_page.set(None);
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
+            cred_msg.set(None);
+        } else {
+            close_settings_subpage.call(());
+        }
+    });
+    create_effect(move |_| {
+        if !show_settings.get() || settings_section.get() != "credentials" {
+            credential_page.set(None);
+            cred_inputs.update(|inputs| {
+                inputs.retain(|id, _| {
+                    !CRED_GROUPS
+                        .iter()
+                        .any(|group| group.fields.iter().any(|field| field.id == id))
+                })
+            });
+        }
+    });
     let custom_cred_name = create_rw_signal(String::new());
     let custom_cred_env = create_rw_signal(String::new());
     let custom_cred_value = create_rw_signal(String::new());
@@ -1066,6 +1664,29 @@ pub(super) fn SettingsView(
     let quick_action_form = create_rw_signal(None::<QuickAction>);
     let quick_action_busy = create_rw_signal(false);
     let quick_action_error = create_rw_signal(None::<String>);
+    // Skill details share the section breadcrumb and Escape navigation.
+    let selected_skill = create_rw_signal(None::<String>);
+    let skill_store_open = create_rw_signal(false);
+    let skill_store_github = create_rw_signal(false);
+    create_effect(move |_| {
+        if !show_settings.get() || settings_section.get() != "skills" {
+            skill_store_open.set(false);
+        }
+    });
+    create_effect(move |_| {
+        if !show_settings.get()
+            || settings_section.get() != "skills"
+            || selected_skill
+                .get()
+                .is_some_and(|name| !skills_list.get().iter().any(|s| s.name == name))
+        {
+            selected_skill.set(None);
+        }
+    });
+    let close_settings_subpage = Callback::new(move |_| {
+        selected_skill.set(None);
+        close_settings_subpage.call(());
+    });
     // Specialist skill whitelist picker: search query + filtered results, so a
     // large skill library never renders as an unbounded checkbox list.
     let specialist_skill_query = create_rw_signal(String::new());
@@ -1090,6 +1711,11 @@ pub(super) fn SettingsView(
         if !show_settings.get_untracked() {
             return false;
         }
+        if delete_confirm.get_untracked().is_some()
+            || external_link_confirm.get_untracked().is_some()
+        {
+            return false;
+        }
         if joining.get_untracked() {
             joining.set(false);
             return true;
@@ -1110,7 +1736,9 @@ pub(super) fn SettingsView(
         }
         // Breadcrumb subpages (memory file, model/ACP/specialist/conn/channel
         // editors): one Escape returns to the section list, not the app.
-        let has_subpage = memory_selected.get_untracked().is_some()
+        let has_subpage = credential_page.get_untracked().is_some()
+            || selected_skill.get_untracked().is_some()
+            || memory_selected.get_untracked().is_some()
             || model_form.get_untracked().is_some()
             || acp_form.get_untracked().is_some()
             || specialist_form.get_untracked().is_some()
@@ -1323,82 +1951,9 @@ pub(super) fn SettingsView(
     move || {
         show_settings.get().then(|| view! {
         <div class="settings-page"
-            class:workflow-studio-mode=move || settings_section.get() == "workflows">
-            <div class="settings-nav">
-                <button type="button" class="settings-app-back settings-head-close"
-                    on:click=move |_| show_settings.set(false)>
-                    {compose_icon("chevron-left")}
-                    <span>{move || t(locale.get(), "settings.back_to_app")}</span>
-                </button>
-                <div class="settings-nav-title">{move || t(locale.get(), "settings.title")}</div>
-                <div class="settings-nav-group">
-                    <span class="settings-nav-label">{move || t(locale.get(), "settings.nav.workspace")}</span>
-                    <button class:active=move || settings_section.get()=="general"
-                        on:click=move |_| go_settings_section.call("general".into())>
-                        {move || t(locale.get(), "settings.nav.general")}</button>
-                    <button class:active=move || settings_section.get()=="session"
-                        data-testid="settings-nav-session"
-                        on:click=move |_| go_settings_section.call("session".into())>
-                        {move || t(locale.get(), "settings.nav.session")}</button>
-                    <button class:active=move || settings_section.get()=="appearance"
-                        on:click=move |_| go_settings_section.call("appearance".into())>
-                        {move || t(locale.get(), "settings.nav.appearance")}</button>
-                    <button class:active=move || settings_section.get()=="pet"
-                        on:click=move |_| go_settings_section.call("pet".into())>
-                        {move || t(locale.get(), "settings.nav.pet")}</button>
-                    <button class:active=move || settings_section.get()=="credentials"
-                        on:click=move |_| go_settings_section.call("credentials".into())>
-                        {move || t(locale.get(), "settings.nav.credentials")}</button>
-                    <button class:active=move || settings_section.get()=="permissions"
-                        on:click=move |_| go_settings_section.call("permissions".into())>
-                        {move || t(locale.get(), "settings.nav.permissions")}</button>
-                    <button class:active=move || settings_section.get()=="environments"
-                        on:click=move |_| go_settings_section.call("environments".into())>
-                        {move || t(locale.get(), "settings.nav.environments")}</button>
-                    <button class:active=move || settings_section.get()=="storage"
-                        on:click=move |_| go_settings_section.call("storage".into())>
-                        {move || t(locale.get(), "settings.nav.storage")}</button>
-                    <button class:active=move || settings_section.get()=="usage"
-                        on:click=move |_| go_settings_section.call("usage".into())>
-                        {move || t(locale.get(), "settings.nav.usage")}</button>
-                </div>
-                <div class="settings-nav-group">
-                    <span class="settings-nav-label">{move || t(locale.get(), "settings.nav.capabilities")}</span>
-                    <button class:active=move || settings_section.get()=="models"
-                        on:click=move |_| go_settings_section.call("models".into())>
-                        {move || t(locale.get(), "settings.nav.models")}</button>
-                    <button class:active=move || settings_section.get()=="quick-actions"
-                        data-testid="settings-nav-quick-actions"
-                        on:click=move |_| go_settings_section.call("quick-actions".into())>
-                        {move || t(locale.get(), "settings.nav.quick_actions")}</button>
-                    <button class:active=move || settings_section.get()=="workflows"
-                        data-testid="settings-nav-workflows"
-                        on:click=move |_| go_settings_section.call("workflows".into())>
-                        {move || t(locale.get(), "settings.nav.workflows")}</button>
-                    <button class:active=move || settings_section.get()=="specialists"
-                        on:click=move |_| go_settings_section.call("specialists".into())>
-                        {move || t(locale.get(), "settings.nav.specialists")}</button>
-                    <button class:active=move || settings_section.get()=="memory"
-                        on:click=move |_| go_settings_section.call("memory".into())>
-                        {move || t(locale.get(), "settings.nav.memory")}</button>
-                    <button class:active=move || settings_section.get()=="skills"
-                        on:click=move |_| go_settings_section.call("skills".into())>
-                        {move || t(locale.get(), "settings.nav.skills")}</button>
-                    <button class:active=move || settings_section.get()=="plugins"
-                        on:click=move |_| go_settings_section.call("plugins".into())>
-                        {move || t(locale.get(), "settings.nav.plugins")}</button>
-                    <button class:active=move || settings_section.get()=="browser"
-                        data-testid="settings-nav-browser"
-                        on:click=move |_| go_settings_section.call("browser".into())>
-                        {move || t(locale.get(), "settings.nav.browser")}</button>
-                    <button class:active=move || settings_section.get()=="connections"
-                        on:click=move |_| go_settings_section.call("connections".into())>
-                        {move || t(locale.get(), "settings.nav.connections")}</button>
-                    <button class:active=move || settings_section.get()=="channels"
-                        on:click=move |_| go_settings_section.call("channels".into())>
-                        {move || t(locale.get(), "settings.nav.channels")}</button>
-                </div>
-            </div>
+            class:workflow-studio-mode=move || settings_section.get() == "workflows"
+            class:model-list-mode=move || settings_section.get() == "models" && model_form.get().is_none() && acp_form.get().is_none()>
+            <SettingsNavigation locale settings_section go_settings_section show_settings />
             <div class="settings-content">
                 {move || {
                     let sec = settings_section.get();
@@ -1419,7 +1974,11 @@ pub(super) fn SettingsView(
                         specialist_form.get().as_ref(),
                         acp_form.get().as_ref(),
                         channels_open.get().as_deref(),
-                    );
+                    ).or_else(|| {
+                        (sec == "credentials").then(|| credential_page.get()).flatten()
+                            .and_then(|id| CRED_GROUPS.iter().find(|group| group.id == id))
+                            .map(|group| t(loc, group.name_key).to_string())
+                    }).or_else(|| selected_skill.get());
                     view! {
                         <div class="settings-head">
                             <div class="settings-head-main">
@@ -1445,9 +2004,13 @@ pub(super) fn SettingsView(
                     }
                 }}
                 {move || (settings_section.get() == "general").then(|| view! {
-                    <div class="settings-pane">
-                        <div class="settings-form-grid">
-                        <label class="span-2">{move || t(locale.get(), "settings.language")}
+                    <div class="settings-pane general-settings-pane" data-testid="general-settings-pane">
+                        <section class="general-preferences" data-testid="general-preferences">
+                        <div class="general-preference-groups">
+                        <section class="general-group" aria-labelledby="general-workspace-heading">
+                        <h3 id="general-workspace-heading">{move || t(locale.get(), "settings.general.workspace")}</h3>
+                        <div class="general-fields">
+                        <label class="general-field general-field-inline"><span>{move || t(locale.get(), "settings.language")}</span>
                             <select data-testid="settings-language"
                                 on:change=move|ev| {
                                     let code = dom_value(&ev);
@@ -1465,26 +2028,26 @@ pub(super) fn SettingsView(
                                 <option value="zh" prop:selected=move || locale.get() == Locale::Zh>{move || t(locale.get(), "settings.language.zh")}</option>
                             </select>
                         </label>
-                        <label class="span-2">{move || t(locale.get(), "settings.workspace_dir")}
+                        <label class="general-field">{move || t(locale.get(), "settings.workspace_dir")}
                             <input class="settings-path-input" on:input=move|ev| settings.update(|s| {
                                     s.workspace_dir = event_target_input(&ev).value();
                                 })
                                 prop:value={move || settings.get().workspace_dir}
                                 placeholder=move || bootstrap.get().map(|b| b.workspace).unwrap_or_default() />
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.resume_last_session")}</strong>
+                                <strong id="general-resume-last-session-label">{move || t(locale.get(), "settings.resume_last_session")}</strong>
                                 <span>{move || t(locale.get(), "settings.resume_last_session_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="resume-last-session-enabled"
+                                <input type="checkbox" data-testid="resume-last-session-enabled" aria-labelledby="general-resume-last-session-label"
                                     prop:checked=move || settings.get().resume_last_session
                                     on:change=move |ev| settings.update(|current| current.resume_last_session = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <label class="span-2">{move || t(locale.get(), "settings.send_shortcut")}
+                        <label class="general-field general-field-inline"><span>{move || t(locale.get(), "settings.send_shortcut")}</span>
                             <select data-testid="send-shortcut"
                                 prop:value=move || if send_with_modifier.get() { "modifier_enter" } else { "enter" }
                                 on:change=move |ev| send_with_modifier.set(dom_value(&ev) == "modifier_enter")>
@@ -1496,37 +2059,42 @@ pub(super) fn SettingsView(
                                 )}</option>
                             </select>
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.notifications")}</strong>
-                                <span>{move || t(locale.get(), "settings.notifications_hint")}</span>
-                            </div>
-                            <label class="toggle">
-                                <input type="checkbox" data-testid="notifications-enabled"
-                                    prop:checked=move || settings.get().notifications_enabled
-                                    on:change=move |ev| settings.update(|current| current.notifications_enabled = event_target_checked(&ev)) />
-                                <span class="toggle-track" aria-hidden="true"></span>
-                            </label>
-                        </div>
-                        <div class="span-2 appearance-config-row">
-                            <div>
-                                <strong>{move || t(locale.get(), "settings.selection_popup")}</strong>
+                                <strong id="general-selection-popup-label">{move || t(locale.get(), "settings.selection_popup")}</strong>
                                 <span>{move || t(locale.get(), "settings.selection_popup_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="selection-popup-enabled"
+                                <input type="checkbox" data-testid="selection-popup-enabled" aria-labelledby="general-selection-popup-label"
                                     prop:checked=move || selection_popup_enabled.get()
                                     on:change=move |ev| selection_popup_enabled.set(event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <div class="span-2 appearance-config-row">
+                        </div>
+                        </section>
+                        <section class="general-group" aria-labelledby="general-notifications-heading">
+                        <h3 id="general-notifications-heading">{move || t(locale.get(), "settings.general.notifications")}</h3>
+                        <div class="general-fields">
+                        <div class="appearance-config-row">
                             <div>
-                                <strong>{move || t(locale.get(), "settings.update_check")}</strong>
+                                <strong id="general-notifications-label">{move || t(locale.get(), "settings.notifications")}</strong>
+                                <span>{move || t(locale.get(), "settings.notifications_hint")}</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="notifications-enabled" aria-labelledby="general-notifications-label"
+                                    prop:checked=move || settings.get().notifications_enabled
+                                    on:change=move |ev| settings.update(|current| current.notifications_enabled = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                        <div class="appearance-config-row">
+                            <div>
+                                <strong id="general-update-check-label">{move || t(locale.get(), "settings.update_check")}</strong>
                                 <span>{move || t(locale.get(), "settings.update_check_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="update-check-enabled"
+                                <input type="checkbox" data-testid="update-check-enabled" aria-labelledby="general-update-check-label"
                                     prop:checked=move || update_check_enabled.get()
                                     on:change=move |ev| {
                                         let on = event_target_checked(&ev);
@@ -1540,23 +2108,33 @@ pub(super) fn SettingsView(
                             </label>
                         </div>
                         </div>
+                        <div class="row general-update-actions">
+                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
+                                <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
+                        </div>
+                        </section>
+                        </div>
                         {move || settings_message.get().map(|(ok, text)| view! {
                             <div class="settings-status"
                                 class:ok=move || ok
                                 class:fail=move || !ok>{text}</div>
                         })}
-                        <div class="row settings-footer">
-                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
-                                <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
+                        <div class="row settings-footer general-preferences-footer">
+                            <span class="settings-field-hint">{move || t(locale.get(), "settings.general.save_hint")}</span>
                             <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
                                 <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                         </div>
+                        </section>
+                        <crate::overlays::LocalEnvironmentPanel locale=locale bootstrap=bootstrap />
+                        <crate::network_settings::NetworkSettingsView settings=settings />
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "session").then(|| view! {
-                    <div class="settings-pane" data-testid="session-settings-pane">
-                        <div class="settings-form-grid">
-                        <label class="span-2">{move || t(locale.get(), "settings.max_iter")}
+                    <div class="settings-pane session-settings-pane" data-testid="session-settings-pane">
+                        <section class="settings-card session-preferences">
+                        <h3>{move || t(locale.get(), "settings.session.limits")}</h3>
+                        <div class="session-fields">
+                        <label class="session-number-field"><span>{move || t(locale.get(), "settings.max_iter")}</span>
                             <input data-testid="max-iter" type="number" min="0" step="1"
                                 on:input=move |ev| settings.update(|s| {
                                     if let Ok(value) = event_target_input(&ev).value().parse() {
@@ -1566,32 +2144,20 @@ pub(super) fn SettingsView(
                                 prop:value=move || settings.get().max_iter.to_string() />
                             <span class="settings-field-hint">{move || t(locale.get(), "settings.max_iter_hint")}</span>
                         </label>
-                        <div class="span-2 appearance-config-row">
-                            <div>
-                                <strong>{move || t(locale.get(), "settings.auto_compact")}</strong>
-                                <span>{move || t(locale.get(), "settings.auto_compact_hint")}</span>
-                            </div>
-                            <label class="toggle">
-                                <input type="checkbox" data-testid="auto-compact-enabled"
-                                    prop:checked=move || settings.get().auto_compact
-                                    on:change=move |ev| settings.update(|current| current.auto_compact = event_target_checked(&ev)) />
-                                <span class="toggle-track" aria-hidden="true"></span>
-                            </label>
-                        </div>
-                        <div class="span-2 appearance-config-row">
+                        <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "settings.auto_continue")}</strong>
                                 <span>{move || t(locale.get(), "settings.auto_continue_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="auto-continue-enabled"
+                                <input type="checkbox" data-testid="auto-continue-enabled" aria-label=move || t(locale.get(), "settings.auto_continue")
                                     prop:checked=move || settings.get().auto_continue
                                     on:change=move |ev| settings.update(|current| current.auto_continue = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
-                        <label class="span-2">{move || t(locale.get(), "settings.auto_continue_limit")}
-                            <input data-testid="auto-continue-limit" type="number" min="1" step="1"
+                        <label class="session-number-field session-dependent-field"><span>{move || t(locale.get(), "settings.auto_continue_limit")}</span>
+                            <input data-testid="auto-continue-limit" type="number" disabled=move || !settings.get().auto_continue min="1" step="1"
                                 on:input=move |ev| settings.update(|current| {
                                     if let Ok(value) = event_target_input(&ev).value().parse() {
                                         current.auto_continue_limit = value;
@@ -1600,13 +2166,31 @@ pub(super) fn SettingsView(
                                 prop:value=move || settings.get().auto_continue_limit.to_string() />
                             <span class="settings-field-hint">{move || t(locale.get(), "settings.auto_continue_limit_hint")}</span>
                         </label>
-                        <div class="span-2 appearance-config-row">
+                        </div>
+                        <h3>{move || t(locale.get(), "settings.session.context")}</h3>
+                        <div class="session-fields">
+                        <div class="appearance-config-row">
+                            <div>
+                                <strong>{move || t(locale.get(), "settings.auto_compact")}</strong>
+                                <span>{move || t(locale.get(), "settings.auto_compact_hint")}</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="auto-compact-enabled" aria-label=move || t(locale.get(), "settings.auto_compact")
+                                    prop:checked=move || settings.get().auto_compact
+                                    on:change=move |ev| settings.update(|current| current.auto_compact = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                        </div>
+                        <h3>{move || t(locale.get(), "settings.session.followup")}</h3>
+                        <div class="session-fields">
+                        <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "settings.follow_up_questions")}</strong>
                                 <span>{move || t(locale.get(), "settings.follow_up_questions_hint")}</span>
                             </div>
                             <label class="toggle">
-                                <input type="checkbox" data-testid="follow-up-questions-enabled"
+                                <input type="checkbox" data-testid="follow-up-questions-enabled" aria-label=move || t(locale.get(), "settings.follow_up_questions")
                                     prop:checked=move || settings.get().follow_up_questions
                                     on:change=move |ev| settings.update(|current| current.follow_up_questions = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
@@ -1622,6 +2206,7 @@ pub(super) fn SettingsView(
                             <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
                             <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                         </div>
+                        </section>
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "environments").then(|| view! {
@@ -2395,7 +2980,9 @@ pub(super) fn SettingsView(
                 })}
                 {move || (settings_section.get() == "appearance").then(|| view! {
                     <div class="settings-pane settings-appearance-pane">
-                        <section class="appearance-theme-section">
+                        <div class="appearance-layout">
+                        <div class="appearance-controls">
+                        <section class="settings-card appearance-theme-section">
                             <h3>{move || t(locale.get(), "appearance.theme")}</h3>
                             <div class="theme-mode-grid" role="radiogroup"
                                 aria-label=move || t(locale.get(), "appearance.theme")>
@@ -2423,22 +3010,6 @@ pub(super) fn SettingsView(
                                 }).collect_view()}
                             </div>
                         </section>
-                        <div class="appearance-diff-preview" aria-hidden="true">
-                            <div class="appearance-diff-column is-removed">
-                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
-                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar\""</span>","</code></div>
-                                <div><b>"3"</b><code>"  accent: "<span>"\"#2563eb\""</span>","</code></div>
-                                <div><b>"4"</b><code>"  contrast: "<strong>"42"</strong>","</code></div>
-                                <div><b>"5"</b><code>"};"</code></div>
-                            </div>
-                            <div class="appearance-diff-column is-added">
-                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
-                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar-elevated\""</span>","</code></div>
-                                <div><b>"3"</b><code>"  accent: "<span>"\"#0ea5e9\""</span>","</code></div>
-                                <div><b>"4"</b><code>"  contrast: "<strong>"68"</strong>","</code></div>
-                                <div><b>"5"</b><code>"};"</code></div>
-                            </div>
-                        </div>
                         {move || {
                             let dark = theme_mode.get() == "dark";
                             let palette = if dark { dark_palette.get() } else { light_palette.get() };
@@ -2479,10 +3050,14 @@ pub(super) fn SettingsView(
                                         <strong>{t(locale.get(), "appearance.foreground")}</strong>
                                         <output class="appearance-color-value" style=format!("--appearance-color:{foreground};--appearance-ink:{foreground_ink}")><i></i>{foreground}</output>
                                     </div>
+                                </section>
+                            }
+                        }}
+                        <section class="settings-card appearance-font-card"><h3>{move || t(locale.get(), "appearance.fonts")}</h3>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.ui_font_size")}</strong>
-                                            <span>{t(locale.get(), "appearance.ui_font_size_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.ui_font_size")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.ui_font_size_hint")}</span>
                                         </div>
                                         <label class="font-size-control">
                                             <input type="range" min="0" max="30" step="1"
@@ -2494,8 +3069,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.ui_font_family")}</strong>
-                                            <span>{t(locale.get(), "appearance.ui_font_family_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.ui_font_family")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.ui_font_family_hint")}</span>
                                         </div>
                                         <input type="text" class="appearance-font-input" data-testid="appearance-ui-font"
                                             aria-label=t(locale.get(), "appearance.ui_font_family")
@@ -2505,8 +3080,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.code_font_size")}</strong>
-                                            <span>{t(locale.get(), "appearance.code_font_size_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.code_font_size")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.code_font_size_hint")}</span>
                                         </div>
                                         <label class="font-size-control">
                                             <input type="range" min="0" max="30" step="1"
@@ -2518,8 +3093,8 @@ pub(super) fn SettingsView(
                                     </div>
                                     <div class="appearance-config-row">
                                         <div>
-                                            <strong>{t(locale.get(), "appearance.code_font_family")}</strong>
-                                            <span>{t(locale.get(), "appearance.code_font_family_hint")}</span>
+                                            <strong>{move || t(locale.get(), "appearance.code_font_family")}</strong>
+                                            <span>{move || t(locale.get(), "appearance.code_font_family_hint")}</span>
                                         </div>
                                             <input type="text" class="appearance-font-input" data-testid="appearance-code-font"
                                             aria-label=t(locale.get(), "appearance.code_font_family")
@@ -2527,10 +3102,39 @@ pub(super) fn SettingsView(
                                             prop:value=move || code_font_family.get()
                                             on:input=move |ev| code_font_family.set(event_target_value(&ev)) />
                                     </div>
-                                </section>
-                            }
-                        }}
-                        <section class="appearance-config-card appearance-custom-css-card" data-testid="appearance-custom-css-card">
+                        </section>
+                        </div>
+                        <section class="settings-card appearance-live-preview" data-testid="appearance-live-preview">
+                            <h3>{move || t(locale.get(), "appearance.live_preview")}</h3>
+                            <p class="settings-field-hint">{move || t(locale.get(), "appearance.instant")}</p>
+                            <div class="appearance-chat-preview">
+                                <div class="appearance-preview-user">{move || t(locale.get(), "appearance.preview_question")}</div>
+                                <div class="appearance-preview-answer"><strong>{move || t(locale.get(), "appearance.preview_heading")}</strong>
+                                    <p>{move || t(locale.get(), "appearance.preview_answer")}</p>
+                                    <code>"summary(data)"</code>
+                                </div>
+                            </div>
+                            <h4>{move || t(locale.get(), "appearance.preview_diff")}</h4>
+                        <div class="appearance-diff-preview" aria-hidden="true">
+                            <div class="appearance-diff-column is-removed">
+                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
+                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar\""</span>","</code></div>
+                                <div><b>"3"</b><code>"  accent: "<span>"\"#2563eb\""</span>","</code></div>
+                                <div><b>"4"</b><code>"  contrast: "<strong>"42"</strong>","</code></div>
+                                <div><b>"5"</b><code>"};"</code></div>
+                            </div>
+                            <div class="appearance-diff-column is-added">
+                                <div><b>"1"</b><code><em>"const"</em> " themePreview: "<i>"ThemeConfig"</i>" = {"</code></div>
+                                <div><b>"2"</b><code>"  surface: "<span>"\"sidebar-elevated\""</span>","</code></div>
+                                <div><b>"3"</b><code>"  accent: "<span>"\"#0ea5e9\""</span>","</code></div>
+                                <div><b>"4"</b><code>"  contrast: "<strong>"68"</strong>","</code></div>
+                                <div><b>"5"</b><code>"};"</code></div>
+                            </div>
+                        </div>
+                        </section>
+                        </div>
+                        <details class="appearance-config-card appearance-custom-css-card" data-testid="appearance-custom-css-card">
+                            <summary data-testid="appearance-custom-css-summary">{move || t(locale.get(), "appearance.custom_css")}<span class="settings-field-hint">"CSS"</span></summary>
                             <div class="appearance-custom-css-head">
                                 <div class="appearance-config-row">
                                     <strong>{move || t(locale.get(), "appearance.custom_css")}</strong>
@@ -2566,7 +3170,7 @@ pub(super) fn SettingsView(
                                 prop:value=move || custom_css.get()
                                 on:input=move |ev| custom_css.set(event_target_value(&ev))>
                             </textarea>
-                        </section>
+                        </details>
                     </div>
                 }.into_view())}
                 {move || (settings_section.get() == "models").then(|| {
@@ -2690,6 +3294,7 @@ pub(super) fn SettingsView(
                                                 on:input=move |ev| {
                                                     model_form.update(|o| if let Some(o)=o {
                                                         o.model = event_target_input(&ev).value();
+                                                        o.image_generation_capable = false;
                                                         if is_image_generation_model(&o.model) {
                                                             o.supports_vision = false;
                                                             o.use_for_vision = false;
@@ -2716,7 +3321,7 @@ pub(super) fn SettingsView(
                                                 placeholder=move || t(locale.get(), "settings.label_ph")
                                                 on:input=move |ev| model_form.update(|o| if let Some(o)=o { o.label = event_target_input(&ev).value(); }) /></label>
                                         {move || {
-                                            let image = model_form.get().is_some_and(|f| is_image_generation_model(&f.model));
+                                            let image = model_form.get().is_some_and(|f| f.is_image_model());
                                             // A model id is never both image and video, but keep the
                                             // branches mutually exclusive anyway.
                                             let video = !image && model_form.get().is_some_and(|f| is_video_generation_model(&f.model));
@@ -2863,6 +3468,11 @@ pub(super) fn SettingsView(
                                                             prop:checked=move || model_form.get().map(|f| f.use_for_image_generation).unwrap_or(false)
                                                             on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                                 o.use_for_image_generation = event_target_checked(&ev);
+                                                                if o.use_for_image_generation {
+                                                                    o.use_for_vision = false;
+                                                                    o.supports_vision = false;
+                                                                    o.use_for_video_generation = false;
+                                                                }
                                                             }) />
                                                         <span>{move || t(locale.get(), "settings.use_for_image_generation")}</span>
                                                     </label>
@@ -2894,6 +3504,7 @@ pub(super) fn SettingsView(
                                                 ])}
                                             </span>
                                         })}
+                                        <div class="model-reasoning-field">
                                         <label>{move || t(locale.get(), "settings.reasoning_effort")}
                                             {move || {
                                                 let form = model_form.get();
@@ -2912,7 +3523,7 @@ pub(super) fn SettingsView(
                                                 }
                                                 let loc = locale.get();
                                                 view! {
-                                                    <select
+                                                    <select aria-describedby="model-reasoning-hint"
                                                         on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                             let v = dom_value(&ev);
                                                             o.reasoning_effort = if v == "default" { String::new() } else { v };
@@ -2932,7 +3543,7 @@ pub(super) fn SettingsView(
                                         // Hint lives OUTSIDE the <label> on purpose: its text mentions
                                         // "model", and nesting it would fold that into the <select>'s
                                         // accessible name, so getByLabel("Model") would match it (#e2e).
-                                        <span class="hint effort-hint span-2">{move || {
+                                        <span id="model-reasoning-hint" class="hint effort-hint">{move || {
                                             let form = model_form.get();
                                             let provider = form.as_ref().map(|f| f.provider.clone()).unwrap_or_default();
                                             let model = form.as_ref().map(|f| f.model.clone()).unwrap_or_default();
@@ -2943,6 +3554,7 @@ pub(super) fn SettingsView(
                                                 None => t(loc, "settings.reasoning_effort.unknown_hint").to_string(),
                                             }
                                         }}</span>
+                                        </div>
                                         {move || {
                                             let form = model_form.get();
                                             let provider = form.as_ref().map(|f| settings_provider_value(&f.provider)).unwrap_or_default();
@@ -2980,7 +3592,9 @@ pub(super) fn SettingsView(
                                                 }
                                             })
                                         }}
-                                        <div class="span-2 settings-form-grid">
+                                        <div class="span-2 settings-form-grid model-capabilities">
+                                            <div class="model-capability span-2" role="group" aria-describedby="model-vision-hint">
+                                            <div class="model-capability-checks">
                                             <label class="settings-check">
                                                 <input type="checkbox"
                                                     prop:checked=move || model_form.get().map(|f| f.supports_vision).unwrap_or(false)
@@ -3003,18 +3617,28 @@ pub(super) fn SettingsView(
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_vision")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.vision_hint")}</span>
+                                            </div>
+                                            <span id="model-vision-hint" class="hint">{move || t(locale.get(), "settings.vision_hint")}</span>
+                                            </div>
+                                            <div class="model-capability">
                                             <label class="settings-check span-2">
-                                                <input type="checkbox" data-testid="use-for-image-generation"
+                                                <input type="checkbox" data-testid="use-for-image-generation" aria-describedby="model-image-generation-hint"
                                                     prop:checked=move || model_form.get().map(|f| f.use_for_image_generation).unwrap_or(false)
                                                     on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                         o.use_for_image_generation = event_target_checked(&ev);
+                                                        if o.use_for_image_generation {
+                                                            o.use_for_vision = false;
+                                                            o.supports_vision = false;
+                                                            o.use_for_video_generation = false;
+                                                        }
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_image_generation")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.image_generation_hint")}</span>
+                                            <span id="model-image-generation-hint" class="hint">{move || t(locale.get(), "settings.image_generation_hint")}</span>
+                                            </div>
+                                            <div class="model-capability">
                                             <label class="settings-check span-2">
-                                                <input type="checkbox" data-testid="use-for-video-generation"
+                                                <input type="checkbox" data-testid="use-for-video-generation" aria-describedby="model-video-generation-hint"
                                                     prop:checked=move || model_form.get().map(|f| f.use_for_video_generation).unwrap_or(false)
                                                     on:change=move|ev| model_form.update(|o| if let Some(o)=o {
                                                         o.use_for_video_generation = event_target_checked(&ev);
@@ -3024,12 +3648,14 @@ pub(super) fn SettingsView(
                                                     }) />
                                                 <span>{move || t(locale.get(), "settings.use_for_video_generation")}</span>
                                             </label>
-                                            <span class="hint span-2">{move || t(locale.get(), "settings.video_generation_hint")}</span>
+                                            <span id="model-video-generation-hint" class="hint">{move || t(locale.get(), "settings.video_generation_hint")}</span>
+                                            </div>
                                         </div>
                                                 }.into_view()
                                             }
                                         }}
                                     </div>
+                                    {model_advanced_options(locale, model_form)}
                                     {move || model_form_msg.get().map(|(ok, text)| view! {
                                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                                     })}
@@ -3351,6 +3977,7 @@ pub(super) fn SettingsView(
                                             {move || t(locale.get(), "models.add_entry")}
                                         </button>
                                     </div>
+                                    {model_advanced_options(locale, model_form)}
                                     {move || model_form_msg.get().map(|(ok, text)| view! {
                                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                                     })}
@@ -3366,18 +3993,8 @@ pub(super) fn SettingsView(
                     } else {
                         view! {
                         <div class="settings-pane settings-pane-list model-settings-pane">
-                            <div class="settings-form-grid">
-                                <label class="span-2">{move || t(locale.get(), "settings.proxy_url")}
-                                    <input data-testid="proxy-url" placeholder="http://127.0.0.1:7890"
-                                        on:input=move |ev| settings.update(|s| {
-                                            s.proxy_url = event_target_input(&ev).value();
-                                        })
-                                        prop:value=move || settings.get().proxy_url />
-                                    <span class="settings-field-hint">{move || t(locale.get(), "settings.proxy_url_hint")}</span>
-                                </label>
-                            </div>
                             <div class="settings-toolbar settings-toolbar-end model-category-toolbar">
-                                <div class="settings-category-tabs" role="tablist" aria-label="Model categories">
+                                <div class="settings-category-tabs" role="tablist" aria-label=move || t(locale.get(), "models.categories")>
                                     <button type="button" role="tab" class="settings-category-tab"
                                         class:active=move || !show_acp_agents.get()
                                         aria-selected=move || (!show_acp_agents.get()).to_string()
@@ -3568,6 +4185,7 @@ pub(super) fn SettingsView(
                                                     show_acp_agents.set(false);
                                                     let mut form = ModelForm {
                                                         provider: "openai".into(),
+                                                        send_user_agent: true,
                                                         max_tokens: 8192,
                                                         context_window: 128_000,
                                                         ..Default::default()
@@ -3662,12 +4280,12 @@ pub(super) fn SettingsView(
                                                         <div class="settings-list-main">
                                                             <span class="settings-list-title">
                                                                 {m.label.clone()}
-                                                                {m.use_for_vision.then(|| view! { <span class="settings-cap-badge" title="vision">"vision"</span> })}
+                                                                {m.use_for_vision.then(|| view! { <span class="settings-cap-badge">{move || t(locale.get(), "models.capability.vision")}</span> })}
                                                                 {m.use_for_image_generation.then(|| view! {
-                                                                    <span class="settings-cap-badge" title="image generation">"image gen"</span>
+                                                                    <span class="settings-cap-badge">{move || t(locale.get(), "models.capability.image")}</span>
                                                                 })}
                                                                 {m.use_for_video_generation.then(|| view! {
-                                                                    <span class="settings-cap-badge" title="video generation">"video gen"</span>
+                                                                    <span class="settings-cap-badge">{move || t(locale.get(), "models.capability.video")}</span>
                                                                 })}
                                                             </span>
                                                             {show_sub.then(|| view! {
@@ -3676,7 +4294,7 @@ pub(super) fn SettingsView(
                                                         </div>
                                                         <div class="settings-list-actions">
                                                             {is_active.then(|| view! {
-                                                                <span class="settings-active-mark" title="active">"✓"</span>
+                                                                <span class="settings-model-default">{compose_icon("check")}{move || t(locale.get(), "models.default")}</span>
                                                             })}
                                                             {(can_delete && !is_active).then(|| { let id = del_id.clone(); view! {
                                                                 <button class="settings-list-remove" type="button" title=move || t(locale.get(), "models.remove")
@@ -3690,16 +4308,23 @@ pub(super) fn SettingsView(
                                                             }})}
                                                             {(!is_active && is_chat_model).then(|| { let id = pick_id.clone(); view! {
                                                                 <button class="settings-list-use" type="button"
+                                                                    disabled=move || settings_busy.get()
                                                                     on:click=move |ev| {
                                                                         ev.stop_propagation();
+                                                                        if settings_busy.get_untracked() { return; }
+                                                                        settings_busy.set(true);
+                                                                        settings_message.set(None);
                                                                         let id = id.clone();
                                                                         spawn_local(async move {
                                                                             let arg = to_value(&serde_json::json!({ "id": id })).unwrap();
-                                                                            if let Ok(v) = invoke_checked("set_active_model", arg).await {
-                                                                                if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
-                                                                                    models.set(list);
-                                                                                }
+                                                                            match invoke_checked("set_active_model", arg).await {
+                                                                                Ok(v) => match serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
+                                                                                    Ok(list) => models.set(list),
+                                                                                    Err(error) => settings_message.set(Some((false, error.to_string()))),
+                                                                                },
+                                                                                Err(error) => settings_message.set(Some((false, js_error_text(error)))),
                                                                             }
+                                                                            settings_busy.set(false);
                                                                         });
                                                                     }>{move || t(locale.get(), "models.use")}</button>
                                                             }})}
@@ -3720,10 +4345,6 @@ pub(super) fn SettingsView(
                                     class:ok=move || ok
                                     class:fail=move || !ok>{text}</div>
                             })}
-                            <div class="row settings-footer">
-                                <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
-                                <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
-                            </div>
                         </div>
                         }.into_view()
                     }
@@ -4283,7 +4904,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                        <div class="settings-pane settings-pane-list">
+                        <div class="settings-pane settings-pane-list natural-list-pane">
                             <div class="settings-toolbar settings-toolbar-end">
                                 <span class="settings-filter">{move || {
                                     let n = specialists.get().len();
@@ -4447,7 +5068,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                        <div class="settings-pane settings-pane-list">
+                        <div class="settings-pane settings-pane-list memory-settings-pane">
                             <div class="settings-toolbar settings-toolbar-end">
                                 <div class="memory-project" data-testid="memory-project">
                                     <div class="memory-project-picker">
@@ -4595,29 +5216,6 @@ pub(super) fn SettingsView(
                                             } />
                                         <span class="toggle-track" aria-hidden="true"></span>
                                     </label>
-                                    <button type="button" class="memory-clear-btn" on:click=move |_| {
-                                        let project_id = memory_view
-                                            .get_untracked()
-                                            .map(|view| view.project_id)
-                                            .unwrap_or_default();
-                                        spawn_local(async move {
-                                            let arg = to_value(&serde_json::json!({
-                                                "projectId": project_id,
-                                            }))
-                                            .unwrap();
-                                            let v = invoke("clear_memory", arg).await;
-                                            if let Ok(files) = serde_wasm_bindgen::from_value::<Vec<MemoryFile>>(v) {
-                                                memory_view.update(|o| if let Some(o)=o { o.files = files; });
-                                                reset_memory_browse();
-                                            }
-                                        });
-                                    }>{move || t(locale.get(), "memory.clear_all")}</button>
-                                    <button type="button" class="settings-add-btn" data-testid="memory-add-note"
-                                        on:click=move |_| {
-                                            if let Some(today) = memory_view.get().map(|v| v.today_file) {
-                                                load_memory_file.call(today);
-                                            }
-                                        }>{move || t(locale.get(), "memory.add")}</button>
                                 </div>
                             </div>
                             {move || memory_msg.get().map(|(ok, text)| view! {
@@ -4649,7 +5247,16 @@ pub(super) fn SettingsView(
                                 </div>
                                 })
                             }}
-                            <div class="conn-group-label">{move || t(locale.get(), "memory.scope_hint")}</div>
+                            <div class="memory-collections">
+                            <section class="settings-card memory-project-card" data-testid="memory-project-card">
+                            <div class="settings-card-heading"><h3>{move || t(locale.get(), "memory.scope_hint")}</h3>
+                                    <button type="button" class="settings-add-btn" data-testid="memory-add-note"
+                                        on:click=move |_| {
+                                            if let Some(today) = memory_view.get().map(|v| v.today_file) {
+                                                load_memory_file.call(today);
+                                            }
+                                        }>{move || t(locale.get(), "memory.add")}</button>
+                            </div>
                             <div class="settings-list" data-testid="memory-notes">
                                 <For each=move || memory_view.get().map(|v| v.files).unwrap_or_default()
                                     key=|f| f.name.clone() let:f>
@@ -4680,6 +5287,27 @@ pub(super) fn SettingsView(
                                     })
                                 }}
                             </div>
+                            <div class="memory-project-footer">
+                                    <button type="button" class="memory-clear-btn" on:click=move |_| {
+                                        let project_id = memory_view
+                                            .get_untracked()
+                                            .map(|view| view.project_id)
+                                            .unwrap_or_default();
+                                        spawn_local(async move {
+                                            let arg = to_value(&serde_json::json!({
+                                                "projectId": project_id,
+                                            }))
+                                            .unwrap();
+                                            let v = invoke("clear_memory", arg).await;
+                                            if let Ok(files) = serde_wasm_bindgen::from_value::<Vec<MemoryFile>>(v) {
+                                                memory_view.update(|o| if let Some(o)=o { o.files = files; });
+                                                reset_memory_browse();
+                                            }
+                                        });
+                                    }>{move || t(locale.get(), "memory.clear_all")}</button>
+                            </div>
+                            </section>
+                            <section class="settings-card memory-global-card" data-testid="memory-global-card">
                             <div class="cred-group-heading memory-global-heading">
                                 <span class="conn-group-label">{move || t(locale.get(), "memory.global_scope")}</span>
                                 <button type="button" class="settings-add-btn memory-global-add-btn"
@@ -4850,6 +5478,8 @@ pub(super) fn SettingsView(
                                         </div>
                                     })
                                 }}
+                            </div>
+                            </section>
                             </div>
                         </div>
                         }.into_view()
@@ -5120,6 +5750,7 @@ pub(super) fn SettingsView(
                 }.into_view())}
                 {move || (settings_section.get() == "browser").then(|| view! {
                     <div class="settings-pane settings-pane-list browser-filter-pane" data-testid="browser-url-filters">
+                        <section class="settings-card browser-behavior-card">
                         <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "browser.auto_launch")}</strong>
@@ -5144,10 +5775,13 @@ pub(super) fn SettingsView(
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
+                        </section>
                         <p class="settings-note">{move || t(locale.get(), "browser.filters.hint")}</p>
                         {move || browser_filters_msg.get().map(|(ok, text)| view! {
                             <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                         })}
+                        <div class="browser-filter-collections">
+                        <section class="settings-card browser-filter-card">
                         <div class="cred-group-heading">
                             <span class="conn-group-label">{move || t(locale.get(), "browser.filters.block")}</span>
                         </div>
@@ -5210,6 +5844,8 @@ pub(super) fn SettingsView(
                                 <div class="settings-list-empty">{t(locale.get(), "browser.filters.block_empty")}</div>
                             })}
                         </div>
+                        </section>
+                        <section class="settings-card browser-filter-card">
                         <div class="cred-group-heading">
                             <span class="conn-group-label">{move || t(locale.get(), "browser.filters.prefer")}</span>
                         </div>
@@ -5272,11 +5908,44 @@ pub(super) fn SettingsView(
                                 <div class="settings-list-empty">{t(locale.get(), "browser.filters.prefer_empty")}</div>
                             })}
                         </div>
+                        </section>
+                        </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "skills").then(|| view! {
-                    <div class="settings-pane settings-pane-list">
-                        <div class="settings-toolbar">
+                {move || (settings_section.get() == "skills" && selected_skill.get().is_none() && !skill_store_open.get()).then(|| view! {
+                    <div class="settings-pane settings-pane-list skills-pane" data-testid="skills-pane">
+                        <div class="skills-toolbar">
+                            <input class="settings-search" type="text" inputmode="search"
+                                autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
+                                aria-label=move || t(locale.get(), "skills.search_ph")
+                                placeholder=move || t(locale.get(), "skills.search_ph")
+                                prop:value=move || skills_search.get()
+                                on:input=move |ev| skills_search.set(event_target_input(&ev).value()) />
+                            <div class="skills-primary-actions">
+                                <button type="button" on:click=move |_| { skill_store_github.set(false); skill_store_open.set(true); }>{move || t(locale.get(), "store.browse")}</button>
+                                <button type="button" on:click=move |_| { skill_store_github.set(true); skill_store_open.set(true); }>{move || t(locale.get(), "store.github")}</button>
+                                <details class="settings-add-menu">
+                                    <summary>{compose_icon("plus")}{move || t(locale.get(), "skills.add")}{compose_icon("chevron-down")}</summary>
+                                    <button type="button" on:click=move |_| {
+                                        spawn_local(async move {
+                                            let picked = invoke("pick_skill_source", JsValue::UNDEFINED).await;
+                                            if let Some(path) = picked.as_string() {
+                                                install_skill_from.call(path);
+                                            }
+                                        });
+                                    }>{move || t(locale.get(), "skills.add_file")}</button>
+                                    <button type="button" on:click=move |_| {
+                                        spawn_local(async move {
+                                            let picked = invoke("pick_directory", JsValue::UNDEFINED).await;
+                                            if let Some(path) = picked.as_string() {
+                                                install_skill_from.call(path);
+                                            }
+                                        });
+                                    }>{move || t(locale.get(), "skills.add_folder")}</button>
+                                </details>
+                            </div>
+                        </div>
+                        <div class="skills-list-controls">
                             <span class="settings-filter">{move || {
                                 let q = skills_search.get().trim().to_lowercase();
                                 let tag = skill_filter_tag.get();
@@ -5291,39 +5960,18 @@ pub(super) fn SettingsView(
                                     ("total", &skills.len().to_string()),
                                 ])
                             }}</span>
-                            <input class="settings-search" type="text" inputmode="search"
-                                autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
-                                placeholder=move || t(locale.get(), "skills.search_ph")
-                                prop:value=move || skills_search.get()
-                                on:input=move |ev| skills_search.set(event_target_input(&ev).value()) />
-                            <button type="button" on:click=move |_| set_visible_skills_enabled.call(true)>
-                                {move || t(locale.get(), "skills.enable_visible")}
-                            </button>
-                            <button type="button" on:click=move |_| set_visible_skills_enabled.call(false)>
-                                {move || t(locale.get(), "skills.disable_visible")}
-                            </button>
-                            <button type="button" on:click=move |_| reload_skills.call(())>
-                                {move || t(locale.get(), "skills.reload")}
-                            </button>
-                            <details class="settings-add-menu">
-                                <summary>{move || t(locale.get(), "skills.add")}</summary>
-                                <button type="button" on:click=move |_| {
-                                    spawn_local(async move {
-                                        let picked = invoke("pick_skill_source", JsValue::UNDEFINED).await;
-                                        if let Some(path) = picked.as_string() {
-                                            install_skill_from.call(path);
-                                        }
-                                    });
-                                }>{move || t(locale.get(), "skills.add_file")}</button>
-                                <button type="button" on:click=move |_| {
-                                    spawn_local(async move {
-                                        let picked = invoke("pick_directory", JsValue::UNDEFINED).await;
-                                        if let Some(path) = picked.as_string() {
-                                            install_skill_from.call(path);
-                                        }
-                                    });
-                                }>{move || t(locale.get(), "skills.add_folder")}</button>
-                            </details>
+                            <div class="skills-bulk-actions">
+                                <button type="button" on:click=move |_| set_visible_skills_enabled.call(true)>
+                                    {move || t(locale.get(), "skills.enable_visible")}
+                                </button>
+                                <button type="button" on:click=move |_| set_visible_skills_enabled.call(false)>
+                                    {move || t(locale.get(), "skills.disable_visible")}
+                                </button>
+                                <button type="button" class="skills-reload" disabled=move || skills_reloading.get() on:click=move |_| reload_skills.call(())>
+                                    <span class:skills-loading-icon=move || skills_reloading.get() aria-hidden="true">{compose_icon("refresh")}</span>
+                                    {move || t(locale.get(), if skills_reloading.get() { "skills.reloading" } else { "skills.reload" })}
+                                </button>
+                            </div>
                         </div>
                         <div class="skill-tags-filter">
                             <button class:active=move || skill_filter_tag.get().is_empty()
@@ -5361,6 +6009,9 @@ pub(super) fn SettingsView(
                             }}
                         </div>
                         <p class="settings-note">{move || t(locale.get(), "settings.auto_saved_new_session")}</p>
+                        {move || skills_reloading.get().then(|| view! {
+                            <span class="sr-only" role="status">{move || t(locale.get(), "skills.reloading")}</span>
+                        })}
                         {move || skills_msg.get().map(|(ok, text)| view! {
                             <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                         })}
@@ -5381,69 +6032,31 @@ pub(super) fn SettingsView(
                             } key=|s| format!("{}:{}:{}", s.name, s.enabled, join_tags(&s.tags)) let:s>
                                 {
                                     let name_toggle = s.name.clone();
-                                    let name_remove = s.name.clone();
-                                    let name_tags = s.name.clone();
+                                    let name_open = s.name.clone();
                                     let enabled = s.enabled;
-                                    let builtin = s.builtin;
                                     let managed = s.managed;
-                                    let managed_by = s.managed_by.clone();
-                                    let scope = s.scope.clone();
-                                    let scope_label = t(locale.get(), &format!("skills.scope.{scope}"));
-                                    let source_path = s.dir.clone();
-                                    let tags_text = join_tags(&s.tags);
-                                    let tags_input_text = tags_text.clone();
-                                    let tags_cb = save_skill_tags.clone();
+                                    let scope_label = t(locale.get(), &format!("skills.scope.{}", s.scope));
                                     view! {
-                                        <div class="settings-list-row" data-skill-name=s.name.clone()>
-                                            <div class="settings-list-main">
-                                                <span class="settings-list-title">
-                                                    {s.name.clone()}
-                                                    <span class="skill-scope-badge" title=source_path>{scope_label}</span>
-                                                </span>
-                                                {(!s.description.is_empty() && s.description != ">").then(|| {
-                                                    let desc = s.description.clone();
-                                                    view! { <span class="settings-list-sub">{desc}</span> }
-                                                })}
-                                                {(!managed).then(|| view! {
-                                                    <details class="skill-tags-editor">
-                                                        <summary>
-                                                            <span>{move || t(locale.get(), "skills.edit_tags")}</span>
-                                                            <span class="skill-tags-summary">{tags_text}</span>
-                                                        </summary>
-                                                        <input class="skill-tags-input"
-                                                            prop:value=tags_input_text
-                                                            prop:placeholder=move || t(locale.get(), "skills.tags_placeholder")
-                                                            on:change=move |ev| tags_cb.call((name_tags.clone(), event_target_value(&ev))) />
-                                                    </details>
-                                                })}
-                                            </div>
+                                        <div class="settings-list-row skill-catalog-row" data-skill-name=s.name.clone()>
+                                            <button type="button" class="skill-row-open" on:click=move |_| selected_skill.set(Some(name_open.clone()))>
+                                                <span class="skill-row-name">{s.name.clone()}</span>
+                                                <span class="skill-scope-badge" title=s.dir>{scope_label}</span>
+                                                <span class="skill-row-tags">{s.tags.into_iter().map(|tag| view! { <span class="skill-tag">{tag}</span> }).collect_view()}</span>
+                                                {compose_icon("chevron-right")}
+                                            </button>
                                             <div class="settings-list-actions">
-                                                {(scope == "global" && !builtin).then(|| { let n = name_remove.clone(); view! {
-                                                    <button class="settings-skill-remove" type="button"
-                                                        title=move || t(locale.get(), "skills.remove")
-                                                        on:click=move |_| delete_confirm.set(Some(DeleteConfirm::Skill {
-                                                            name: n.clone(),
-                                                            label: n.clone(),
-                                                        }))>
-                                                        {move || t(locale.get(), "skills.remove")}
-                                                    </button>
-                                                }})}
                                                 {if managed {
-                                                    let provider = managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
-                                                    view! {
-                                                        <span class="skill-managed-badge">
-                                                            {tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}
-                                                        </span>
-                                                    }.into_view()
+                                                    let provider = s.managed_by.unwrap_or_else(|| t(locale.get(), "settings.nav.plugins").to_string());
+                                                    view! { <span class="skill-managed-badge">{tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}</span> }.into_view()
                                                 } else {
                                                     view! {
                                                         <label class="toggle">
-                                                            <input type="checkbox" prop:checked=enabled on:change=move |ev| {
+                                                            <input type="checkbox" aria-label=s.name prop:checked=enabled on:change=move |ev| {
                                                                 let n = name_toggle.clone();
                                                                 let on = event_target_checked(&ev);
                                                                 spawn_local(async move {
                                                                     let arg = to_value(&serde_json::json!({ "name": n, "enabled": on })).unwrap();
-                                                                    let _ = invoke_checked("set_skill_enabled", arg).await;
+                                                                    if let Err(error) = invoke_checked("set_skill_enabled", arg).await { skills_msg.set(Some((false, js_error_text(error)))); }
                                                                     refresh_skills.call(());
                                                                 });
                                                             } />
@@ -5459,10 +6072,47 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
+                {move || (settings_section.get() == "skills" && skill_store_open.get()).then(|| view! {
+                    <crate::skill_store::SkillStore locale=locale skills=skills_list
+                        close=Callback::new(move |_| skill_store_open.set(false))
+                        refresh_skills=refresh_skills github_first=skill_store_github.get_untracked()
+                        external_link_confirm=external_link_confirm />
+                })}
+                {move || (settings_section.get() == "skills").then(|| selected_skill.get().map(|name| view! {
+                    <crate::skill_detail::SkillDetail name=name skills=skills_list locale=locale
+                        refresh=refresh_skills save_tags=save_skill_tags delete_confirm=delete_confirm />
+                    {move || skills_msg.get().map(|(ok, text)| view! {
+                        <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
+                    })}
+                }))}
                 {move || (settings_section.get() == "credentials").then(|| view! {
-                    <div class="settings-pane">
+                    <div class="settings-pane credentials-pane">
                         <p class="settings-note">{move || t(locale.get(), "cred.desc")}</p>
-                        {CRED_GROUPS.iter().map(|g| {
+                        {move || credential_page.get().is_none().then(|| view! {
+                            <div class="credential-service-list" data-testid="credential-service-list">
+                                {CRED_GROUPS.iter().map(|group| view! {
+                                    <button type="button" class="credential-service-entry"
+                                        data-credential-service=group.id
+                                        on:click=move |_| {
+                                            cred_msg.set(None);
+                                            credential_page.set(Some(group.id));
+                                        }>
+                                        <span class="credential-service-main">
+                                            <strong>{move || t(locale.get(), group.name_key)}</strong>
+                                            <span>{move || t(locale.get(), group.about_key)}</span>
+                                        </span>
+                                        <span class="credential-service-status">{move || {
+                                            let configured = group.fields.iter().filter(|field|
+                                                cred_status.get().get(field.id).copied().unwrap_or(false)).count();
+                                            if configured == 0 { t(locale.get(), "cred.not_stored").to_string() }
+                                            else { format!("{} {}/{}", t(locale.get(), "cred.stored"), configured, group.fields.len()) }
+                                        }}</span>
+                                        {compose_icon("chevron-right")}
+                                    </button>
+                                }).collect_view()}
+                            </div>
+                        })}
+                        {move || CRED_GROUPS.iter().filter(|group| Some(group.id) == credential_page.get()).map(|g| {
                             let tooltip_id = format!("cred-help-{}", g.id);
                             let described_by = tooltip_id.clone();
                             view! {
@@ -5496,7 +6146,7 @@ pub(super) fn SettingsView(
                                     let id = f.id;
                                     let stored = move || cred_status.get().get(id).copied().unwrap_or(false);
                                     view! {
-                                        <label class="span-2">
+                                        <label class="span-2" for=format!("credential-field-{id}")>
                                             <span class="cred-field-head">
                                                 <span>{move || format!("{} — {}", t(locale.get(), f.label_key),
                                                     if stored() { t(locale.get(), "cred.stored") } else { t(locale.get(), "cred.not_stored") })}</span>
@@ -5516,7 +6166,7 @@ pub(super) fn SettingsView(
                                                     }>{move || t(locale.get(), "cred.clear")}</button>
                                                 })}
                                             </span>
-                                            <input type=if f.secret { "password" } else { "text" }
+                                            <input id=format!("credential-field-{id}") type=if f.secret { "password" } else { "text" }
                                                 placeholder=move || if stored() { t(locale.get(), "settings.stored_key").to_string() } else { String::new() }
                                                 prop:value=move || cred_inputs.get().get(id).cloned().unwrap_or_default()
                                                 on:input=move |ev| { let v = event_target_input(&ev).value(); cred_inputs.update(|m| { m.insert(id.into(), v); }); } />
@@ -5540,6 +6190,7 @@ pub(super) fn SettingsView(
                                 </span>
                             </div>
                         }}).collect_view()}
+                        {move || credential_page.get().is_none().then(|| view! {
                         <div class="conn-group-label">{move || t(locale.get(), "cred.custom.name")}</div>
                         <p class="settings-note">{move || t(locale.get(), "cred.custom.hint")}</p>
                         <For
@@ -5697,16 +6348,26 @@ pub(super) fn SettingsView(
                                     }}</button>
                             </div>
                         </div>
+                        })}
                         {move || cred_msg.get().map(|(ok, text)| view! {
                             <div class="settings-status" class:ok=move || ok class:fail=move || !ok>{text}</div>
                         })}
                         <div class="row settings-footer">
-                            <button type="button" class="primary" on:click=move |_| {
-                                // Save every field that was edited (non-empty input); blank inputs
-                                // leave a stored key untouched (placeholder communicates this).
+                            {move || credential_page.get().is_some().then(|| view! {
+                                <button type="button" disabled=move || credential_saving.get()
+                                    on:click=move |_| close_settings_subpage.call(())>{move || t(locale.get(), "settings.cancel")}</button>
+                            })}
+                            <button type="button" class="primary" disabled=move || credential_saving.get()
+                                on:click=move |_| {
+                                let selected = credential_page.get_untracked();
                                 let edits: Vec<(String, String)> = cred_inputs.get().into_iter()
-                                    .filter(|(_, v)| !v.trim().is_empty()).collect();
+                                    .filter(|(id, value)| !value.trim().is_empty() && match selected {
+                                        Some(selected) => CRED_GROUPS.iter().find(|group| group.id == selected)
+                                            .is_some_and(|group| group.fields.iter().any(|field| field.id == id)),
+                                        None => custom_credentials.get_untracked().iter().any(|credential| credential.id == *id),
+                                    }).collect();
                                 if edits.is_empty() { return; }
+                                credential_saving.set(true);
                                 spawn_local(async move {
                                     let mut ok_all = true;
                                     for (id, value) in edits {
@@ -5718,22 +6379,28 @@ pub(super) fn SettingsView(
                                         }
                                     }
                                     if ok_all {
-                                        cred_inputs.set(std::collections::HashMap::new());
+                                        cred_inputs.update(|inputs| inputs.retain(|id, _| match selected {
+                                            Some(selected) => !CRED_GROUPS.iter().find(|group| group.id == selected)
+                                                .is_some_and(|group| group.fields.iter().any(|field| field.id == id)),
+                                            None => !custom_credentials.get_untracked().iter().any(|credential| credential.id == *id),
+                                        }));
                                         cred_msg.set(Some((true, t(locale.get(), "cred.saved").into())));
                                     }
                                     let v = invoke("credential_status", JsValue::UNDEFINED).await;
                                     if let Ok(pairs) = serde_wasm_bindgen::from_value::<Vec<(String, bool)>>(v) {
                                         cred_status.set(pairs.into_iter().collect());
                                     }
+                                    credential_saving.set(false);
                                 });
                             }>{move || t(locale.get(), "settings.save")}</button>
                         </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "channels" && channels_open.get().is_none()).then(|| view! {
-                    <div class="settings-pane">
-                        <div class="settings-form-grid">
-                            <div class="span-2 settings-sync-block">
+                {move || (settings_section.get() == "channels").then(|| view! {
+                    <div class="settings-pane remote-settings-pane" data-testid="remote-settings-pane">
+                        <div class="remote-settings-grid" class:remote-settings-detail=move || channels_open.get().is_some()>
+                        {move || channels_open.get().is_none().then(|| view! {
+                            <section class="settings-card settings-sync-block" data-testid="project-sync-card">
                                 <h3>{move || t(locale.get(), "settings.sync.title")}</h3>
                                 <p class="settings-field-hint">{move || t(locale.get(), "settings.sync.hint")}</p>
                                 <label>{move || t(locale.get(), "settings.sync.backend")}
@@ -5780,6 +6447,10 @@ pub(super) fn SettingsView(
                                         </label>
                                     }.into_view()
                                 }}
+                        <div class="row settings-footer">
+                            <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
+                            <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
+                        </div>
                                 <p class="settings-field-hint">
                                     {move || t(locale.get(), "settings.sync.join_hint")}
                                 </p>
@@ -5788,7 +6459,7 @@ pub(super) fn SettingsView(
                                         {compose_icon("doc")}
                                         <span>{move || t(locale.get(), "projects.sync.guide")}</span>
                                     </button>
-                                    <button type="button" class="primary"
+                                    <button type="button" class="secondary"
                                         on:click=move |_| {
                                             join_error.set(None);
                                             joining.set(true);
@@ -5797,19 +6468,14 @@ pub(super) fn SettingsView(
                                         <span>{move || t(locale.get(), "projects.sync.join")}</span>
                                     </button>
                                 </div>
-                            </div>
-                        </div>
-                        <div class="row settings-footer">
-                            <button type="button" disabled=move || settings_busy.get() on:click=move |_| show_settings.set(false)>{move || t(locale.get(), "settings.cancel")}</button>
-                            <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_settings.call(ev)>{move || t(locale.get(), "settings.save")}</button>
+                            </section>
+                        })}
+                        <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
                         </div>
                     </div>
                 }.into_view())}
-                {move || (settings_section.get() == "channels").then(|| view! {
-                    <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
-                }.into_view())}
                 {move || (settings_section.get() == "permissions").then(|| view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list permissions-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 format!("{} ({})", t(locale.get(), "settings.nav.permissions"), approval_grants.get().len())
@@ -5823,6 +6489,7 @@ pub(super) fn SettingsView(
                                     });
                                 }>{move || t(locale.get(), "permissions.revoke_all")}</button>
                         </div>
+                        <ProjectApprovalSettings locale=locale connectors=connectors />
                         <p class="settings-note">{move || t(locale.get(), "permissions.note")}</p>
                         {move || approval_grants.get().is_empty().then(|| view! {
                             <div class="settings-status">{move || t(locale.get(), "permissions.empty")}</div>
@@ -5906,41 +6573,10 @@ pub(super) fn SettingsView(
                                                 on:input=move |ev| conn_form.update(|o| if let Some(o)=o { o.args = event_target_input(&ev).value(); }) /></label>
                                         <div class="conn-secret-fields">
                                             <span class="conn-secret-label">{move || t(locale.get(),"conn.env")}</span>
-                                            {move || conn_form.get().map(|f| f.env).unwrap_or_default().into_iter().enumerate().map(|(idx, field)| {
-                                                let has_value = field.has_value;
-                                                view! {
-                                                    <div class="conn-secret-row">
-                                                        <input placeholder="NAME"
-                                                            prop:value=field.name
-                                                            on:input=move |ev| conn_form.update(|o| if let Some(o)=o {
-                                                                if let Some(row) = o.env.get_mut(idx) {
-                                                                    row.name = event_target_input(&ev).value();
-                                                                }
-                                                            }) />
-                                                        <input type="password" autocomplete="new-password"
-                                                            placeholder=move || if has_value {
-                                                                t(locale.get(), "conn.secret_keep").to_string()
-                                                            } else {
-                                                                t(locale.get(), "conn.secret_value").to_string()
-                                                            }
-                                                            prop:value=field.value
-                                                            on:input=move |ev| conn_form.update(|o| if let Some(o)=o {
-                                                                if let Some(row) = o.env.get_mut(idx) {
-                                                                    row.value = event_target_input(&ev).value();
-                                                                }
-                                                            }) />
-                                                        <button type="button" class="settings-list-remove"
-                                                            title=move || t(locale.get(), "conn.secret_remove")
-                                                            aria-label=move || t(locale.get(), "conn.secret_remove")
-                                                            on:click=move |_| conn_form.update(|o| if let Some(o)=o {
-                                                                if idx < o.env.len() { o.env.remove(idx); }
-                                                            })>{compose_icon("close")}</button>
-                                                    </div>
-                                                }
-                                            }).collect_view()}
+                                            <ConnSecretRows conn_form=conn_form kind=ConnSecretKind::Env disabled=oauth_authorizing />
                                             <button type="button" class="settings-add-btn conn-secret-add"
                                                 on:click=move |_| conn_form.update(|o| if let Some(o)=o {
-                                                    o.env.push(ConnSecretField::default());
+                                                    o.env.push(blank_conn_secret_field());
                                                 })>
                                                 {compose_icon("plus")}
                                                 <span>{move || t(locale.get(), "conn.secret_add_env")}</span>
@@ -5966,48 +6602,11 @@ pub(super) fn SettingsView(
                                         </label>
                                         <div class="conn-secret-fields">
                                             <span class="conn-secret-label">{move || t(locale.get(),"conn.headers")}</span>
-                                            {move || conn_form.get().map(|f| f.headers).unwrap_or_default().into_iter().enumerate().map(|(idx, field)| {
-                                                let has_value = field.has_value;
-                                                let oauth = conn_form.get().is_some_and(|form| form.auth == "oauth");
-                                                view! {
-                                                    <div class="conn-secret-row">
-                                                        <input placeholder=if oauth { "X-Custom-Header" } else { "Authorization" }
-                                                            prop:value=field.name
-                                                            disabled=move || oauth_authorizing.get()
-                                                            on:input=move |ev| conn_form.update(|o| if let Some(o)=o {
-                                                                if let Some(row) = o.headers.get_mut(idx) {
-                                                                    row.name = event_target_input(&ev).value();
-                                                                }
-                                                            }) />
-                                                        <input type="password" autocomplete="new-password"
-                                                            placeholder=move || if has_value {
-                                                                t(locale.get(), "conn.secret_keep").to_string()
-                                                            } else if oauth {
-                                                                "value".to_string()
-                                                            } else {
-                                                                "Bearer token".to_string()
-                                                            }
-                                                            prop:value=field.value
-                                                            disabled=move || oauth_authorizing.get()
-                                                            on:input=move |ev| conn_form.update(|o| if let Some(o)=o {
-                                                                if let Some(row) = o.headers.get_mut(idx) {
-                                                                    row.value = event_target_input(&ev).value();
-                                                                }
-                                                            }) />
-                                                        <button type="button" class="settings-list-remove"
-                                                            title=move || t(locale.get(), "conn.secret_remove")
-                                                            aria-label=move || t(locale.get(), "conn.secret_remove")
-                                                            disabled=move || oauth_authorizing.get()
-                                                            on:click=move |_| conn_form.update(|o| if let Some(o)=o {
-                                                                if idx < o.headers.len() { o.headers.remove(idx); }
-                                                            })>{compose_icon("close")}</button>
-                                                    </div>
-                                                }
-                                            }).collect_view()}
+                                            <ConnSecretRows conn_form=conn_form kind=ConnSecretKind::Headers disabled=oauth_authorizing />
                                             <button type="button" class="settings-add-btn conn-secret-add"
                                                 disabled=move || oauth_authorizing.get()
                                                 on:click=move |_| conn_form.update(|o| if let Some(o)=o {
-                                                    o.headers.push(ConnSecretField::default());
+                                                    o.headers.push(blank_conn_secret_field());
                                                 })>
                                                 {compose_icon("plus")}
                                                 <span>{move || t(locale.get(), "conn.secret_add_header")}</span>
@@ -6019,42 +6618,83 @@ pub(super) fn SettingsView(
                                         && conn_form.get().is_some_and(|form| form.auth == "oauth")).then(|| view!{
                                         <p class="settings-note">{move || t(locale.get(), "conn.oauth.desc")}</p>
                                     })}
-                                    {move || conn_test_msg.get().map(|(ok,msg)| view!{
-                                        <div class="settings-status" class:ok=ok class:fail=move||!ok>{msg}</div>
-                                    })}
+                                    {move || if conn_testing.get() {
+                                        view! {
+                                            <div class="settings-status pending" data-testid="conn-test-status"
+                                                role="status" aria-live="polite">
+                                                <span class="conn-test-spinner" aria-hidden="true"></span>
+                                                {move || t(
+                                                    locale.get(),
+                                                    if oauth_authorizing.get() {
+                                                        "conn.oauth.waiting"
+                                                    } else {
+                                                        "conn.testing_status"
+                                                    },
+                                                )}
+                                            </div>
+                                        }.into_view()
+                                    } else {
+                                        conn_test_msg.get().map(|(ok, msg)| view! {
+                                            <div class="settings-status" class:ok=ok class:fail=!ok
+                                                data-testid="conn-test-status">{msg}</div>
+                                        }).into_view()
+                                    }}
                                     <div class="row settings-footer">
-                                        <button type="button" disabled=move || oauth_authorizing.get()
-                                            on:click=move |_| { let f = conn_form.get().unwrap_or_default();
-                                            spawn_local(async move {
+                                        <button type="button" data-testid="conn-test"
+                                            disabled=move || conn_testing.get() || oauth_authorizing.get()
+                                            attr:aria-busy=move || if conn_testing.get() { "true" } else { "false" }
+                                            on:click=move |_| {
+                                                if conn_testing.get() || oauth_authorizing.get() {
+                                                    return;
+                                                }
+                                                let f = conn_form.get().unwrap_or_default();
+                                                conn_testing.set(true);
+                                                conn_test_msg.set(None);
+                                                conn_test_seq.update(|n| *n += 1);
+                                                let seq = conn_test_seq.get_untracked();
                                                 let oauth = f.kind == "http" && f.auth == "oauth";
                                                 if oauth {
                                                     oauth_authorizing.set(true);
-                                                    conn_test_msg.set(Some((true, t(locale.get(), "conn.oauth.waiting").into())));
                                                 }
-                                                let conn = build_conn_json(&f, false);
-                                                let command = if oauth {
-                                                    "test_oauth_mcp_connection"
-                                                } else {
-                                                    "test_mcp_connection"
-                                                };
-                                                match invoke_checked(command, to_value(&serde_json::json!({"conn": conn})).unwrap()).await {
-                                                    Ok(v) => match serde_wasm_bindgen::from_value::<Vec<ConnectorTool>>(v) {
-                                                        Ok(tools) => {
-                                                            let n = tools.len();
-                                                            if let Some(id) = f.id.clone() {
-                                                                custom_conn_tools.update(|m| { m.insert(id, tools); });
+                                                spawn_local(async move {
+                                                    let conn = build_conn_json(&f, false);
+                                                    let command = if oauth {
+                                                        "test_oauth_mcp_connection"
+                                                    } else {
+                                                        "test_mcp_connection"
+                                                    };
+                                                    let outcome = invoke_checked(
+                                                        command,
+                                                        to_value(&serde_json::json!({"conn": conn})).unwrap(),
+                                                    )
+                                                    .await;
+                                                    if conn_test_seq.get_untracked() != seq {
+                                                        return;
+                                                    }
+                                                    match outcome {
+                                                        Ok(v) => match serde_wasm_bindgen::from_value::<Vec<ConnectorTool>>(v) {
+                                                            Ok(tools) => {
+                                                                let n = tools.len();
+                                                                if let Some(id) = f.id.clone() {
+                                                                    custom_conn_tools.update(|m| { m.insert(id, tools); });
+                                                                }
+                                                                conn_test_msg.set(Some((true, format!("OK — {n} tools"))));
                                                             }
-                                                            conn_test_msg.set(Some((true, format!("OK — {n} tools"))));
-                                                        }
-                                                        Err(e) => conn_test_msg.set(Some((false, e.to_string()))),
-                                                    },
-                                                    Err(e) => conn_test_msg.set(Some((false, js_error_text(e)))),
-                                                }
-                                                if oauth {
-                                                    oauth_authorizing.set(false);
-                                                }
-                                            });
-                                        }>{move || t(locale.get(),"conn.test")}</button>
+                                                            Err(e) => conn_test_msg.set(Some((false, e.to_string()))),
+                                                        },
+                                                        Err(e) => conn_test_msg.set(Some((false, js_error_text(e)))),
+                                                    }
+                                                    conn_testing.set(false);
+                                                    if oauth {
+                                                        oauth_authorizing.set(false);
+                                                    }
+                                                });
+                                            }>
+                                            {move || t(
+                                                locale.get(),
+                                                if conn_testing.get() { "conn.testing" } else { "conn.test" },
+                                            )}
+                                        </button>
                                         <button type="button"
                                             on:click=move |_| {
                                                 if oauth_authorizing.get() {
@@ -6062,10 +6702,16 @@ pub(super) fn SettingsView(
                                                         let _ = invoke_checked("cancel_oauth_authorization", JsValue::UNDEFINED).await;
                                                     });
                                                 }
+                                                conn_test_seq.update(|n| *n += 1);
+                                                conn_testing.set(false);
                                                 oauth_authorizing.set(false);
                                                 close_settings_subpage.call(());
                                             }>{move || t(locale.get(),"settings.cancel")}</button>
-                                        <button type="button" class="primary" on:click=move |_| { let f = conn_form.get().unwrap_or_default();
+                                        <button type="button" class="primary" on:click=move |_| {
+                                            if conn_testing.get() || oauth_authorizing.get() {
+                                                return;
+                                            }
+                                            let f = conn_form.get().unwrap_or_default();
                                             spawn_local(async move {
                                                 if f.kind == "http" && f.auth == "oauth" {
                                                     oauth_authorizing.set(true);
@@ -6092,7 +6738,7 @@ pub(super) fn SettingsView(
                                                     conn_form.set(None); conn_test_msg.set(None); refresh_conns.call(());
                                                 }
                                             });
-                                        } disabled=move || oauth_authorizing.get()>
+                                        } disabled=move || conn_testing.get() || oauth_authorizing.get()>
                                             {move || t(locale.get(), "settings.save")}
                                         </button>
                                     </div>
@@ -6103,13 +6749,17 @@ pub(super) fn SettingsView(
                         // Level 2 — connector detail. Bundled connectors have static approval controls;
                         // custom MCP tools are discovered on demand.
                         view! {
-                            <div class="settings-pane settings-pane-subpage">
-                                <p class="settings-note">{move || t(locale.get(), "settings.applies_new_session")}</p>
+                            <div class="settings-pane settings-pane-subpage connector-detail" data-testid="connector-detail">
                                 {move || {
                                     let key = open_conn_key.get();
                                     let conn = key.and_then(|k| connectors.get().and_then(|v| v.connectors.into_iter().find(|c| c.key == k)));
                                     conn.map(|c| {
                                         let is_custom = c.kind == "custom";
+                                        let connector_key = c.key.clone();
+                                        let key_enabled = c.key.clone();
+                                        let description = if locale.get() == Locale::Zh && !c.description_zh.is_empty() {
+                                            c.description_zh.clone()
+                                        } else { c.description.clone() };
                                         let skip_on = c.skip_approvals;
                                         let key_skip = c.key.clone();
                                         let service = c.subtitle.clone();
@@ -6129,6 +6779,26 @@ pub(super) fn SettingsView(
                                         };
                                         let has_error = error.is_some();
                                         view! {
+                                            <div class="conn-detail-heading">
+                                                <div class="conn-detail-title">{compose_icon("grid")}<h2>{c.name.clone()}</h2>
+                                                    <span class="badge">{move || t(locale.get(), if is_custom { "conn.custom_badge" } else { "conn.bundled_badge" })}</span>
+                                                </div>
+                                                <label class="toggle">
+                                                    <input type="checkbox" aria-label=move || t(locale.get(), "conn.enabled_toggle") prop:checked=enabled on:change=move |ev| {
+                                                        let key = key_enabled.clone();
+                                                        let enabled = event_target_checked(&ev);
+                                                        spawn_local(async move {
+                                                            let args = if is_custom { serde_json::json!({"id": key, "enabled": enabled}) } else { serde_json::json!({"key": key, "enabled": enabled}) };
+                                                            let command = if is_custom { "set_mcp_connection_enabled" } else { "set_connector_enabled" };
+                                                            let _ = invoke_checked(command, to_value(&args).unwrap()).await;
+                                                            refresh_conns.call(());
+                                                        });
+                                                    } />
+                                                    <span class="toggle-track" aria-hidden="true"></span>
+                                                </label>
+                                            </div>
+                                            {(!description.is_empty()).then(|| view! { <p class="conn-introduction">{description}</p> })}
+                                            <p class="settings-note">{move || t(locale.get(), "settings.applies_new_session")}</p>
                                             {is_custom.then(|| view! {
                                                 <div class="settings-list">
                                                     <div class="settings-list-row">
@@ -6193,18 +6863,23 @@ pub(super) fn SettingsView(
                                             {(!loading && !has_error && tools.is_empty()).then(|| view! {
                                                 <div class="settings-status">{move || t(locale.get(), "conn.no_tools")}</div>
                                             })}
-                                            <div class="settings-list">
+                                            <p class="hint conn-tools-hint">{move || t(locale.get(), "conn.tools_hint")}</p>
+                                            <div class="settings-list conn-tools-list">
                                                 {tools.iter().map(|tool| {
                                                     let name = tool.name.clone();
                                                     let mode = tool.mode.clone();
-                                                    let desc = tool.description.clone();
-                                                    let seg = |m: &'static str, glyph: &'static str, key: &'static str| {
+                                                    let tool_key = (connector_key.clone(), name.clone());
+                                                    let key_read = tool_key.clone();
+                                                    let key_toggle = tool_key.clone();
+                                                    let key_body = tool_key.clone();
+                                                    let documentation = tool.clone();
+                                                    let seg = |m: &'static str, icon: &'static str, key: &'static str| {
                                                         let name2 = name.clone();
                                                         let active = mode.as_str() == m;
                                                         view! {
                                                             <button type="button" class=format!("approval-btn approval-{m}") class:active=active
-                                                                disabled=skip_on
-                                                                title=move || t(locale.get(), key)
+                                                                disabled=skip_on aria-pressed=active.to_string()
+                                                                title=move || t(locale.get(), key) aria-label=move || t(locale.get(), key)
                                                                 on:click=move |_| {
                                                                     let name = name2.clone();
                                                                     spawn_local(async move {
@@ -6212,28 +6887,51 @@ pub(super) fn SettingsView(
                                                                         let _ = invoke_checked("set_tool_approval", arg).await;
                                                                         refresh_conns.call(());
                                                                     });
-                                                                }>{glyph}</button>
+                                                                }>{compose_icon(icon)}</button>
                                                         }
                                                     };
                                                     view! {
-                                                        <div class="settings-list-row">
-                                                            <div class="settings-list-main">
-                                                                <span class="settings-list-title">{tool.name.clone()}</span>
-                                                                {(!desc.is_empty()).then(|| view! {
-                                                                    <span class="settings-list-sub">{desc.clone()}</span>
+                                                        <div class="conn-tool" data-tool=tool.name.clone()>
+                                                            <div class="conn-tool-row">
+                                                                <button type="button" class="conn-tool-disclosure"
+                                                                    aria-expanded=move || expanded_connector_tools.with(|open| open.contains(&key_read)).to_string()
+                                                                    on:click=move |_| expanded_connector_tools.update(|open| {
+                                                                        if !open.remove(&key_toggle) { open.insert(key_toggle.clone()); }
+                                                                    })>
+                                                                    {compose_icon("chevron-right")}<span>{tool.name.clone()}</span>
+                                                                </button>
+                                                                {(!is_custom).then(|| view! {
+                                                                    <div class="approval-seg" class:disabled=skip_on>
+                                                                        {seg("allow", "check", "conn.approval.allow")}
+                                                                        {seg("ask", "hand", "conn.approval.ask")}
+                                                                        {seg("deny", "ban", "conn.approval.deny")}
+                                                                    </div>
                                                                 })}
                                                             </div>
-                                                            {(!is_custom).then(|| view! {
-                                                                <div class="approval-seg" class:disabled=skip_on>
-                                                                    {seg("allow", "✓", "conn.approval.allow")}
-                                                                    {seg("ask", "?", "conn.approval.ask")}
-                                                                    {seg("deny", "✕", "conn.approval.deny")}
-                                                                </div>
+                                                            {move || expanded_connector_tools.with(|open| open.contains(&key_body)).then(|| view! {
+                                                                <ConnectorToolDocumentation locale=locale tool=documentation.clone() />
                                                             })}
                                                         </div>
                                                     }
                                                 }).collect_view()}
                                             </div>
+                                            {(!c.maintainer.is_empty() || !c.links.is_empty()).then(|| view! {
+                                                <section class="conn-source-details" data-testid="connector-source-details">
+                                                    <h3>{move || t(locale.get(), "conn.details")}</h3>
+                                                    {(!c.maintainer.is_empty()).then(|| view! {
+                                                        <dl><dt>{move || t(locale.get(), "conn.maintainer")}</dt><dd>{c.maintainer.clone()}</dd></dl>
+                                                    })}
+                                                    {(!c.links.is_empty()).then(|| view! {
+                                                        <h4>{move || t(locale.get(), "conn.sources")}</h4>
+                                                        <ul>{c.links.iter().filter(|link| link.url.starts_with("https://") || link.url.starts_with("http://")).map(|link| {
+                                                            let url = link.url.clone();
+                                                            view! { <li><a href=link.url.clone() target="_blank" rel="noopener noreferrer" on:click=move |ev| {
+                                                                ev.prevent_default(); open_external_url(url.clone());
+                                                            }>{link.label.clone()}{compose_icon("link")}</a></li> }
+                                                        }).collect_view()}</ul>
+                                                    })}
+                                                </section>
+                                            })}
                                         }
                                     })
                                 }}
@@ -6241,7 +6939,7 @@ pub(super) fn SettingsView(
                         }.into_view()
                     } else {
                         view! {
-                    <div class="settings-pane settings-pane-list">
+                    <div class="settings-pane settings-pane-list connections-pane">
                         <div class="settings-toolbar settings-toolbar-end">
                             <span class="settings-filter">{move || {
                                 let nb = connectors.get().map(|v| v.connectors.iter().filter(|c| c.kind == "bundled").count()).unwrap_or(0);
@@ -6249,46 +6947,11 @@ pub(super) fn SettingsView(
                                 format!("{} ({})", t(locale.get(), "settings.nav.connections"), nb + nc)
                             }}</span>
                             <button type="button" class="settings-add-btn" on:click=move |_| {
-                                conn_form.set(Some(ConnForm::new_connection()));
+                                conn_form.set(Some(new_conn_form()));
                                 conn_test_msg.set(None);
                             }>{move || t(locale.get(), "conn.add")}</button>
                         </div>
                         <p class="settings-note">{move || t(locale.get(), "settings.applies_new_session")}</p>
-                        <div class="settings-list">
-                            <div class="settings-list-row">
-                                <div class="settings-list-main">
-                                    <span class="settings-list-title">{move || t(locale.get(), "conn.scope")}</span>
-                                    <span class="settings-list-sub">{move || {
-                                        let cur = connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into());
-                                        t(locale.get(), match cur.as_str() {
-                                            "full" => "conn.scope.full.desc",
-                                            "auto" => "conn.scope.auto.desc",
-                                            _ => "conn.scope.ask.desc",
-                                        })
-                                    }}</span>
-                                </div>
-                                <div class="approval-seg">
-                                    {["ask", "auto", "full"].into_iter().map(|val| {
-                                        let label_key = match val {
-                                            "full" => "conn.scope.full",
-                                            "auto" => "conn.scope.auto",
-                                            _ => "conn.scope.ask",
-                                        };
-                                        let active = move || connectors.get().map(|v| v.scope).unwrap_or_else(|| "ask".into()) == val;
-                                        view! {
-                                            <button type="button" class=format!("approval-btn scope-seg scope-{val}") class:active=active
-                                                on:click=move |_| {
-                                                    spawn_local(async move {
-                                                        let arg = to_value(&serde_json::json!({ "scope": val })).unwrap();
-                                                        let _ = invoke_checked("set_approval_scope", arg).await;
-                                                        refresh_conns.call(());
-                                                    });
-                                                }>{move || t(locale.get(), label_key)}</button>
-                                        }
-                                    }).collect_view()}
-                                </div>
-                            </div>
-                        </div>
                         <div class="conn-group-label">{move || t(locale.get(), "conn.featured")}</div>
                         <div class="settings-list">
                             <For each=move || connectors.get().map(|v| v.connectors.into_iter().filter(|c| c.kind == "bundled").collect::<Vec<_>>()).unwrap_or_default() key=|c| c.key.clone() let:c>

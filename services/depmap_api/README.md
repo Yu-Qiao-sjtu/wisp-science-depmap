@@ -26,15 +26,29 @@ association modes return explicit
 `MODULE_UNAVAILABLE` states plus manifests and provenance; the API never turns
 an absent sparse row into a biological-negative claim.
 
+Cancer-level `lineage_directions` uses each completed network module's
+`manifest.min_n` as its minimum pair sample count, together with FDR <= 0.05.
+It adds no universal 30-sample cutoff. Each network section returns
+`selection_filters` with the actual threshold and its source. Missing or invalid
+`min_n` makes that section `MODULE_UNAVAILABLE` with a reason; a declared cohort
+below the module minimum is `INELIGIBLE`. Other modules remain queryable.
+`selection_policy.network_pair_n_min_by_family` records the per-module minima.
+The legacy scalar `network_pair_n_min` summarizes the lowest declared minimum
+(null if none can be resolved); use the per-section filters for exact semantics.
+An empty filtered shortlist is not evidence of biological absence. CNV, PRISM,
+and enrichment filters are unchanged.
+
 Contract v4 adds `tcga_expression_survival`. It bridges the fixed 18,531-gene
 DepMap CRISPR target universe to precomputed TCGA primary-tumour expression and
 the censored OS, DSS, DFI, and PFI endpoints. The mode accepts `gene` plus an
 optional TCGA `project`, canonical DepMap `lineage`, `endpoint`, and bounded
-`limit`. Genes are aligned by Ensembl gene ID with an explicit gene-symbol
+`limit`. Genes are aligned by exact gene symbol with an explicit Ensembl-ID
 fallback. It returns project rows with the mapping basis, median `log2(TPM+1)`, cohort/event counts,
 a signed Breslow Cox score z statistic, nominal p value, and BH FDR. Positive z
 means higher expression is associated with higher event hazard; it is not a
 hazard ratio or a causal estimate. Raw patient matrices remain outside the API.
+All 18,531 targets retain an indexed project row; genes absent from TCGA source
+annotation return `NOT_COMPUTED` instead of being treated as zero expression.
 
 Build the read-only bridge next to the existing knowledge modules:
 

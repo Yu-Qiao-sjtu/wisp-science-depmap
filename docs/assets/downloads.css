@@ -1,0 +1,29 @@
+.download-page { padding: 64px 0 88px; scroll-margin-top: calc(var(--nav-h) + 16px); }
+.download-page #download-title { font-family: var(--font-serif); font-size: clamp(30px, 4vw, 48px); line-height: 1.3; margin: 16px 0; }
+.download-lead { color: var(--text-muted); max-width: 650px; margin-bottom: 36px; }
+.download-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.download-panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; box-shadow: var(--shadow); }
+#release-status { margin-top: 0; color: var(--clay); font-weight: 600; }
+.download-fields { display: grid; gap: 20px; }
+.download-fields label { display: grid; gap: 8px; font-weight: 600; }
+.download-fields select { width: 100%; min-height: 48px; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid #a8a29e; border-radius: var(--radius-sm); }
+.download-page :is(a, select, summary):focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.download-help { font-size: 14px; color: var(--text-muted); }
+.download-result { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 12px; }
+#package-name { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 14px; }
+#download-primary { display: flex; text-align: center; min-height: 48px; }
+#download-primary[aria-disabled="true"] { opacity: .55; cursor: default; }
+.download-backup { display: block; text-align: center; margin: 14px 0; }
+.download-backup, .download-guide-links a { color: var(--clay); text-decoration: underline; text-underline-offset: 4px; }
+.download-guide { padding: 8px 8px 0; }
+.download-guide h2 { font-size: 22px; margin-top: 0; }
+.download-guide h3 { font-size: 16px; margin-bottom: 6px; }
+.download-guide p { font-size: 14px; color: var(--text-muted); margin-top: 0; }
+.download-guide-links { display: grid; gap: 10px; margin-top: 24px; }
+#checksum-details summary { cursor: pointer; font-size: 13px; }
+#package-checksum { display: block; overflow-wrap: anywhere; margin-top: 8px; font-size: 12px; }
+@media (max-width: 760px) {
+  .download-page { padding: 36px 0 56px; }
+  .download-layout { grid-template-columns: 1fr; gap: 28px; }
+  .download-panel { padding: 24px 20px; }
+}

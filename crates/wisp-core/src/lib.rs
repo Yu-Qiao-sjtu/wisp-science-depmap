@@ -133,13 +133,14 @@ impl Agent {
         vision_cfg: Option<ProviderConfig>,
     ) -> Self {
         let provider = wisp_llm::build(cfg.clone());
-        let vision_provider = vision_cfg.map(wisp_llm::build);
+        let vision_provider = vision_cfg
+            .map(|vision| wisp_llm::build(vision.with_session_id(cfg.session_id.clone())));
         let mut tools = build_registry(skills, memory, memory_enabled);
         // The explore subagent shares the primary model but runs in its own
         // context; only its anchor (stats + conclusion + trace path) lands in
         // the main context.
-        tools.add(Box::new(subagent::ExploreTool::new(
-            Arc::from(wisp_llm::build(cfg)),
+        tools.add(Box::new(subagent::ExploreTool::from_config(
+            cfg,
             max_context,
         )));
         let session_path = root.join(".wisp").join("session.json");
@@ -204,13 +205,14 @@ impl Agent {
         )
     }
 
-    /// Seed a fresh system prompt or refresh its catalog-free skills section.
+    /// Seed a fresh system prompt or refresh host execution and skills guidance.
     pub fn seed_system_prompt(&mut self, skills: &SkillIndex, compute_hosts: Option<String>) {
         let system_prompt = SystemPrompt::new(&self.root, skills, compute_hosts);
         if self.ctx.is_empty() {
             self.ctx.append_system(system_prompt.assemble());
         } else if let Some(message) = self.ctx.messages.first_mut() {
             if let wisp_llm::Content::Text(prompt) = &mut message.content {
+                system_prompt.refresh_execution_guidance(prompt);
                 system_prompt.refresh_skills_guidance(prompt);
             }
         }
@@ -506,6 +508,27 @@ mod session_ctor_tests {
             "session_path stays available for an explicit later save"
         );
         assert!(agent.session_path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resumed_agent_refreshes_execution_rules_without_losing_history() {
+        let root = leftover_root("execution-guidance");
+        let mut ctx = ContextManager::new(8_000);
+        ctx.append_system("Intro\n\n## Tool Selection\n\nOld runtime preference.\n\n## User Rules\n\nKeep my instructions.");
+        ctx.append_user("Continue the project task.");
+        ctx.save(&root.join(".wisp/session.json"));
+        let mut agent = construct(root.clone(), false);
+        agent.seed_system_prompt(&SkillIndex::default(), None);
+        assert_eq!(agent.ctx.messages.len(), 2);
+        let prompt = agent.ctx.messages[0].content.as_text();
+        assert!(prompt.contains("provide persistent runtimes"));
+        assert!(!prompt.contains("Old runtime preference"));
+        assert!(prompt.ends_with("## User Rules\n\nKeep my instructions."));
+        assert_eq!(
+            agent.ctx.messages[1].content.as_text(),
+            "Continue the project task."
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
