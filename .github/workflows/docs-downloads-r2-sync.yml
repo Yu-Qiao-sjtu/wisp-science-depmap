@@ -1,0 +1,47 @@
+name: Sync installers to Cloudflare R2
+
+on:
+  workflow_run:
+    workflows: [Windows Release, macOS Release, Linux Release]
+    types: [completed]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# All triggers resolve the current latest stable release, never a workflow_run
+# artifact or branch. Serializing prevents concurrent manifest replacement.
+concurrency:
+  group: docs-downloads-r2-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: vars.CLOUDFLARE_AUTOMATION_ENABLED == 'true' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SYNC_ALLOW_INCOMPLETE: ${{ github.event_name == 'workflow_run' && '1' || '0' }}
+    steps:
+      # Use trusted default-branch code, not the completed run's source.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Check Cloudflare configuration
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::Set CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo '::error::Set CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+      - run: npm ci --prefix docs
+      - run: npm test --prefix docs
+      - name: Upload installers and publish manifest last
+        run: npm run sync-downloads --prefix docs

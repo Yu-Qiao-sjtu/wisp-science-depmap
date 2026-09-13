@@ -312,7 +312,7 @@ async fn import_parsed(
 pub(super) async fn import_session_archive(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Option<ImportSessionSummary>, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -335,7 +335,7 @@ pub(super) async fn import_session_archive(
             .map_err(|e| format!("{e}"))??
     };
 
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     let model_id = models::active_profile_id(&state.store).await;
     let source_path = archive_path.to_string_lossy().into_owned();
     let (frame_id, status) =

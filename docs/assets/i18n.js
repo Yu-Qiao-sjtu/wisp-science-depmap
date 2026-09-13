@@ -1,17 +1,45 @@
 const WISP_PAGES_I18N = {
   zh: {
+    "meta.downloads.title": "下载安装包 | Wisp Science",
+    "meta.downloads.desc": "按系统与芯片选择 Wisp Science 安装包：Windows、macOS、Linux。提供 Cloudflare 下载与 GitHub 备用入口。",
+    "mcp.settingsPath": "设置 → 连接",
+    "footer.releases": "版本记录",
+    "footer.issues": "问题反馈",
+    "nav.skills": "SKILLS",
+    "meta.skills.title": "科研技能 | Wisp Science",
+    "meta.skills.desc": "了解 Wisp Science 的 28 个内置技能：文献与证据、数据分析、图表与写作、计算环境和自动化。",
+    "skills.categories": "技能分类",
     "meta.home.title": "Wisp Science | 开源科学计算 Agent",
     "meta.home.desc":
-      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 36 个内置 SKILL。",
+      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 28 个内置 SKILL。",
     "meta.models.title": "模型配置 | Wisp Science",
     "meta.models.desc": "Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
     "meta.acp.title": "ACP Agent 配置 | Wisp Science",
     "meta.acp.desc":
       "Wisp Science ACP Agent 配置说明：在 Settings → Models → ACP Agents 下接入 Codex / Claude 等本地 ACP v1 agent。",
+    "meta.mcp.title": "科研 MCP | Wisp Science",
+    "meta.mcp.desc":
+      "了解 Wisp Science 的科研连接器：23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。",
+    "meta.tutorials.title": "教程 | Wisp Science",
+    "meta.tutorials.desc": "Wisp Science 入门教程：模型配置、浏览器、服务器与命令行、导入导出、MCP、Skills 和轨迹。",
+    "nav.tutorials": "教程",
+    "tutorials.kicker": "从入门到实践",
+    "tutorials.title": "教程",
+    "tutorials.lead": "从配置模型开始，学习浏览器、服务器和导入导出，再用 MCP、Skills 与轨迹完成可核对的科研任务。",
+    "tutorials.language": "教程支持中文和英文，可使用顶部语言按钮切换。",
+    "tutorials.aria": "教程目录",
+    "tutorials.source": "查看原文",
+    "tutorials.back": "返回教程目录",
+    "tutorials.read": "阅读教程",
+    "tutorials.previous": "上一篇",
+    "tutorials.next": "下一篇",
+    "tutorials.readerNav": "教程导航",
+    "tutorials.pagination": "相邻教程",
     "nav.aria": "页面导航",
     "nav.features": "功能",
     "nav.usecases": "场景",
     "nav.stack": "生态",
+    "nav.mcp": "MCP",
     "nav.models": "模型配置",
     "nav.acp": "ACP",
     "nav.faq": "FAQ",
@@ -19,161 +47,189 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "下载桌面版",
     "nav.downloadShort": "下载",
     "lang.aria": "语言",
-    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.6.1",
+    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.12.0",
     "hero.title": "严谨科研的<br>本地 Agent 工作台",
     "hero.lead":
-      "Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。",
+      "在一个项目中完成文献检索、数据分析与结果整理。让 Wisp 调用 Python、R 和科研工具，保留代码、文件与执行记录，把更多时间留给研究问题。",
     "hero.download": "下载桌面安装包",
     "hero.source": "从源码构建",
+    "hero.quickStart": "快速开始",
     "hero.mockUser": "检索 PubMed 上 CRISPR 筛选的最新方法，并画一张流程图。",
     "hero.mockAssistant":
-      "已调用 mcp_pubmed 检索 12 篇文献，生成 Markdown 报告与 Python 绘图代码。表格与公式已提取为 artifact。",
+      "已检索 12 篇候选文献，并整理为带来源的报告。绘图代码与结果已保存到项目中。",
     "trusted.heading": "Wisp Science 用户来自高校与科研团队",
     "trusted.aria": "Wisp Science 用户所在团队",
-    "voices.kicker": "From real research questions",
-    "voices.heading": "他们这样用 Wisp Science",
-    "voices.lead": "不是一句“帮我分析”，而是把手头真实、具体的科研任务交给它继续推进。",
+    "voices.kicker": "常见科研任务",
+    "voices.heading": "从一个具体问题开始",
+    "voices.lead": "下面这些任务描述，展示了如何把研究目标、检查要求和交付内容说清楚。",
     "voices.q1":
-      "“能不能先帮我把这批单细胞数据做完 QC，再看看这几个 cluster 到底是什么细胞？每一步的参数和图都留下来，我明天组会要讲。”",
+      "“请先检查这批单细胞数据的质量，再协助判断各细胞群的类型。保留每一步的参数、代码和图表，方便组会讨论。”",
     "voices.a1":
-      "以前最怕中途改参数，现在可以沿着同一段对话接着跑，图、代码和判断也都找得到。",
-    "voices.role1": "生物信息方向博士生",
+      "沿着同一段对话调整分析，保留参数与结果，便于复盘和继续验证。",
+    "voices.role1": "单细胞分析",
     "voices.q2":
-      "“把最近五年和这个靶点有关的临床前研究梳理一下。别只给结论，把检索来源、相互矛盾的结果和还缺什么证据一起列出来。”",
-    "voices.a2": "它更像一个愿意把依据摊开的研究搭档，而不是给我一段看起来很确定的摘要。",
-    "voices.role2": "药物研发团队研究员",
+      "“梳理近五年与这个靶点相关的临床前研究。列出来源、相互矛盾的结果，以及仍然缺少的证据。”",
+    "voices.a2": "把检索记录与结论放在一起，方便逐项核对研究依据。",
+    "voices.role2": "药物研发",
     "voices.q3":
-      "“这个蛋白的几个突变位点可能影响稳定性吗？先查数据库和文献，再给我一个能在本地复现的分析方案，不要动原始数据。”",
-    "voices.a3": "数据留在电脑上很重要；更省心的是检索、分析和最后的 Methods 草稿能在一个项目里串起来。",
-    "voices.role3": "结构生物学研究者",
+      "“评估这些蛋白突变可能产生的影响。先查数据库和文献，再给出可在本机验证的分析方案，保留原始数据。”",
+    "voices.a3": "在项目中衔接检索、分析与方法记录，减少来回整理材料的工作。",
+    "voices.role3": "结构生物学",
     "voices.q4":
-      "“我把 20 篇 PDF 放进项目了。能按实验体系整理它们各自用了什么对照吗？有数字对不上的地方先标出来，别替作者猜。”",
-    "voices.a4": "做文献表格时最有用的不是快，而是它会把出处带回来，我能立刻核对原文。",
-    "voices.role4": "分子生物学博士后",
+      "“按实验体系比较这 20 篇论文使用的对照。每项结论标明出处，数字不一致的地方单独列出。”",
+    "voices.a4": "为文献比较保留证据位置，遇到疑问时可以直接回到原文。",
+    "voices.role4": "论文精读",
     "voices.q5":
-      "“这份代谢组结果先别急着解释。帮我检查缺失值、批次效应和异常样本，再把你建议的统计步骤写成一份可重复运行的脚本。”",
-    "voices.a5": "它不会只扔给我一张漂亮图，前面的数据检查和后面的脚本都在，交接给同事也方便。",
-    "voices.role5": "转化医学实验室成员",
+      "“先检查代谢组数据的缺失值、批次效应和异常样本，再提出统计方案，并保留可重复运行的脚本。”",
+    "voices.a5": "把数据检查、分析建议和脚本一起交付，方便后续复现与协作。",
+    "voices.role5": "组学数据分析",
     "voices.q6":
-      "“根据这组候选分子查一下 ChEMBL 和 PubChem，活性、选择性和已知风险分开列。最后告诉我下一轮最值得补哪三个实验。”",
-    "voices.a6": "数据库检索和本地分析不用来回切工具，尤其适合先把问题收敛，再决定昂贵的实验往哪做。",
-    "voices.role6": "计算化学研究员",
-    "features.kicker": "Built for scientific research",
-    "features.heading": "为科研而生",
+      "“查询候选分子的活性、选择性与已知风险，分项整理来源，并列出下一步需要验证的问题。”",
+    "voices.a6": "结合数据库记录与本地分析，逐步明确值得继续研究的方向。",
+    "voices.role6": "计算化学",
+    "features.kicker": "围绕科研工作设计",
+    "features.heading": "从问题到结果，保留每一步",
     "features.lead":
-      "独立开源的 Rust/Tauri 科研工作台：Agent 核心、生物工具链与桌面 UI 全部本地运行，数据不出机器。",
-    "features.artTitle": "科学产物，完整可追溯",
+      "项目、会话和结果文件统一管理。根据任务连接模型、调用工具，在本机或已配置的计算环境中继续工作。",
+    "features.artTitle": "图表、代码与文件，随时回看",
     "features.artBody":
-      "对话中的表格、代码块、LaTeX 公式与文件路径自动提取为 artifact，侧边栏即时预览。Markdown 渲染支持 KaTeX 与代码高亮。",
+      "对话中的表格、代码、公式与文件可作为产物查看，并关联到生成它们的会话。支持 Markdown、公式排版和代码高亮。",
     "features.artPre":
-      "{{artifact:abc123}}\n→ Table · 8 rows × 4 cols\n→ figure_umap.py · 42 lines\n→ $\\hat{\\beta}$ · LaTeX equation\n\n每个 artifact 绑定生成它的对话上下文，\n便于复现、编辑与版本回溯。",
-    "features.pyTitle": "持久 Python / R 内核",
+      "{{artifact:abc123}}\n→ 表格 · 8 行 × 4 列\n→ figure_umap.py · 42 行\n→ LaTeX 公式\n\n从结果回到对应会话，\n查看代码、参数与生成过程。",
+    "features.pyTitle": "连续分析，无需反复加载数据",
     "features.pyBody":
-      "长驻内核子进程保持变量与 DataFrame 在内存中，且按会话隔离。跨轮次迭代分析无需重复加载数据，并行会话也不会互相覆盖状态。",
+      "Python 和 R 运行时可在多轮对话间保留变量与数据对象。不同会话的状态相互隔离，便于逐步调整和检查分析。",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# 变量在后续 tool call 中仍然可用\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "36 个内置 SKILL 工作流",
+    "features.skillTitle": "28 个内置 SKILL 工作流",
     "features.skillBody": "从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。",
     "features.skillPre":
-      "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 通过 use_skill 工具按需加载 SKILL.md",
-    "features.llmTitle": "任意 LLM 后端",
+      "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 根据任务读取相应的技能说明。",
+    "features.llmTitle": "连接适合任务的模型",
     "features.llmBody":
-      "支持 OpenAI 兼容、OpenAI Responses、Anthropic API，以及本地 <a href=\"acp-agents.html\">ACP Agent</a>。<a href=\"model-configuration.html\">查看 HTTP 模型配置</a>。",
-    "features.ctxTitle": "三层上下文压缩",
+      "支持 OpenAI 兼容、OpenAI Responses 和 Anthropic API，也可接入本机 ACP Agent。配置方法见<a href=\"tutorials.html\">使用教程</a>。",
+    "features.ctxTitle": "长对话也能继续推进",
     "features.ctxBody":
-      "完整历史先归档，安全裁剪 tool/图片噪声；必须移除语义轮次时，先基于原历史生成增量摘要检查点，并保留有界近期上下文。",
-    "features.sqlTitle": "SQLite 持久化",
-    "features.sqlBody": "项目、会话帧、消息与 artifact 写入本地数据库，重启应用完整恢复历史。",
-    "local.kicker": "Works wherever your data lives",
-    "local.heading": "数据留在本地",
+      "压缩上下文前先保留完整历史，再整理较早的工具输出和对话摘要，为后续任务留出空间。",
+    "features.sqlTitle": "工作记录保存在本机",
+    "features.sqlBody": "项目与会话记录保存在本地数据库，文件留在工作区。重新打开项目时，可以继续查看此前的工作。",
+    "local.kicker": "跟随数据所在的位置",
+    "local.heading": "项目在本机，计算按需选择",
     "local.lead":
-      "Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；Python 环境与 MCP 服务器在首次启动时自动配置。",
-    "local.pkgTitle": "自包含安装包",
+      "支持 Windows、macOS 与 Linux，也提供命令行入口。本机和远程环境各有用途，可以根据数据位置和计算需求选择。",
+    "local.pkgTitle": "下载安装即可开始",
     "local.pkgBody":
-      "skills、Python、MCP 与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。",
-    "local.mcpTitle": "统一 bio MCP",
-    "local.mcpBody": "默认启动 mcp_bio，约 240 个工具覆盖 PubMed、UniProt、ChEMBL 等 80+ 数据库。",
-    "local.remoteTitle": "远程计算",
-    "local.remoteBody": "SKILL 支持 SSH、WSL 与 GPU 主机；Agent 可编写并提交带实时日志的长 Run。",
-    "usecases.kicker": "How researchers use Wisp Science",
-    "usecases.heading": "研究者如何使用",
-    "usecases.lead": "预置生命科学多领域工作流；跨学科项目可在同一会话中串联文献、分析与可视化。",
+      "桌面安装包随附技能、原生科研工具和演示会话。Python、R 等可选运行工具可在需要时配置，无需先下载项目源码。",
+    "local.mcpTitle": "科研数据库，按需连接",
+    "local.mcpBody":
+      "内置 23 个科研连接器、247 个工具，可检索 PubMed、UniProt、ChEMBL 等约 80 个数据库。访问在线数据源仍需网络。",
+    "local.remoteTitle": "让远程计算有记录可查",
+    "local.remoteBody": "配置 SSH／WSL 环境后，可以读取远程数据、运行分析，并通过任务记录查看状态、日志和输出位置。",
+    "usecases.kicker": "贴近实际研究场景",
+    "usecases.heading": "按你的研究问题使用",
+    "usecases.lead": "从文献、数据和计算结果出发，在同一个项目中串联分析、可视化与写作。",
     "usecases.tabScrna": "单细胞 RNA-seq",
     "usecases.tabProtein": "蛋白结构",
     "usecases.tabChem": "化学信息学",
     "usecases.tabLit": "文献与写作",
     "usecases.scrnaTitle": "单细胞与转录组分析",
     "usecases.scrnaBody":
-      "用 analysis-workflow 把 QC、聚类、注释收成可复现模块；在持久 Python 内核中完成 Scanpy 流程与 UMAP 可视化。",
-    "usecases.scrnaLi1": "调用 MCP 查询 GEO / CellxGene 元数据",
-    "usecases.scrnaLi2": "表格与图形自动进入 artifact 面板",
-    "usecases.scrnaLi3": "代码与对话绑定，便于复现",
-    "usecases.promptLabel": "示例提示",
-    "usecases.scrnaPrompt": "对 PBMC 3k 数据做标准 Scanpy 流程，标注 major cell types，并导出 marker 基因热图。",
+      "将质量控制、聚类和细胞类型注释整理为可复现的分析模块，使用 Python／R 完成计算与可视化。",
+    "usecases.scrnaLi1": "检索 GEO／CELLxGENE 数据集与元数据",
+    "usecases.scrnaLi2": "随时查看生成的表格和图形",
+    "usecases.scrnaLi3": "保留代码、参数与会话记录",
+    "usecases.promptLabel": "可以这样提问",
+    "usecases.scrnaPrompt": "请对 PBMC 3k 数据开展单细胞分析。先检查质量并提出筛选方案，再进行聚类与主要细胞类型注释，保存分析脚本和标记基因热图。",
     "usecases.proteinTitle": "蛋白结构与序列",
     "usecases.proteinBody":
-      "从 UniProt / PDB 拉取序列与实验结构，结合文献综述与作图，生成可引用的位点表和 Methods 草稿。",
-    "usecases.proteinLi1": "从 UniProt / PDB MCP 拉取序列与结构",
-    "usecases.proteinLi2": "3D 结构查看器在 Roadmap 中",
-    "usecases.proteinLi3": "与文献综述 SKILL 串联假设生成",
-    "usecases.proteinPrompt": "获取 TP53 预测结构，叠加 ClinVar 致病突变位点，并生成 Methods 段落草稿。",
+      "结合序列、结构和文献记录，整理可核对的位点信息，并保留分析方法与来源。",
+    "usecases.proteinLi1": "查询 UniProt／PDB 序列与结构记录",
+    "usecases.proteinLi2": "在工作台中预览分子与蛋白结构",
+    "usecases.proteinLi3": "结合文献证据提出待验证的假设",
+    "usecases.proteinPrompt": "请查找 TP53 的结构记录及相关突变信息，标明每项来源，提出可验证的结构分析方案。",
     "usecases.chemTitle": "化学信息学与分子设计",
     "usecases.chemBody":
-      "通过 ChEMBL、PubChem MCP 检索活性数据，计算理化性质与相似性，用 figure-composer 出 SAR 图。",
+      "查询 ChEMBL、PubChem 等数据库的活性记录，结合本地计算比较分子性质，并整理图表与证据。",
     "usecases.chemLi1": "计算理化性质与相似性",
-    "usecases.chemLi2": "右侧面板预览 SMILES / MOL / SDF（RDKit）",
-    "usecases.chemLi3": "figure-composer 统一出图风格",
-    "usecases.chemPrompt": "检索靶点 EGFR 的 IC50 数据，筛选 oral bioavailability 较好的候选，并绘制 SAR 热力图。",
-    "usecases.litTitle": "文献检索与稿件草稿",
-    "usecases.litBody": "literature-review、paper-narrative、pdf-explore SKILL 帮助从 PDF 到结构化综述与叙事。",
-    "usecases.litLi1": "PubMed / Semantic Scholar MCP 检索",
-    "usecases.litLi2": "Markdown + LaTeX 实时预览",
-    "usecases.litLi3": "indication-dossier 适应症档案模板",
-    "usecases.litPrompt": "基于附件 PDF 写一段 Discussion，附引用列表，并检查数字是否与表格一致。",
-    "demo.kicker": "See it in action",
-    "demo.heading": "内置 Demo 会话",
+    "usecases.chemLi2": "在侧边面板查看 SMILES／MOL／SDF 分子内容",
+    "usecases.chemLi3": "用统一的图表规范呈现比较结果",
+    "usecases.chemPrompt": "请检索针对 EGFR 的 IC50 记录，核对实验条件和来源，再比较候选分子的性质，整理构效关系图表。",
+    "usecases.litTitle": "文献调研与论文写作",
+    "usecases.litBody": "结合文献检索、PDF 阅读和论文叙事技能，整理证据、比较研究，并形成可继续修改的草稿。",
+    "usecases.litLi1": "检索 PubMed／OpenAlex／arXiv 等来源",
+    "usecases.litLi2": "预览 Markdown 文本与数学公式",
+    "usecases.litLi3": "按研究问题组织疾病与适应症资料",
+    "usecases.litPrompt": "请基于附件论文起草讨论部分，区分已有证据与推测，附上引用，并检查文中数字是否与表格一致。",
+    "demo.kicker": "先看一次完整的工作过程",
+    "demo.heading": "从内置演示了解 Wisp",
     "demo.lead":
-      "桌面应用「Open demo」可打开只读示例：CRISPR 筛选、酶工程、极端微生物与免疫治疗——无需 API 额度即可感受工作流。",
-    "demo.crisprTitle": "CRISPR Screen",
-    "demo.crisprBody": "从 raw counts 到 hit calling 与可视化报告的完整 Agent 轨迹。",
-    "demo.enzymeTitle": "Enzyme Engineering",
-    "demo.enzymeBody": "序列分析、突变建议与活性预测的多轮工具调用示例。",
-    "demo.extTitle": "Extremophile",
-    "demo.extBody": "宏基因组检索与功能注释的跨数据库工作流。",
-    "demo.immTitle": "Immunotherapy",
-    "demo.immBody": "肿瘤免疫相关文献整合与假设生成演示。",
-    "stack.kicker": "Works with your stack",
-    "stack.heading": "对接你的工具链",
-    "stack.lead": "MCP 协议连接生物数据库与自定义服务器；SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
-    "stack.skill": "36 bundled workflows",
+      "打开应用中的示例项目，查看文献检索、分析与结果整理的只读记录。浏览演示无需模型额度，发送自己的任务时再配置模型。",
+    "demo.crisprTitle": "CRISPR 筛选",
+    "demo.crisprBody": "查看从原始计数、命中基因筛选到图表与报告的任务记录。",
+    "demo.enzymeTitle": "酶工程",
+    "demo.enzymeBody": "了解序列分析、突变建议和活性研究中的多轮工具使用。",
+    "demo.extTitle": "极端环境微生物",
+    "demo.extBody": "查看跨数据库检索与功能注释如何衔接。",
+    "demo.immTitle": "肿瘤免疫",
+    "demo.immBody": "从文献整理出发，了解如何梳理证据并提出研究问题。",
+    "stack.kicker": "连接已有工具与方法",
+    "stack.heading": "融入你的科研工具链",
+    "stack.lead":
+      "内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
+    "stack.skill": "28 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
-    "stack.browse": "浏览 MCP 服务器",
+    "stack.bioItem": "mcp_bio<span>247 个工具 · 23 个连接器</span>",
+    "stack.browse": "查看 MCP 工具目录",
     "faq.heading": "常见问题",
     "faq.q1": "Wisp Science 是新模型吗？",
     "faq.a1":
-      "不是。Wisp Science 是开源桌面/CLI 应用，使用你自备 API Key 对接的任意兼容 LLM。新的是围绕模型的 Agent 循环、工具、MCP 与 Python / R 内核。",
+      "Wisp Science 是科研工作台，不是一个新模型。你可以配置兼容的模型 API，也可以接入本机 ACP Agent，用它们处理项目中的任务。",
     "faq.q2": "与通用 AI 助手有何不同？",
     "faq.a2":
-      "它能真正执行：读写本地文件、运行 Shell、调用持久 Python / R REPL、通过 MCP 查询 PubMed/UniProt 等数据库，并在 SQLite 中保存完整会话。内置 36 个领域 SKILL，而非仅生成文本。",
+      "它能真正执行：读写本地文件、运行 Shell、调用持久 Python / R REPL、通过 MCP 查询 PubMed/UniProt 等数据库，并在 SQLite 中保存完整会话。内置 28 个领域 SKILL，而非仅生成文本。",
     "faq.q3": "研究数据是否私密？",
     "faq.a3":
-      "原始数据与计算在本地进行；会话与 artifact 存于本机 SQLite。发送至 LLM 提供商的仅为 prompt 与 model 响应，遵循你所用 API 的隐私政策。",
+      "项目文件和会话记录保存在本机。调用远程模型或在线服务时，任务所需的消息、附件内容或工具结果可能发送给对应服务；具体范围取决于你的配置与任务，并受服务商的数据政策约束。",
     "faq.q4": "支持哪些平台？",
     "faq.a4":
-      "Windows（已签名 MSI/NSIS + WebView2）、macOS（Apple Silicon / Intel 分架构 dmg，已签名并公证）与 Linux（.deb / AppImage，x86_64 与 aarch64）均提供安装包，随 GitHub Release 一同发布。macOS 双击即可打开；Windows 如仍触发 SmartScreen，选择「仍要运行」。",
+      "提供 Windows、macOS 和 Linux 安装包。请从官方发布页选择与操作系统和处理器架构匹配的版本；安装步骤见“快速开始”。",
     "faq.q5": "macOS 为什么反复弹出钥匙串密码框？",
     "faq.a5":
-      "API Key 存放在 macOS 登录钥匙串，条目会绑定写入时应用的代码签名身份。若你先用过未签名的 v0.4.x 填过 Key，那个条目被绑到了旧身份；升级到已签名版本后身份改变，系统便反复要求输入登录密码来重新授权。解决办法：打开「钥匙串访问」，搜索并删除名为 <code>wisp</code> 的条目，重开 wisp 重新填一次 API Key（点一次「始终允许」）即可。",
-    "faq.q6": "需要什么前置依赖？",
+      "macOS 钥匙串会核对访问密钥的应用身份。升级或更换应用签名后，可能需要重新授权。先确认提示来自 Wisp，再按系统提示处理；若仍反复出现，可检查对应的 Wisp 钥匙串条目并重新配置 API Key。",
+    "faq.q6": "需要提前安装哪些工具？",
     "faq.a6":
-      "安装包用户：Windows 需 WebView2（Win10/11 通常已带），macOS 用系统 WebKit，Linux 用 WebKitGTK；都需自备 API Key。可选安装 R（需 jsonlite）以使用持久 r 工具。从源码构建需 Rust、uv、Trunk、Tauri CLI v2（macOS 另需 Xcode 命令行工具）。首次运行会自动创建 Python venv 并安装 MCP 依赖。",
+      "普通模型对话不需要先安装 Python 或 R。涉及代码运行、浏览器控制或第三方工具时，再按任务准备相应环境。首次引导会检测已有工具路径，缺少工具不会阻止你打开应用。源码构建所需环境另见开发文档。",
     "faq.q7": "Wisp Science 是独立项目吗？",
     "faq.a7":
-      "是的。我们最初关注过 Claude Science 一类封闭产品，但发现其对部分地区用户不友好、且生态封闭。Wisp Science 由此起步：学习其 Skills 与 MCP 工具选型思路，并以 Rust/Tauri 独立实现本地优先的科研工作台（AGPL-3.0）。Agent 架构、多项目工作流、Run 管理、插件体系、ACP 等核心能力均为自主设计；可对接任意模型提供商，任何人都可使用、研究与改进。",
-    "faq.q8": "当前版本稳定吗？",
+      "是的。Wisp Science 使用 Rust／Tauri 独立开发，以 AGPL-3.0 协议开源。你可以查看源码、连接兼容的模型服务，并根据自己的科研需求使用和改进它。",
+    "faq.q8": "第一次使用，建议从哪里开始？",
     "faq.a8":
-      "v1.6.1 是面向本地科研工作流的活跃预览版。核心 Agent、流式、工具、Python / R、MCP、分享导出与桌面 UI 可运行；关键方法与输出仍应人工复核，并以 Release 说明确认当前签名和更新状态。",
+      "v1.12.0 是面向本地科研工作流的活跃预览版。核心 Agent、流式、工具、Python / R、MCP、分享导出与桌面 UI 可运行；关键方法与输出仍应人工复核，并以 Release 说明确认当前签名和更新状态。",
     "footer.copy": "© 2026 Wisp Science · 开源科学计算 Agent",
+    "mcp.title": "科研 MCP",
+    "mcp.lead":
+      "通过科研连接器，在同一段对话中检索文献、查询数据库和整理结果。Wisp 内置 23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据源，也支持添加自定义 MCP 服务。",
+    "mcp.wiki": "查看完整连接器清单",
+    "mcp.howKicker": "怎样使用",
+    "mcp.nativeTitle": "随应用提供",
+    "mcp.nativeBody":
+      "内置科研连接器可在设置 → 连接中查看和启用。访问在线数据库需要网络，部分服务还需要单独配置凭据。",
+    "mcp.discoverTitle": "说清目标，按需调用",
+    "mcp.discoverBody":
+      "告诉 Wisp 希望查询的数据源、问题和输出形式。Agent 会发现相关工具并调用；你也可以在轨迹中核对实际请求和结果。",
+    "mcp.customTitle": "接入自己的工具",
+    "mcp.customBody":
+      "在设置 → 连接 → 添加连接中，配置本地命令或远程 MCP 地址。支持需要 OAuth 的服务，敏感凭据保存在系统密钥环中。",
+    "mcp.notice":
+      "使用各数据源前，请查看其访问条件和使用条款。部分来源仅提供特定用途或快照数据；查询结果通常有数量或分页限制，不能视为完整数据库导出。开放获取标记也不等于获得了任意再利用授权。",
+    "mcp.tocKicker": "按数据来源查找",
+    "mcp.tocHeading": "科研连接器一览",
+    "mcp.thConnector": "连接器",
+    "mcp.thPkg": "连接标识",
+    "mcp.thCount": "工具数",
+    "mcp.thUpstream": "数据来源",
+    "mcp.thTool": "工具",
+    "mcp.thDoes": "功能说明",
     "models.lead":
       "Wisp Science 的桌面版使用模型 profile 管理远程 API 后端。每个 profile 可以配置 provider、API URL、模型 ID、高级参数和独立 API key。",
     "models.download": "下载最新版",
@@ -251,19 +307,47 @@ const WISP_PAGES_I18N = {
     "acp.pathChanged": "改过启动参数或项目路径后需新开会话",
   },
   en: {
+    "meta.downloads.title": "Download installers | Wisp Science",
+    "meta.downloads.desc": "Choose a Wisp Science installer for Windows, macOS or Linux by system and processor. Download via Cloudflare or GitHub.",
+    "mcp.settingsPath": "Settings → Connections",
+    "footer.releases": "Releases",
+    "footer.issues": "Issues",
+    "nav.skills": "SKILLS",
+    "meta.skills.title": "Research Skills | Wisp Science",
+    "meta.skills.desc": "Explore Wisp Science’s 26 bundled Skills for literature, analysis, figures, writing, compute environments, and automation.",
+    "skills.categories": "Skill categories",
     "meta.home.title": "Wisp Science | Open-source scientific computing agent",
     "meta.home.desc":
-      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 36 bundled SKILLs.",
+      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 28 bundled SKILLs.",
     "meta.models.title": "Model configuration | Wisp Science",
     "meta.models.desc":
       "Wisp Science model setup: OpenAI-compatible, OpenAI Responses, and Anthropic APIs.",
     "meta.acp.title": "ACP agent setup | Wisp Science",
     "meta.acp.desc":
       "Connect local ACP v1 agents such as Codex and Claude under Settings → Models → ACP Agents.",
+    "meta.mcp.title": "Scientific MCP | Wisp Science",
+    "meta.mcp.desc":
+      "Wisp Science ships an in-process mcp_bio catalog: 23 connectors and 247 tools covering PubMed, GEO, UniProt, ChEMBL, and ~80 other databases.",
+    "meta.tutorials.title": "Tutorials | Wisp Science",
+    "meta.tutorials.desc": "Wisp Science tutorials: models, browser access, servers and CLI, imports and exports, MCP, Skills, and trajectories.",
+    "nav.tutorials": "Tutorials",
+    "tutorials.kicker": "Learn by doing",
+    "tutorials.title": "Tutorials",
+    "tutorials.lead": "Start with model setup, then learn browser access, servers, and imports and exports. Use MCP, Skills, and trajectories to carry out and review research tasks.",
+    "tutorials.language": "Read in Chinese or English using the language switch above.",
+    "tutorials.aria": "Tutorial directory",
+    "tutorials.source": "View source",
+    "tutorials.back": "Back to tutorials",
+    "tutorials.read": "Read tutorial",
+    "tutorials.previous": "Previous",
+    "tutorials.next": "Next",
+    "tutorials.readerNav": "Tutorial navigation",
+    "tutorials.pagination": "Adjacent tutorials",
     "nav.aria": "Page navigation",
     "nav.features": "Features",
     "nav.usecases": "Use cases",
     "nav.stack": "Stack",
+    "nav.mcp": "MCP",
     "nav.models": "Models",
     "nav.acp": "ACP",
     "nav.faq": "FAQ",
@@ -271,49 +355,50 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "Download desktop",
     "nav.downloadShort": "Download",
     "lang.aria": "Language",
-    "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.6.1",
+    "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.12.0",
     "hero.title": "A local agent workbench<br>for rigorous research",
     "hero.lead":
       "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
     "hero.download": "Download the desktop app",
     "hero.source": "Build from source",
+    "hero.quickStart": "Quick Start",
     "hero.mockUser": "Search PubMed for recent CRISPR screen methods and draft a flowchart.",
     "hero.mockAssistant":
       "Called mcp_pubmed on 12 papers and drafted a Markdown report plus Python plotting code. Tables and equations are already extracted as artifacts.",
     "trusted.heading": "Used by researchers from universities and research teams",
     "trusted.aria": "Organizations using Wisp Science",
-    "voices.kicker": "From real research questions",
-    "voices.heading": "How researchers move work forward",
+    "voices.kicker": "Common research tasks",
+    "voices.heading": "Start with a concrete question",
     "voices.lead":
-      "Not a vague “analyze this” prompt, but a concrete research task advanced with evidence, code, and a traceable record.",
+      "These illustrative requests show how to specify a research goal, verification requirements, and deliverables.",
     "voices.q1":
       "“Start by QCing this single-cell dataset, then help me identify those clusters. Keep every parameter, figure, and rationale—I need to walk through it at lab meeting tomorrow.”",
-    "voices.a1": "Keeps QC parameters, plots, code, and annotation decisions together for review.",
-    "voices.role1": "PhD student in bioinformatics",
+    "voices.a1": "Keep parameters, code, and results with the conversation so you can review the analysis and continue testing.",
+    "voices.role1": "Single-cell analysis",
     "voices.q2":
       "“Map the preclinical studies on this target from the past five years. Don’t just give me a conclusion—show the sources, conflicting findings, and evidence that is still missing.”",
-    "voices.a2": "Builds an auditable evidence map instead of a confident-looking summary.",
-    "voices.role2": "Drug discovery researcher",
+    "voices.a2": "Keep retrieval records beside the conclusions so their evidence can be checked.",
+    "voices.role2": "Drug discovery",
     "voices.q3":
       "“Could these mutations affect protein stability? Check the databases and literature first, then give me a locally reproducible analysis plan without moving the raw data off my computer.”",
-    "voices.a3": "Connects database evidence and literature to a reproducible local analysis.",
-    "voices.role3": "Structural biology researcher",
+    "voices.a3": "Connect retrieval, analysis, and method notes in the project to reduce manual organization.",
+    "voices.role3": "Structural biology",
     "voices.q4":
       "“I added 20 papers to the project. Organize the controls by experimental system, flag inconsistent numbers, and make every finding traceable to the original text.”",
-    "voices.a4": "Compares experimental designs across papers while preserving source-level traceability.",
-    "voices.role4": "Postdoctoral researcher in molecular biology",
+    "voices.a4": "Retain evidence locations in literature comparisons so questions can be checked against the original papers.",
+    "voices.role4": "Close reading",
     "voices.q5":
       "“Don’t interpret these metabolomics results yet. Check missing values, batch effects, and outliers first, then turn the recommended statistical steps into a rerunnable script.”",
-    "voices.a5": "Prioritizes data-quality checks before producing a reproducible analysis workflow.",
-    "voices.role5": "Translational medicine researcher",
+    "voices.a5": "Deliver data checks, recommendations, and scripts together for reproducibility and collaboration.",
+    "voices.role5": "Omics analysis",
     "voices.q6":
       "“Search ChEMBL and PubChem for these candidate molecules, compare activity, selectivity, and known risks, then identify the three most valuable experiments to run next.”",
-    "voices.a6": "Combines database evidence with local analysis to prioritize costly follow-up experiments.",
-    "voices.role6": "Computational chemistry researcher",
+    "voices.a6": "Combine database records and local analysis to identify questions worth pursuing.",
+    "voices.role6": "Computational chemistry",
     "features.kicker": "Built for scientific research",
     "features.heading": "Built for research",
     "features.lead":
-      "An independent open-source Rust/Tauri workbench: the agent core, scientific toolchain, and desktop UI all run locally. Your data stays on the machine.",
+      "Keep projects, conversations, and outputs together. Connect models and tools, then work locally or in a configured execution environment.",
     "features.artTitle": "Scientific artifacts, fully traceable",
     "features.artBody":
       "Tables, code blocks, LaTeX, and file paths in a conversation become artifacts with a live sidebar preview. Markdown rendering includes KaTeX and syntax highlighting.",
@@ -324,14 +409,14 @@ const WISP_PAGES_I18N = {
       "Long-lived kernel workers keep variables and DataFrames in memory, isolated per conversation. Iterate across turns without reloading data, and parallel sessions never share state.",
     "features.pyPre":
       ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# Variables remain available in later tool calls\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "36 bundled SKILL workflows",
+    "features.skillTitle": "28 bundled SKILL workflows",
     "features.skillBody":
       "Literature review, analysis modules, figures, Python/R environments, and remote SSH compute—ready to load.",
     "features.skillPre":
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nThe agent loads SKILL.md on demand via use_skill",
-    "features.llmTitle": "Any LLM backend",
+    "features.llmTitle": "Choose a model for the task",
     "features.llmBody":
-      "OpenAI-compatible, OpenAI Responses, Anthropic API, and local <a href=\"acp-agents.html\">ACP agents</a>. <a href=\"model-configuration.html\">See HTTP model configuration</a>.",
+      "OpenAI-compatible, OpenAI Responses, Anthropic API, and local ACP agents. <a href=\"tutorials.html\">Explore the tutorials</a>.",
     "features.ctxTitle": "Three-layer context compression",
     "features.ctxBody":
       "Full history is archived first, then tool/image noise is trimmed safely. When semantic turns must go, an incremental summary checkpoint is written from the original history, and a bounded recent window remains.",
@@ -339,15 +424,15 @@ const WISP_PAGES_I18N = {
     "features.sqlBody":
       "Projects, session frames, messages, and artifacts land in a local database. Restart the app and the history is back.",
     "local.kicker": "Works wherever your data lives",
-    "local.heading": "Keep the data local",
+    "local.heading": "Local projects, flexible compute",
     "local.lead":
-      "Windows (WebView2), macOS (Apple Silicon / Intel, separate builds), and Linux desktops, or a headless CLI. Python and MCP servers configure themselves on first launch.",
+      "Windows (WebView2), macOS (Apple Silicon / Intel, separate builds), and Linux desktops, or a headless CLI. Native biological tools work without Python; optional runtimes can be configured after launch.",
     "local.pkgTitle": "Self-contained installers",
     "local.pkgBody":
-      "Skills, Python, MCP, and demo sessions ship inside Windows MSI/NSIS, macOS dmg, and Linux .deb / AppImage packages. No source tree required.",
-    "local.mcpTitle": "Unified bio MCP",
+      "Installers include Skills, native research tools, and demonstration sessions. Configure optional Python/R tools when needed; no source checkout is required.",
+    "local.mcpTitle": "Native scientific MCP",
     "local.mcpBody":
-      "mcp_bio starts by default: about 240 tools covering PubMed, UniProt, ChEMBL, and 80+ other databases.",
+      "mcp_bio is enabled by default: an in-process catalog of 23 connectors and 247 tools covering PubMed, UniProt, ChEMBL, and ~80 other databases. No Python MCP subprocess.",
     "local.remoteTitle": "Remote compute",
     "local.remoteBody":
       "SKILLs cover SSH, WSL, and GPU hosts. The agent can write and submit long Runs with live logs.",
@@ -372,7 +457,7 @@ const WISP_PAGES_I18N = {
     "usecases.proteinBody":
       "Pull sequences and experimental structures from UniProt / PDB, then combine literature review and figures into citable site tables and Methods drafts.",
     "usecases.proteinLi1": "Fetch sequences and structures via UniProt / PDB MCP",
-    "usecases.proteinLi2": "A 3D structure viewer is still on the roadmap",
+    "usecases.proteinLi2": "Preview molecules and protein structures in the workbench",
     "usecases.proteinLi3": "Chain literature-review SKILLs for hypothesis generation",
     "usecases.proteinPrompt":
       "Fetch a predicted TP53 structure, overlay ClinVar pathogenic variants, and draft a Methods paragraph.",
@@ -387,7 +472,7 @@ const WISP_PAGES_I18N = {
     "usecases.litTitle": "Literature search and manuscript drafts",
     "usecases.litBody":
       "literature-review, paper-narrative, and pdf-explore SKILLs take you from PDFs to structured reviews and narrative.",
-    "usecases.litLi1": "PubMed / Semantic Scholar MCP search",
+    "usecases.litLi1": "PubMed / OpenAlex / arXiv MCP search",
     "usecases.litLi2": "Live Markdown + LaTeX preview",
     "usecases.litLi3": "indication-dossier templates",
     "usecases.litPrompt":
@@ -407,36 +492,61 @@ const WISP_PAGES_I18N = {
     "stack.kicker": "Works with your stack",
     "stack.heading": "Fits the tools you already use",
     "stack.lead":
-      "MCP connects biological databases and custom servers; SKILL.md extends reusable pipelines. The agent treats both as first-class tools.",
-    "stack.skill": "36 bundled workflows",
+      "Built-in mcp_bio queries ~80 scientific databases from an in-process catalog; you can also add custom MCP servers. SKILL.md extends reusable pipelines. The agent treats both as first-class tools.",
+    "stack.skill": "28 bundled workflows",
     "stack.python": "uv-managed venv · isolated R",
-    "stack.browse": "Browse MCP servers",
+    "stack.bioItem": "mcp_bio<span>247 tools · 23 connectors</span>",
+    "stack.browse": "Browse the MCP catalog",
     "faq.heading": "Frequently asked questions",
     "faq.q1": "Is Wisp Science a new model?",
     "faq.a1":
       "No. It is an open-source desktop and CLI app that talks to any compatible LLM with the API key you supply. What is new is the agent loop, tools, MCP, and Python / R kernels around that model.",
     "faq.q2": "How is it different from a generic AI assistant?",
     "faq.a2":
-      "It actually executes: read and write local files, run a shell, call persistent Python / R REPLs, query PubMed/UniProt through MCP, and store the full session in SQLite. It ships 34 domain SKILLs instead of only generating text.",
+      "It actually executes: read and write local files, run a shell, call persistent Python / R REPLs, query PubMed/UniProt through MCP, and store the full session in SQLite. It ships 28 domain SKILLs instead of only generating text.",
     "faq.q3": "Does research data stay private?",
     "faq.a3":
-      "Raw data and compute stay local; sessions and artifacts live in on-disk SQLite. Only prompts and model responses go to your LLM provider, under that API’s privacy policy.",
+      "Project files and conversation records are stored locally. Calls to remote models or online services may send the messages, attachment content, or tool results needed for the task. What is sent depends on your configuration and task, and is subject to the service provider’s data policies.",
     "faq.q4": "Which platforms are supported?",
     "faq.a4":
-      "Windows (signed MSI/NSIS + WebView2), macOS (signed and notarized Apple Silicon / Intel dmgs), and Linux (.deb / AppImage for x86_64 and aarch64) all ship with GitHub Releases. macOS opens with a double-click. If Windows SmartScreen still appears, choose Run anyway.",
+      "Installers are available for Windows, macOS, and Linux. Choose the operating system and processor architecture that match your computer on the official release page; see Quick Start for installation steps.",
     "faq.q5": "Why does macOS keep asking for the keychain password?",
     "faq.a5":
-      "API keys live in the macOS login keychain, bound to the code-signing identity that wrote the item. If you saved a key in unsigned v0.4.x, that item is bound to the old identity; a signed build looks like a different app, so macOS keeps asking you to re-authorize. Fix: open Keychain Access, delete the <code>wisp</code> item, reopen Wisp, paste the key once, and click Always Allow.",
+      "macOS Keychain checks the identity of the app requesting a key. Upgrades or signature changes may require authorization again. Confirm the prompt is from Wisp, then follow the system prompt. If it persists, inspect the relevant Wisp keychain entry and reconfigure the API key.",
     "faq.q6": "What are the prerequisites?",
     "faq.a6":
-      "Installer users: Windows needs WebView2 (usually present on Windows 10/11), macOS uses system WebKit, Linux uses WebKitGTK; all need your own API key. Optionally install R with jsonlite for the persistent r tool. Building from source needs Rust, uv, Trunk, and Tauri CLI v2 (plus Xcode command-line tools on macOS). First launch creates a Python venv and installs MCP dependencies.",
+      "Installer users: Windows needs WebView2 (usually present on Windows 10/11), macOS uses system WebKit, Linux uses WebKitGTK; all need your own API key. Optionally install R with jsonlite for the persistent r tool. Building from source needs Rust, Trunk, and Tauri CLI v2 (plus Xcode command-line tools on macOS). First-run setup detects executable paths in the background and saves them to Local. Missing tools do not block startup or trigger installs; use local-env-setup after launch when needed.",
     "faq.q7": "Is Wisp Science an independent project?",
     "faq.a7":
       "Yes. We originally looked at closed products such as Claude Science, but they were unfriendly to some regions and locked down. Wisp Science started from that gap: it learned from their Skills and MCP tool choices, then implemented a local-first research workbench in Rust/Tauri (AGPL-3.0). The agent architecture, multi-project workflow, Run manager, plugins, and ACP support are original; it can talk to any model provider, and anyone can use, study, and improve it.",
-    "faq.q8": "Is the current release production-stable?",
+    "faq.q8": "Where should I begin?",
     "faq.a8":
-      "v1.6.1 is an active preview for local scientific workflows. The core agent, streaming, tools, Python / R, MCP, share export, and desktop UI run; still review critical methods and outputs, and check the release notes for current signing and update status.",
+      "v1.12.0 is an active preview for local scientific workflows. The core agent, streaming, tools, Python / R, MCP, share export, and desktop UI run; still review critical methods and outputs, and check the release notes for current signing and update status.",
     "footer.copy": "© 2026 Wisp Science · Open-source scientific computing agent",
+    "mcp.title": "Scientific MCP",
+    "mcp.lead":
+      "Public biology and chemistry retrieval is an in-process native catalog (mcp_bio)—not a Python MCP subprocess, and there is no bundled ketcher server. Default: 23 connectors, 247 tools, ~80 upstream databases. The agent discovers tools with search_mcp_tools and calls them with use_mcp_tool.",
+    "mcp.wiki": "GitHub Wiki inventory",
+    "mcp.howKicker": "How it works",
+    "mcp.nativeTitle": "In-process catalog",
+    "mcp.nativeBody":
+      "Desktop, CLI, and the ACP bridge share crates/wisp-bio. Default mcp_bio mounts every implemented domain; WISP_MCP_PKG=mcp_pubmed selects one.",
+    "mcp.discoverTitle": "Discover, then call",
+    "mcp.discoverBody":
+      "The full schema is never copied into every model request. Describe the database or the goal; do not guess tool names. Connection changes apply to new sessions or the next idle-agent rebuild.",
+    "mcp.customTitle": "Custom MCP",
+    "mcp.customBody":
+      "Settings → Connections → Add connection accepts a local command or a remote URL (including OAuth). That is separate from this catalog. Secrets stay in the OS keyring.",
+    "mcp.notice":
+      "KEGG, CADD, PanglaoDB, and Sanger Cell Model Passports carry academic or snapshot notices. ZINC SmallWorld is the public ZINC20 for-sale index. A PubMed open-access flag is not a reuse grant. Results are almost always bounded pages, not full-database dumps.",
+    "mcp.tocKicker": "23 connectors",
+    "mcp.tocHeading": "Connector index",
+    "mcp.thConnector": "Connector",
+    "mcp.thPkg": "Package",
+    "mcp.thCount": "Tools",
+    "mcp.thUpstream": "Upstream",
+    "mcp.thTool": "Tool",
+    "mcp.thDoes": "What it does",
     "models.lead":
       "The desktop app manages remote API backends as model profiles. Each profile can set a provider, API URL, model ID, advanced parameters, and its own API key.",
     "models.download": "Download the latest release",
@@ -549,8 +659,9 @@ function wispPagesApply(lang) {
   const page = document.documentElement.dataset.page || "home";
   document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
   document.documentElement.dataset.lang = lang;
-  const title = pack[`meta.${page}.title`];
-  const desc = pack[`meta.${page}.desc`];
+  const root = document.documentElement;
+  const title = root.dataset[lang === "en" ? "titleEn" : "titleZh"] || pack[`meta.${page}.title`];
+  const desc = root.dataset[lang === "en" ? "descEn" : "descZh"] || pack[`meta.${page}.desc`];
   if (title) document.title = title;
   const meta = document.querySelector('meta[name="description"]');
   if (meta && desc) meta.setAttribute("content", desc);
@@ -568,6 +679,21 @@ function wispPagesApply(lang) {
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
     const text = pack[el.dataset.i18nAria];
     if (text != null) el.setAttribute("aria-label", text);
+  });
+  document.querySelectorAll("[data-text-zh][data-text-en]").forEach((el) => {
+    el.textContent = el.getAttribute(`data-text-${lang}`);
+  });
+  document.querySelectorAll("[data-href-zh][data-href-en]").forEach((el) => {
+    el.setAttribute("href", el.getAttribute(`data-href-${lang}`));
+  });
+  // Preserve language in direct URLs and navigation even when storage is blocked.
+  document.querySelectorAll("a[href]").forEach((link) => {
+    const href = link.getAttribute("href");
+    if (!href || href.startsWith("#")) return;
+    const target = new URL(href, location.href);
+    if (target.origin !== location.origin || !target.pathname.endsWith(".html")) return;
+    target.searchParams.set("lang", lang);
+    link.setAttribute("href", href.split(/[?#]/)[0] + target.search + target.hash);
   });
   document.querySelectorAll(".lang-switch [data-lang]").forEach((btn) => {
     btn.setAttribute("aria-pressed", btn.dataset.lang === lang ? "true" : "false");

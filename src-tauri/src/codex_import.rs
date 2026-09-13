@@ -1482,12 +1482,12 @@ pub(super) async fn preview_claude_session(
 
 async fn import_sessions(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     paths: Vec<String>,
     context_id: Option<String>,
     provider: ImportProvider,
 ) -> Result<ExternalImportSummary, String> {
-    let ap = state.active(window.label());
+    let ap = state.require_active(window.label())?;
     let _project_activity = state.begin_project_activity(&ap.id)?;
     let model_id = super::models::active_profile_id(&state.store).await;
     let context_id = context_id.unwrap_or_else(|| "local".into());
@@ -1568,7 +1568,7 @@ async fn import_sessions(
 #[tauri::command]
 pub(super) async fn import_codex_sessions(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     paths: Vec<String>,
     context_id: Option<String>,
 ) -> Result<ExternalImportSummary, String> {
@@ -1578,7 +1578,7 @@ pub(super) async fn import_codex_sessions(
 #[tauri::command]
 pub(super) async fn import_claude_sessions(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     paths: Vec<String>,
     context_id: Option<String>,
 ) -> Result<ExternalImportSummary, String> {

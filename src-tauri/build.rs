@@ -19,6 +19,18 @@ fn main() {
     purge_stale_seed_dirs();
     bake_model_catalog();
     tauri_build::build();
+    // tauri-build embeds the Windows manifest into binaries, not examples.
+    // The real-WebView smoke also needs Common Controls v6 (TaskDialogIndirect).
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/webview_recovery_smoke.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg-examples=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg-examples=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
+    }
 }
 
 /// Distill models.dev into `$OUT_DIR/model_catalog.json`, falling back to the

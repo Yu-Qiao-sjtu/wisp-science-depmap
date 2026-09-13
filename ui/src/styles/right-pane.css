@@ -315,7 +315,7 @@ button.run-status:hover { filter:brightness(0.96); }
 .notebook-output .nb-out-latex { margin-top:8px; padding:10px 12px; overflow:auto; border:1px solid var(--border); border-radius: var(--radius-xs); background:var(--bg-sunken); }
 .notebook-output .nb-out-omitted { margin-top:8px; padding:8px 10px; border-left:3px solid var(--warn); color:var(--text-muted); background:var(--bg-sunken); }
 
-.rp-artifacts-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.rp-artifacts-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: clip; }
 .rp-artifacts-body.preview-hidden .rp-tiles {
   max-height: none; flex: 1 1 auto; border-bottom: none;
 }
@@ -346,7 +346,7 @@ button.run-status:hover { filter:brightness(0.96); }
 .rp-tiles {
   display: flex; flex-direction: column; gap: 6px;
   padding: 12px; border-bottom: 1px solid var(--border);
-  flex: 0 0 auto; max-height: min(240px, 34vh); overflow-y: auto;
+  flex: 0 0 auto; min-height: 0; max-height: min(240px, 34vh); overflow-y: auto; overscroll-behavior: contain;
   background: var(--bg-sunken);
 }
 .rp-tile {
@@ -850,3 +850,9 @@ button.run-status:hover { filter:brightness(0.96); }
 .highlight-text { flex: 1; min-width: 0; text-align: left; background: none; border: none; margin: 0; padding: 2px 0 2px 10px; border-left: 3px solid var(--clay); color: var(--text); font: inherit; font-size: 13px; line-height: 1.55; cursor: pointer; white-space: pre-wrap; word-break: break-word; }
 .highlight-text:hover { color: var(--clay-strong); }
 .highlight-actions { display: flex; flex-direction: column; gap: 2px; }
+.center-mcp-app[data-mcp-backend="native-child"] { display: flex; flex-direction: column; min-height: 0; }
+.mcp-app-isolation-controls { display: flex; gap: 8px; align-items: center; padding: 6px 10px; flex: 0 0 auto; font-size: 12px; }
+.mcp-app-isolation-controls span { flex: 1; opacity: .75; }
+.mcp-app-isolation-controls button { flex: 0 0 auto; }
+.mcp-app-native-content { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; }
+.mcp-app-native-status { padding: 16px; }

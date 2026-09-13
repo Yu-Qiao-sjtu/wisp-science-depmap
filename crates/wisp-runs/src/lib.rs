@@ -21,7 +21,8 @@ pub use run_context::*;
 /// Always-on prompt for hosts that expose the Run tools.
 pub fn runs_guidance() -> String {
     "## Runs\n\n\
-Long-running commands use **run_in_context** (context_id `local`, or an SSH/WSL context when one is selected). \
+Long-running standalone commands use **run_in_context** (context_id `local`, or an SSH/WSL context when one is selected). \
+Short standalone local scripts can run through **shell**. Runs start a fresh process and cannot reuse objects in a persistent Python/R runtime; keep state-dependent analysis in that runtime even when it takes time. \
 After submission, call **monitor_run** with the returned run_id. Wisp waits without extra model calls. \
 Do not use shell `sleep`, `Start-Sleep`, `ps`/`kill -0` polling, `nohup`, background `&`, or repeated **get_run**. \
 The `shell` tool has a 60s timeout and is the wrong tool for waiting on jobs. \

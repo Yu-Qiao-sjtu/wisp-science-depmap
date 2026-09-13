@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="MCP · 教程 | Wisp Science" data-title-en="MCP · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：MCP" data-desc-en="Wisp Science Basics: MCP">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：MCP">
+  <title>MCP · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="../index.html#download"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-mcp" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" id="wisp-science-mcp" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：MCP" data-text-en="Wisp Science Basics: MCP">Wisp Science基础入门：MCP</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-mcp.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-mcp.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-mcp.md" data-i18n="tutorials.source">查看原文</a></header>
+<div class="tutorial-body lang-zh" lang="zh-CN">
+<p>做科研时，我们经常需要在不同工具之间来回切换：去 PubMed 查论文，到 GEO 找数据，再把结果整理进项目笔记。如果希望 AI 参与这些工作，就需要让它能够访问相应的数据源和工具。</p>
+<p>MCP 提供了一套统一的连接方式。在 Wisp Science 中，你可以使用已有的科研连接器，也可以添加自己的 MCP 服务，让检索、读取和整理结果在同一段对话里完成。</p>
+<p>这篇文章从概念讲起，再用两个例子介绍如何配置和验证连接。</p>
+<p><strong>先认识 MCP：让 AI 应用连接外部工具的通用协议。</strong></p>
+<p>MCP 的全称是 <strong>Model Context Protocol，模型上下文协议</strong>。它是一项开放标准，用来连接 AI 应用与外部系统，包括数据源、工具和工作流。MCP 官方用 USB-C 接口作比喻：设备通过统一接口连接，AI 应用也可以通过统一协议接入不同服务。<a href="https://modelcontextprotocol.io/docs/getting-started/intro">MCP 官方介绍</a></p>
+<p>放到 Wisp Science 里，可以这样理解各自的分工：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>角色</th>
+<th>负责什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>大模型</td>
+<td>理解你的需求，选择工具，解读返回结果</td>
+</tr>
+<tr>
+<td>Wisp Science</td>
+<td>管理连接、组织工具调用、处理权限，并展示结果</td>
+</tr>
+<tr>
+<td>MCP 服务</td>
+<td>提供具体能力，例如读取网页、检索笔记或查询数据库</td>
+</tr>
+</tbody>
+</table></div>
+<p>例如，你要求“查找某个研究方向的论文”，Wisp 可以把模型选定的检索请求交给相应工具，再让模型依据返回的记录整理结果。</p>
+<p>MCP 规范中的服务端能力包括 <strong>Tools（工具）</strong>、<strong>Resources（资源）</strong> 和 <strong>Prompts（提示模板）</strong>。具体服务和客户端支持哪些能力，需要看各自实现；本文关注 Wisp 中最直接的用法：连接服务并调用工具。<a href="https://modelcontextprotocol.io/specification/2025-06-18/server/index">MCP 服务端能力说明</a></p>
+<p>对科研用户来说，这意味着可以要求回答附上实际查到的 PMID、数据集编号和来源链接，方便后续核验。工具结果仍然需要结合原始记录和论文内容判断。</p>
+<p><strong>第一次使用，可以先试试 Wisp 内置的科研连接器。</strong></p>
+<p>Wisp Science 已有面向 PubMed、GEO、UniProt 等数据源的内置科研连接器。打开项目，进入 <strong>设置 → 连接</strong>，即可查看可用连接器，并按需要启用。</p>
+<p>点击连接器名称，可以查看简介、数据来源和工具列表。展开某个工具，还能看到参数说明、必填项和默认值。具体覆盖范围可参阅项目的<a href="https://xuzhougeng.github.io/wisp-science/mcp.html">科研连接器清单</a>。</p>
+<p>先确认已配置好可用模型，再试着发送这样一条消息：</p>
+<blockquote>
+<p>请使用 PubMed 相关工具，检索 2024—2025 年关于植物单细胞转录组的论文，先整理 5 篇。请列出标题、年份、期刊、PMID 和来源链接，并用一句话概括研究对象。只收录工具实际返回的论文；检索失败时请说明原因。</p>
+</blockquote>
+<p>你不需要记住工具名称。Wisp 内置 Agent 会先发现相关工具，再调用匹配的能力。把数据库、研究主题和需要的输出说清楚即可。</p>
+<p>内置连接器已经随应用提供，访问上游数据库时仍需要网络；个别数据源也可能有凭据、额度或访问条件。</p>
+<p><strong>添加自定义 MCP 时，先判断对方提供的是“命令”还是“网址”。</strong></p>
+<p>统一入口是：<strong>设置 → 连接 → 添加连接</strong>。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>对方提供的配置</th>
+<th>Wisp 中选择的类型</th>
+<th>需要准备什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uvx …</code>、<code>npx …</code> 等启动命令</td>
+<td>本地命令</td>
+<td>对应运行工具、启动参数，以及服务要求的环境变量</td>
+</tr>
+<tr>
+<td><code>https://…/mcp</code> 等服务端点</td>
+<td>远程 URL</td>
+<td>MCP 地址，以及服务要求的登录授权或请求头</td>
+</tr>
+</tbody>
+</table></div>
+<p>“本地命令”表示 Wisp 在本机启动一个 MCP 程序，通过标准输入输出与它通信。这个程序仍可能联网访问外部服务。</p>
+<p>“远程 URL”表示 Wisp 连接一个已经运行的 MCP 服务。这里要填写服务商提供的 <strong>MCP 端点</strong>；服务官网首页和普通 API 地址通常不能直接使用。</p>
+<p>下面两个例子可以按需要选择，不必全部配置。</p>
+<p><strong>本地命令示例：添加 Fetch 网页读取工具。</strong></p>
+<p>Fetch 是 MCP 官方示例仓库中的服务，可以读取网页并将内容转换为适合模型处理的文本。其文档提供了通过 <code>uvx mcp-server-fetch</code> 启动的配置方式。<a href="https://github.com/modelcontextprotocol/servers/blob/main/src/fetch/README.md">Fetch 使用说明</a></p>
+<p>开始前，需要在电脑上安装 uv。可以参考 <a href="https://docs.astral.sh/uv/getting-started/installation/">uv 官方安装说明</a>，安装后在终端运行 <code>uvx --version</code>，确认命令可用。</p>
+<p>随后打开 Wisp 的“添加连接”，填写：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>字段</th>
+<th>填写内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>名称</td>
+<td><code>Fetch 网页读取</code></td>
+</tr>
+<tr>
+<td>类型</td>
+<td>本地命令</td>
+</tr>
+<tr>
+<td>命令</td>
+<td><code>uvx</code></td>
+</tr>
+<tr>
+<td>参数</td>
+<td><code>mcp-server-fetch</code></td>
+</tr>
+<tr>
+<td>环境变量</td>
+<td>此例通常可以留空</td>
+</tr>
+</tbody>
+</table></div>
+<p>注意，<strong>命令和参数分开填写</strong>：“命令”框只填 <code>uvx</code>，“参数”框填 <code>mcp-server-fetch</code>。</p>
+<p>点击 <strong>测试</strong>，成功后再点击 <strong>保存</strong>，并确认连接处于启用状态。首次运行可能需要下载依赖，因此会比后续启动慢一些。</p>
+<p>如果终端能找到 <code>uvx</code>，但 Wisp 提示找不到命令，可以把“命令”改为 <code>uvx</code> 可执行文件的完整路径。macOS/Linux 可用 <code>command -v uvx</code> 查询，Windows PowerShell 可用 <code>(Get-Command uvx).Source</code> 查询。</p>
+<p>Windows 上若遇到编码相关异常，可以按 Fetch 文档在“环境变量”中添加：名称为 <code>PYTHONIOENCODING</code>，值为 <code>utf-8</code>。</p>
+<p>保存后，新建一段对话进行验证：</p>
+<blockquote>
+<p>请使用“Fetch 网页读取”连接，读取 https://example.com ，告诉我网页标题和主要内容，并注明实际读取的网址。如果调用失败，请报告错误。</p>
+</blockquote>
+<p>验证时，既要看工具调用是否成功，也要看回答是否依据返回内容。Fetch 适合读取网页文本，需要登录或依赖复杂页面交互的任务，应根据实际情况选择其他工具。</p>
+<p><strong>远程 URL 示例：连接 Notion。</strong></p>
+<p>如果你使用 Notion 管理研究笔记，可以连接它提供的远程 MCP 服务。Notion 官方提供的端点为 <code>https://mcp.notion.com/mcp</code>，通过 OAuth 授权访问工作区。<a href="https://developers.notion.com/guides/mcp/get-started-with-mcp">Notion MCP 连接说明</a></p>
+<p>在 Wisp 的“添加连接”中填写：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>字段</th>
+<th>填写内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>名称</td>
+<td><code>Notion 研究笔记</code></td>
+</tr>
+<tr>
+<td>类型</td>
+<td>远程 URL</td>
+</tr>
+<tr>
+<td>URL</td>
+<td><code>https://mcp.notion.com/mcp</code></td>
+</tr>
+<tr>
+<td>认证方式</td>
+<td>OAuth</td>
+</tr>
+</tbody>
+</table></div>
+<p>点击 <strong>测试</strong>或<strong>保存</strong>，Wisp 会按授权流程打开浏览器。登录后，按页面提示选择工作区并完成授权。测试不会保存连接，测试成功后仍需点击保存。</p>
+<p>接着，新建一段对话：</p>
+<blockquote>
+<p>请使用“Notion 研究笔记”连接，搜索标题包含“文献阅读”的页面，只返回页面标题和链接。</p>
+</blockquote>
+<p>从搜索和读取开始，能比较容易确认授权范围是否符合预期。后续需要创建或更新笔记时，再明确目标页面和要写入的内容。</p>
+<p>其他远程服务可能使用 API Key，而非 OAuth。这时按服务商文档填写“请求头”。例如，服务商要求 Bearer Token 时，添加名称为 <code>Authorization</code> 的请求头，其值填写 <code>Bearer 你的实际密钥</code>。这类手动请求头配置通常将认证方式选为“无”，表示不走 OAuth 流程；请求本身仍通过填写的请求头认证。</p>
+<p>Wisp 会把连接级环境变量值、请求头值和 OAuth Token 保存在操作系统密钥环中。编辑已有连接时，密钥值留空会保留原值，删除对应行才会清除。完整操作说明见<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置教程</a>。</p>
+<p><strong>配置完成后，把“用什么、做什么、交付什么”写进任务。</strong></p>
+<p>Wisp 当前没有逐轮选择 MCP 的下拉框。连接是否可用，由当前项目的连接设置和已启用插件决定；在提示词里可以进一步说明本次任务希望使用的数据源。</p>
+<p>例如，寻找公开数据时可以这样写：</p>
+<blockquote>
+<p>请使用 GEO 相关工具，检索拟南芥根尖单细胞 RNA 测序公开数据。先列出候选数据集的 GSE 编号、研究主题、平台和来源链接，再说明各数据集与我的研究问题有什么关系。暂时只整理元数据。</p>
+</blockquote>
+<p>或者，把检索结果整理成文件：</p>
+<blockquote>
+<p>请使用 PubMed 相关工具检索植物根系细胞图谱论文，整理 10 篇候选文献。把标题、年份、PMID、链接和筛选理由保存为项目中的 Markdown 文件，并在对话中告诉我文件位置。</p>
+</blockquote>
+<p>这里的检索由相关工具完成，整理和保存则可以结合 Wisp 的其他能力完成。同一项科研任务可以使用多个工具，不必由一个 MCP 包办所有步骤。</p>
+<p>修改连接配置后，建议新建会话验证，避免旧会话尚未更新连接状态。需要停用某个服务时，在 <strong>设置 → 连接</strong> 关闭它，并新建会话或等待空闲 Agent 重建。工具详情中还可以设置“允许、询问、禁止”规则。</p>
+<p><strong>遇到问题，可以按出现的位置排查。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本地连接提示找不到命令</td>
+<td>uv、Node 等依赖是否安装；必要时填写可执行文件完整路径</td>
+</tr>
+<tr>
+<td>第一次测试一直等待</td>
+<td>是否正在下载依赖；网络是否能访问所需的软件包来源</td>
+</tr>
+<tr>
+<td>远程连接返回 401/403</td>
+<td>授权是否完成、Token 是否有效、账号是否有目标资源权限</td>
+</tr>
+<tr>
+<td>远程连接返回 404</td>
+<td>是否填了正确的 MCP 端点，而非服务首页或普通 API 地址</td>
+</tr>
+<tr>
+<td>测试成功，对话却未调用</td>
+<td>是否已保存并启用；新建会话后，明确指定连接名称和任务</td>
+</tr>
+<tr>
+<td>能列出工具，但具体查询失败</td>
+<td>查看该次调用的错误，检查参数、资源权限、额度或上游服务状态</td>
+</tr>
+</tbody>
+</table></div>
+<p>涉及代理时，可进入 <strong>设置 → 常规 → 网络</strong>，检查 MCP 服务对应的网络设置。已有连接需要重新连接后使用新值，本地 MCP 是否遵循代理环境变量还取决于服务自身实现。</p>
+<p>第一次尝试，可以选一个熟悉的小任务：检索 5 篇论文、读取一个公开网页，或者搜索一篇自己的研究笔记。观察 Wisp 调用了什么工具、拿到了什么结果，再沿着这些结果继续提问，就能逐步把 MCP 用到自己的科研流程中。</p>
+<blockquote>
+<p>本文依据撰写时的 Wisp Science 项目文档与界面实现整理；不同版本的界面文字可能略有差异。文中的任务提示词用于演示使用方式，不代表已经执行的检索结果。</p>
+</blockquote>
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>Research often means switching between tools: PubMed for papers, GEO for datasets, and project notes for organizing results. To help with this work, an AI needs access to the relevant data sources and tools.</p>
+<p>MCP provides a common way to connect them. In Wisp Science, you can use built-in research connectors or add your own MCP services so that searching, reading, and organizing results happen in the same conversation.</p>
+<p>This tutorial introduces the concept, then uses two examples to configure and verify connections.</p>
+<p><strong>MCP connects AI applications to external tools.</strong></p>
+<p>MCP stands for <strong>Model Context Protocol</strong>, an open standard connecting AI applications to external systems such as data sources, tools, and workflows. Its official introduction compares it to USB-C: a common interface lets different systems connect. See the <a href="https://modelcontextprotocol.io/docs/getting-started/intro">MCP introduction</a>.</p>
+<p>In Wisp, the responsibilities are:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Participant</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Language model</td>
+<td>Understand your request, select tools, and interpret results</td>
+</tr>
+<tr>
+<td>Wisp Science</td>
+<td>Manage connections, organize calls, handle permissions, and display results</td>
+</tr>
+<tr>
+<td>MCP service</td>
+<td>Provide capabilities such as webpage reading, note search, or database queries</td>
+</tr>
+</tbody>
+</table></div>
+<p>For a literature request, Wisp can pass the model's chosen query to the appropriate tool, then let the model organize the returned records.</p>
+<p>MCP server capabilities include <strong>Tools</strong>, <strong>Resources</strong>, and <strong>Prompts</strong>. Support depends on each server and client. This tutorial focuses on connecting services and calling tools. See <a href="https://modelcontextprotocol.io/specification/2025-06-18/server/index">MCP server capabilities</a>.</p>
+<p>For research, request actual PMIDs, dataset identifiers, and source URLs so you can verify them later. Tool output still needs to be evaluated against original records and papers.</p>
+<p><strong>Start with a built-in research connector.</strong></p>
+<p>Wisp includes connectors for sources such as PubMed, GEO, and UniProt. Open a project and go to <strong>Settings → Connections</strong> to inspect and enable them.</p>
+<p>Click a connector to see its description, sources, and tool list. Expand a tool for parameters, required fields, and defaults. The <a href="https://xuzhougeng.github.io/wisp-science/mcp.html">research connector catalog</a> describes coverage.</p>
+<p>After configuring a working model, try:</p>
+<blockquote>
+<p>Use the PubMed tools to find five papers from 2024–2025 on plant single-cell transcriptomics. List title, year, journal, PMID, and source URL, with one sentence about the study organism or material. Include only papers actually returned by the tools, and explain any search failure.</p>
+</blockquote>
+<p>You do not need to memorize tool names. The built-in agent discovers relevant tools and calls a matching capability. Specify the database, research topic, and desired output.</p>
+<p>Built-in connectors ship with the app, but accessing upstream databases still requires network access. Some sources also have credential, quota, or access requirements.</p>
+<p><strong>For a custom MCP service, identify whether you have a command or a URL.</strong></p>
+<p>Open <strong>Settings → Connections → Add connection</strong>.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Supplied configuration</th>
+<th>Connection type</th>
+<th>Prerequisites</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A command such as <code>uvx …</code> or <code>npx …</code></td>
+<td>Local command</td>
+<td>The launcher, arguments, and any required environment variables</td>
+</tr>
+<tr>
+<td>A service endpoint such as <code>https://…/mcp</code></td>
+<td>Remote URL</td>
+<td>The MCP endpoint and any required authorization or headers</td>
+</tr>
+</tbody>
+</table></div>
+<p>A local command starts an MCP process on your computer and communicates over standard input and output. The process may still access online services.</p>
+<p>A remote URL connects to an already-running MCP service. Enter the provider's <strong>MCP endpoint</strong>; a website homepage or ordinary API URL usually will not work.</p>
+<p>Choose whichever example below is useful; you do not need both.</p>
+<p><strong>Local command example: add Fetch for reading webpages.</strong></p>
+<p>Fetch is a service in the official MCP examples repository. It reads webpages and converts them into text suitable for a model. Its documented launch command is <code>uvx mcp-server-fetch</code>. See the <a href="https://github.com/modelcontextprotocol/servers/blob/main/src/fetch/README.md">Fetch instructions</a>.</p>
+<p>Install uv following its <a href="https://docs.astral.sh/uv/getting-started/installation/">official installation guide</a>, then run <code>uvx --version</code> in a terminal to check that the command is available.</p>
+<p>Fill in Add connection:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name</td>
+<td><code>Fetch webpage reader</code></td>
+</tr>
+<tr>
+<td>Type</td>
+<td>Local command</td>
+</tr>
+<tr>
+<td>Command</td>
+<td><code>uvx</code></td>
+</tr>
+<tr>
+<td>Arguments</td>
+<td><code>mcp-server-fetch</code></td>
+</tr>
+<tr>
+<td>Environment variables</td>
+<td>Usually empty for this example</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Keep the command and arguments separate.</strong> Enter only <code>uvx</code> in Command and <code>mcp-server-fetch</code> in Arguments.</p>
+<p>Click <strong>Test</strong>, then <strong>Save</strong> after success, and verify that the connection is enabled. The first run may download dependencies and take longer.</p>
+<p>If a terminal finds <code>uvx</code> but Wisp cannot, enter its full executable path. Find it with <code>command -v uvx</code> on macOS/Linux or <code>(Get-Command uvx).Source</code> in Windows PowerShell.</p>
+<p>For Windows encoding errors, the Fetch documentation suggests the environment variable <code>PYTHONIOENCODING</code> with value <code>utf-8</code>.</p>
+<p>Save the connection and start a new conversation:</p>
+<blockquote>
+<p>Use the Fetch webpage reader connection to read https://example.com. Report the page title, main content, and URL actually read. If the call fails, report the error.</p>
+</blockquote>
+<p>Check both successful tool execution and whether the answer follows the returned content. Fetch is suited to webpage text; login-dependent or highly interactive tasks may need other tools.</p>
+<p><strong>Remote URL example: connect Notion.</strong></p>
+<p>If you keep research notes in Notion, you can connect its remote MCP service at <code>https://mcp.notion.com/mcp</code>, using OAuth for workspace authorization. See <a href="https://developers.notion.com/guides/mcp/get-started-with-mcp">Notion's connection instructions</a>.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name</td>
+<td><code>Notion research notes</code></td>
+</tr>
+<tr>
+<td>Type</td>
+<td>Remote URL</td>
+</tr>
+<tr>
+<td>URL</td>
+<td><code>https://mcp.notion.com/mcp</code></td>
+</tr>
+<tr>
+<td>Authentication</td>
+<td>OAuth</td>
+</tr>
+</tbody>
+</table></div>
+<p>Click <strong>Test</strong> or <strong>Save</strong> to follow the browser authorization flow. Sign in, choose the workspace, and authorize access. Testing does not save the connection; save it afterward.</p>
+<p>In a new conversation, try:</p>
+<blockquote>
+<p>Use Notion research notes to find pages with “Literature reading” in the title. Return only page titles and links.</p>
+</blockquote>
+<p>Search and reading are useful initial checks of authorization scope. When you later want to create or update notes, specify the target page and the exact content.</p>
+<p>Other remote services may use API keys instead of OAuth. Fill request headers according to their documentation. For a required Bearer token, use <code>Authorization</code> with value <code>Bearer YOUR_ACTUAL_KEY</code>. Such manual-header configurations normally select authentication <strong>None</strong>, meaning no OAuth flow; the header still authenticates the request.</p>
+<p>Wisp stores connection-level environment values, header values, and OAuth tokens in the OS keyring. When editing, leaving an existing secret blank preserves it; removing its row clears it. See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Basic Configuration</a>.</p>
+<p><strong>Specify the source, task, and deliverable.</strong></p>
+<p>There is no per-turn MCP selector. Available connections depend on the current project's connection settings and enabled plugins. Your prompt can specify which source this task should use.</p>
+<p>For public data:</p>
+<blockquote>
+<p>Use GEO tools to find public single-cell RNA-seq datasets for Arabidopsis root tips. List candidate GSE identifiers, topics, platforms, and source URLs, then explain their relevance to my question. Only organize metadata for now.</p>
+</blockquote>
+<p>For a saved literature list:</p>
+<blockquote>
+<p>Use PubMed tools to find ten candidate papers on plant root cell atlases. Save titles, years, PMIDs, links, and screening reasons to a Markdown file in the project, then report its location.</p>
+</blockquote>
+<p>The connector retrieves information; other Wisp tools can organize and save it. One research task can combine several tools without a single MCP service doing every step.</p>
+<p>After changing connections, validate in a new session to avoid an older agent's connection state. Disable a service under <strong>Settings → Connections</strong>, then create a new session or wait for an idle agent rebuild. Tool details also offer Allow, Ask, and Deny permission rules.</p>
+<p><strong>Troubleshoot at the point of failure.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local command not found</td>
+<td>Installed uv/Node dependencies; use an absolute executable path if needed</td>
+</tr>
+<tr>
+<td>First test keeps waiting</td>
+<td>Dependency downloads and access to package sources</td>
+</tr>
+<tr>
+<td>Remote 401 / 403</td>
+<td>Completed authorization, valid token, and resource permissions</td>
+</tr>
+<tr>
+<td>Remote 404</td>
+<td>MCP endpoint rather than service homepage or ordinary API URL</td>
+</tr>
+<tr>
+<td>Test succeeds but no tool is called</td>
+<td>Saved and enabled connection; new session with its name and a specific task</td>
+</tr>
+<tr>
+<td>Tools are listed but a query fails</td>
+<td>Actual call error, parameters, permissions, quota, or upstream status</td>
+</tr>
+</tbody>
+</table></div>
+<p>For proxies, check <strong>Settings → General → Network</strong> for MCP settings. Existing connections need to reconnect; whether a local MCP process honors proxy variables also depends on that service.</p>
+<p>Start with a familiar small task: five papers, a public webpage, or a note search. Inspect the called tool and returned results, then continue from those results to build a useful research workflow.</p>
+<blockquote>
+<p>This tutorial reflects Wisp documentation and implementation when written. Labels may vary by version. Example prompts demonstrate usage, not searches already executed.</p>
+</blockquote>
+</div>
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-transfer.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="导入、导出与分享" data-text-en="Import, Export, and Sharing">导入、导出与分享</strong></a><a class="tutorial-next" href="wisp-science-skills.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="Skills" data-text-en="Skills">Skills</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-mcp" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

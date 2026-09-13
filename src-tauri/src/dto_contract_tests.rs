@@ -8,9 +8,93 @@
 
 use serde_json::json;
 
+#[test]
+fn mcp_app_isolation_dtos_keep_js_camel_case_and_page_generation() {
+    let handle = wisp_dto::McpAppChildHandle {
+        owner_epoch: "page-1".into(),
+        mount_serial: 4,
+        child_label: "mcp-app-child-test".into(),
+    };
+    let value = serde_json::to_value(&handle).unwrap();
+    assert_eq!(
+        value,
+        json!({"ownerEpoch":"page-1","mountSerial":4,"childLabel":"mcp-app-child-test"})
+    );
+    let bounds: wisp_dto::McpAppChildBounds = serde_json::from_value(json!({"x":10,"y":20,"width":300,"height":200,"viewportWidth":1000,"viewportHeight":700,"visible":false,"revision":3})).unwrap();
+    assert_eq!(bounds.revision, 3);
+    let bootstrap = wisp_dto::McpAppChildBootstrap {
+        handle,
+        instance_id: "mcp-app:session:ui://test".into(),
+        payload: json!({"resource":{"text":"<body>"}}),
+        host_context: json!({"theme":"light"}),
+        version: "test".into(),
+        server_tools_available: false,
+    };
+    let decoded: wisp_dto::McpAppChildBootstrap = roundtrip(&bootstrap);
+    assert_eq!(decoded.handle.mount_serial, 4);
+    assert_eq!(decoded.host_context["theme"], "light");
+    let request: wisp_dto::McpAppChildRequest = serde_json::from_value(
+        json!({"id":null,"method":"ui/notifications/initialized","params":{}}),
+    )
+    .unwrap();
+    assert!(request.id.is_none());
+    assert_eq!(
+        serde_json::to_value(wisp_dto::McpAppChildCloseReason::UserClose).unwrap(),
+        "user_close"
+    );
+}
+
+#[test]
+fn network_settings_support_partial_persisted_configuration() {
+    let settings: wisp_dto::NetworkSettings = serde_json::from_value(json!({
+        "model_proxy_url": "none",
+        "pip_index_url": "https://mirror.test/simple"
+    }))
+    .unwrap();
+    assert!(settings.mcp_proxy_url.is_empty());
+    assert!(settings.command_proxy_url.is_empty());
+    let ui: wisp_dto::NetworkSettings = roundtrip(&settings);
+    assert_eq!(ui, settings);
+}
+
+#[test]
+fn restored_acp_session_state_contract() {
+    let backend = wisp_dto::AcpSessionState {
+        frame_id: "frame-a".into(),
+        modes: Some(json!({"availableModes": [{"id":"plan","name":"Plan"}]})),
+        config_options: Some(vec![json!({"id":"model","currentValue":"smart"})]),
+    };
+    let ui: wisp_dto::AcpSessionState = roundtrip(&backend);
+    assert_eq!(ui.frame_id, "frame-a");
+    assert_eq!(ui.config_options.unwrap()[0]["currentValue"], "smart");
+    assert_eq!(ui.modes.unwrap()["availableModes"][0]["id"], "plan");
+}
+
 fn roundtrip<T: serde::Serialize, D: serde::de::DeserializeOwned>(value: &T) -> D {
     let json = serde_json::to_value(value).expect("backend value must serialize");
     serde_json::from_value(json).expect("UI DTO must accept the backend payload")
+}
+
+#[test]
+fn remote_connector_tool_keeps_server_description_and_schemas() {
+    let backend = wisp_mcp::RemoteTool {
+        name: "example_query".into(),
+        title: None,
+        description: "Search records.\nReturns a bounded page.".into(),
+        input_schema: json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+        output_schema: Some(json!({"type":"object","properties":{"total":{"type":"integer"}}})),
+        meta: None,
+        annotations: None,
+    };
+    let ui: wisp_dto::ConnectorTool = roundtrip(&backend);
+    assert_eq!(ui.description, backend.description);
+    assert_eq!(ui.input_schema, Some(backend.input_schema));
+    assert_eq!(ui.output_schema, backend.output_schema);
+    assert_eq!(ui.mode, "allow");
+    let legacy: wisp_dto::ConnectorTool =
+        serde_json::from_value(json!({"name":"old","mode":"ask"})).unwrap();
+    assert!(legacy.description.is_empty());
+    assert!(legacy.input_schema.is_none());
 }
 
 #[test]
@@ -58,9 +142,14 @@ fn model_profile_contract() {
         context_window: 200_000,
         reasoning_effort: "high".into(),
         service_tier: "priority".into(),
+        user_agent: "research-client/1.0".into(),
+        send_user_agent: false,
+        send_session_id: Some(true),
+        session_header_name: "x-custom-session".into(),
         supports_vision: true,
         use_for_vision: true,
         use_for_image_generation: false,
+        image_generation_capable: false,
         image_size: String::new(),
         image_quality: String::new(),
         image_aspect_ratio: String::new(),
@@ -83,9 +172,14 @@ fn model_profile_contract() {
     assert_eq!(dto.context_window, 200_000);
     assert_eq!(dto.reasoning_effort, "high");
     assert_eq!(dto.service_tier, "priority");
+    assert_eq!(dto.user_agent, "research-client/1.0");
+    assert!(!dto.send_user_agent);
+    assert_eq!(dto.send_session_id, Some(true));
+    assert_eq!(dto.session_header_name, "x-custom-session");
     assert!(dto.supports_vision);
     assert!(dto.use_for_vision);
     assert!(!dto.use_for_image_generation);
+    assert!(!dto.image_generation_capable);
     assert!(dto.use_for_video_generation);
     assert_eq!(dto.video_duration_secs, Some(8));
     assert_eq!(dto.video_aspect_ratio.as_deref(), Some("9:16"));
@@ -100,6 +194,16 @@ fn model_profile_contract() {
     assert_eq!(wisp_dto::VIDEO_RESOLUTIONS.len(), 3);
     assert_eq!(wisp_dto::VIDEO_DURATION_MIN_SECS, 1);
     assert_eq!(wisp_dto::VIDEO_DURATION_MAX_SECS, 15);
+}
+
+#[test]
+fn custom_image_capability_survives_backend_to_ui_contract() {
+    let dto: wisp_dto::ModelProfile = serde_json::from_value(serde_json::json!({
+        "id":"image", "provider":"openai", "model":"vendor/custom-image",
+        "use_for_image_generation":false, "image_generation_capable":true
+    }))
+    .unwrap();
+    assert!(!dto.is_chat_model());
 }
 
 #[test]
@@ -395,6 +499,34 @@ fn browser_tab_cleanup_prompt_contract() {
 }
 
 #[test]
+fn browser_needs_human_prompt_contract() {
+    let prompt = wisp_dto::BrowserNeedsHumanPrompt {
+        tabs: vec![wisp_dto::BrowserNeedsHumanTab {
+            session: "shared".into(),
+            tab_id: 12,
+            url: "https://www.sciencedirect.com/science".into(),
+            title: "Just a moment...".into(),
+            reason: "captcha_challenge".into(),
+            frame_id: "frame-1".into(),
+            turn_id: "turn-1".into(),
+        }],
+    };
+    let dto: wisp_dto::BrowserNeedsHumanPrompt = roundtrip(&prompt);
+    assert_eq!(dto.tabs.len(), 1);
+    assert_eq!(dto.tabs[0].session, "shared");
+    assert_eq!(dto.tabs[0].tab_id, 12);
+    assert_eq!(dto.tabs[0].reason, "captcha_challenge");
+    assert_eq!(dto.tabs[0].frame_id, "frame-1");
+    let result = wisp_dto::BrowserNeedsHumanConfirmResult {
+        still_required: dto.tabs.clone(),
+        cleared: Vec::new(),
+    };
+    let dto: wisp_dto::BrowserNeedsHumanConfirmResult = roundtrip(&result);
+    assert_eq!(dto.still_required[0].tab_id, 12);
+    assert!(dto.cleared.is_empty());
+}
+
+#[test]
 fn mcp_connection_list_contract_redacts_secrets() {
     let backend = crate::McpConnection {
         id: "conn-1".into(),
@@ -453,4 +585,111 @@ fn channels_status_contract_includes_feishu_owner() {
     assert_eq!(dto.feishu_owner_open_id, "ou_owner");
     assert_eq!(dto.feishu_pending_owner_open_id, "ou_pending");
     assert_eq!(dto.feishu_app_id, "cli_1");
+}
+
+#[test]
+fn research_journey_contract_preserves_version_and_occurrence_time() {
+    let backend = wisp_dto::ResearchJourney {
+        entries: vec![wisp_dto::ResearchJourneyEntry {
+            id: "version:v1".into(),
+            kind: "artifact".into(),
+            title: "figure.png".into(),
+            occurred_at: 100,
+            recorded_at: 200,
+            source_id: "v1".into(),
+            version_number: Some(1),
+            source_discarded: true,
+            ..Default::default()
+        }],
+        truncated: true,
+    };
+    let ui: wisp_dto::ResearchJourney = roundtrip(&backend);
+    assert_eq!(ui, backend);
+    let source = wisp_dto::ResearchJourneySource {
+        run_id: Some("run".into()),
+        generated_at: Some(90),
+        inputs: vec![wisp_dto::ResearchJourneyInput {
+            title: "counts.csv".into(),
+            role: "counts".into(),
+            version_id: Some("input-v2".into()),
+            confidence: "exact".into(),
+        }],
+        ..Default::default()
+    };
+    assert_eq!(
+        roundtrip::<_, wisp_dto::ResearchJourneySource>(&source),
+        source
+    );
+}
+
+#[test]
+fn research_calendar_contract_preserves_project_errors_and_truncation() {
+    let backend = vec![
+        wisp_dto::ResearchCalendarProject {
+            project_id: "p".into(),
+            history: wisp_dto::ResearchJourney {
+                entries: vec![],
+                truncated: true,
+            },
+            error: None,
+        },
+        wisp_dto::ResearchCalendarProject {
+            project_id: "missing".into(),
+            error: Some("Project no longer exists".into()),
+            ..Default::default()
+        },
+    ];
+    assert_eq!(
+        roundtrip::<_, Vec<wisp_dto::ResearchCalendarProject>>(&backend),
+        backend
+    );
+}
+#[test]
+fn renderer_health_accepts_partial_numeric_snapshots() {
+    let snapshot: wisp_dto::UiHealthSnapshot = serde_json::from_value(serde_json::json!({
+        "timerLagMs": 850, "activeApps": 1, "parkedApps": 2, "scriptErrors": 3,
+        "mediaBlobUrls": 42, "mediaBlobBytes": 5_000_000_000_u64, "mediaOwners": 12
+    }))
+    .unwrap();
+    assert_eq!(snapshot.timer_lag_ms, 850);
+    assert_eq!(snapshot.active_apps, 1);
+    assert_eq!(snapshot.parked_apps, 2);
+    assert_eq!(snapshot.script_errors, 3);
+    assert_eq!(snapshot.app_messages, 0);
+    assert_eq!(snapshot.media_blob_urls, 42);
+    assert_eq!(snapshot.media_blob_bytes, 5_000_000_000);
+    assert_eq!(snapshot.media_owners, 12);
+    assert_eq!(
+        serde_json::from_value::<wisp_dto::UiHealthSnapshot>(serde_json::json!({}))
+            .unwrap()
+            .media_blob_urls,
+        0
+    );
+    let encoded = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(encoded["timerLagMs"], 850);
+    assert!(
+        serde_json::from_value::<wisp_dto::UiHealthSnapshot>(serde_json::json!({
+            "scriptErrors": "arbitrary content"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn transfer_progress_preserves_indeterminate_and_accepts_legacy_records() {
+    let legacy = json!({
+        "phase": "uploading", "direction": "relay", "completed_bytes": 0,
+        "total_bytes": 1024, "files_completed": 0, "files_total": 1,
+        "current_file": null, "bytes_per_second": null, "eta_seconds": null,
+        "updated_at": 100,
+    });
+    let mut backend: wisp_store::RunProgress = serde_json::from_value(legacy.clone()).unwrap();
+    let old_ui: wisp_dto::RunProgress = serde_json::from_value(legacy).unwrap();
+    assert!(!backend.indeterminate);
+    assert!(!old_ui.indeterminate);
+    backend.indeterminate = true;
+    let ui: wisp_dto::RunProgress = roundtrip(&backend);
+    assert!(ui.indeterminate);
+    assert_eq!(ui.total_bytes, 1024);
+    assert_eq!(ui.completed_bytes, 0);
 }

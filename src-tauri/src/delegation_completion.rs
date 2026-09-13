@@ -98,10 +98,10 @@ pub(crate) async fn save_session_completion_settings(
 #[tauri::command]
 pub(crate) async fn get_session_agent_completion(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<AgentCompletionSettings, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     match state
         .store
         .frame_project_id(&session_id)
@@ -120,12 +120,12 @@ pub(crate) async fn get_session_agent_completion(
 #[tauri::command]
 pub(crate) async fn set_session_agent_completion(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     policy: AgentCompletionPolicy,
     auto_resume: bool,
 ) -> Result<AgentCompletionSettings, String> {
-    let project = state.active(window.label());
+    let project = state.require_active(window.label())?;
     let settings = save_session_completion_settings(
         &state.store,
         &project.id,
@@ -411,9 +411,10 @@ async fn dispatch_frame(app: AppHandle, frame_id: String) {
         // before either auto-resume or the next user turn.
         *runtime.agent.lock().await = None;
     }
+    let project_id = state.store.frame_project_id(&frame_id).await.ok().flatten();
     for delivery in &delivered {
         let result = delivery.result_json.clone().unwrap_or_default();
-        crate::emit_agent_event(
+        crate::emit_agent_event_in(
             &app,
             AgentEvent::DelegationCompleted {
                 frame_id: frame_id.clone(),
@@ -422,6 +423,7 @@ async fn dispatch_frame(app: AppHandle, frame_id: String) {
                 result,
                 auto_resume: delivery.auto_resume,
             },
+            project_id.as_deref(),
         );
     }
     let claimed = match state

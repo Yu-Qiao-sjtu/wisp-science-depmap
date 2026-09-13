@@ -1065,17 +1065,36 @@ async fn ssh_launch_failure_stops_after_the_first_attempt() {
         .set_session_execution_context_enabled("f", "ssh:gpu", true)
         .await
         .unwrap();
-    let runner = Arc::new(ScriptedRunRunner::new(vec![
-        ok_output("__WISP_PREPARED__\n"),
-        ok_output(""),
-        Err("temporary SSH disconnect".into()),
-        // Post-failure reattach probe: nothing was submitted remotely, so the
-        // original launch error must surface and the Run must fail.
-        ok_output("__WISP_PREPARED__\n"),
-    ]));
-    runner
-        .synthesize_launch_ack
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // Route by operation, not timing: a background transfer-progress poll may
+    // race the immediately-ready SCP future. It must not consume the scripted
+    // upload response and shift the launch failure into the staging phase.
+    struct LaunchFailureRunner {
+        commands: StdMutex<Vec<RunCommand>>,
+    }
+    #[async_trait::async_trait]
+    impl RunCommandRunner for LaunchFailureRunner {
+        async fn run(
+            &self,
+            command: RunCommand,
+            _timeout: Duration,
+        ) -> Result<RunCommandOutput, String> {
+            let result = if command.program == "scp" {
+                ok_output("")
+            } else {
+                match command.script.as_str() {
+                    "prepare SSH Run" => ok_output("__WISP_PREPARED__\n"),
+                    "poll SSH input progress" => ok_output(""),
+                    "launch SSH Run" => Err("temporary SSH disconnect".into()),
+                    other => Err(format!("unexpected command: {other}")),
+                }
+            };
+            self.commands.lock().unwrap().push(command);
+            result
+        }
+    }
+    let runner = Arc::new(LaunchFailureRunner {
+        commands: StdMutex::new(Vec::new()),
+    });
     let manager = RunManager::with_runner(runner.clone());
 
     let submitted = manager
@@ -1427,6 +1446,7 @@ async fn cancelling_ssh_input_staging_aborts_the_transfer() {
     run.remote_workdir = Some("~/.wisp-science/runs/upload".into());
     run.remote_handle_json = Some(serde_json::to_string(&test_handle("upload", false)).unwrap());
     run.progress_json = serde_json::to_string(&wisp_store::RunProgress {
+        indeterminate: false,
         phase: "uploading".into(),
         direction: "upload".into(),
         completed_bytes: 25,
@@ -3785,6 +3805,25 @@ impl RunCommandRunner for StagingLedgerRunRunner {
             other => Err(format!("unexpected command: {other}")),
         }
     }
+#[test]
+fn ssh_input_paths_remain_compatible_with_artifact_snapshots() {
+    let root = std::env::temp_dir().join(format!("wisp_staging_snapshot_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("input.fasta"), b">seq\nACGT\n").unwrap();
+    let paths = resolve_input_paths(&root, &["input.fasta".into()]).unwrap();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(
+        paths[0],
+        dunce::canonicalize(root.join("input.fasta")).unwrap()
+    );
+    let snapshot = crate::snapshot_store::capture_file(
+        &root,
+        &paths[0],
+        crate::snapshot_store::SnapshotPolicy::Reference,
+    )
+    .unwrap();
+    assert_eq!(snapshot.size_bytes, 10);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]

@@ -1451,67 +1451,79 @@ def _run_lineage_directions_query(
     full = settings.knowledge_root / "depmap-26q1-full"
     sections: list[dict[str, Any]] = []
 
-    reciprocal_columns = [
-        "family", "lineage", "source_gene", "target_gene", "correlation",
-        "pair_n", "p_value", "fdr", "direction", "reverse_correlation",
-        "reciprocal_rank_max", "reciprocal_score",
-    ]
-    for family in ("effect_correlation", "expression_correlation"):
+    network_minima: dict[str, int] = {}
+    for family in ("effect_correlation", "expression_correlation", "expression_dependency"):
         root = full / "lineage_sparse_networks" / family / _lineage_key(lineage)
         manifest = _load_manifest(root) if root.is_dir() else None
-        path = root / "reciprocal_pairs.parquet"
-        if manifest is None or manifest.get("status") != "complete" or not path.is_file():
-            sections.append(
-                _direction_section(
-                    label=family, status_name="NOT_COMPUTED", rows=[],
-                    eligible_row_count=0, metric="reciprocal_score",
-                    interpretation="signed reciprocal correlation; not causal",
-                    provenance=[str(root)],
-                )
-            )
+        reciprocal = family != "expression_dependency"
+        paths = (
+            [root / "reciprocal_pairs.parquet"]
+            if reciprocal else sorted((root / "blocks").glob("*.parquet"))
+        )
+        metric = "reciprocal_score" if reciprocal else "correlation"
+        interpretation = (
+            "signed reciprocal within-lineage correlation; candidate network edge, not synthetic-lethality proof"
+            if reciprocal else
+            "expression feature versus CRISPR dependency correlation; candidate biomarker, not causal"
+        )
+        section = _direction_section(
+            label=family, status_name="NOT_COMPUTED", rows=[],
+            eligible_row_count=0, metric=metric, interpretation=interpretation,
+            provenance=[str(root / "manifest.json")],
+        )
+        sections.append(section)
+        if manifest is None or manifest.get("status") != "complete":
+            section["reason"] = "a complete network manifest is unavailable"
             continue
-        rows, count, provenance = _top_precomputed_rows(
-            [path], columns=reciprocal_columns,
-            filters=[("fdr", "<=", 0.05), ("pair_n", ">=", 30)],
-            value_key="reciprocal_score", limit=limit, identity=_pair_identity,
-        )
-        for row in rows:
-            if abs(float(row.get("correlation") or 0.0)) >= 0.999:
-                row["qc_flag"] = "near_perfect_correlation_requires_variance_and_identifier_review"
-        sections.append(
-            _direction_section(
-                label=family, status_name="FOUND" if rows else "NOT_RETAINED",
-                rows=rows, eligible_row_count=count, metric="reciprocal_score",
-                interpretation="signed reciprocal within-lineage correlation; candidate network edge, not synthetic-lethality proof",
-                provenance=[str(root / "manifest.json"), *provenance],
-                qc_note=(
-                    "Near-perfect expression correlations may reflect low variance, duplicated features, or identifier artifacts."
-                    if family == "expression_correlation" else None
-                ),
-            )
-        )
-
-    expression_dependency_root = (
-        full / "lineage_sparse_networks" / "expression_dependency" / _lineage_key(lineage)
-    )
-    expression_dependency_paths = sorted((expression_dependency_root / "blocks").glob("*.parquet"))
-    rows, count, provenance = _top_precomputed_rows(
-        expression_dependency_paths,
-        columns=[
+        min_n = manifest.get("min_n")
+        # bool is an int subclass, but is not a scientific sample minimum.
+        if type(min_n) is not int or min_n <= 0:
+            section["status"] = "MODULE_UNAVAILABLE"
+            section["reason"] = "network manifest.min_n must be a positive integer; no sample threshold was assumed"
+            continue
+        network_minima[family] = min_n
+        section["selection_filters"] = {
+            "fdr_max": 0.05,
+            "pair_n_min": min_n,
+            "pair_n_min_source": "manifest.min_n",
+        }
+        cohort_n = manifest.get("lineage_sample_n")
+        if type(cohort_n) is int and cohort_n < min_n:
+            section["status"] = "INELIGIBLE"
+            section["reason"] = "manifest.lineage_sample_n is below manifest.min_n"
+            continue
+        if not paths or any(not path.is_file() for path in paths):
+            section["reason"] = "retained network files are unavailable"
+            continue
+        columns = [
             "family", "lineage", "source_gene", "target_gene", "correlation",
-            "pair_n", "p_value", "fdr", "rank_absolute",
-        ],
-        filters=[("fdr", "<=", 0.05), ("pair_n", ">=", 30)],
-        value_key="correlation", limit=limit, identity=_directed_pair_identity,
-    )
-    sections.append(
-        _direction_section(
-            label="expression_dependency", status_name="FOUND" if rows else "NOT_RETAINED",
-            rows=rows, eligible_row_count=count, metric="correlation",
-            interpretation="expression feature versus CRISPR dependency correlation; candidate biomarker, not causal",
-            provenance=[str(expression_dependency_root / "manifest.json"), *provenance],
+            "pair_n", "p_value", "fdr",
+        ] + (
+            ["direction", "reverse_correlation", "reciprocal_rank_max", "reciprocal_score"]
+            if reciprocal else ["rank_absolute"]
         )
-    )
+        rows, count, provenance = _top_precomputed_rows(
+            paths, columns=columns,
+            filters=[("fdr", "<=", 0.05), ("pair_n", ">=", min_n)],
+            value_key=metric, limit=limit,
+            identity=_pair_identity if reciprocal else _directed_pair_identity,
+        )
+        if reciprocal:
+            for row in rows:
+                if abs(float(row.get("correlation") or 0.0)) >= 0.999:
+                    row["qc_flag"] = "near_perfect_correlation_requires_variance_and_identifier_review"
+        section.update(
+            status="FOUND" if rows else "NOT_RETAINED",
+            eligible_retained_row_count=count,
+            returned_candidate_count=len(rows),
+            rows=rows,
+            provenance=[str(root / "manifest.json"), *provenance],
+            reason=None if rows else "no retained rows pass the module sample minimum and FDR filter; this is not a biological negative",
+            qc_note=(
+                "Near-perfect expression correlations may reflect low variance, duplicated features, or identifier artifacts."
+                if family == "expression_correlation" else None
+            ),
+        )
 
     cnv_root = full / "lineage_cnv_amplification_dependency" / _lineage_key(lineage)
     cnv_paths = sorted((cnv_root / "blocks").glob("*.parquet"))
@@ -1695,7 +1707,11 @@ def _run_lineage_directions_query(
         "lineage": lineage,
         "selection_policy": {
             "network_and_enrichment_fdr_max": 0.05,
-            "network_pair_n_min": 30,
+            # Legacy scalar summarizes the lowest declared minimum; consumers
+            # needing the actual filter should use the per-family/section fields.
+            "network_pair_n_min": min(network_minima.values(), default=None),
+            "network_pair_n_min_by_family": network_minima,
+            "network_sample_policy": "each network uses its own manifest.min_n",
             "cnv_fdr_max": 0.05,
             "cnv_amplified_n_min": 5,
             "cnv_control_n_min": 10,

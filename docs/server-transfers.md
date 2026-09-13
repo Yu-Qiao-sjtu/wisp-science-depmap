@@ -34,7 +34,21 @@ download, it renames the staged item to the requested path. Existing
 destinations are rejected and partial downloads are removed after failure,
 cancellation, or timeout.
 
-The composer tray shows transfer progress while work is active. A completed,
+The composer tray shows transfer progress while work is active. Transports
+that report bytes show the transferred size, percentage, speed, and ETA. The
+external scp/rsync paths used for local uploads, downloads, and SSH relay do not
+currently report byte counts while copying (scp disables its meter with piped
+output). These phases show an animated indeterminate bar, the known total size
+when available, and elapsed time refreshed every second, instead of a false 0%.
+The animation indicates an active Run, not proof that bytes are moving; byte
+speed and ETA are unavailable on these paths. Relay switches from Downloading
+to Uploading after staging completes and shows 100% only after upload succeeds.
+
+Use **Collapse transfers** to reduce all cards to one small **Transfers (N)**
+row; **Expand transfers** restores the details and cancellation controls. The
+collapsed state survives progress refreshes. Escape collapses an expanded tray
+after any higher dialog or menu has been dismissed. Cards use a thinner progress
+bar below their details to leave more room for the conversation. A completed,
 failed, or cancelled transfer remains there for three seconds so its final
 state can be confirmed, then dismisses automatically without covering the
 conversation.

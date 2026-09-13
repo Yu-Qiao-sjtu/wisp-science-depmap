@@ -1,0 +1,210 @@
+[
+  {
+    "group": "literature",
+    "id": "literature-review",
+    "title_zh": "文献检索与综述",
+    "title_en": "Literature review",
+    "summary_zh": "检索并核验论文，比较研究方法与证据，整理带来源链接的综述。",
+    "summary_en": "Retrieve and verify papers, compare methods and evidence, and write a sourced synthesis."
+  },
+  {
+    "group": "literature",
+    "id": "pdf-explore",
+    "title_zh": "PDF 阅读与提取",
+    "title_en": "PDF exploration",
+    "summary_zh": "读取 PDF 的页面、目录与图表内容，为精读、比较和信息提取提供依据。",
+    "summary_en": "Read PDF pages, outlines, and figures for close reading, comparison, and extraction."
+  },
+  {
+    "group": "literature",
+    "id": "audit-biomedical-paper-evidence",
+    "title_zh": "论文证据审读",
+    "title_en": "Biomedical evidence review",
+    "summary_zh": "围绕科学问题逐图梳理实验设计，检查因果论证、验证方式与结论边界。",
+    "summary_en": "Review biomedical papers figure by figure, checking experimental design, causal claims, validation, and limitations."
+  },
+  {
+    "group": "literature",
+    "id": "indication-dossier",
+    "title_zh": "疾病研究档案",
+    "title_en": "Indication dossiers",
+    "summary_zh": "汇总疾病人群、机制、治疗背景与代表性试验，形成有来源的研究档案。",
+    "summary_en": "Build sourced research dossiers covering populations, disease biology, treatment context, and landmark trials."
+  },
+  {
+    "group": "analysis",
+    "id": "analysis-workflow",
+    "title_zh": "组织可复现分析",
+    "title_en": "Reproducible analysis modules",
+    "summary_zh": "将多步分析整理为独立模块，记录输入、参数、版本、脚本与结果。",
+    "summary_en": "Organize multi-step analyses into modules with recorded inputs, parameters, versions, scripts, and outputs."
+  },
+  {
+    "group": "analysis",
+    "id": "public-data-access",
+    "title_zh": "获取公开数据",
+    "title_en": "Public data access",
+    "summary_zh": "规划公开组学数据获取，检查下载结果，并记录来源、清单和缓存。",
+    "summary_en": "Plan public omics data acquisition, validate downloads, and document sources, manifests, and caches."
+  },
+  {
+    "group": "analysis",
+    "id": "singlecell-qc",
+    "title_zh": "单细胞质量控制",
+    "title_en": "Single-cell QC",
+    "summary_zh": "检查单样本质量指标，讨论阈值、环境 RNA 和双细胞等问题，经确认后再筛选。",
+    "summary_en": "Inspect per-sample QC, discuss thresholds, ambient RNA, and doublets, then filter after user confirmation."
+  },
+  {
+    "group": "analysis",
+    "id": "agent-infini",
+    "title_zh": "InfiniSynapse 分析",
+    "title_en": "InfiniSynapse analysis",
+    "summary_zh": "通过 agent_infini 组织数据库或 RAG 分析与多轮任务，需要对应 CLI 和服务接入。",
+    "summary_en": "Use agent_infini for database or RAG analysis and multi-turn tasks; requires its CLI and service access."
+  },
+  {
+    "group": "figures",
+    "id": "figure-style",
+    "title_zh": "检查科研图表",
+    "title_en": "Figure style and accuracy",
+    "summary_zh": "检查数据表达、坐标轴、配色和标注，并在生成图表后核对实际效果。",
+    "summary_en": "Check data fidelity, axes, colors, and labels, then inspect the rendered figure."
+  },
+  {
+    "group": "figures",
+    "id": "figure-composer",
+    "title_zh": "组合多面板图",
+    "title_en": "Multi-panel figures",
+    "summary_zh": "围绕研究结论安排多个图面板，完成布局、拼图与视觉检查。",
+    "summary_en": "Plan panels around a research claim, compose the layout, and inspect the final figure."
+  },
+  {
+    "group": "figures",
+    "id": "figure-duplicate-audit",
+    "title_zh": "图像重复检查",
+    "title_en": "Figure duplication review",
+    "summary_zh": "拆分论文图像面板，筛查重复或变换后的相似图像，并整理可复核的证据。",
+    "summary_en": "Inspect figure panels for duplication or transformed reuse and produce reviewable evidence."
+  },
+  {
+    "group": "figures",
+    "id": "paper-narrative",
+    "title_zh": "梳理论文叙事",
+    "title_en": "Paper narrative",
+    "summary_zh": "检查论文结构、图表顺序和论点衔接，识别需要补充的分析。",
+    "summary_en": "Review manuscript structure, figure ordering, and claim progression, identifying missing analyses."
+  },
+  {
+    "group": "figures",
+    "id": "journal-club-ppt",
+    "title_zh": "制作组会汇报",
+    "title_en": "Journal club slides",
+    "summary_zh": "从论文 PDF 梳理科学逻辑与关键图表，组织成组会演示文稿。",
+    "summary_en": "Turn a paper PDF into journal-club slides organized around its scientific logic and key figures."
+  },
+  {
+    "group": "figures",
+    "id": "word-zotero-citations",
+    "title_zh": "Word 与 Zotero 引用",
+    "title_en": "Word–Zotero citations",
+    "summary_zh": "检查或转换 DOCX 中的引用与参考文献，保留源文件，并分步确认实际集成操作。",
+    "summary_en": "Audit or convert DOCX citations and bibliographies while preserving sources and explicitly authorizing live integration."
+  },
+  {
+    "group": "figures",
+    "id": "social-note",
+    "title_zh": "整理分享文案",
+    "title_en": "Research sharing copy",
+    "summary_zh": "将科研对话、论文要点或图表故事整理为适合目标平台的分享草稿。",
+    "summary_en": "Turn a research conversation, paper takeaway, or figure story into a draft for the chosen platform."
+  },
+  {
+    "group": "environment",
+    "id": "local-env-setup",
+    "title_zh": "配置本机环境",
+    "title_en": "Local environment setup",
+    "summary_zh": "检测并准备任务所需的 Python、R、Node 等本机工具，按需配置解释器和镜像。",
+    "summary_en": "Prepare optional local Python, R, Node, and related tools, configuring interpreters and mirrors as needed."
+  },
+  {
+    "group": "environment",
+    "id": "compute-env-setup",
+    "title_zh": "配置计算环境",
+    "title_en": "Compute environment setup",
+    "summary_zh": "在本机、WSL 或直连 SSH 环境中配置 Python／R 依赖，并进行小规模验证。",
+    "summary_en": "Configure Python/R dependencies in local, WSL, or direct SSH contexts and run a small validation."
+  },
+  {
+    "group": "environment",
+    "id": "pixi-environment-builder",
+    "title_zh": "管理 pixi 环境",
+    "title_en": "pixi environments",
+    "summary_zh": "创建、迁移或排查科研 pixi 环境，处理 Conda 与 PyPI 混合依赖等问题。",
+    "summary_en": "Create, migrate, or debug scientific pixi environments, including mixed Conda and PyPI dependencies."
+  },
+  {
+    "group": "environment",
+    "id": "probe-compute-environment",
+    "title_zh": "探测服务器能力",
+    "title_en": "Environment probing",
+    "summary_zh": "检查已注册环境中的解释器、GPU、调度器与权限，为运行方案提供依据。",
+    "summary_en": "Inspect registered environments for interpreters, GPUs, schedulers, and permissions before planning execution."
+  },
+  {
+    "group": "environment",
+    "id": "remote-compute-ssh",
+    "title_zh": "管理 SSH 计算任务",
+    "title_en": "SSH research runs",
+    "summary_zh": "通过已登记的 SSH 环境提交可追踪任务，查看实时进度并持续监控状态。",
+    "summary_en": "Submit traceable research runs through registered SSH contexts with live progress and status monitoring."
+  },
+  {
+    "group": "extension",
+    "id": "browser-use",
+    "title_zh": "操作真实浏览器",
+    "title_en": "Browser interaction",
+    "summary_zh": "使用已连接的浏览器读取页面、定位元素、填写表单和截图，沿用该浏览器的登录状态。",
+    "summary_en": "Read pages, locate controls, fill forms, and take screenshots in a connected browser using its existing login state."
+  },
+  {
+    "group": "extension",
+    "id": "skill-creator",
+    "title_zh": "创建与验证技能",
+    "title_en": "Skill creation",
+    "summary_zh": "编写或更新技能说明、脚本和资源，并验证其他 Agent 能否按流程完成任务。",
+    "summary_en": "Create or update Skill instructions, scripts, and resources, then evaluate whether another agent can follow them."
+  },
+  {
+    "group": "extension",
+    "id": "customize",
+    "title_zh": "定制专家与技能",
+    "title_en": "Specialists and customization",
+    "summary_zh": "根据具体任务创建专家角色，或编写当前项目使用的技能。",
+    "summary_en": "Create a specialist role or a project-local Skill for a specific task."
+  },
+  {
+    "group": "extension",
+    "id": "custom-theme",
+    "title_zh": "定制界面主题",
+    "title_en": "Custom themes",
+    "summary_zh": "按 Wisp 的主题规则编写 CSS，调整界面配色与对话排版。",
+    "summary_en": "Write CSS using Wisp theme rules to customize colors and transcript presentation."
+  },
+  {
+    "group": "extension",
+    "id": "self-awareness",
+    "title_zh": "了解 Wisp 能力",
+    "title_en": "Wisp capability guidance",
+    "summary_zh": "帮助 Agent 判断可用工具、运行边界与合适的任务执行方式。",
+    "summary_en": "Help the agent identify available tools, runtime boundaries, and suitable ways to execute a task."
+  },
+  {
+    "group": "extension",
+    "id": "distill-concept-books",
+    "title_zh": "提炼方法型技能",
+    "title_en": "Method extraction from books",
+    "summary_zh": "从概念或方法类书籍中提炼可复用技能，保留证据映射和分阶段人工审核。",
+    "summary_en": "Distill reusable methods from conceptual books into Skills with evidence mapping and staged human review."
+  }
+]

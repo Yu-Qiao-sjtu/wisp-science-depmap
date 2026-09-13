@@ -11,6 +11,7 @@ dist = "dist"
 [watch]
 watch = [
   "src",
+  "mcp-app",
   "index.html",
   "fonts.css",
   "fonts",
@@ -18,6 +19,8 @@ watch = [
   "mock-bridge.js",
   "logo.svg",
   "logo-mark.svg",
+  "../docs/assets/wordmark-light.svg",
+  "../docs/assets/wordmark-dark.svg",
   "Cargo.toml",
   "Cargo.lock",
 ]
