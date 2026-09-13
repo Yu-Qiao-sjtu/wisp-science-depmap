@@ -3805,6 +3805,8 @@ impl RunCommandRunner for StagingLedgerRunRunner {
             other => Err(format!("unexpected command: {other}")),
         }
     }
+}
+
 #[test]
 fn ssh_input_paths_remain_compatible_with_artifact_snapshots() {
     let root = std::env::temp_dir().join(format!("wisp_staging_snapshot_{}", uuid::Uuid::new_v4()));
