@@ -2814,6 +2814,27 @@ fn follow_up_questions_parse_exactly_three_distinct_options() {
 }
 
 #[test]
+fn follow_up_questions_preserve_analysis_scope_without_executing() {
+    let prompt = crate::FOLLOW_UP_SUGGESTION_PROMPT;
+    for rule in [
+        "clicking one only fills the composer",
+        "measurement roles",
+        "Never invent missing genes or cohorts",
+        "if enrichment is already complete",
+        "rank-sum enrichment",
+        "For other topics",
+    ] {
+        assert!(prompt.contains(rule), "missing suggestion rule: {rule}");
+    }
+    let suggestions = parse_follow_up_questions(
+        r#"["看看全局 ESR1 表达相关的依赖通路", "解释全局 ESR1 的主要依赖靶点", "选择一个癌种继续分析 ESR1"]"#,
+    )
+    .unwrap();
+    assert_eq!(suggestions.len(), 3);
+    assert!(suggestions.iter().all(|text| text.contains("ESR1")));
+}
+
+#[test]
 fn startup_timeline_returns_phase_results_and_names_the_slowest_phase() {
     let mut timeline = StartupTimeline::default();
     let fast = timeline.record("fast", || 1_u32);

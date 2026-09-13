@@ -121,6 +121,19 @@ For expression-to-dependency questions, distinguish the requested operation:
 - do not trigger GSEA when the expression source gene is missing or when the
   user only asks about one gene pair.
 
+Read `analysis-modules/表达基因-CRISPR基因依赖相关性分析/module.intent.json`
+for the `semantic_routing` synonyms, guards, and positive/negative examples.
+These are semantic guidance, not a keyword-triggered execution engine. Resolve
+an execution request, an expression source gene, the expression-to-CRISPR
+dependency relationship, and pathway intent together. Negation, deferred work,
+quoted examples, method explanations, and capability-only questions do not
+authorize execution. “继续做富集” may inherit the gene, module, cohort and method
+only from an unambiguous active analysis; explicit user values override context.
+Clarify missing or conflicting measurement roles. Drug sensitivity is a
+different analysis. Explicit ORA is not GSEA, and GO/KEGG must not silently
+become Hallmark. Preserve low-expression requests and the declared NES sign.
+Record the resolved fields and any defaults in `analysis_spec.json`.
+
 The global enrichment capability executes its declared `executable_entrypoint`
 over one complete precomputed correlation row and reuses an exact-parameter
 cache. Its defaults are Hallmark, `negative_signed_t`, and an 80% pair-count
