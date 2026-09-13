@@ -1,7 +1,7 @@
 use super::remote::{checked_output, scp_local_path, ssh_script_command};
 use super::{
-    run_with_lifecycle_lease, tail, transfer_progress, ActiveRun, RunCommand, RunManager,
-    SubmitRunRequest, SubmitRunResponse, ACTIVE_LEASE_SECS, REMOTE_RPC_TIMEOUT,
+    run_with_lifecycle_lease, tail, ActiveRun, RunCommand, RunManager, SubmitRunRequest,
+    SubmitRunResponse, ACTIVE_LEASE_SECS, REMOTE_RPC_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -9,6 +9,38 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wisp_llm::ToolSchema;
 use wisp_tools::{Approval, Tool, ToolEnv, ToolResult};
+
+// scp suppresses its progress meter when stderr is a pipe. These external
+// scp/rsync lifecycles observe phase boundaries, not bytes written; knowing the
+// staged file size does not make the uploading phase a measured 0% transfer.
+#[allow(clippy::too_many_arguments)]
+fn unmeasured_transfer_progress(
+    direction: &str,
+    phase: &str,
+    completed_bytes: u64,
+    total_bytes: u64,
+    files_completed: u64,
+    files_total: u64,
+    current_file: Option<String>,
+    started: Instant,
+) -> wisp_store::RunProgress {
+    let mut progress = super::transfer_progress(
+        direction,
+        phase,
+        completed_bytes,
+        total_bytes,
+        files_completed,
+        files_total,
+        current_file,
+        started,
+    );
+    progress.indeterminate = matches!(phase, "uploading" | "downloading");
+    if progress.indeterminate {
+        progress.bytes_per_second = None;
+        progress.eta_seconds = None;
+    }
+    progress
+}
 
 const TRUST_EDGES_SETTING: &str = "ssh_trust_edges_v1";
 const PUBLIC_KEY_MARKER: &str = "__WISP_PUBLIC_KEY__:";
@@ -1570,7 +1602,7 @@ impl RunManager {
             destination_path
         ));
         run.timeout_secs = Some(timeout.as_secs() as i64);
-        run.progress_json = serde_json::to_string(&transfer_progress(
+        run.progress_json = serde_json::to_string(&unmeasured_transfer_progress(
             "upload",
             "uploading",
             0,
@@ -1711,7 +1743,7 @@ impl RunManager {
             destination_path.display()
         ));
         run.timeout_secs = Some(timeout.as_secs() as i64);
-        run.progress_json = serde_json::to_string(&transfer_progress(
+        run.progress_json = serde_json::to_string(&unmeasured_transfer_progress(
             "download",
             "downloading",
             0,
@@ -1835,7 +1867,7 @@ impl RunManager {
             source.id, source_path, destination.id, destination_path
         ));
         run.timeout_secs = Some(timeout.as_secs() as i64);
-        run.progress_json = serde_json::to_string(&transfer_progress(
+        run.progress_json = serde_json::to_string(&unmeasured_transfer_progress(
             "relay",
             "downloading",
             0,
@@ -2280,7 +2312,7 @@ async fn local_upload_lifecycle(
             Some(0),
             upload.stdout,
             upload.stderr,
-            transfer_progress(
+            unmeasured_transfer_progress(
                 "upload",
                 "uploaded",
                 total_bytes,
@@ -2299,21 +2331,21 @@ async fn local_upload_lifecycle(
             None,
             String::new(),
             error,
-            transfer_progress("upload", "cancelled", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("upload", "cancelled", 0, 0, 0, 0, None, started),
         ),
         Err(error) if error.starts_with("run_in_context timed out after ") => (
             wisp_store::RunStatus::TimedOut,
             Some(124),
             String::new(),
             error,
-            transfer_progress("upload", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("upload", "failed", 0, 0, 0, 0, None, started),
         ),
         Err(error) => (
             wisp_store::RunStatus::Failed,
             Some(-1),
             String::new(),
             error,
-            transfer_progress("upload", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("upload", "failed", 0, 0, 0, 0, None, started),
         ),
     };
     let _ = store
@@ -2419,7 +2451,7 @@ async fn local_download_lifecycle(
             Some(0),
             download.stdout,
             download.stderr,
-            transfer_progress(
+            unmeasured_transfer_progress(
                 "download",
                 "downloaded",
                 total_bytes,
@@ -2438,21 +2470,21 @@ async fn local_download_lifecycle(
             None,
             String::new(),
             error,
-            transfer_progress("download", "cancelled", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("download", "cancelled", 0, 0, 0, 0, None, started),
         ),
         Err(error) if error.starts_with("run_in_context timed out after ") => (
             wisp_store::RunStatus::TimedOut,
             Some(124),
             String::new(),
             error,
-            transfer_progress("download", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("download", "failed", 0, 0, 0, 0, None, started),
         ),
         Err(error) => (
             wisp_store::RunStatus::Failed,
             Some(-1),
             String::new(),
             error,
-            transfer_progress("download", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("download", "failed", 0, 0, 0, 0, None, started),
         ),
     };
     let _ = store
@@ -2502,7 +2534,7 @@ async fn relay_lifecycle(
             "relay download",
         )
         .await?;
-        let uploading = transfer_progress(
+        let uploading = unmeasured_transfer_progress(
             "relay",
             "uploading",
             0,
@@ -2572,7 +2604,7 @@ async fn relay_lifecycle(
             Some(0),
             format!("{}\n{}", download.stdout, upload.stdout),
             format!("{}\n{}", download.stderr, upload.stderr),
-            transfer_progress(
+            unmeasured_transfer_progress(
                 "relay",
                 "uploaded",
                 total_bytes,
@@ -2588,21 +2620,21 @@ async fn relay_lifecycle(
             None,
             String::new(),
             error,
-            transfer_progress("relay", "cancelled", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("relay", "cancelled", 0, 0, 0, 0, None, started),
         ),
         Err(error) if error.starts_with("run_in_context timed out after ") => (
             wisp_store::RunStatus::TimedOut,
             Some(124),
             String::new(),
             error,
-            transfer_progress("relay", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("relay", "failed", 0, 0, 0, 0, None, started),
         ),
         Err(error) => (
             wisp_store::RunStatus::Failed,
             Some(-1),
             String::new(),
             error,
-            transfer_progress("relay", "failed", 0, 0, 0, 0, None, started),
+            unmeasured_transfer_progress("relay", "failed", 0, 0, 0, 0, None, started),
         ),
     };
     let _ = store
@@ -2998,6 +3030,99 @@ mod tests {
         let commands = runner.commands.lock().unwrap();
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].script, "remove source transfer key");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct PausedRelayRunner {
+        inner: RelayRunner,
+        phases: tokio::sync::mpsc::UnboundedSender<String>,
+        proceed: tokio::sync::Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl super::super::RunCommandRunner for PausedRelayRunner {
+        async fn run(
+            &self,
+            command: RunCommand,
+            timeout: Duration,
+        ) -> Result<RunCommandOutput, String> {
+            self.phases.send(command.script.clone()).unwrap();
+            self.proceed.notified().await;
+            self.inner.run(command, timeout).await
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_marks_both_copy_phases_unmeasured_until_success() {
+        let (root, store) = test_store().await;
+        let (phases, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let runner = Arc::new(PausedRelayRunner {
+            inner: RelayRunner {
+                commands: StdMutex::new(Vec::new()),
+            },
+            phases,
+            proceed: tokio::sync::Notify::new(),
+        });
+        let manager = RunManager::with_runner(runner.clone());
+        let response = submit_transfer(
+            &store,
+            &manager,
+            "p",
+            Some("f"),
+            &root,
+            TransferRequest {
+                source_context_id: "ssh:a".into(),
+                source_path: "/data/result.txt".into(),
+                destination_context_id: "ssh:b".into(),
+                destination_path: Some("/results/".into()),
+                route: "relay".into(),
+                transport: "auto".into(),
+                resume: false,
+                timeout_secs: Some(30),
+            },
+        )
+        .await
+        .unwrap();
+        let run_id = response["run_id"].as_str().unwrap();
+        for (script, phase, total) in [
+            ("relay download", "downloading", 0),
+            ("relay upload", "uploading", 11),
+        ] {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                script
+            );
+            let run = store.get_run(run_id).await.unwrap().unwrap();
+            let progress: wisp_store::RunProgress =
+                serde_json::from_str(&run.progress_json).unwrap();
+            assert_eq!(run.status, wisp_store::RunStatus::Running);
+            assert_eq!(progress.phase, phase);
+            assert!(progress.indeterminate);
+            assert_eq!(progress.total_bytes, total);
+            assert_eq!(progress.completed_bytes, 0);
+            assert_eq!(progress.bytes_per_second, None);
+            assert_eq!(progress.eta_seconds, None);
+            runner.proceed.notify_one();
+        }
+        let run = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let run = store.get_run(run_id).await.unwrap().unwrap();
+                if run.status.is_terminal() {
+                    break run;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(run.status, wisp_store::RunStatus::Succeeded);
+        let progress: wisp_store::RunProgress = serde_json::from_str(&run.progress_json).unwrap();
+        assert!(!progress.indeterminate);
+        assert_eq!(progress.completed_bytes, progress.total_bytes);
+        assert_eq!(progress.total_bytes, 11);
         let _ = std::fs::remove_dir_all(root);
     }
 

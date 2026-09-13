@@ -117,7 +117,7 @@ pub(super) struct ScratchChatInfo {
 #[tauri::command]
 pub(super) async fn start_scratch_chat(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<ScratchChatInfo, String> {
     let label = window.label().to_string();
     close_scratch_for_window(state.inner(), &label).await;
@@ -164,7 +164,7 @@ pub(super) async fn start_scratch_chat(
 #[tauri::command]
 pub(super) async fn close_scratch_chat(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<(), String> {
     close_scratch_for_window(state.inner(), window.label()).await;
     Ok(())

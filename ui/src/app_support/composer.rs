@@ -48,6 +48,9 @@ pub(crate) enum ComposerPickerItem {
 
 #[derive(Clone)]
 pub(crate) enum ComposerReferenceChip {
+    FilePath {
+        path: String,
+    },
     Artifact {
         id: String,
         name: String,
@@ -148,6 +151,7 @@ pub(crate) struct CommandAction {
 impl ComposerReferenceChip {
     pub(crate) fn key(&self) -> String {
         match self {
+            Self::FilePath { path } => format!("file-path:{path}"),
             Self::Artifact { id, .. } => format!("artifact:{id}"),
             Self::Session { id, .. } => format!("session:{id}"),
             Self::Project { id, .. } => format!("project:{id}"),
@@ -164,6 +168,11 @@ impl ComposerReferenceChip {
 
     pub(crate) fn label(&self) -> String {
         match self {
+            Self::FilePath { path } => path
+                .rsplit(['/', '\\'])
+                .find(|s| !s.is_empty())
+                .unwrap_or(path)
+                .to_string(),
             Self::Artifact { name, .. } | Self::Skill { name } | Self::Workflow { name, .. } => {
                 name.clone()
             }
@@ -184,6 +193,7 @@ impl ComposerReferenceChip {
 
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::FilePath { .. } => "file-path",
             Self::Artifact { .. } => "artifact",
             Self::Session { .. } => "session",
             Self::Project { .. } => "project",
@@ -194,8 +204,9 @@ impl ComposerReferenceChip {
         }
     }
 
-    pub(crate) fn arg(&self) -> ComposerReferenceArg {
-        match self {
+    pub(crate) fn arg(&self) -> Option<ComposerReferenceArg> {
+        Some(match self {
+            Self::FilePath { .. } => return None,
             Self::Artifact { id, .. } => ComposerReferenceArg::Artifact { id: id.clone() },
             Self::Session { id, .. } => ComposerReferenceArg::Session { id: id.clone() },
             Self::Project { id, .. } => ComposerReferenceArg::Project { id: id.clone() },
@@ -210,8 +221,24 @@ impl ComposerReferenceChip {
                 context_id: context_id.clone(),
                 language: language.clone(),
             },
-        }
+        })
     }
+}
+
+/// File clipboard context is deliberately excluded from upload/vision arguments.
+pub(crate) fn attach_clipboard_paths(
+    references: RwSignal<Vec<ComposerReferenceChip>>,
+    value: JsValue,
+) {
+    let paths: Vec<String> = serde_wasm_bindgen::from_value(value).unwrap_or_default();
+    references.update(|items| {
+        for path in paths.into_iter().filter(|path| !path.is_empty()) {
+            let chip = ComposerReferenceChip::FilePath { path };
+            if !items.iter().any(|item| item.key() == chip.key()) {
+                items.push(chip);
+            }
+        }
+    });
 }
 
 pub(crate) fn composer_attachment_key(name: &str, idx: usize) -> String {
@@ -503,6 +530,7 @@ pub(crate) fn message_with_composer_context(
     quotes: &[ComposerQuote],
 ) -> String {
     let mut message = message_with_attachments(&message_with_quotes(text, quotes), paths);
+    let mut file_paths = Vec::new();
     let mut artifacts = Vec::new();
     let mut sessions = Vec::new();
     let mut projects = Vec::new();
@@ -512,6 +540,9 @@ pub(crate) fn message_with_composer_context(
     let mut runtimes = Vec::new();
     for reference in references {
         match reference {
+            ComposerReferenceChip::FilePath { path } => {
+                file_paths.push(serde_json::to_string(path).unwrap_or_default())
+            }
             ComposerReferenceChip::Artifact { name, .. } => artifacts.push(name.clone()),
             ComposerReferenceChip::Session {
                 title,
@@ -526,6 +557,7 @@ pub(crate) fn message_with_composer_context(
         }
     }
     for (label, values) in [
+        ("Referenced local file paths (not imported)", file_paths),
         ("Attached artifacts", artifacts),
         ("Attached sessions", sessions),
         ("Project context", projects),

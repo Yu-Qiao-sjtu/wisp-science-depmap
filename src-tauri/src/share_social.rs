@@ -333,7 +333,7 @@ fn clamp_chars(text: &str, max: usize) -> String {
 #[tauri::command]
 pub(super) async fn generate_share_social_copy(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     platform: String,
     locale: String,
@@ -350,8 +350,19 @@ pub(super) async fn generate_share_social_copy(
         .or_else(|| state.active_frame(window.label()))
         .ok_or_else(|| "Open a conversation before generating share copy.".to_string())?;
     let prompt = share_copy_user_prompt(platform, &locale, &excerpt);
-    let (provider, api_url, model, api_key, _, reasoning_effort, service_tier) =
-        load_session_settings(&state.store, &frame_id).await;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        _,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = load_session_settings(&state.store, &frame_id).await;
     let config = build_provider_config(
         &provider,
         &api_url,
@@ -360,6 +371,11 @@ pub(super) async fn generate_share_social_copy(
         SHARE_COPY_OUTPUT_TOKENS,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&frame_id),
     )?;
     let completion = tokio::time::timeout(
         SHARE_COPY_TIMEOUT,

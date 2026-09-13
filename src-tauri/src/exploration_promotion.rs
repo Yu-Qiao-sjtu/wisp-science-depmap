@@ -297,7 +297,7 @@ impl ExplorationPromotionService {
             || family.generation != checkpoint.source_family_generation;
         let mainline_advanced = family_advanced
             || source_message_head != checkpoint.source_frame_head_seq
-            || source_ui_event_head != checkpoint.source_ui_event_seq
+            || source_ui_event_head != checkpoint.source_ui_event_head_seq
             || state_generation != checkpoint.source_state_generation
             || !mainline_changes.files.is_empty()
             || !mainline_changes.artifact_keys.is_empty()
@@ -892,7 +892,7 @@ pub(crate) async fn open_exploration_manual_resolution(
 pub(crate) async fn promote_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     exploration_id: String,
     expected_guard_hash: String,
 ) -> Result<ExplorationPromotionResult, String> {
@@ -1029,7 +1029,7 @@ pub(crate) async fn promote_exploration(
 pub(crate) async fn discard_exploration(
     state: State<'_, AppState>,
     terminals: State<'_, crate::terminal_sessions::TerminalManager>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     exploration_id: String,
 ) -> Result<(), String> {
     let exploration = state
@@ -2255,6 +2255,142 @@ mod tests {
             preview.eligibility.code.as_deref(),
             Some(ERR_EXTERNAL_REFERENCE_CHANGED)
         );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn historical_exploration_promotion_appends_after_later_mainline_turns() {
+        let (creator, store, base, project, app_data) = fixture("historical_promotion").await;
+        store
+            .append_message("main", 3, &wisp_llm::Message::user("later question"))
+            .await
+            .unwrap();
+        store
+            .append_message("main", 4, &wisp_llm::Message::assistant("later answer"))
+            .await
+            .unwrap();
+        for (seq, event) in [
+            (1, r#"{"kind":"User","frame_id":"main","text":"question"}"#),
+            (2, r#"{"kind":"Text","frame_id":"main","delta":"answer"}"#),
+            (3, r#"{"kind":"MessageBoundary","frame_id":"main","seq":2}"#),
+            (
+                4,
+                r#"{"kind":"User","frame_id":"main","text":"later question"}"#,
+            ),
+            (
+                5,
+                r#"{"kind":"Text","frame_id":"main","delta":"later answer"}"#,
+            ),
+            (6, r#"{"kind":"MessageBoundary","frame_id":"main","seq":4}"#),
+        ] {
+            store
+                .append_session_ui_event("main", seq, event)
+                .await
+                .unwrap();
+        }
+        let original_events = store.load_session_ui_events("main").await.unwrap();
+        let checkpoint = creator
+            .create_checkpoint_at("p", "main", Some(0))
+            .await
+            .unwrap();
+        let selected = creator
+            .create_exploration(&checkpoint.id, "Earlier approach")
+            .await
+            .unwrap();
+        store
+            .append_message(
+                &selected.frame_id,
+                3,
+                &wisp_llm::Message::user("different parameter"),
+            )
+            .await
+            .unwrap();
+        store
+            .append_message(
+                &selected.frame_id,
+                4,
+                &wisp_llm::Message::assistant("new result"),
+            )
+            .await
+            .unwrap();
+        for (seq, event) in [
+            (
+                4,
+                serde_json::json!({"kind":"User", "text":"different parameter"}),
+            ),
+            (5, serde_json::json!({"kind":"Text", "delta":"new result"})),
+            (
+                6,
+                serde_json::json!({"kind":"Resources", "seq":0, "resources":[]}),
+            ),
+            (
+                7,
+                serde_json::json!({"kind":"Resources", "seq":3, "resources":[]}),
+            ),
+            (8, serde_json::json!({"kind":"MessageBoundary", "seq":4})),
+        ] {
+            let mut event = event;
+            event["frame_id"] = selected.frame_id.clone().into();
+            store
+                .append_session_ui_event(&selected.frame_id, seq, &event.to_string())
+                .await
+                .unwrap();
+        }
+        std::fs::write(
+            Path::new(&selected.workspace_dir).join("baseline.txt"),
+            b"new result",
+        )
+        .unwrap();
+        store
+            .upsert_session_review(&selected.frame_id, "historical-review", 4, "{}")
+            .await
+            .unwrap();
+        let promotion = ExplorationPromotionService::new(store.clone(), app_data);
+        let preview = promotion.preview(&selected.id).await.unwrap();
+        assert!(preview.eligibility.eligible, "{:?}", preview.eligibility);
+        promotion
+            .promote_locked(&selected.id, &preview.eligibility.expected_guard_hash)
+            .await
+            .unwrap();
+        let messages = store.load_messages_with_seq("main").await.unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|(seq, message)| (*seq, message.content.as_text()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "question".into()),
+                (2, "answer".into()),
+                (3, "later question".into()),
+                (4, "later answer".into()),
+                (5, "different parameter".into()),
+                (6, "new result".into()),
+            ]
+        );
+        let events = store.load_session_ui_events("main").await.unwrap();
+        assert_eq!(&events[..6], &original_events);
+        assert_eq!(events.len(), 11);
+        let unbound: serde_json::Value = serde_json::from_str(&events[8]).unwrap();
+        let bound: serde_json::Value = serde_json::from_str(&events[9]).unwrap();
+        assert_eq!(unbound["seq"], 0);
+        assert_eq!(bound["seq"], 5);
+        assert_eq!(
+            store
+                .load_session_transcript_page("main", None, 10)
+                .await
+                .unwrap()
+                .reviews,
+            vec![(6, "{}".into())]
+        );
+        let boundary: serde_json::Value = serde_json::from_str(events.last().unwrap()).unwrap();
+        assert_eq!(boundary["frame_id"], "main");
+        assert_eq!(boundary["seq"], 6);
+        assert_eq!(store.frame_ui_event_head("main").await.unwrap(), 11);
+        assert_eq!(
+            std::fs::read(project.join("baseline.txt")).unwrap(),
+            b"new result"
+        );
+        assert!(!store.mainline_frame_is_frozen("main").await.unwrap());
         let _ = std::fs::remove_dir_all(base);
     }
 

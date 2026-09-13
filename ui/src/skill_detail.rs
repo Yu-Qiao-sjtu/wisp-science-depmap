@@ -177,6 +177,7 @@ pub(crate) fn SkillDetail(
                     {s.managed_by.map(|provider| view! { <p class="skill-managed-badge">{crate::i18n::tf(locale.get(), "skills.managed_by", &[("plugin", &provider)])}</p> })}
                     <p class="skill-detail-description">{s.description}</p>
                     <p class="skill-detail-path">{s.dir}</p>
+                    <crate::skill_store::SkillOrigin name=s.name.clone() locale=locale />
                     <label class="skill-detail-tags">
                         <span>{move || t(locale.get(), "skills.edit_tags")}</span>
                         <input class="skill-tags-input" prop:value=join_tags(&s.tags)
@@ -204,7 +205,12 @@ pub(crate) fn SkillDetail(
                     <button type="button" class:active=move || source_mode.get() on:click=move |_| source_mode.set(true)>{move || t(locale.get(), "skills.source")}</button>
                 })}
             </div>
-            {move || loading.get().then(|| view! { <p role="status">{move || t(locale.get(), "skills.loading")}</p> })}
+            {move || loading.get().then(|| view! {
+                <p class="skill-file-loading" role="status">
+                    <span class="skills-loading-icon" aria-hidden="true">{compose_icon("loader")}</span>
+                    {move || t(locale.get(), "skills.loading")}
+                </p>
+            })}
             {move || error.get().map(|message| view! {
                 <div class="settings-status fail" role="alert">{message}
                     <button type="button" on:click=move |_| { selected.set(String::new()); retry.update(|v| *v += 1); }>{move || t(locale.get(), "skills.retry")}</button>

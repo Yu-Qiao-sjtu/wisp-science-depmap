@@ -312,7 +312,7 @@ async fn import_parsed(
 pub(super) async fn import_session_archive(
     app: AppHandle,
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Option<ImportSessionSummary>, String> {
     use tauri_plugin_dialog::DialogExt;
 

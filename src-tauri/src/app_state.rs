@@ -7,7 +7,7 @@
 
 use super::*;
 
-/// Per-session runtime: one agent (with its own MCP clients), one cancel flag,
+/// Per-session runtime: one agent (with Host-managed MCP handles), one cancel flag,
 /// and the persisted-seq cursor. Python processes live in the project-scoped
 /// `RuntimeManager`, so rebuilding or deleting a conversation preserves them.
 /// Keyed by frame id in `AppState.sessions`, so different conversations run
@@ -279,10 +279,11 @@ pub(crate) struct ActiveProject {
 /// Host-side `serverTools` binding for one live MCP App instance. Registered
 /// when an `mcp_app` presentation flows to the UI and revoked on teardown or
 /// session delete; the `server` handle keeps only a `Weak` reference to the
-/// MCP client, so an agent rebuild or connector restart naturally makes the
-/// instance stale instead of pinning the server process.
+/// MCP client. Host ownership preserves it across Agent rebuilds; connection
+/// and view generations revoke stale callbacks without making the view a process owner.
 #[derive(Clone)]
 pub(crate) struct McpAppToolBridge {
+    pub(crate) generation: u64,
     pub(crate) frame_id: String,
     pub(crate) server: Arc<dyn wisp_tools::McpAppServer>,
     pub(crate) limiter: Arc<McpAppCallLimiter>,
@@ -298,11 +299,29 @@ pub(crate) const MCP_APP_CALL_WINDOW: std::time::Duration = std::time::Duration:
 #[derive(Default)]
 pub(crate) struct McpAppBridges {
     bridges: StdMutex<HashMap<String, McpAppToolBridge>>,
+    next_generation: std::sync::atomic::AtomicU64,
 }
 
 impl McpAppBridges {
-    pub(crate) fn register(&self, instance_id: String, bridge: McpAppToolBridge) {
-        self.bridges.lock().unwrap().insert(instance_id, bridge);
+    pub(crate) fn register(&self, instance_id: String, mut bridge: McpAppToolBridge) {
+        bridge.generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(old) = self.bridges.lock().unwrap().insert(instance_id, bridge) {
+            old.limiter.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn close_generation(&self, instance_id: &str, generation: Option<u64>) -> bool {
+        let mut bridges = self.bridges.lock().unwrap();
+        if bridges
+            .get(instance_id)
+            .is_some_and(|b| Some(b.generation) == generation)
+        {
+            if let Some(old) = bridges.remove(instance_id) {
+                old.limiter.closed.store(true, Ordering::SeqCst);
+            }
+            return true;
+        }
+        false
     }
 
     pub(crate) fn get(&self, instance_id: &str) -> Option<McpAppToolBridge> {
@@ -310,19 +329,48 @@ impl McpAppBridges {
     }
 
     pub(crate) fn close(&self, instance_id: &str) -> bool {
-        self.bridges.lock().unwrap().remove(instance_id).is_some()
-    }
-
-    pub(crate) fn remove_for_frame(&self, frame_id: &str) {
         self.bridges
             .lock()
             .unwrap()
-            .retain(|_, bridge| bridge.frame_id != frame_id);
+            .remove(instance_id)
+            .is_some_and(|old| {
+                old.limiter.closed.store(true, Ordering::SeqCst);
+                true
+            })
+    }
+
+    pub(crate) fn cancel_all(&self) {
+        for bridge in self.bridges.lock().unwrap().values() {
+            bridge.limiter.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn cancel_for_frame(&self, frame_id: &str) {
+        for bridge in self
+            .bridges
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|b| b.frame_id == frame_id)
+        {
+            bridge.limiter.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn remove_for_frame(&self, frame_id: &str) {
+        self.bridges.lock().unwrap().retain(|_, bridge| {
+            if bridge.frame_id == frame_id {
+                bridge.limiter.closed.store(true, Ordering::SeqCst);
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct McpAppCallLimiter {
+    pub(crate) cancel_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) closed: AtomicBool,
     max_concurrent: usize,
     max_per_window: usize,
     window: std::time::Duration,
@@ -344,6 +392,14 @@ impl Drop for McpAppCallPermit {
 }
 
 impl McpAppCallLimiter {
+    pub(crate) fn was_cancelled(&self, epoch: u64) -> bool {
+        self.closed.load(Ordering::SeqCst) || self.cancel_epoch.load(Ordering::SeqCst) != epoch
+    }
+    pub(crate) async fn cancelled(&self, epoch: u64) {
+        while !self.was_cancelled(epoch) {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
     pub(crate) fn new() -> Arc<Self> {
         Self::with_limits(
             MCP_APP_MAX_CONCURRENT_CALLS,
@@ -358,6 +414,8 @@ impl McpAppCallLimiter {
         window: std::time::Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
+            cancel_epoch: std::sync::atomic::AtomicU64::new(0),
+            closed: AtomicBool::new(false),
             max_concurrent,
             max_per_window,
             window,
@@ -426,6 +484,7 @@ impl ProjectActivityLocks {
 }
 
 pub(crate) struct AppState {
+    pub(crate) desktop: tauri::AppHandle,
     pub(crate) app_data: PathBuf,
     pub(crate) store: Store,
     pub(crate) library: LibraryStore,
@@ -550,6 +609,7 @@ impl AppState {
         self.active_frame.read().unwrap().get(label).cloned()
     }
     pub(crate) fn set_active_frame(&self, label: &str, frame: Option<String>) {
+        let changed = self.active_frame(label) != frame;
         match frame {
             Some(f) => {
                 self.active_frame
@@ -560,6 +620,12 @@ impl AppState {
             None => {
                 self.active_frame.write().unwrap().remove(label);
             }
+        }
+        // Drop active_frame before touching the child registry. Native
+        // suspend is a no-op when the isolation manager is not installed
+        // (unit tests without a full desktop runtime).
+        if changed {
+            crate::mcp_app_child_commands::suspend_owner(&self.desktop, label);
         }
     }
     pub(crate) fn set_notification_window(&self, frame_id: &str, label: &str) {
@@ -583,6 +649,7 @@ impl AppState {
     /// Revoke every app bridge owned by a conversation (session delete).
     pub(crate) fn remove_mcp_app_bridges_for_frame(&self, frame_id: &str) {
         self.mcp_app_tool_bridges.remove_for_frame(frame_id);
+        crate::mcp_app_child_commands::remove_frame(&self.desktop, frame_id);
     }
     pub(crate) fn preferred_notification_window(
         &self,

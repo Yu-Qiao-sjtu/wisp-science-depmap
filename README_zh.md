@@ -64,7 +64,8 @@ Agent 读写项目文件、执行 shell，并按需加载 Skills（`SKILL.md`）
 | macOS | 已签名并公证的 `.dmg`（Apple Silicon + Intel） |
 | Linux | `.deb` / AppImage（x86_64 + aarch64） |
 
-上手教程：[基础配置](docs/basic-configuration.md) ·
+上手教程：[快速开始](docs/wechat/wisp-science-quick-start.md) ·
+[基础配置](docs/basic-configuration.md) ·
 [模型配置](docs/model-configuration.md) ·
 [ACP Agents](docs/acp-agents.md)
 

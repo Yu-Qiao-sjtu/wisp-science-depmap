@@ -1,6 +1,7 @@
 //! Tauri v2 desktop shell: commands that drive the Wisp agent and stream
 //! events to the webview, plus a settings/confirm surface.
 
+use crate::workspace_surface::WorkspaceManager;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
@@ -52,6 +53,8 @@ pub(crate) use wisp_runs::harvest;
 mod image_generation_tool;
 mod library_commands;
 mod mcp_bridge;
+mod mcp_broker;
+mod mcp_connections;
 pub use mcp_bridge::run_mcp_bridge_cli;
 mod mcp_oauth;
 mod mcp_secrets;
@@ -100,23 +103,29 @@ mod share_social;
 mod side_chat;
 mod skill_commands;
 mod skill_portfolio;
+mod skill_store;
 pub(crate) use wisp_runs::snapshot_store;
 mod specialist_tool;
 mod specialists;
 pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
 pub(crate) use wisp_runs::ssh_master;
+mod clipboard_files;
+mod mcp_app_child_commands;
+mod mcp_app_children;
 mod storage_prefs;
 mod terminal_sessions;
 mod trajectory;
 mod trajectory_export;
 mod turn_memory;
 mod turn_undo;
+mod ui_health;
 mod video_generation_tool;
 mod windows_snap;
 mod workspace_manifest;
 mod workspace_scan;
 mod workspace_session_recovery;
+mod workspace_surface;
 mod wsl_contexts;
 
 pub(crate) use agent_turn::*;
@@ -2009,6 +2018,14 @@ struct Settings {
     /// OpenAI-compatible HTTP `service_tier`. Empty = omit; `priority` = Fast.
     #[serde(default)]
     service_tier: String,
+    #[serde(default)]
+    user_agent: String,
+    #[serde(default = "default_send_user_agent_setting")]
+    send_user_agent: bool,
+    #[serde(default)]
+    send_session_id: Option<bool>,
+    #[serde(default)]
+    session_header_name: String,
     /// LLM HTTP proxy. Empty = follow system/env proxy; `none` = force direct;
     /// otherwise a proxy URL (http://, https://, socks5://).
     #[serde(default)]
@@ -2045,6 +2062,10 @@ const fn default_max_iter_setting() -> i64 {
     DEFAULT_MAX_ITER as i64
 }
 
+const fn default_send_user_agent_setting() -> bool {
+    true
+}
+
 const fn default_auto_compact() -> bool {
     true
 }
@@ -2065,6 +2086,7 @@ const fn default_resume_last_session() -> bool {
 /// settings. A busy runtime remembers the invalidation until its current turn
 /// releases the agent lock; it must never silently lose a settings change.
 async fn clear_idle_agents(state: &AppState) {
+    mcp_connections::host().reconcile(&state.store, None).await;
     let runtimes = state
         .sessions
         .lock()
@@ -2089,6 +2111,9 @@ fn invalidate_idle_agents_owned(
 }
 
 async fn clear_idle_agents_for_project(state: &AppState, project_id: &str) {
+    mcp_connections::host()
+        .reconcile(&state.store, Some(project_id))
+        .await;
     let owned: HashSet<String> = match state.store.list_sessions(project_id).await {
         Ok(rows) => rows.into_iter().map(|(id, ..)| id).collect(),
         Err(_) => return,
@@ -2518,9 +2543,8 @@ const MAX_MCP_APP_ARGUMENT_BYTES: usize = 3 * 1024 * 1024;
 /// Hard ceiling on a single MCP App `tools/call` result JSON blob.
 const MAX_MCP_APP_RESULT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MCP_APP_TOOL_NAME_BYTES: usize = 256;
-/// Host-side App `tools/call` ceiling, independent of the 120s transport
-/// timeout. Expiry fails this iframe call only; it does not tear down stdio.
-const MCP_APP_TOOL_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// No default execution limit. Explicit deadlines remain available to tests/embedders.
+const MCP_APP_TOOL_CALL_TIMEOUT: Option<std::time::Duration> = None;
 const MCP_APP_STALE_INSTANCE_ERROR: &str =
     "stale-instance: the MCP App is no longer bound to a live MCP server";
 
@@ -2528,8 +2552,11 @@ pub(crate) async fn invoke_mcp_app_server_tool(
     server: &dyn wisp_tools::McpAppServer,
     name: &str,
     arguments: &serde_json::Value,
-    timeout: std::time::Duration,
+    timeout: Option<std::time::Duration>,
 ) -> Result<serde_json::Value, String> {
+    let Some(timeout) = timeout else {
+        return server.call_tool(name, arguments).await;
+    };
     match tokio::time::timeout(timeout, server.call_tool(name, arguments)).await {
         Ok(result) => result,
         Err(_) => Err(format!(
@@ -2569,6 +2596,8 @@ async fn request_mcp_app_tool_confirmation(
     tool: &str,
     preview: String,
     grant: Option<ApprovalGrantKey>,
+    limiter: &McpAppCallLimiter,
+    epoch: u64,
 ) -> wisp_tools::ConfirmDecision {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let request = ConfirmRequest::new(frame_id, message, tool, preview);
@@ -2588,10 +2617,24 @@ async fn request_mcp_app_tool_confirmation(
         .insert(frame_id.to_string());
     state.device_hub.mark_needs_user(frame_id, Some(project_id));
     emit_confirm_request(app, &request, Some(project_id));
-    let decision = receive_confirm_decision(rx).await;
-    state.confirms.lock().unwrap().remove(frame_id);
-    state.awaiting_confirm.lock().unwrap().remove(frame_id);
-    state.device_hub.resolve_needs_user(frame_id);
+    let decision = tokio::select! {
+        decision = receive_confirm_decision(rx) => decision,
+        _ = limiter.cancelled(epoch) => wisp_tools::ConfirmDecision::Denied { feedback: None },
+    };
+    let owns_confirmation = {
+        let mut pending = state.confirms.lock().unwrap();
+        let owns = pending
+            .get(frame_id)
+            .is_none_or(|p| p.request.approval_id == request.approval_id);
+        if owns {
+            pending.remove(frame_id);
+        }
+        owns
+    };
+    if owns_confirmation {
+        state.awaiting_confirm.lock().unwrap().remove(frame_id);
+        state.device_hub.resolve_needs_user(frame_id);
+    }
     decision
 }
 
@@ -2607,6 +2650,17 @@ async fn call_mcp_app_tool(
     instance_id: String,
     name: String,
     arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    call_mcp_app_tool_inner(app, &state, instance_id, name, arguments, None).await
+}
+
+async fn call_mcp_app_tool_inner(
+    app: AppHandle,
+    state: &AppState,
+    instance_id: String,
+    name: String,
+    arguments: serde_json::Value,
+    child: Option<&mcp_app_children::Child>,
 ) -> Result<serde_json::Value, String> {
     let frame_id = mcp_app_frame_id(&instance_id)?.to_string();
     if name.is_empty() || name.len() > MAX_MCP_APP_TOOL_NAME_BYTES {
@@ -2639,6 +2693,12 @@ async fn call_mcp_app_tool(
     if bridge.frame_id != frame_id {
         return Err(MCP_APP_STALE_INSTANCE_ERROR.into());
     }
+    if let Some(child) = child {
+        mcp_app_child_commands::ensure_current(state, child)?;
+        if child.bridge_generation != Some(bridge.generation) {
+            return Err(MCP_APP_STALE_INSTANCE_ERROR.into());
+        }
+    }
     if !bridge.server.visible_to_app(&name) {
         return Err(format!(
             "MCP App tool '{name}' is not visible to apps on this server."
@@ -2647,6 +2707,7 @@ async fn call_mcp_app_tool(
     if let Some(schema) = bridge.server.input_schema(&name) {
         wisp_mcp::validate_tool_arguments(&schema, &arguments)?;
     }
+    let epoch = bridge.limiter.cancel_epoch.load(Ordering::SeqCst);
     let _permit = bridge.limiter.try_acquire()?;
     let project_id = state
         .store
@@ -2730,6 +2791,8 @@ async fn call_mcp_app_tool(
                 &name,
                 preview,
                 grant_key,
+                &bridge.limiter,
+                epoch,
             )
             .await;
             if !decision.approved() {
@@ -2746,6 +2809,11 @@ async fn call_mcp_app_tool(
             }
         }
     }
+    // Approval may outlive the page that asked for it. Never dispatch a stale
+    // request after an asynchronous policy/user decision.
+    if let Some(child) = child {
+        mcp_app_child_commands::ensure_current(state, child)?;
+    }
     audit_mcp_app_tool(
         "mcp_app.tool_call_approved",
         &instance_id,
@@ -2755,15 +2823,18 @@ async fn call_mcp_app_tool(
         started.elapsed().as_millis() as u64,
         "",
     );
-    match invoke_mcp_app_server_tool(
-        bridge.server.as_ref(),
-        &name,
-        &arguments,
-        MCP_APP_TOOL_CALL_TIMEOUT,
-    )
-    .await
-    {
+    if bridge.limiter.was_cancelled(epoch) {
+        return Err("MCP App was closed or cancelled; request not sent".into());
+    }
+    let outcome = tokio::select! {
+        result = invoke_mcp_app_server_tool(bridge.server.as_ref(), &name, &arguments, MCP_APP_TOOL_CALL_TIMEOUT) => result,
+        _ = bridge.limiter.cancelled(epoch) => Err("MCP wait cancelled; plugin kept alive. External operation outcome may be unknown; do not replay automatically.".into()),
+    };
+    match outcome {
         Ok(result) => {
+            if let Some(child) = child {
+                mcp_app_child_commands::ensure_current(state, child)?;
+            }
             let result_bytes = serde_json::to_vec(&result)
                 .map_err(|error| format!("Invalid MCP App tool result: {error}"))?
                 .len();
@@ -2851,7 +2922,7 @@ async fn mcp_app_has_server_tools(
     let frame_id = mcp_app_frame_id(&instance_id)?;
     Ok(state
         .mcp_app_bridge(&instance_id)
-        .is_some_and(|bridge| bridge.frame_id == frame_id))
+        .is_some_and(|bridge| bridge.frame_id == frame_id && bridge.server.is_connected()))
 }
 
 /// Revoke an MCP App instance's host-side bridge when the iframe tears down
@@ -3139,17 +3210,29 @@ impl Output for TauriOutput {
         payload: &serde_json::Value,
         server: Option<std::sync::Arc<dyn wisp_tools::McpAppServer>>,
     ) {
+        let mut payload = payload.clone();
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("_wispMcpBinding");
+        }
         let presentation_id = Uuid::new_v4().to_string();
         if kind == "mcp_app" && !payload.is_null() {
             if let Some(server) = server {
+                payload["_wispMcpBinding"] = serde_json::to_value(wisp_dto::McpAppBinding {
+                    version: 1,
+                    project_id: self.project_id.clone(),
+                    frame_id: self.frame_id.clone(),
+                    connector_id: server.connector_id().into(),
+                })
+                .unwrap_or_default();
                 // Same formula as ui/src/mcp_app.rs: resource URI (or tool
                 // name), not the unique presentation UUID, so a later Open/
                 // Search of the same app replaces the live bridge instead of
                 // stacking another center tab.
-                let instance_id = mcp_app_instance_id(&self.frame_id, payload);
+                let instance_id = mcp_app_instance_id(&self.frame_id, &payload);
                 self.app.state::<AppState>().register_mcp_app_bridge(
                     instance_id,
                     McpAppToolBridge {
+                        generation: 0,
                         frame_id: self.frame_id.clone(),
                         server,
                         limiter: McpAppCallLimiter::new(),
@@ -3631,9 +3714,26 @@ fn mac_menu_action(id: &str, focused: bool) -> Option<&'static str> {
 }
 
 #[cfg(target_os = "macos")]
-fn wire_macos_menu_events(window: &tauri::WebviewWindow) {
+fn wire_macos_menu_events(window: &crate::workspace_surface::WorkspaceSurface) {
     window.on_menu_event(|window, event| {
         // Tauri invokes every window's menu handler for each native action.
+        if window.is_focused().unwrap_or(false) {
+            match event.id().as_ref() {
+                "recovery.stop-agent" => {
+                    if let Some(target) = window.app_handle().workspace_surface(window.label()) {
+                        ui_health::stop_window_agent(&target);
+                    }
+                    return;
+                }
+                "recovery.reload-window" => {
+                    if let Some(target) = window.app_handle().workspace_surface(window.label()) {
+                        ui_health::reload_window(&target, "native menu");
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Some(action) =
             mac_menu_action(event.id().as_ref(), window.is_focused().unwrap_or(false))
         {
@@ -3823,6 +3923,33 @@ fn install_macos_app_menu(app: &AppHandle, locale_tag: &str) -> Result<(), Strin
         .map_err(|error| error.to_string())?;
 
     let window_menu = SubmenuBuilder::new(app, labels.window)
+        .item(
+            &build_menu_item(
+                app,
+                "recovery.stop-agent",
+                if locale_tag.starts_with("zh") {
+                    "停止当前 Agent"
+                } else {
+                    "Stop current agent"
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .item(
+            &build_menu_item(
+                app,
+                "recovery.reload-window",
+                if locale_tag.starts_with("zh") {
+                    "重载当前窗口"
+                } else {
+                    "Reload current window"
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .separator()
         .item(&PredefinedMenuItem::minimize(app, None).map_err(|error| error.to_string())?)
         .item(&PredefinedMenuItem::maximize(app, None).map_err(|error| error.to_string())?)
         .item(&PredefinedMenuItem::fullscreen(app, None).map_err(|error| error.to_string())?)
@@ -3949,7 +4076,19 @@ pub(crate) async fn load_settings(store: &Store) -> (String, String, String, Str
 async fn load_session_settings(
     store: &Store,
     frame_id: &str,
-) -> (String, String, String, String, u64, String, String) {
+) -> (
+    String,
+    String,
+    String,
+    String,
+    u64,
+    String,
+    String,
+    String,
+    bool,
+    Option<bool>,
+    String,
+) {
     let profile_id = models::session_profile_id(store, frame_id).await;
     let (
         provider,
@@ -3959,12 +4098,23 @@ async fn load_session_settings(
         max_tokens,
         profile_reasoning_effort,
         profile_service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
     ) = match models::profile_llm(store, &profile_id).await {
         Some(config) => config,
         None => {
             let (provider, api_url, model, api_key) = load_settings(store).await;
-            let (max_tokens, reasoning_effort, service_tier) =
-                models::active_llm_advanced(store).await;
+            let (
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
+            ) = models::active_llm_advanced(store).await;
             (
                 provider,
                 api_url,
@@ -3973,6 +4123,10 @@ async fn load_session_settings(
                 max_tokens,
                 reasoning_effort,
                 service_tier,
+                user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
             )
         }
     };
@@ -3989,6 +4143,10 @@ async fn load_session_settings(
         max_tokens,
         reasoning_effort,
         service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
     )
 }
 
@@ -4759,6 +4917,11 @@ fn build_provider_config(
     max_tokens: u64,
     reasoning_effort: &str,
     service_tier: &str,
+    user_agent: &str,
+    send_user_agent: bool,
+    send_session_id: Option<bool>,
+    session_header_name: &str,
+    session_id: Option<&str>,
 ) -> Result<ProviderConfig, String> {
     let provider = normalized_provider(provider);
     let api_url = api_url.trim();
@@ -4786,7 +4949,15 @@ fn build_provider_config(
         service_tier,
         &provider,
     );
+    cfg.user_agent = wisp_llm::provider::normalize_user_agent(user_agent)?;
+    cfg.send_user_agent = send_user_agent;
+    cfg.send_session_id = send_session_id;
+    cfg.session_header_name =
+        wisp_llm::provider::normalize_session_header_name(session_header_name)?;
     cfg.proxy = llm_proxy();
+    if let Some(session_id) = session_id {
+        cfg.session_id = session_id.to_string();
+    }
     Ok(cfg)
 }
 
@@ -4794,11 +4965,13 @@ fn add_configured_image_generation_tool(
     agent: &mut Agent,
     config: Option<(String, String, String, models::ImageGenerationOptions)>,
     proxy: Option<String>,
+    session_id: &str,
 ) {
     if let Some((api_url, model, api_key, options)) = config {
         agent.add_tool(Box::new(
             image_generation_tool::GenerateImageTool::new(api_url, api_key, model, proxy)
-                .with_options(options),
+                .with_options(options)
+                .with_session_id(session_id),
         ));
     }
 }
@@ -4807,18 +4980,31 @@ fn add_configured_video_generation_tool(
     agent: &mut Agent,
     config: Option<(String, String, String, models::VideoGenerationOptions)>,
     proxy: Option<String>,
+    session_id: &str,
 ) {
     if let Some((api_url, model, api_key, options)) = config {
         agent.add_tool(Box::new(
             video_generation_tool::GenerateVideoTool::new(api_url, api_key, model, proxy)
-                .with_options(options),
+                .with_options(options)
+                .with_session_id(session_id),
         ));
     }
 }
 
-async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-        models::vision_config(store).await?;
+async fn build_vision_provider_config(store: &Store, session_id: &str) -> Option<ProviderConfig> {
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = models::vision_config(store).await?;
     match build_provider_config(
         &provider,
         &api_url,
@@ -4827,6 +5013,11 @@ async fn build_vision_provider_config(store: &Store) -> Option<ProviderConfig> {
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(session_id),
     ) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -4884,7 +5075,7 @@ async fn load_image_attachments(
             } else {
                 wisp_tools::image::view_image(&path.to_string_lossy())
             };
-            let mut image = result.image.ok_or(result.content)?;
+            let mut image = result.images.into_iter().next().ok_or(result.content)?;
             image.label = format!("Attached image: {attachment}. {}", image.label);
             Ok(image)
         })
@@ -5032,40 +5223,8 @@ async fn wire_runtimes_and_mcp(
 
     // Native bio domains obey connector settings and grants. The explicit
     // WISP_MCP_COMMAND override selects an external MCP server instead.
-    if let Ok(cmdline) = std::env::var("WISP_MCP_COMMAND") {
-        if connector_allow.is_some_and(|allow| !allow.contains("dev-mcp")) {
-            return finish_custom_mcp_wiring(result, registry, store, project_id, connector_allow)
-                .await;
-        }
-        let parts: Vec<String> = cmdline
-            .split_whitespace()
-            .map(|s| {
-                if s.ends_with(".py") {
-                    wisp_runtime::resolve_bundled_script(s)
-                        .to_string_lossy()
-                        .to_string()
-                } else {
-                    s.to_string()
-                }
-            })
-            .collect();
-        if !parts.is_empty() {
-            let args: Vec<String> = parts[1..].to_vec();
-            match wisp_mcp::McpClient::launch(&parts[0], &args).await {
-                Ok(client) => match register_mcp(
-                    registry,
-                    std::sync::Arc::new(client),
-                    BUNDLED_DEV_MCP_CONNECTOR_ID,
-                )
-                .await
-                {
-                    Ok(names) => result.added_tools.extend(names),
-                    Err(error) => result.errors.push(error),
-                },
-                Err(e) => result.errors.push(format!("MCP command: {e}")),
-            }
-        }
-    } else {
+    // The explicit development server is registered by the same Host manager.
+    if std::env::var("WISP_MCP_COMMAND").is_err() {
         let pkg = std::env::var("WISP_MCP_PKG").unwrap_or_else(|_| "mcp_bio".into());
         let native_selected = wisp_bio::selected_by_package(&pkg);
         if native_selected {
@@ -5098,7 +5257,16 @@ async fn wire_runtimes_and_mcp(
         }
     }
 
-    finish_custom_mcp_wiring(result, registry, store, project_id, connector_allow).await
+    finish_custom_mcp_wiring(
+        result,
+        registry,
+        store,
+        project_id,
+        frame_id,
+        scope_key,
+        connector_allow,
+    )
+    .await
 }
 
 /// Host environment keys copied into a plugin MCP child after `env_clear()`.
@@ -5174,22 +5342,12 @@ async fn finish_custom_mcp_wiring(
     registry: &mut wisp_tools::Registry,
     store: &Store,
     project_id: &str,
+    frame_id: &str,
+    scope_key: &str,
     connector_allow: Option<&HashSet<String>>,
 ) -> ToolWiringResult {
-    // User-configured connections. Connect concurrently: each HTTP server has
-    // a 10s connect timeout, so a sequential loop could stall first-message
-    // startup by 10s per unreachable server (#67). Registration stays in
-    // config order so tool ordering is deterministic.
-    let conns: Vec<McpConnection> = load_mcp_connections(store)
-        .await
-        .into_iter()
-        .filter(|c| c.enabled)
-        .filter(|c| connector_allow.is_none_or(|allow| allow.contains(&c.id)))
-        .collect();
-    let mut set = tokio::task::JoinSet::new();
-    let (plugin_launches, plugin_errors) =
-        plugins::enabled_plugin_mcp_launches(store, project_id).await;
-    for error in plugin_errors {
+    let (specs, errors) = mcp_connections::configured(store, project_id).await;
+    for error in errors {
         result
             .plugin_runtime_checks
             .entry(error.plugin_id)
@@ -5197,31 +5355,27 @@ async fn finish_custom_mcp_wiring(
             .push(error.message.clone());
         result.errors.push(error.message);
     }
-    let mut next_index = 0usize;
-    for launch in plugin_launches
-        .into_iter()
-        .filter(|launch| connector_allow.is_none_or(|allow| allow.contains(&launch.connector_id)))
-    {
-        let plugin_id = launch.plugin_id.clone();
-        result
-            .plugin_runtime_checks
-            .entry(plugin_id.clone())
-            .or_default();
-        let index = next_index;
-        next_index += 1;
-        let connector_id = launch.connector_id.clone();
+    let mut set = tokio::task::JoinSet::new();
+    for (index, spec) in specs.into_iter().enumerate() {
+        if connector_allow.is_some_and(|allow| !allow.contains(spec.id())) {
+            continue;
+        }
+        let client = mcp_connections::host()
+            .acquire(store, project_id, frame_id, scope_key, &spec)
+            .await;
+        let connector_id = spec.id().to_string();
+        let name = spec.name().to_string();
+        let plugin_id = spec.plugin_id().map(str::to_string);
+        if let Some(id) = &plugin_id {
+            result.plugin_runtime_checks.entry(id.clone()).or_default();
+        }
         set.spawn(async move {
-            let name = launch.display_name.clone();
-            let res = connect_plugin_mcp(&launch).await;
-            (index, name, Some(plugin_id), connector_id, true, res)
-        });
-    }
-    for (i, conn) in conns.into_iter().enumerate() {
-        let index = next_index + i;
-        let connector_id = conn.id.clone();
-        set.spawn(async move {
-            let res = connect_mcp(&conn).await;
-            (index, conn.name, None, connector_id, false, res)
+            let res = match client {
+                Ok(client) => client.tools_list().await.map(|_| client),
+                Err(error) => Err(anyhow::anyhow!(error)),
+            };
+            let approval = plugin_id.is_some();
+            (index, name, plugin_id, connector_id, approval, res)
         });
     }
     let mut results = Vec::new();
@@ -5233,27 +5387,24 @@ async fn finish_custom_mcp_wiring(
     results.sort_by_key(|(i, _, _, _, _, _)| *i);
     for (_, name, plugin_id, connector_id, require_approval, res) in results {
         match res {
-            Ok(client) => match register_mcp_with_approval(
-                registry,
-                std::sync::Arc::new(client),
-                &connector_id,
-                require_approval,
-            )
-            .await
-            {
-                Ok(names) => result.added_tools.extend(names),
-                Err(error) => {
-                    let message = format!("MCP '{name}': {error}");
-                    if let Some(plugin_id) = plugin_id {
-                        result
-                            .plugin_runtime_checks
-                            .entry(plugin_id)
-                            .or_default()
-                            .push(message.clone());
+            Ok(client) => {
+                match register_mcp_with_approval(registry, client, &connector_id, require_approval)
+                    .await
+                {
+                    Ok(names) => result.added_tools.extend(names),
+                    Err(error) => {
+                        let message = format!("MCP '{name}': {error}");
+                        if let Some(plugin_id) = plugin_id {
+                            result
+                                .plugin_runtime_checks
+                                .entry(plugin_id)
+                                .or_default()
+                                .push(message.clone());
+                        }
+                        result.errors.push(message);
                     }
-                    result.errors.push(message);
                 }
-            },
+            }
             Err(error) => {
                 let message = format!("MCP '{name}': {error}");
                 if let Some(plugin_id) = plugin_id {
@@ -5268,14 +5419,6 @@ async fn finish_custom_mcp_wiring(
         }
     }
     result
-}
-
-async fn register_mcp(
-    registry: &mut wisp_tools::Registry,
-    client: std::sync::Arc<wisp_mcp::McpClient>,
-    connector_id: &str,
-) -> Result<Vec<String>, String> {
-    register_mcp_with_approval(registry, client, connector_id, false).await
 }
 
 async fn register_mcp_with_approval(
@@ -5301,6 +5444,7 @@ async fn register_mcp_with_approval(
             }
             // Keep UI-only tools available to App bridges; model visibility is
             // checked below when adding tools to the agent registry.
+            client.mark_catalog_current();
             let catalog = std::sync::Arc::new(tools);
             let mut names = Vec::new();
             for t in catalog.iter() {
@@ -5727,8 +5871,19 @@ async fn generate_review_with_backend(
             if let Some(review::ReviewBackendConfig::HttpModel { profile_id }) = backend {
                 reviewer.model_id = profile_id;
             }
-            let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-                specialists::specialist_llm(&state.store, &reviewer).await;
+            let (
+                provider,
+                api_url,
+                model,
+                api_key,
+                max_tokens,
+                reasoning_effort,
+                service_tier,
+                user_agent,
+                send_user_agent,
+                send_session_id,
+                session_header_name,
+            ) = specialists::specialist_llm(&state.store, &reviewer).await;
             let cfg = build_provider_config(
                 &provider,
                 &api_url,
@@ -5737,6 +5892,11 @@ async fn generate_review_with_backend(
                 max_tokens,
                 &reasoning_effort,
                 &service_tier,
+                &user_agent,
+                send_user_agent,
+                send_session_id,
+                &session_header_name,
+                Some(frame_id),
             )?;
             let llm = wisp_llm::build(cfg);
             let reviewer_model = llm.model().to_string();
@@ -6080,7 +6240,7 @@ struct ReviewerBackendTestResult {
 #[tauri::command]
 async fn test_reviewer_backend(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     mut reviewer: specialists::Specialist,
 ) -> Result<ReviewerBackendTestResult, String> {
     if reviewer.id != "reviewer" {
@@ -6133,7 +6293,7 @@ async fn test_reviewer_backend(
 async fn review_session(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
 ) -> Result<(), String> {
     let frame_id = match session_id.as_deref().filter(|s| !s.is_empty()) {
@@ -6255,13 +6415,24 @@ async fn generate_follow_up_questions(
         .await
         .map_err(|error| error.to_string())?;
     let specialist = specialists::session_specialist(&state.store, &session_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-        match specialist {
-            Some(ref specialist) if !specialist.model_id.trim().is_empty() => {
-                specialists::specialist_llm(&state.store, specialist).await
-            }
-            _ => load_session_settings(&state.store, &session_id).await,
-        };
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = match specialist {
+        Some(ref specialist) if !specialist.model_id.trim().is_empty() => {
+            specialists::specialist_llm(&state.store, specialist).await
+        }
+        _ => load_session_settings(&state.store, &session_id).await,
+    };
     let llm = wisp_llm::build(build_provider_config(
         &provider,
         &api_url,
@@ -6270,6 +6441,11 @@ async fn generate_follow_up_questions(
         max_tokens.min(512),
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&session_id),
     )?);
     let completion = llm
         .complete(
@@ -6294,7 +6470,7 @@ fn branch_title(raw: Option<&str>) -> Option<String> {
 #[tauri::command]
 async fn side_chat(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     question: String,
     acp_agent_id: Option<String>,
@@ -6343,9 +6519,9 @@ async fn side_chat(
         snapshot_version = messages.last().map(|(seq, _)| *seq).unwrap_or_default();
         history = side_chat::history_from_messages(&messages);
     }
-    let http_llm = side_chat_http_provider(&state).await;
+    let http_llm = side_chat_http_provider(&state, frame_id).await;
     let intent = match &http_llm {
-        Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await?,
+        Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await,
         Err(error) => {
             if acp_agent_id.as_deref().is_some_and(|id| !id.is_empty()) {
                 side_chat::SideChatIntent::session_fallback(question)
@@ -6392,10 +6568,20 @@ async fn side_chat(
     })
 }
 
-async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::Provider>, String> {
+async fn side_chat_http_provider(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Box<dyn wisp_llm::Provider>, String> {
     let (provider, api_url, model, api_key) = load_settings(&state.store).await;
-    let (max_tokens, reasoning_effort, service_tier) =
-        models::active_llm_advanced(&state.store).await;
+    let (
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = models::active_llm_advanced(&state.store).await;
     let cfg = build_provider_config(
         &provider,
         &api_url,
@@ -6404,6 +6590,11 @@ async fn side_chat_http_provider(state: &AppState) -> Result<Box<dyn wisp_llm::P
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(session_id),
     )?;
     Ok(wisp_llm::build(cfg))
 }
@@ -6488,7 +6679,7 @@ async fn build_project_info(state: &AppState, label: &str) -> Result<ProjectInfo
 /// Tell the webview whether we're in dev (keep native context menu / DevTools).
 fn set_dev_flag(app: &tauri::AppHandle) {
     let dev = cfg!(debug_assertions);
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app.workspace_surface("main") else {
         return;
     };
     let _ = window.eval(&format!("window.__WISP_DEV__ = {};", dev));
@@ -6647,78 +6838,6 @@ pub(crate) fn startup_report_summary() -> String {
         .lock()
         .map(|report| report.summary())
         .unwrap_or_default()
-}
-
-/// Frontend `ui_heartbeat` timer. Silence on a focused window means the
-/// renderer died; reload recovers because sessions live in SQLite.
-static UI_HEARTBEAT: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
-static UI_WATCHDOG_LAST_RELOAD: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
-const UI_HEARTBEAT_STALE: std::time::Duration = std::time::Duration::from_secs(60);
-const UI_WATCHDOG_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
-
-#[tauri::command]
-fn ui_heartbeat() {
-    if let Ok(mut last) = UI_HEARTBEAT.lock() {
-        *last = Some(std::time::Instant::now());
-    }
-}
-
-fn ui_watchdog_requires_reload(
-    secs_since_beat: Option<u64>,
-    secs_since_reload: Option<u64>,
-) -> bool {
-    match secs_since_beat {
-        Some(secs) if secs >= UI_HEARTBEAT_STALE.as_secs() => match secs_since_reload {
-            Some(secs) => secs >= UI_WATCHDOG_COOLDOWN.as_secs(),
-            None => true,
-        },
-        _ => false,
-    }
-}
-
-/// Backgrounded webviews throttle JS timers, so elapsed time is not a death
-/// signal. Refresh the clock while unfocused so a later focus does not look
-/// immediately stale. Leave `None` alone: that means "wait for a real beat".
-fn ui_watchdog_note_unfocused(last_beat: &mut Option<std::time::Instant>) {
-    if last_beat.is_some() {
-        *last_beat = Some(std::time::Instant::now());
-    }
-}
-
-async fn run_ui_watchdog(app: tauri::AppHandle) {
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        let secs_since_beat = UI_HEARTBEAT
-            .lock()
-            .ok()
-            .and_then(|last| last.map(|instant| instant.elapsed().as_secs()));
-        let secs_since_reload = UI_WATCHDOG_LAST_RELOAD
-            .lock()
-            .ok()
-            .and_then(|last| last.map(|instant| instant.elapsed().as_secs()));
-        if !ui_watchdog_requires_reload(secs_since_beat, secs_since_reload) {
-            continue;
-        }
-        let Some(window) = app.get_webview_window("main") else {
-            continue;
-        };
-        if !window.is_focused().unwrap_or(false) {
-            if let Ok(mut last) = UI_HEARTBEAT.lock() {
-                ui_watchdog_note_unfocused(&mut last);
-            }
-            continue;
-        }
-        tracing::warn!(target: "wisp", secs_since_beat = secs_since_beat.unwrap_or_default(),
-            "main webview stopped heartbeating; reloading to recover the UI");
-        if window.reload().is_ok() {
-            if let Ok(mut last) = UI_WATCHDOG_LAST_RELOAD.lock() {
-                *last = Some(std::time::Instant::now());
-            }
-            if let Ok(mut last) = UI_HEARTBEAT.lock() {
-                *last = None;
-            }
-        }
-    }
 }
 
 /// Windows creates the main WebView2 before `setup` runs but cannot service it
@@ -6945,6 +7064,7 @@ pub fn run() {
     let macos_exit_for_setup = Arc::clone(&macos_exit_in_progress);
 
     tauri::Builder::default()
+        .manage(mcp_app_children::McpAppChildren::default())
         // Keep this first so a repeated launch is intercepted before other plugins
         // and application state are initialized in a second process.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -6957,11 +7077,19 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
                 record_window_focus(window.label(), *focused);
+                ui_health::note_focus(window.label(), *focused);
                 if *focused {
                     drain_pending_notify_target(window);
                 }
             }
-            tauri::WindowEvent::Destroyed => record_window_focus(window.label(), false),
+            tauri::WindowEvent::Destroyed => {
+                mcp_app_child_commands::reset_owner(window.app_handle(), window.label(), true);
+                record_window_focus(window.label(), false);
+                ui_health::remove_window(window.label());
+            }
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                mcp_app_children::hide_owner(window.app_handle(), window.label());
+            }
             _ => {}
         })
         // The blank window ends when the main webview finishes loading its
@@ -6969,6 +7097,11 @@ pub fn run() {
         // `setup` total next to a huge `window_ready` moves the search from the
         // backend to WebView2 and asset loading.
         .on_page_load(|webview, payload| {
+            if workspace_surface::is_primary_document(webview.window().label(), webview.label())
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                mcp_app_child_commands::reset_owner(webview.app_handle(), webview.label(), false);
+            }
             if webview.label() != "main"
                 || !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
             {
@@ -7002,7 +7135,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             let main_builder = main_builder.decorations(false).shadow(true);
             main_builder.build().expect("create main window");
-            tauri::async_runtime::spawn(run_ui_watchdog(app.handle().clone()));
+            tauri::async_runtime::spawn(ui_health::run_watchdog(app.handle().clone()));
             let mut startup = StartupTimeline::default();
             if let Ok(res) = app.path().resource_dir() {
                 wisp_paths::set_resource_root(res);
@@ -7133,6 +7266,7 @@ pub fn run() {
                 store.clone(),
             ));
             let state = AppState {
+                desktop: app.handle().clone(),
                 app_data,
                 store,
                 library,
@@ -7204,14 +7338,14 @@ pub fn run() {
                 startup.record("windows_shell", || {
                     desktop_lifecycle::install_windows_shell(app, &locale)
                 })?;
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.workspace_surface("main") {
                     let _ = window.set_decorations(false);
                     let _ = window.set_shadow(true);
                     windows_snap::install_for_window(&window);
                 }
             }
             #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.workspace_surface("main") {
                 wire_macos_menu_events(&window);
                 let app_handle = app.handle().clone();
                 let label = window.label().to_string();
@@ -7232,13 +7366,30 @@ pub fn run() {
             // Dev runs the bare debug binary, which does not grab focus on macOS.
             // release launches from the .app bundle and activates normally.
             #[cfg(debug_assertions)]
-            if let Some(w) = app.get_webview_window("main") {
+            if let Some(w) = app.workspace_surface("main") {
                 let _ = w.set_focus();
             }
             startup.finish();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke| {
+            if !mcp_app_children::child_command_allowed(invoke.message.webview().label(), invoke.message.command()) {
+                invoke.resolver.reject("MCP App child command is not permitted");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+            mcp_app_child_commands::mcp_app_host_info,
+            mcp_app_child_commands::open_mcp_app_child,
+            mcp_connections::prepare_mcp_app,
+            mcp_connections::restart_session_mcp,
+            mcp_app_child_commands::update_mcp_app_child_bounds,
+            mcp_app_child_commands::mcp_app_child_bootstrap,
+            mcp_app_child_commands::mcp_app_child_ready,
+            mcp_app_child_commands::mcp_app_child_request,
+            mcp_app_child_commands::request_mcp_app_child_action,
+            mcp_app_child_commands::mcp_app_child_action_reply,
+            mcp_app_child_commands::close_mcp_app_child,
+            clipboard_files::read_clipboard_file_paths,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,
@@ -7379,6 +7530,10 @@ pub fn run() {
             storage_prefs::get_context_storage_prefs,
             storage_prefs::set_context_storage_prefs,
             project_commands::get_research_graph,
+            project_commands::get_research_journey,
+            project_commands::get_research_calendar,
+            project_commands::add_research_journal_entry,
+            project_commands::get_research_journey_source,
             session_commands::delete_session,
             session_commands::rename_session,
             session_commands::set_session_pinned,
@@ -7391,6 +7546,7 @@ pub fn run() {
             session_commands::list_recent_sessions,
             session_commands::latest_used_session,
             project_commands::list_projects,
+            project_commands::list_workspace_projects,
             app_commands::pick_directory,
             app_commands::pick_executable_file,
             app_commands::download_file,
@@ -7424,6 +7580,7 @@ pub fn run() {
             project_commands::get_project_settings,
             project_commands::update_project,
             publication_commands::get_publication_workspace,
+            publication_commands::list_publication_sources,
             publication_commands::create_publication_workspace,
             publication_commands::save_publication_item,
             publication_commands::bind_publication_evidence,
@@ -7433,12 +7590,17 @@ pub fn run() {
             publication_commands::verify_publication_revision,
             publication_capsule::build_publication_capsule,
             publication_freeze::freeze_publication_revision,
+            publication_freeze::check_publication_revision,
             session_commands::load_session,
             session_commands::load_session_trajectory,
             trajectory_export::export_session_trajectory,
             session_commands::rewind_session,
             turn_undo::preview_turn_undo,
             turn_undo::undo_turn,
+            skill_store::list_community_skills,
+            skill_store::preview_github_skills,
+            skill_store::install_github_skill,
+            skill_store::get_skill_install_source,
             skill_commands::list_skills,
             skill_commands::list_skill_files,
             skill_commands::read_skill_file,
@@ -7577,7 +7739,7 @@ pub fn run() {
             app_commands::browser_extension_status,
             app_commands::update_browser_extension,
             app_commands::extension_connected,
-            ui_heartbeat,
+            ui_health::ui_heartbeat,
             app_commands::reveal_in_file_manager,
             app_commands::open_workspace_path,
             connector_commands::list_mcp_connections,
@@ -7599,7 +7761,9 @@ pub fn run() {
             specialists::remove_specialist,
             specialists::set_session_specialist,
             specialists::get_session_specialist,
-        ])
+        ];
+            handler(invoke)
+        })
         .build(tauri::generate_context!())
         .expect("error while building Wisp")
         .run(move |_app, _event| {
@@ -7612,6 +7776,8 @@ pub fn run() {
                 macos_exit_in_progress.store(true, Ordering::SeqCst);
             }
             if matches!(_event, tauri::RunEvent::Exit) {
+                mcp_broker::shutdown();
+                tauri::async_runtime::block_on(mcp_connections::host().shutdown_all());
                 let store = _app.state::<AppState>().store.clone();
                 match tauri::async_runtime::block_on(store.pause_method_searches_for_shutdown()) {
                     Ok(paused) if paused > 0 => {

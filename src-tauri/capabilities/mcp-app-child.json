@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mcp-app-child",
+  "description": "Trusted local MCP shell: no plugin, event, window or filesystem permissions. App IPC is additionally restricted by caller label and the native registry.",
+  "webviews": ["mcp-app-child-*"],
+  "permissions": []
+}

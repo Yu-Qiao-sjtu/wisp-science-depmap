@@ -311,7 +311,6 @@ button.browser-needs-human-row .browser-tab-cleanup-body { opacity: 1; }
   color: var(--text-muted); font-size: 13px; line-height: 1.35;
 }
 .context-compaction-flag > svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: .8; }
-.context-compaction-count { color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .context-compaction-flag.auto { animation: context-compaction-arrive .5s ease-out both; }
 @keyframes context-compaction-arrive {
   from { opacity: 0; transform: translateY(4px); filter: blur(2px); }
@@ -623,6 +622,9 @@ button.browser-needs-human-row .browser-tab-cleanup-body { opacity: 1; }
   color: var(--text-muted); font-size: 12.5px; line-height: 1.5;
 }
 .workspace-recovery-modal { max-width: 600px; }
+.workspace-project-options { display: grid; gap: 8px; overflow-y: auto; max-height: 45vh; }
+.workspace-project-options .project-import-option { overflow-wrap: anywhere; min-width: 0; }
+.workspace-project-id { font-family: var(--font-mono); user-select: text; }
 .workspace-recovery-path {
   overflow: hidden; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-xs);
   background: var(--bg-sunken); color: var(--text-faint); font: 11.5px/1.45 var(--font-mono);

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="快速开始 · 教程 | Wisp Science" data-title-en="Quick Start · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：快速开始" data-desc-en="Wisp Science Basics: Quick Start">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science基础入门：快速开始">
+  <title>快速开始 · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="../index.html#download"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-quick-start" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" id="wisp-science-quick-start" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：快速开始" data-text-en="Wisp Science Basics: Quick Start">Wisp Science基础入门：快速开始</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-quick-start.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-quick-start.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-quick-start.md" data-i18n="tutorials.source">查看原文</a></header>
+<div class="tutorial-body lang-zh" lang="zh-CN">
+<p>第一次使用 Wisp Science，不必一开始就配置服务器、浏览器和各种科研工具。先下载安装，走完首次引导，创建一个练习项目，再发送一条能核对结果的小问题，就能确认最基本的使用流程是否畅通。</p>
+<p>这篇教程带你完成从下载到第一次对话的过程。你只需要一台电脑，以及一个可以使用的模型 API 接入；暂时没有 API Key，也可以先安装应用、浏览界面和内置演示。</p>
+<blockquote>
+<p>本文截图来自 Wisp Science 实际前端，使用模拟配置和教学回复。图中的路径、项目及回答用于说明操作，不代表已验证真实 API 账号。不同版本的界面文字可能略有差异。</p>
+</blockquote>
+<p><strong>第一步：选择适合电脑的安装包。</strong></p>
+<p>打开 <a href="https://wispscience.com/#download">Wisp Science 下载页</a>，选择操作系统、芯片和安装格式，再点击“从 Cloudflare 下载”。页面会显示版本号、文件大小与安装方法；Mac 用户请在“关于本机”中确认是 Apple Silicon 还是 Intel。下载不可用时，可使用页面上的 GitHub 备用入口。</p>
+<p>安装包名称中的版本号会变化，使用 GitHub 备用下载时，在 Assets 中主要看文件末尾的架构与格式：</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>电脑类型</th>
+<th>在 Assets 中寻找</th>
+<th>下载后怎样安装</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows，Intel／AMD 64 位电脑</td>
+<td><code>…_x64-setup.exe</code> 或 <code>…_x64_en-US.msi</code></td>
+<td>选择其中一种，双击后按安装向导完成安装</td>
+</tr>
+<tr>
+<td>Mac，Apple Silicon（M 系列芯片）</td>
+<td><code>…_aarch64.dmg</code></td>
+<td>打开 DMG，将应用拖入“应用程序”，再从“应用程序”启动</td>
+</tr>
+<tr>
+<td>Mac，Intel 芯片</td>
+<td><code>…_x64.dmg</code></td>
+<td>同样通过 DMG 安装到“应用程序”</td>
+</tr>
+<tr>
+<td>Linux，Intel／AMD 64 位</td>
+<td><code>…_amd64.deb</code> 或 <code>…_amd64.AppImage</code></td>
+<td>Debian／Ubuntu 系发行版可用软件安装器打开 DEB；AppImage 需设为可执行后运行</td>
+</tr>
+<tr>
+<td>Linux，ARM64</td>
+<td><code>…_arm64.deb</code> 或 <code>…_aarch64.AppImage</code></td>
+<td>选择与发行版和架构匹配的格式安装或运行</td>
+</tr>
+</tbody>
+</table></div>
+<p>Mac 不确定芯片类型时，可以打开苹果菜单中的“关于本机”查看。其他系统也应先确认自己的系统架构，再选择对应文件；实际可下载的构建以发布页为准。</p>
+<p>第一次安装不需要下载 <code>Source code (zip)</code>、<code>Source code (tar.gz)</code>、<code>.sig</code>、<code>latest.json</code> 或 <code>.app.tar.gz</code>：这些是源码、签名或更新相关文件。选择上表中的桌面安装包即可。</p>
+<p>安装完成后打开 <strong>Wisp Science</strong>。第一次纯文字对话不需要你先安装 Rust、Python 或 R。</p>
+<p><strong>第二步：跟着四页首次引导了解应用。</strong></p>
+<p>第一次启动会显示引导窗口，按底部按钮逐步继续。</p>
+<p><img src="../assets/tutorials/quick-start/01-welcome.png" alt="首次引导的欢迎页，底部提供下一步按钮" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 1：欢迎页是起点。点击“下一步”继续；底部圆点显示当前所在步骤。</em></p>
+<p>第二页介绍 Wisp 能做什么：围绕项目与模型对话，运行分析、使用科研工具，以及查看文件和结果。先知道这些入口存在即可，不需要此时全部配置。</p>
+<p><img src="../assets/tutorials/quick-start/02-features.png" alt="首次引导的功能介绍页" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 2：功能介绍帮助你认识工作台。第一次练习先完成普通对话，之后再逐步使用分析和检索能力。</em></p>
+<p>第三页是 <strong>配置模型</strong>。当前引导提供 DeepSeek 的快捷配置：使用自己的 API Key，按页面提示保存并继续。API Key 需要从模型服务商的控制台获取，不是网页登录密码。</p>
+<p><img src="../assets/tutorials/quick-start/03-model.png" alt="首次引导的模型配置页，包含控制台入口和 API 密钥输入框" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 3：在自己的电脑上填写真实有效的 API Key，截图不展示密钥。当前引导中的快捷入口面向 DeepSeek，其他模型可稍后在设置中添加。</em></p>
+<p>如果准备使用其他服务商或实验室网关，点击 <strong>稍后配置</strong>。进入应用后，前往 <strong>设置 → 模型 → 添加 API 接入</strong>，填写对应地址、协议、模型 ID 和密钥。详细字段见<a href="wisp-science-models.html">模型配置教程</a>。</p>
+<p><strong>继续下面的对话测试前，请确保至少配置了一个可用模型。</strong> 跳过引导中的密钥配置，可以浏览应用和内置演示，但不会自动获得模型 API 访问权限。网页聊天账号是否包含 API 权限，需要以服务商说明为准。</p>
+<p>第四页是 <strong>本地环境（可选）</strong>，用于检查这台电脑上的 Python、R 等工具路径。</p>
+<p><img src="../assets/tutorials/quick-start/04-environment.png" alt="首次引导的本地环境检查页" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 4：工具路径会显示检测结果。这里的路径来自演示环境，不要照抄到自己的电脑上；缺少工具不影响完成本篇的纯文字测试。</em></p>
+<p>已经安装的工具可以自动检测；路径不对时，可以点 <strong>编辑路径</strong>。如果暂时没有安装 Python 或 R，也可以先点击 <strong>开始使用</strong>，等真正需要运行分析时再配置。引导页不会自动替你安装所有工具。</p>
+<p>想重新查看引导时，按 <strong>Ctrl+P</strong>（macOS 为 <strong>Cmd+P</strong>），搜索 <strong>快速配置</strong>。重新打开不会清空已有项目。</p>
+<p><strong>第三步：创建一个练习项目。</strong></p>
+<p>完成引导后，你会看到项目首页。项目用来组织这一项工作的会话、文件与结果；可以把第一次练习单独放在一个项目中。</p>
+<p><img src="../assets/tutorials/quick-start/05-projects.png" alt="项目首页：从顶部的新建项目入口开始" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 5：截图中的项目是演示数据。新安装时，你的项目列表可能为空，也可能先看到内置示例入口。点击“新建项目”创建自己的练习空间。</em></p>
+<p>点击 <strong>新建项目</strong>，填写名称，例如 <strong>第一次使用 Wisp</strong>，再选择一个准备存放练习内容的本地文件夹。建议使用专门的空文件夹，方便找到后续生成的文件。</p>
+<p><img src="../assets/tutorials/quick-start/06-create-project.png" alt="新建项目表单：填写名称并选择本地文件夹" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 6：名称方便你在 Wisp 中识别项目，目录决定文件实际存放的位置。截图中的 <code>/mock/root/new-project</code> 是模拟路径，请选择自己电脑上的文件夹。</em></p>
+<p>其他字段和目录结构选项可以先保持默认。确认名称和目录后点击 <strong>创建</strong>。进入项目后，左侧是会话列表，中央是对话区，底部是输入框。需要开始一段新的讨论时，点击左侧 <strong>新建会话</strong>。</p>
+<p>如果暂时没有 API Key，也可以先打开项目首页提供的内置演示，阅读已有记录；继续发送自己的问题仍需要配置可用模型。</p>
+<p><strong>第四步：选择模型，发送第一条测试消息。</strong></p>
+<p>在输入框附近的模型选择器中，确认当前选择的是自己配置的可用模型。如果没有可用项，先回到 <strong>设置 → 模型</strong> 完成配置，再返回会话。</p>
+<p>把下面这段话复制到输入框，点击 <strong>发送</strong>：</p>
+<blockquote>
+<p>这是我的第一次对话测试。请把样本 A=10、B=20、C=30 整理成表格，并告诉我样本数和平均值。只根据这些数字回答，不读取文件、不运行代码、不访问网页。</p>
+</blockquote>
+<p>这个例子不依赖额外的数据文件或科研工具，能帮助你先确认消息发送、模型响应和表格显示是否正常。</p>
+<p><img src="../assets/tutorials/quick-start/07-first-conversation.png" alt="第一次对话的教学示例：用户发送数字，助手返回表格、样本数和平均值" loading="lazy" width="1440" height="1000" /></p>
+<p><em>图 7：这是模拟模型回复的界面示例，用于展示成功回答应出现在哪里。你实际收到的措辞可以不同，但数值应能核对。</em></p>
+<p>检查下面几项：</p>
+<ul>
+<li>对话区出现了你刚发送的问题。</li>
+<li>助手给出了完整回复，而不是一直停留在运行状态或错误提示。</li>
+<li>表格对应 A、B、C 三个样本，数值分别为 10、20、30。</li>
+<li>样本数为 <strong>3</strong>，平均值为 <strong>20</strong>，即 <code>(10 + 20 + 30) ÷ 3</code>。</li>
+</ul>
+<p>回复不必与截图逐字一致。如果算错或漏了样本，可以继续要求它核对原始数字。模型能返回文字与结果正确，是需要分别检查的两件事。</p>
+<p>这次测试只验证基本对话流程，还没有验证文件读取、Python／R、网页检索或服务器计算。后续可以打开<a href="wisp-science-trajectory.html">轨迹教程</a>，学习怎样检查工具是否实际执行。</p>
+<p><strong>遇到问题，先检查最靠近当前步骤的配置。</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>下载后找不到可安装的应用</td>
+<td>是否误下了源码或更新文件；安装包是否与系统架构匹配</td>
+</tr>
+<tr>
+<td>引导里没有自己的模型服务商</td>
+<td>选择“稍后配置”，再到“设置 → 模型”添加接入</td>
+</tr>
+<tr>
+<td>输入框附近没有可用模型</td>
+<td>模型配置是否保存，当前会话是否已选中它</td>
+</tr>
+<tr>
+<td>返回 401／403</td>
+<td>API Key、模型访问权限和账号状态是否有效</td>
+</tr>
+<tr>
+<td>返回 404 或网页内容</td>
+<td>API 地址、协议和模型 ID 是否配套</td>
+</tr>
+<tr>
+<td>一直连接失败或超时</td>
+<td>网络是否能访问模型服务；检查“设置 → 常规 → 网络”中的模型 API 代理</td>
+</tr>
+<tr>
+<td>本地环境提示缺少 Python／R</td>
+<td>可以先完成本篇纯文字对话；运行代码时再配置相应环境</td>
+</tr>
+</tbody>
+</table></div>
+<p>完成第一条对话后，就可以根据自己的任务继续学习：<a href="wisp-science-models.html">模型配置</a>用于补充接入，<a href="wisp-science-browser.html">浏览器使用</a>用于读取网页，<a href="wisp-science-mcp.html">MCP</a>和 <a href="wisp-science-skills.html">Skills</a>用于连接科研工具与复用工作方法。希望在其他机器上分析时，再阅读<a href="wisp-science-servers-cli.html">服务器环境配置</a>。</p>
+<blockquote>
+<p>安装包以 <a href="https://github.com/xuzhougeng/wisp-science/releases/latest">官方发布页</a> 为准；引导与设置细节参见 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Wisp 基础配置</a>。本文示例用于练习操作，不代表已经完成的真实模型测试或科研分析。</p>
+</blockquote>
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>You do not need to configure servers, browser access, and every research tool before using Wisp Science. Install the app, complete the welcome guide, create a practice project, and send a small question whose answer you can check. This establishes that the basic workflow works.</p>
+<p>This tutorial takes you from downloading the app to your first conversation. You need a computer and access to a working model API. Without an API key, you can still install the app, explore its interface, and read the bundled demonstration.</p>
+<blockquote>
+<p>Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.</p>
+</blockquote>
+<p><strong>Step 1: Choose an installer for your computer.</strong></p>
+<p>Open the <a href="https://wispscience.com/?lang=en#download">Wisp Science download page</a>, choose your operating system, processor and package format, then select <strong>Download from Cloudflare</strong>. The page shows the version, file size and installation steps. On a Mac, check <strong>About This Mac</strong> to choose Apple Silicon or Intel. Use the GitHub fallback if the download is unavailable.</p>
+<p>The version number in the filename changes. Look for the architecture and file extension:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Computer</th>
+<th>File to find in Assets</th>
+<th>Installation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows on a 64-bit Intel or AMD processor</td>
+<td><code>…_x64-setup.exe</code> or <code>…_x64_en-US.msi</code></td>
+<td>Choose either installer, double-click it, and follow the setup wizard</td>
+</tr>
+<tr>
+<td>Mac with Apple Silicon, such as an M-series chip</td>
+<td><code>…_aarch64.dmg</code></td>
+<td>Open the DMG, drag the app into Applications, then launch it from Applications</td>
+</tr>
+<tr>
+<td>Mac with an Intel processor</td>
+<td><code>…_x64.dmg</code></td>
+<td>Install into Applications using the DMG</td>
+</tr>
+<tr>
+<td>Linux on a 64-bit Intel or AMD processor</td>
+<td><code>…_amd64.deb</code> or <code>…_amd64.AppImage</code></td>
+<td>On Debian/Ubuntu-based distributions, open the DEB with the software installer; make an AppImage executable before running it</td>
+</tr>
+<tr>
+<td>Linux on ARM64</td>
+<td><code>…_arm64.deb</code> or <code>…_aarch64.AppImage</code></td>
+<td>Choose the package format and architecture appropriate for your distribution</td>
+</tr>
+</tbody>
+</table></div>
+<p>On a Mac, <strong>About This Mac</strong> in the Apple menu identifies the chip. On other systems, check the system architecture before choosing a file. The release page determines which builds are actually available.</p>
+<p>For a first installation, you do not need <code>Source code (zip)</code>, <code>Source code (tar.gz)</code>, <code>.sig</code>, <code>latest.json</code>, or <code>.app.tar.gz</code>. These are source, signature, or update-related files. Choose a desktop installer from the table.</p>
+<p>Once installed, open <strong>Wisp Science</strong>. This tutorial's text-only conversation does not require installing Rust, Python, or R first.</p>
+<p><strong>Step 2: Follow the four onboarding pages.</strong></p>
+<p>The first launch displays a welcome guide. Use the button at the bottom to continue.</p>
+<p><img src="../assets/tutorials/en/quick-start/01-welcome.png" alt="Welcome page of the onboarding guide, with the Next button at the bottom" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 1: Start on the welcome page and click Next. The dots show your current step.</em></p>
+<p>The second page introduces project conversations, analysis, research tools, and file previews. You only need to know that these capabilities exist; you do not need to configure all of them now.</p>
+<p><img src="../assets/tutorials/en/quick-start/02-features.png" alt="The onboarding page introducing Wisp Science features" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 2: The feature introduction outlines the workbench. Start with an ordinary conversation, then explore analysis and retrieval.</em></p>
+<p>The third page is <strong>Set up your model</strong>. The current onboarding shortcut uses DeepSeek: enter your own API key and follow the prompts to save it and continue. Obtain the key from your model provider's console; it is not your website login password.</p>
+<p><img src="../assets/tutorials/en/quick-start/03-model.png" alt="The model onboarding page with the provider console link and API key field" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 3: Enter a valid API key on your own computer. No key is shown in the screenshot. This onboarding shortcut is for DeepSeek; add other providers later in Settings.</em></p>
+<p>For another provider or a laboratory gateway, choose <strong>Set up later</strong>. Then open <strong>Settings → Models → Add API access</strong> and enter the address, protocol, model ID, and key. See the <a href="wisp-science-models.html">model configuration tutorial</a> for field details.</p>
+<p><strong>Configure at least one usable model before attempting the conversation below.</strong> Skipping the key lets you explore the app and its demonstration, but does not give you API access. Whether a web-chat account includes API access depends on the provider.</p>
+<p>The fourth page, <strong>Local environment (optional)</strong>, checks paths to tools such as Python and R.</p>
+<p><img src="../assets/tutorials/en/quick-start/04-environment.png" alt="The local-environment detection page in onboarding" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 4: Detected tool paths appear here. These are simulated paths, not values to copy. Missing tools do not prevent this text-only test.</em></p>
+<p>Installed tools can be detected automatically. Use <strong>Edit paths</strong> if a path is wrong. If Python or R is not installed, click <strong>Get started</strong> and configure it when you need to run analysis. Onboarding does not automatically install every tool.</p>
+<p>To reopen the guide, press <strong>Ctrl+P</strong>, or <strong>Cmd+P</strong> on macOS, and search for <strong>Quick setup</strong>. Reopening it does not erase existing projects.</p>
+<p><strong>Step 3: Create a practice project.</strong></p>
+<p>After onboarding, the Projects screen appears. A project organizes conversations, files, and results for a piece of work. Keep this first exercise in a separate practice project.</p>
+<p><img src="../assets/tutorials/en/quick-start/05-projects.png" alt="The Projects screen with New project in the top toolbar" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 5: This screen uses demonstration data. A new installation may have an empty project list or show the bundled example. Click New project to create your own workspace.</em></p>
+<p>Click <strong>New project</strong>, enter a name such as <strong>My first Wisp project</strong>, and choose a local folder for the exercise. A dedicated empty folder makes subsequent files easy to find.</p>
+<p><img src="../assets/tutorials/en/quick-start/06-create-project.png" alt="The New project form with a project name and local folder" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 6: The name identifies the project in Wisp; the directory determines where files live. <code>/mock/root/new-project</code> is a simulated path. Select a folder on your own computer.</em></p>
+<p>Leave the other fields and directory-layout options at their defaults for now. Confirm the name and folder, then click <strong>Create</strong>. Inside the project, conversations are listed on the left, the transcript occupies the center, and the message box is at the bottom. Use <strong>New session</strong> on the left for a new discussion.</p>
+<p>Without an API key, you can read the built-in example from the Projects screen. Sending your own questions still requires a usable model.</p>
+<p><strong>Step 4: Select a model and send your first test message.</strong></p>
+<p>Check the model picker near the message box and choose a model you configured. If none is available, finish <strong>Settings → Models</strong> first, then return to the conversation.</p>
+<p>Copy this message into the input box and click <strong>Send</strong>:</p>
+<blockquote>
+<p>This is my first conversation test. Put samples A=10, B=20, and C=30 in a table, then report the sample count and mean. Answer only from these numbers. Do not read files, run code, or visit websites.</p>
+</blockquote>
+<p>This exercise requires no extra data files or research tools. It checks message sending, model responses, and table rendering.</p>
+<p><img src="../assets/tutorials/en/quick-start/07-first-conversation.png" alt="A teaching example of the first conversation, showing the sample table, count, and mean" loading="lazy" width="1440" height="1000" /></p>
+<p><em>Figure 7: The screenshot uses a simulated model response to show where a successful answer appears. Your reply can use different wording, but the numbers should be checkable.</em></p>
+<p>Check that:</p>
+<ul>
+<li>Your message appears in the conversation.</li>
+<li>The assistant completes a reply instead of remaining busy or showing an error.</li>
+<li>The table contains A, B, and C with values 10, 20, and 30.</li>
+<li>The sample count is <strong>3</strong> and the mean is <strong>20</strong>: <code>(10 + 20 + 30) ÷ 3</code>.</li>
+</ul>
+<p>The response need not match the screenshot word for word. If a sample is missing or the arithmetic is wrong, ask the model to check the supplied numbers. Receiving a response and receiving a correct response are separate things to verify.</p>
+<p>This only tests basic conversation. It does not test file access, Python/R, web retrieval, or server computation. The <a href="wisp-science-trajectory.html">trajectory tutorial</a> explains how to check whether tools actually ran.</p>
+<p><strong>Troubleshoot the step you are currently on.</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tutorial table"><table class="doc-table doc-table-compact">
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The downloaded file is not an installable app</td>
+<td>Did you download source or an update file? Does the installer match your system architecture?</td>
+</tr>
+<tr>
+<td>Your provider is absent from onboarding</td>
+<td>Choose Set up later, then add it in Settings → Models</td>
+</tr>
+<tr>
+<td>The model picker has no usable model</td>
+<td>Was the configuration saved, and has the current session selected it?</td>
+</tr>
+<tr>
+<td>401 / 403</td>
+<td>API key, model permissions, and account status</td>
+</tr>
+<tr>
+<td>404 or an HTML page in the response</td>
+<td>Whether the API address, protocol, and model ID match</td>
+</tr>
+<tr>
+<td>Connection failure or timeout</td>
+<td>Connectivity to the provider and the model API proxy under Settings → General → Network</td>
+</tr>
+<tr>
+<td>Python/R is missing</td>
+<td>Complete the text-only test first; configure an interpreter when you need code execution</td>
+</tr>
+</tbody>
+</table></div>
+<p>After the first conversation, follow the tutorials that match your task: <a href="wisp-science-models.html">Models</a> for API access, <a href="wisp-science-browser.html">Browser</a> for webpages, and <a href="wisp-science-mcp.html">MCP</a> and <a href="wisp-science-skills.html">Skills</a> for research tools and reusable methods. Read <a href="wisp-science-servers-cli.html">Server Environment Setup</a> when you need another machine.</p>
+<blockquote>
+<p>Use the <a href="https://github.com/xuzhougeng/wisp-science/releases/latest">official releases</a> for installers. See <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/basic-configuration.md">Basic Configuration</a> for onboarding and settings details. These examples teach the workflow; they are not evidence of a live model test or completed research analysis.</p>
+</blockquote>
+</div>
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-next" href="wisp-science-models.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="模型配置" data-text-en="Model Configuration">模型配置</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-quick-start" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

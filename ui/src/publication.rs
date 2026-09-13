@@ -6,6 +6,7 @@ use crate::dto::{
     PublicationWorkspaceInfo,
 };
 use crate::i18n::{t, tf, Locale};
+use crate::publication_sources::PublicationSourcePicker;
 use crate::text::event_target_value;
 use crate::window_capture_escape;
 use leptos::*;
@@ -46,7 +47,13 @@ fn install_workspace(
             .map(|revision| revision.id.clone())
             .unwrap_or_default(),
     );
-    selected_item_id.set(None);
+    let selected = selected_item_id.get_untracked();
+    if selected
+        .as_ref()
+        .is_some_and(|id| !next.items.iter().any(|item| &item.id == id))
+    {
+        selected_item_id.set(None);
+    }
     workspace.set(Some(next));
     Ok(())
 }
@@ -65,8 +72,8 @@ fn refresh_workspace(
         let publication = publication_id.get_untracked();
         let revision = revision_id.get_untracked();
         let args = serde_json::json!({
-            "publicationId": (!publication.is_empty()).then_some(publication),
-            "revisionId": (!revision.is_empty()).then_some(revision),
+            "publicationId": (!publication.is_empty()).then_some(publication.clone()),
+            "revisionId": (!revision.is_empty()).then_some(revision.clone()),
         });
         match invoke_checked(
             "get_publication_workspace",
@@ -75,6 +82,11 @@ fn refresh_workspace(
         .await
         {
             Ok(value) => {
+                if publication_id.try_get_untracked().as_deref() != Some(publication.as_str())
+                    || revision_id.try_get_untracked().as_deref() != Some(revision.as_str())
+                {
+                    return;
+                }
                 if let Err(message) = install_workspace(
                     value,
                     workspace,
@@ -313,7 +325,7 @@ fn precise_evidence_source(
 }
 
 #[component]
-pub(super) fn PublicationWorkspaceModal(
+pub(super) fn PublicationWorkspacePage(
     locale: ReadSignal<Locale>,
     binding_source: RwSignal<Option<PublicationEvidenceSource>>,
     on_close: Callback<()>,
@@ -326,13 +338,15 @@ pub(super) fn PublicationWorkspaceModal(
     let busy = create_rw_signal(false);
     let error = create_rw_signal::<Option<String>>(None);
     let transient_readiness = create_rw_signal::<Option<PublicationReadinessInfo>>(None);
+    let page = create_rw_signal("evidence");
 
     let new_title = create_rw_signal(String::new());
     let new_description = create_rw_signal(String::new());
-    let new_revision_label = create_rw_signal("Submission".to_string());
+    let new_revision_label =
+        create_rw_signal(t(locale.get_untracked(), "publication.initial_revision").to_string());
 
     let item_editor_open = create_rw_signal(false);
-    let item_kind = create_rw_signal("claim".to_string());
+    let item_kind = create_rw_signal("figure".to_string());
     let item_title = create_rw_signal(String::new());
     let item_parent = create_rw_signal(String::new());
 
@@ -345,8 +359,7 @@ pub(super) fn PublicationWorkspaceModal(
     let anchor_tool_call = create_rw_signal(String::new());
     let anchor_exact_id = create_rw_signal(String::new());
 
-    let freeze_open = create_rw_signal(false);
-    let freeze_visibility = create_rw_signal("public".to_string());
+    let freeze_visibility = create_rw_signal("private".to_string());
     let freeze_phi_reviewed = create_rw_signal(false);
     let freeze_redistribution_reviewed = create_rw_signal(false);
     let freeze_restricted_bytes = create_rw_signal(false);
@@ -361,7 +374,7 @@ pub(super) fn PublicationWorkspaceModal(
     let binding_purpose = create_rw_signal(String::new());
     let binding_claim = create_rw_signal(String::new());
     let binding_selection = create_rw_signal("selected".to_string());
-    let binding_visibility = create_rw_signal("public".to_string());
+    let binding_visibility = create_rw_signal("private".to_string());
 
     window_capture_escape(move || {
         if anchor_open.get_untracked() {
@@ -369,11 +382,11 @@ pub(super) fn PublicationWorkspaceModal(
         } else if waiver_code.get_untracked().is_some() {
             waiver_code.set(None);
             waiver_reason.set(String::new());
-        } else if freeze_open.get_untracked() {
-            freeze_open.set(false);
         } else if binding_source.get_untracked().is_some() {
             binding_source.set(None);
             binding_seen.set(String::new());
+        } else if page.get_untracked() == "add" {
+            page.set("evidence");
         } else if item_editor_open.get_untracked() {
             item_editor_open.set(false);
         } else {
@@ -395,14 +408,15 @@ pub(super) fn PublicationWorkspaceModal(
         let Some(source) = binding_source.get() else {
             return;
         };
+        page.set("add");
         if binding_seen.get_untracked() != source.id {
             binding_seen.set(source.id);
             binding_revision.set(String::new());
-            binding_item.set(String::new());
+            binding_item.set(selected_item_id.get_untracked().unwrap_or_default());
             binding_purpose.set(String::new());
             binding_claim.set(String::new());
             binding_selection.set("selected".into());
-            binding_visibility.set("public".into());
+            binding_visibility.set("private".into());
         }
         if !binding_revision.get_untracked().is_empty() {
             return;
@@ -439,10 +453,70 @@ pub(super) fn PublicationWorkspaceModal(
         );
     });
 
+    // Any change to the evidence set or policy invalidates the previous check.
+    create_effect(move |_| {
+        workspace.track();
+        freeze_visibility.track();
+        freeze_phi_reviewed.track();
+        freeze_redistribution_reviewed.track();
+        freeze_restricted_bytes.track();
+        transient_readiness.set(None);
+    });
+    let run_check = Callback::new(move |commit: bool| {
+        if busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        let selected_revision = revision_id.get_untracked();
+        let args = serde_json::json!({
+            "revisionId": selected_revision,
+            "policy": {
+                "target_visibility": freeze_visibility.get_untracked(),
+                "phi_pii_reviewed": freeze_phi_reviewed.get_untracked(),
+                "redistribution_reviewed": freeze_redistribution_reviewed.get_untracked(),
+                "snapshot_restricted_bytes": freeze_restricted_bytes.get_untracked(),
+            },
+        });
+        spawn_local(async move {
+            let command = if commit {
+                "freeze_publication_revision"
+            } else {
+                "check_publication_revision"
+            };
+            let result =
+                invoke_checked(command, to_value(&args).unwrap_or(JsValue::UNDEFINED)).await;
+            if revision_id.try_get_untracked().as_deref() != Some(selected_revision.as_str()) {
+                return;
+            }
+            match result {
+                Ok(value) => {
+                    match serde_wasm_bindgen::from_value::<PublicationFreezeOutcome>(value) {
+                        Ok(outcome) => {
+                            transient_readiness.set(Some(outcome.readiness));
+                            if outcome.frozen {
+                                refresh_workspace(
+                                    workspace,
+                                    publication_id,
+                                    revision_id,
+                                    selected_item_id,
+                                    loading,
+                                    error,
+                                );
+                            }
+                        }
+                        Err(e) => error.set(Some(e.to_string())),
+                    }
+                }
+                Err(e) => error.set(Some(error_text(e))),
+            }
+            busy.set(false);
+        });
+    });
+
     view! {
-        <div class="overlay publication-workspace-overlay" role="presentation"
-            on:click=move |_| on_close.call(())>
-            <section class="modal publication-workspace-modal" role="dialog" aria-modal="true"
+        <div class="publication-page">
+            <section class="publication-workspace-page" role="region"
                 aria-labelledby="publication-workspace-title"
                 data-testid="publication-workspace"
                 on:click=|event| event.stop_propagation()>
@@ -464,7 +538,7 @@ pub(super) fn PublicationWorkspaceModal(
                             title=move || t(locale.get(), "publication.close")
                             aria-label=move || t(locale.get(), "publication.close")
                             on:click=move |_| on_close.call(())>
-                            {compose_icon("close")}
+                            {compose_icon("arrow-left")}
                         </button>
                     </div>
                 </header>
@@ -484,7 +558,16 @@ pub(super) fn PublicationWorkspaceModal(
                     if !has_publications {
                         view! {
                             <div class="publication-create">
+                                <div class="publication-create-intro">
                                 <h3>{t(locale.get(), "publication.create")}</h3>
+                                <p class="publication-help">{t(locale.get(), "publication.create_hint")}</p>
+                                <ol class="publication-onboarding">
+                                    <li>{t(locale.get(), "publication.choose_source")}</li>
+                                    <li>{t(locale.get(), "publication.explain_use")}</li>
+                                    <li>{t(locale.get(), "publication.tab_readiness")}</li>
+                                </ol>
+                                </div>
+                                <div class="publication-create-fields">
                                 <label>
                                     <span>{t(locale.get(), "publication.paper_title")}</span>
                                     <input type="text" data-testid="publication-new-title"
@@ -518,6 +601,7 @@ pub(super) fn PublicationWorkspaceModal(
                                     }>
                                     {t(locale.get(), "publication.create_action")}
                                 </button>
+                                </div>
                             </div>
                         }.into_view()
                     } else {
@@ -595,7 +679,7 @@ pub(super) fn PublicationWorkspaceModal(
                                     <span class=format!("publication-state {}", revision.state)>
                                         {t(locale.get(), &format!("publication.state.{}", revision.state))}
                                     </span>
-                                    <span class="publication-capability">
+                                    <span class="publication-capability" hidden=draft>
                                         {t(locale.get(), &format!(
                                             "publication.capability.{}",
                                             effective_capability.clone()
@@ -625,14 +709,10 @@ pub(super) fn PublicationWorkspaceModal(
                                         {t(locale.get(), "publication.clone")}
                                     </button>
                                     {draft.then(|| view! {
-                                        <button type="button" class="secondary"
-                                            data-testid="add-precise-publication-evidence"
-                                            on:click=move |_| anchor_open.set(true)>
-                                            {t(locale.get(), "publication.add_precise")}
-                                        </button>
-                                        <button type="button" class="primary"
-                                            on:click=move |_| freeze_open.set(true)>
-                                            {t(locale.get(), "publication.freeze")}
+                                        <button type="button" class="primary" hidden=move || page.get() == "add"
+                                            data-testid="add-publication-evidence"
+                                            on:click=move |_| { binding_source.set(None); page.set("add"); }>
+                                            {compose_icon("plus")}{t(locale.get(), "publication.add_evidence")}
                                         </button>
                                     })}
                                     {capsule_ready.then(|| {
@@ -668,8 +748,32 @@ pub(super) fn PublicationWorkspaceModal(
                                 </div>
                             </div>
 
-                            <div class="publication-workspace-grid">
-                                <aside class="publication-manuscript">
+
+                            <nav class="publication-page-tabs" aria-label=t(locale.get(), "publication.title")>
+                                {[("evidence", "publication.tab_evidence"), ("readiness", "publication.tab_readiness"), ("versions", "publication.tab_versions")].into_iter().map(|(value,key)| view! {
+                                    <button type="button" class:active=move || page.get() == value aria-pressed=move || page.get() == value on:click=move |_| { binding_source.set(None); page.set(value); }>{t(locale.get(), key)}</button>
+                                }).collect_view()}
+                            </nav>
+                            <Show when=move || page.get() == "add" && binding_source.get().is_none()>
+                                <PublicationSourcePicker locale=locale on_select=Callback::new(move |source| binding_source.set(Some(source))) on_advanced=Callback::new(move |_| anchor_open.set(true)) />
+                            </Show>
+                            <section class="publication-versions" hidden=move || page.get() != "versions">
+                                <h3>{t(locale.get(), "publication.versions_hint")}</h3>
+                                {current.revisions.clone().into_iter().map(|old| {
+                                    let id=old.id.clone();
+                                    view! {
+                                        <article class="publication-version-row">
+                                            <div><h4>{format!("{} · v{}",old.label,old.revision_number)}</h4>
+                                                <span class=format!("publication-state {}",old.state)>{t(locale.get(), &format!("publication.state.{}",old.state))}</span>
+                                                {old.manifest_sha256.map(|hash| view! { <details><summary>{t(locale.get(), "publication.frozen_manifest")}</summary><code>{hash}</code></details> })}
+                                            </div>
+                                            <button type="button" class="secondary" disabled=move || busy.get() on:click=move |_| { revision_id.set(id.clone()); transient_readiness.set(None); page.set("evidence"); refresh_workspace(workspace,publication_id,revision_id,selected_item_id,loading,error); }>{t(locale.get(), "publication.view_version")}</button>
+                                        </article>
+                                    }
+                                }).collect_view()}
+                            </section>
+                            <div class="publication-workspace-grid" class:checking=move || page.get() == "readiness" hidden=move || !matches!(page.get(), "evidence" | "readiness")>
+                                <aside class="publication-manuscript" hidden=move || page.get() != "evidence">
                                     <div class="publication-pane-head">
                                         <h3>{t(locale.get(), "publication.manuscript")}</h3>
                                         {draft.then(|| view! {
@@ -758,6 +862,7 @@ pub(super) fn PublicationWorkspaceModal(
                                                             move |_| selected_item_id.set(Some(item_id.clone()))
                                                         }>
                                                         <span class="publication-item-kind">
+                                                            {compose_icon(match item.kind.as_str() { "figure" => "image", "table" => "table", "claim" => "check", _ => "book" })}
                                                             {t(locale.get(), &format!("publication.item.{}", item.kind))}
                                                         </span>
                                                         <strong>{item.title}</strong>
@@ -769,16 +874,18 @@ pub(super) fn PublicationWorkspaceModal(
                                     {(!current_for_tree.item_links.is_empty()).then(|| view! {
                                         <div class="publication-item-links">
                                             {current_for_tree.item_links.into_iter().map(|link| view! {
-                                                <code>{format!(
+                                                <span>{format!(
                                                     "{} {} {}",
-                                                    link.source_item_id, link.relation, link.target_item_id,
-                                                )}</code>
+                                                    current_for_tree.items.iter().find(|item| item.id == link.source_item_id).map(|item| item.title.as_str()).unwrap_or(""),
+                                                    link.relation,
+                                                    current_for_tree.items.iter().find(|item| item.id == link.target_item_id).map(|item| item.title.as_str()).unwrap_or(""),
+                                                )}</span>
                                             }).collect_view()}
                                         </div>
                                     })}
                                 </aside>
 
-                                <main class="publication-evidence">
+                                <section class="publication-evidence" hidden=move || page.get() != "evidence">
                                     <div class="publication-pane-head">
                                         <h3>{t(locale.get(), "publication.evidence")}</h3>
                                         <span>{evidence.len()}</span>
@@ -786,7 +893,9 @@ pub(super) fn PublicationWorkspaceModal(
                                     {if evidence.is_empty() {
                                         view! {
                                             <div class="publication-empty">
-                                                {t(locale.get(), "publication.no_evidence")}
+                                                <h3>{t(locale.get(), "publication.start_figure")}</h3>
+                                                <p>{t(locale.get(), "publication.start_hint")}</p>
+                                                {draft.then(|| view! { <button type="button" class="primary" on:click=move |_| page.set("add")>{compose_icon("plus")}{t(locale.get(), "publication.add_evidence")}</button> })}
                                             </div>
                                         }.into_view()
                                     } else {
@@ -837,7 +946,11 @@ pub(super) fn PublicationWorkspaceModal(
                                                                 "publication.visibility.{}", binding.visibility,
                                                             ))}
                                                         </span>
+                                                        <span class="publication-selection">{t(locale.get(), &format!("publication.selection.{}", binding.selection_state))}</span>
                                                     </header>
+                                                    <div class="publication-purpose"><span>{t(locale.get(), "publication.purpose")}</span><p>{binding.purpose.clone()}</p></div>
+                                                    {binding.supported_claim_item_id.as_ref().and_then(|id| current_for_evidence.items.iter().find(|item| &item.id == id)).map(|claim| view! { <p class="publication-supported-claim">{t(locale.get(), "publication.supported_claim")}{": "}{claim.title.clone()}</p> })}
+                                                    <details class="publication-technical"><summary>{t(locale.get(), "publication.technical")}</summary>
                                                     <dl>
                                                         <div>
                                                             <dt>{t(locale.get(), "publication.exact_source")}</dt>
@@ -862,7 +975,17 @@ pub(super) fn PublicationWorkspaceModal(
                                                             ))}</dd>
                                                         </div>
                                                     </dl>
+                                                    </details>
+                                                    <h4 class="publication-lineage-title">{t(locale.get(), "publication.analysis_source")}</h4>
                                                     {lineage.map(|lineage| view! {
+                                                        <ol class="publication-source-chain">
+                                                            <li><span>{t(locale.get(), "publication.sources.files")}</span><strong>{if lineage.input_labels.is_empty() { t(locale.get(), "publication.source_unrecorded").to_string() } else { lineage.input_labels.join(", ") }}</strong></li>
+                                                            <li><span>{t(locale.get(), "publication.sources.runs")}</span><strong>{lineage.producing_run_title.clone().unwrap_or_else(|| t(locale.get(), "publication.source_unrecorded").to_string())}</strong>
+                                                                {(!lineage.code_labels.is_empty()).then(|| view! { <span>{lineage.code_labels.join(", ")}</span> })}
+                                                            </li>
+                                                            <li><span>{t(locale.get(), "publication.selected_result")}</span><strong>{lineage.source_label.clone()}</strong></li>
+                                                        </ol>
+                                                        <details class="publication-lineage-details"><summary>{t(locale.get(), "publication.lineage_details")}</summary>
                                                         <div class="publication-lineage">
                                                             <span class=format!("lineage-quality {}", lineage.quality)>
                                                                 {tf(
@@ -906,6 +1029,7 @@ pub(super) fn PublicationWorkspaceModal(
                                                                 <code>{format!("run:{run_id}")}</code>
                                                             })}
                                                         </div>
+                                                        </details>
                                                     })}
                                                     {drift.filter(|drift| drift.has_drift).map(|drift| view! {
                                                         <div class="publication-drift" role="status">
@@ -1021,10 +1145,34 @@ pub(super) fn PublicationWorkspaceModal(
                                             }
                                         }).collect_view()
                                     }}
-                                </main>
+                                </section>
 
-                                <aside class="publication-readiness">
+                                <aside class="publication-readiness" hidden=move || page.get() != "readiness">
                                     <h3>{t(locale.get(), "publication.readiness")}</h3>
+                                    {draft.then(|| view! {
+                                        <section class="publication-policy-inline">
+                                            <p class="publication-help">{t(locale.get(), "publication.finalize_hint")}</p>
+                                            <label><span>{t(locale.get(), "publication.target_visibility")}</span>
+                                                <select disabled=move || busy.get() prop:value=move || freeze_visibility.get()
+                                                    on:change=move |event| freeze_visibility.set(event_target_value(&event))>
+                                                    {["private", "restricted", "public"].into_iter().map(|value| view! { <option value=value>{t(locale.get(), &format!("publication.visibility.{value}"))}</option> }).collect_view()}
+                                                </select>
+                                            </label>
+                                            <Show when=move || freeze_visibility.get() == "public">
+                                                <label class="publication-check"><input type="checkbox" disabled=move || busy.get() prop:checked=move || freeze_phi_reviewed.get() on:change=move |event| freeze_phi_reviewed.set(event_target_checked(&event)) /><span>{t(locale.get(), "publication.phi_reviewed")}</span></label>
+                                                <label class="publication-check"><input type="checkbox" disabled=move || busy.get() prop:checked=move || freeze_redistribution_reviewed.get() on:change=move |event| freeze_redistribution_reviewed.set(event_target_checked(&event)) /><span>{t(locale.get(), "publication.redistribution_reviewed")}</span></label>
+                                            </Show>
+                                            <Show when=move || freeze_visibility.get() != "public">
+                                                <label class="publication-check"><input type="checkbox" disabled=move || busy.get() prop:checked=move || freeze_restricted_bytes.get() on:change=move |event| freeze_restricted_bytes.set(event_target_checked(&event)) /><span>{t(locale.get(), "publication.snapshot_restricted")}</span></label>
+                                            </Show>
+                                            <div class="publication-policy-actions">
+                                                <button type="button" class="secondary" data-testid="check-publication" disabled=move || busy.get() on:click=move |_| run_check.call(false)>{compose_icon("check")}{t(locale.get(), "publication.check_action")}</button>
+                                                <button type="button" class="primary" data-testid="freeze-publication" disabled=move || busy.get() || !transient_readiness.get().is_some_and(|r| r.can_freeze) on:click=move |_| run_check.call(true)>{compose_icon("lock")}{t(locale.get(), "publication.freeze_action")}</button>
+                                            </div>
+                                        </section>
+                                    })}
+                                    <p class="publication-help">{t(locale.get(), "publication.reproduction_hint")}</p>
+
                                     {readiness.map(|readiness| {
                                         let on_waive = Callback::new(move |code: String| {
                                             waiver_code.set(Some(code));
@@ -1323,13 +1471,9 @@ pub(super) fn PublicationWorkspaceModal(
                     revision.id == binding_revision.get() && revision.state == "draft"
                 });
                 view! {
-                    <div class="overlay publication-nested-overlay" role="presentation"
-                        on:click=move |_| {
-                            binding_source.set(None);
-                            binding_seen.set(String::new());
-                        }>
-                        <section class="modal publication-binding-dialog" role="dialog"
-                            aria-modal="true" data-testid="publication-binding-dialog"
+                    <div class="publication-binding-step">
+                        <section class="publication-binding-dialog" role="region"
+                            data-testid="publication-binding-dialog"
                             aria-labelledby="publication-binding-title"
                             on:click=|event| event.stop_propagation()>
                             <header>
@@ -1337,7 +1481,7 @@ pub(super) fn PublicationWorkspaceModal(
                                     <h3 id="publication-binding-title">
                                         {t(locale.get(), "publication.bind_title")}
                                     </h3>
-                                    <p>{format!("{} · {}", source.label, source.id)}</p>
+                                    <p>{source.label.clone()}</p>
                                 </div>
                                 <button type="button" class="ps-close"
                                     aria-label=t(locale.get(), "publication.close")
@@ -1464,6 +1608,7 @@ pub(super) fn PublicationWorkspaceModal(
                                                         selected_item_id, busy, error,
                                                         move |ok| if ok {
                                                             transient_readiness.set(None);
+                                                            page.set("evidence");
                                                             binding_source.set(None);
                                                             binding_seen.set(String::new());
                                                         },
@@ -1475,106 +1620,6 @@ pub(super) fn PublicationWorkspaceModal(
                                     </footer>
                                 }.into_view()
                             }}
-                        </section>
-                    </div>
-                }
-            })}
-
-            {move || freeze_open.get().then(|| {
-                let selected_revision = revision_id.get();
-                view! {
-                    <div class="overlay publication-nested-overlay" role="presentation"
-                        on:click=move |_| freeze_open.set(false)>
-                        <section class="modal publication-policy-dialog" role="dialog"
-                            aria-modal="true" aria-labelledby="publication-freeze-title"
-                            on:click=|event| event.stop_propagation()>
-                            <header>
-                                <h3 id="publication-freeze-title">
-                                    {t(locale.get(), "publication.freeze_title")}
-                                </h3>
-                                <button type="button" class="ps-close"
-                                    aria-label=t(locale.get(), "publication.close")
-                                    on:click=move |_| freeze_open.set(false)>
-                                    {compose_icon("close")}
-                                </button>
-                            </header>
-                            <label>
-                                <span>{t(locale.get(), "publication.target_visibility")}</span>
-                                <select prop:value=move || freeze_visibility.get()
-                                    on:change=move |event| freeze_visibility.set(event_target_value(&event))>
-                                    {["public", "restricted", "private"].into_iter().map(|value| view! {
-                                        <option value=value>
-                                            {t(locale.get(), &format!("publication.visibility.{value}"))}
-                                        </option>
-                                    }).collect_view()}
-                                </select>
-                            </label>
-                            <label class="publication-check">
-                                <input type="checkbox" prop:checked=move || freeze_phi_reviewed.get()
-                                    on:change=move |event| {
-                                        freeze_phi_reviewed.set(event_target_checked(&event));
-                                    } />
-                                <span>{t(locale.get(), "publication.phi_reviewed")}</span>
-                            </label>
-                            <label class="publication-check">
-                                <input type="checkbox" prop:checked=move || freeze_redistribution_reviewed.get()
-                                    on:change=move |event| {
-                                        freeze_redistribution_reviewed.set(event_target_checked(&event));
-                                    } />
-                                <span>{t(locale.get(), "publication.redistribution_reviewed")}</span>
-                            </label>
-                            <label class="publication-check">
-                                <input type="checkbox" prop:checked=move || freeze_restricted_bytes.get()
-                                    on:change=move |event| {
-                                        freeze_restricted_bytes.set(event_target_checked(&event));
-                                    } />
-                                <span>{t(locale.get(), "publication.snapshot_restricted")}</span>
-                            </label>
-                            <footer>
-                                <button type="button" class="secondary"
-                                    on:click=move |_| freeze_open.set(false)>
-                                    {t(locale.get(), "publication.cancel")}
-                                </button>
-                                <button type="button" class="primary" disabled=move || busy.get()
-                                    on:click=move |_| {
-                                        busy.set(true);
-                                        error.set(None);
-                                        let args = serde_json::json!({
-                                            "revisionId": selected_revision,
-                                            "policy": {
-                                                "target_visibility": freeze_visibility.get_untracked(),
-                                                "phi_pii_reviewed": freeze_phi_reviewed.get_untracked(),
-                                                "redistribution_reviewed": freeze_redistribution_reviewed.get_untracked(),
-                                                "snapshot_restricted_bytes": freeze_restricted_bytes.get_untracked(),
-                                            },
-                                        });
-                                        spawn_local(async move {
-                                            match invoke_checked(
-                                                "freeze_publication_revision",
-                                                to_value(&args).unwrap_or(JsValue::UNDEFINED),
-                                            ).await {
-                                                Ok(value) => match serde_wasm_bindgen::from_value::<PublicationFreezeOutcome>(value) {
-                                                    Ok(outcome) => {
-                                                        transient_readiness.set(Some(outcome.readiness));
-                                                        revision_id.set(outcome.revision.id);
-                                                        freeze_open.set(false);
-                                                        if outcome.frozen {
-                                                            refresh_workspace(
-                                                                workspace, publication_id, revision_id,
-                                                                selected_item_id, loading, error,
-                                                            );
-                                                        }
-                                                    }
-                                                    Err(parse_error) => error.set(Some(parse_error.to_string())),
-                                                },
-                                                Err(value) => error.set(Some(error_text(value))),
-                                            }
-                                            busy.set(false);
-                                        });
-                                    }>
-                                    {t(locale.get(), "publication.freeze_action")}
-                                </button>
-                            </footer>
                         </section>
                     </div>
                 }

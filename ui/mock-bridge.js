@@ -1,3 +1,4 @@
+window.__WISP_MCP_APP_BACKEND__ = "legacy-iframe";
 // Dev-only Tauri bridge mock. Load with http://localhost:1421/?mock=1
 (function () {
   const listeners = {};

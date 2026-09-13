@@ -53,3 +53,51 @@
 - P3: add visual baselines for dark theme and the narrow mobile breakpoint when corresponding source references exist.
 
 final result: passed
+
+---
+
+# Research journey design QA
+
+Selected target: [approved reference](docs/design-qa/research-journey/reference.png).
+Implementation: the existing Leptos desktop app, with the Playwright Tauri bridge providing deterministic research records and real fixture file previews. Backend persistence and scope behavior are covered separately by Rust tests.
+
+## Iteration 1
+
+Compared the selected reference with the rendered 1488 × 1058 light desktop view.
+
+- P2: the inspector column was too narrow. Increased its desktop width to align the main timeline and date column with the reference.
+- P2: CSV/report previews showed raw text instead of readable content. Rendered actual CSV rows and bounded report excerpts.
+- P2: the progress record repeated the daily heading. The heading now opens that record; the expanded body omits the duplicate.
+- P2: narrow viewports put the entire source inspector before the daily history and left a gap beside the collapsed sidebar. Source details now follow the feed; choosing an output scrolls to them. The page follows the existing 56 px rail below 900 px.
+
+## Iteration 2
+
+Compared the source and implementation together in [comparison.png](docs/design-qa/research-journey/comparison.png), and reviewed 800 × 900 and 390 × 844 captures.
+
+- Earlier layout and preview findings resolved. Mobile shows the current daily entry before source details.
+- P2: turning the daily headline into a button inherited body-size typography. Added a component-specific heading font rule and a browser assertion for 18 px desktop headings.
+- Screenshot normalization: wait for the existing sidebar resize transition to finish before taking the dark desktop capture.
+
+## Final verification
+
+The final combined desktop comparison and the 800 × 900, 390 × 844, and dark-theme captures were inspected after the corrections. Desktop headlines now measure 18 px; the compact rail shows the active icon without overlapping label text. No actionable P0/P1/P2 issues remain.
+
+Evidence: [desktop](docs/design-qa/research-journey/desktop.png), [combined comparison](docs/design-qa/research-journey/comparison.png), [narrow](docs/design-qa/research-journey/narrow.png), [mobile](docs/design-qa/research-journey/mobile.png), [dark](docs/design-qa/research-journey/dark.png).
+
+Validation:
+- `WISP_CATALOG_OFFLINE=1 RUST_TEST_THREADS=4 cargo test --workspace`: 1,991 passed. Four threads avoid an existing 30-second run-lease fixture expiring under high parallel load.
+- `cargo check --target wasm32-unknown-unknown` in `ui`: passed.
+- Both workspace/UI formatting checks and `git diff --check`: passed.
+- Full Playwright run: 561 passed, 2 existing conditional skips, 1 app-startup timeout. That unchanged connector test passed in isolation afterward.
+- Final targeted pass: 11 passed, covering the 9 journey cases, retained graph interactions, and the connector retry. The final compact-sidebar screenshot check also passed.
+
+The browser captures use mock Tauri records; no real SSH host, GPU, model key, or external data service was used.
+
+Remaining P3 differences are intentional integration choices: the existing sidebar/navigation is retained; factual event counts replace the mock's illustrative totals; artifact filenames and real previews replace decorative thumbnails; registration time and exact version are visible rather than claiming every registered file was created that day.
+
+final result: passed
+
+
+## Chinese feature name
+
+The current Chinese UI and usage documentation use **研究历程**. Navigation, page heading, breadcrumb, accessible region/close labels, and the rendered screenshots follow that name. The selected reference image is retained as the original approved concept. The naming change passed WASM compilation, formatting checks, and 11 focused browser checks, including exact Chinese navigation/heading/accessible labels and immediate Escape dismissal.

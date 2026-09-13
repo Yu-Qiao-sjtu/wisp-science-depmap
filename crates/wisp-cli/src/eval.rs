@@ -1242,6 +1242,7 @@ async fn run_case(
     setup_workspace(&case, workspace.path())?;
     let before = snapshot_workspace(workspace.path())?;
     let output = Arc::new(EvalOutput::new(&case.approval, case.plan_mode)?);
+    let session_id = uuid::Uuid::new_v4().to_string();
     let provider_source = match options.mode {
         EvalMode::Offline => ProviderSource::Offline(ScriptedProvider::new(
             format!("scripted:{}", case.id),
@@ -1250,7 +1251,8 @@ async fn run_case(
         EvalMode::Live => ProviderSource::Live(
             live_config
                 .clone()
-                .context("live eval provider was not configured")?,
+                .context("live eval provider was not configured")?
+                .with_session_id(session_id.clone()),
         ),
     };
     let vision_source = match options.mode {
@@ -1260,7 +1262,9 @@ async fn run_case(
                 case.vision_script.clone(),
             )))
         }
-        EvalMode::Live => live_vision.map(ProviderSource::Live),
+        EvalMode::Live => {
+            live_vision.map(|config| ProviderSource::Live(config.with_session_id(session_id)))
+        }
         _ => None,
     };
     let max_context = limits.max_context_tokens.unwrap_or(DEFAULT_MAX_CONTEXT);

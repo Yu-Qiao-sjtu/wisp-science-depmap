@@ -168,8 +168,19 @@ pub async fn read_references(
         inputs.push(SessionInput { info, messages });
     }
 
-    let (provider, api_url, model, api_key, profile_max_tokens, _reasoning_effort, service_tier) =
-        crate::specialists::specialist_llm(store, &reader).await;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        profile_max_tokens,
+        _reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = crate::specialists::specialist_llm(store, &reader).await;
     let cfg = reader_provider_config(
         &provider,
         &api_url,
@@ -177,6 +188,11 @@ pub async fn read_references(
         &model,
         READER_OUTPUT_TOKENS,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        target_frame_id,
     )
     .map_err(|error| format!("Reader model is unavailable: {error}"))?;
     let llm: Arc<dyn Provider> = Arc::from(wisp_llm::build(cfg));
@@ -191,6 +207,11 @@ pub async fn read_references(
             &model,
             profile_max_tokens,
             &service_tier,
+            &user_agent,
+            send_user_agent,
+            send_session_id,
+            &session_header_name,
+            target_frame_id,
         )
         .ok()
         .map(|cfg| Arc::from(wisp_llm::build(cfg)))
@@ -249,6 +270,11 @@ fn reader_provider_config(
     model: &str,
     max_tokens: u64,
     service_tier: &str,
+    user_agent: &str,
+    send_user_agent: bool,
+    send_session_id: Option<bool>,
+    session_header_name: &str,
+    session_id: &str,
 ) -> Result<wisp_llm::ProviderConfig, String> {
     let mut cfg = crate::build_provider_config(
         provider,
@@ -258,6 +284,11 @@ fn reader_provider_config(
         max_tokens,
         "",
         service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+        Some(session_id),
     )?;
     cfg.thinking_enabled = Some(false);
     Ok(cfg)
@@ -1142,6 +1173,7 @@ mod tests {
                 source_message_seq: 2,
                 source_frame_head_seq: 2,
                 source_ui_event_seq: 0,
+                source_ui_event_head_seq: 0,
                 source_family_generation: 0,
                 source_state_generation: 0,
                 workspace_snapshot_id: "snapshot".into(),

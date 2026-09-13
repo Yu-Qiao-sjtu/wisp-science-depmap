@@ -11,6 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = "0.1"
 anyhow = { workspace = true }
+base64 = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }
 wisp-llm = { workspace = true }
@@ -36,3 +37,8 @@ harness = false
 name = "mcp_transport"
 path = "tests/mcp_transport.rs"
 harness = false
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+axum = { workspace = true }
+futures-util = { workspace = true }

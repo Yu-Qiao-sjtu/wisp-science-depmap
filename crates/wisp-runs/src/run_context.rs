@@ -228,6 +228,7 @@ fn transfer_progress(
         .filter(|_| completed_bytes < total_bytes)
         .map(|rate| total_bytes.saturating_sub(completed_bytes).div_ceil(rate));
     wisp_store::RunProgress {
+        indeterminate: false,
         phase: phase.into(),
         direction: direction.into(),
         completed_bytes: completed_bytes.min(total_bytes),
