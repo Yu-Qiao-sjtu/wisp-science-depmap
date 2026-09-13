@@ -11,7 +11,7 @@ const WISP_PAGES_I18N = {
     "skills.categories": "技能分类",
     "meta.home.title": "Wisp Science | 开源科学计算 Agent",
     "meta.home.desc":
-      "Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 28 个内置 SKILL。",
+      "Wisp Science 是开源、本地优先的科研工作台，支持 Windows、macOS 和 Linux。连接模型服务，运行 Python／R，使用科研数据库与 28 个内置技能，让分析过程有据可查。",
     "meta.models.title": "模型配置 | Wisp Science",
     "meta.models.desc": "Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
     "meta.acp.title": "ACP Agent 配置 | Wisp Science",
@@ -47,8 +47,8 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "下载桌面版",
     "nav.downloadShort": "下载",
     "lang.aria": "语言",
-    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux · v1.12.0",
-    "hero.title": "严谨科研的<br>本地 Agent 工作台",
+    "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux",
+    "hero.title": "严谨做科研，<br>Wisp Science 在身边。",
     "hero.lead":
       "在一个项目中完成文献检索、数据分析与结果整理。让 Wisp 调用 Python、R 和科研工具，保留代码、文件与执行记录，把更多时间留给研究问题。",
     "hero.download": "下载桌面安装包",
@@ -100,9 +100,9 @@ const WISP_PAGES_I18N = {
     "features.pyBody":
       "Python 和 R 运行时可在多轮对话间保留变量与数据对象。不同会话的状态相互隔离，便于逐步调整和检查分析。",
     "features.pyPre":
-      ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# 变量在后续 tool call 中仍然可用\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
-    "features.skillTitle": "28 个内置 SKILL 工作流",
-    "features.skillBody": "从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。",
+      ">>> import scanpy as sc\n>>> adata = sc.read_h5ad(\"pbmc.h5ad\")\n>>> adata.shape\n(2700, 32738)\n\n# 后续调用可以继续使用 adata\n>>> sc.pp.neighbors(adata)\n>>> sc.tl.umap(adata)",
+    "features.skillTitle": "28 个内置技能",
+    "features.skillBody": "覆盖文献调研、数据分析、科研绘图、论文写作和环境配置。按任务选择技能，让工作步骤和检查要求可以复用。",
     "features.skillPre":
       "skills/\n├─ literature-review/\n├─ analysis-workflow/\n├─ remote-compute-ssh/\n├─ figure-composer/\n└─ paper-narrative/ …\n\nAgent 根据任务读取相应的技能说明。",
     "features.llmTitle": "连接适合任务的模型",
@@ -175,19 +175,19 @@ const WISP_PAGES_I18N = {
     "stack.kicker": "连接已有工具与方法",
     "stack.heading": "融入你的科研工具链",
     "stack.lead":
-      "内置 mcp_bio 以进程内 catalog 查询约 80 个科研数据库；也可添加自定义 MCP。SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。",
-    "stack.skill": "28 bundled workflows",
-    "stack.python": "uv-managed venv · isolated R",
-    "stack.bioItem": "mcp_bio<span>247 个工具 · 23 个连接器</span>",
-    "stack.browse": "查看 MCP 工具目录",
+      "通过 MCP 使用科研数据库与自定义工具，通过 Skills 复用分析方法。根据当前任务组合这些能力，并把结果留在项目中。",
+    "stack.skill": "28 个内置技能",
+    "stack.python": "可保留状态的 Python／R 运行时",
+    "stack.bioItem": "科研连接器<span>247 个工具 · 23 个连接器</span>",
+    "stack.browse": "浏览科研连接器",
     "faq.heading": "常见问题",
     "faq.q1": "Wisp Science 是新模型吗？",
     "faq.a1":
       "Wisp Science 是科研工作台，不是一个新模型。你可以配置兼容的模型 API，也可以接入本机 ACP Agent，用它们处理项目中的任务。",
     "faq.q2": "与通用 AI 助手有何不同？",
     "faq.a2":
-      "它能真正执行：读写本地文件、运行 Shell、调用持久 Python / R REPL、通过 MCP 查询 PubMed/UniProt 等数据库，并在 SQLite 中保存完整会话。内置 28 个领域 SKILL，而非仅生成文本。",
-    "faq.q3": "研究数据是否私密？",
+      "它围绕项目组织文件、会话、工具与执行记录，可以运行 Python／R、检索科研数据库，并保存分析产物。28 个内置技能提供可复用的方法与检查步骤。",
+    "faq.q3": "数据会保存在哪里？",
     "faq.a3":
       "项目文件和会话记录保存在本机。调用远程模型或在线服务时，任务所需的消息、附件内容或工具结果可能发送给对应服务；具体范围取决于你的配置与任务，并受服务商的数据政策约束。",
     "faq.q4": "支持哪些平台？",
@@ -204,7 +204,7 @@ const WISP_PAGES_I18N = {
       "是的。Wisp Science 使用 Rust／Tauri 独立开发，以 AGPL-3.0 协议开源。你可以查看源码、连接兼容的模型服务，并根据自己的科研需求使用和改进它。",
     "faq.q8": "第一次使用，建议从哪里开始？",
     "faq.a8":
-      "v1.12.0 是面向本地科研工作流的活跃预览版。核心 Agent、流式、工具、Python / R、MCP、分享导出与桌面 UI 可运行；关键方法与输出仍应人工复核，并以 Release 说明确认当前签名和更新状态。",
+      "先按“快速开始”完成安装、模型配置和第一条对话，再用熟悉的小数据验证工作流程。项目持续迭代，具体变化以发布说明为准；科研结论和关键结果仍需结合原始材料核对。",
     "footer.copy": "© 2026 Wisp Science · 开源科学计算 Agent",
     "mcp.title": "科研 MCP",
     "mcp.lead":
@@ -314,7 +314,7 @@ const WISP_PAGES_I18N = {
     "footer.issues": "Issues",
     "nav.skills": "SKILLS",
     "meta.skills.title": "Research Skills | Wisp Science",
-    "meta.skills.desc": "Explore Wisp Science’s 26 bundled Skills for literature, analysis, figures, writing, compute environments, and automation.",
+    "meta.skills.desc": "Explore Wisp Science’s 28 bundled Skills for literature, analysis, figures, writing, compute environments, and automation.",
     "skills.categories": "Skill categories",
     "meta.home.title": "Wisp Science | Open-source scientific computing agent",
     "meta.home.desc":
@@ -355,8 +355,8 @@ const WISP_PAGES_I18N = {
     "nav.downloadFull": "Download desktop",
     "nav.downloadShort": "Download",
     "lang.aria": "Language",
-    "hero.eyebrow": "Open source · Local-first · Windows / macOS / Linux · v1.12.0",
-    "hero.title": "A local agent workbench<br>for rigorous research",
+    "hero.eyebrow": "Open source · Local first · Windows / macOS / Linux",
+    "hero.title": "Let rigor be your guide,<br>with Wisp Science by your side.",
     "hero.lead":
       "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
     "hero.download": "Download the desktop app",
@@ -504,7 +504,7 @@ const WISP_PAGES_I18N = {
     "faq.q2": "How is it different from a generic AI assistant?",
     "faq.a2":
       "It actually executes: read and write local files, run a shell, call persistent Python / R REPLs, query PubMed/UniProt through MCP, and store the full session in SQLite. It ships 28 domain SKILLs instead of only generating text.",
-    "faq.q3": "Does research data stay private?",
+    "faq.q3": "Where is my data stored?",
     "faq.a3":
       "Project files and conversation records are stored locally. Calls to remote models or online services may send the messages, attachment content, or tool results needed for the task. What is sent depends on your configuration and task, and is subject to the service provider’s data policies.",
     "faq.q4": "Which platforms are supported?",
@@ -521,7 +521,7 @@ const WISP_PAGES_I18N = {
       "Yes. We originally looked at closed products such as Claude Science, but they were unfriendly to some regions and locked down. Wisp Science started from that gap: it learned from their Skills and MCP tool choices, then implemented a local-first research workbench in Rust/Tauri (AGPL-3.0). The agent architecture, multi-project workflow, Run manager, plugins, and ACP support are original; it can talk to any model provider, and anyone can use, study, and improve it.",
     "faq.q8": "Where should I begin?",
     "faq.a8":
-      "v1.12.0 is an active preview for local scientific workflows. The core agent, streaming, tools, Python / R, MCP, share export, and desktop UI run; still review critical methods and outputs, and check the release notes for current signing and update status.",
+      "Follow Quick Start to install the app, configure a model, and send your first message. Then validate a workflow with small, familiar data. Check release notes for changes and verify scientific conclusions against the original material.",
     "footer.copy": "© 2026 Wisp Science · Open-source scientific computing agent",
     "mcp.title": "Scientific MCP",
     "mcp.lead":
