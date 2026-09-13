@@ -82,6 +82,14 @@ expression-to-dependency association from gene names alone.
    If a tool receives empty arguments or returns `invalid_query`, do not repeat
    the identical call. Correct it once using the visible flat schema, then
    report a block if the corrected call still cannot be serialized.
+   For mutation-dependency requests, distinguish the two directed roles before
+   querying: fixed mutation event and unknown dependency targets is a source
+   query; fixed dependency target and unknown mutation biomarkers is a target
+   query. Use `depmap_synthetic_lethal_evidence` with `source`, `target`, or both
+   as appropriate. The phrase “hotspot gene” is ambiguous between a Hotspot
+   mutation event and a user-selected dependency target; do not use the Hotspot
+   event filter unless the user's mutation meaning supports it. Follow the
+   mutation direction rules in [references/intent-routing.md](references/intent-routing.md).
 5. Interpret returned JSON with the event definition, sample count, effect
    direction, P/FDR family, and source path intact.
 6. On a coverage gap, state exactly what is absent. Load

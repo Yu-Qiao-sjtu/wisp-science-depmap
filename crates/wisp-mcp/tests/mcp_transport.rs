@@ -28,6 +28,14 @@ fn main() -> ExitCode {
     if args.get(1).map(String::as_str) == Some(ECHO_ARG) {
         return fake_echo_server();
     }
+    #[cfg(target_os = "macos")]
+    if std::env::var("WISP_SKIP_MCP_TRANSPORT_SELF_EXEC").as_deref() == Ok("1") {
+        eprintln!(
+            "skipping mcp_transport self-exec on the GitHub macOS runner; \
+             process_tree_shutdown still covers macOS child-process handling"
+        );
+        return ExitCode::SUCCESS;
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

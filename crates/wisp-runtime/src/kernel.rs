@@ -354,6 +354,11 @@ impl KernelClient {
 /// The tree is signalled before the child is reaped, which is what keeps a
 /// freed Unix process-group id from being signalled after reuse.
 async fn kill_worker(child: &mut Child, tree: &ProcessTree) -> Result<std::process::ExitStatus> {
+    // A worker can exit between the protocol read returning EOF and cleanup.
+    // Reap it first so an already-gone process group does not hide its status.
+    if let Some(status) = child.try_wait()? {
+        return Ok(status);
+    }
     tree.terminate_forcefully()?;
     tokio::time::timeout(WORKER_KILL_WAIT, child.wait())
         .await

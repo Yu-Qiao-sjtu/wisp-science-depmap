@@ -1,0 +1,30 @@
+{
+  "status": "complete",
+  "release": "26Q1",
+  "gene_universe": "genes with at least one retained somatic mutation record among CRISPR Gene Dependency models",
+  "gene_count": 19784,
+  "hgnc_resolved_count": 19775,
+  "hgnc_exact_count": 19739,
+  "hgnc_previous_symbol_count": 36,
+  "hgnc_alias_symbol_count": 0,
+  "hgnc_unresolved_count": 9,
+  "hgnc_unresolved_genes": ["FLJ36000", "FLJ40288", "FLJ46284", "GS1-600G8.3", "HRAT17", "KC6", "MGC27382", "MIURF", "TARP"],
+  "oncokb_role_gene_count": 569,
+  "common_essential_gene_count": 1788,
+  "damaging_positive_gene_count": 17073,
+  "hotspot_positive_gene_count": 425,
+  "artifacts": [
+    {
+      "path": "gene_annotation_cache_26Q1/all_mutation_gene_annotations.csv",
+      "bytes": 9660247,
+      "sha256": "f4eaf96e32bfd2b87c719cc53c9a8a3404e3dc0ede120bc45dbc020cb16aeb12"
+    },
+    {
+      "path": "gene_annotation_cache_26Q1/all_mutation_gene_annotations.jsonl",
+      "bytes": 27996539,
+      "sha256": "0196f84774f9b7f75d553820687559da889dfc70387941b80dba250bc1117090"
+    }
+  ],
+  "sources": ["DepMap Public 26Q1 OmicsSomaticMutations.csv", "DepMap Public 26Q1 mutation matrices and CRISPR Gene Dependency model universe", "DepMap Public 26Q1 CRISPRInferredCommonEssentials.csv", "local HGNC table", "local OncoKB-derived mutation class table"],
+  "limitations": ["OncoKB-derived roles are a local snapshot and cover cancer-role genes only", "an absent OncoKB role is unclassified in this snapshot, not evidence that a gene has no cancer role", "top protein changes and annotations summarize retained DepMap records and are not functional validation", "unresolved HGNC symbols are retained with their DepMap symbol and explicit unresolved status"]
+}
