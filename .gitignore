@@ -11,8 +11,13 @@ node_modules
 dist
 /ui/dist-dev/
 /ui/dist-test/
+/ui/dist-browser/
+/ui/dist-debug/
 /ui/vendor-runtime/
 web-dist/
+# local release artifacts (multi-GB analysis module packages, catalogs)
+/analysis-module-packages-*/
+/cancer_anchor_catalog_v2_*/
 .wisp/
 ui-tests/test-results/
 ui-tests/website-test-results/
