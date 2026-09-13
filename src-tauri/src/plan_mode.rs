@@ -69,7 +69,7 @@ async fn ensure_project_frame(
 #[tauri::command]
 pub(crate) async fn get_session_plan_mode(
     state: State<'_, crate::AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
 ) -> Result<Option<bool>, String> {
     let project = state.require_active(window.label())?;
@@ -83,7 +83,7 @@ pub(crate) async fn get_session_plan_mode(
 #[tauri::command]
 pub(crate) async fn set_session_plan_mode(
     state: State<'_, crate::AppState>,
-    _window: tauri::WebviewWindow,
+    _window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     enabled: bool,
 ) -> Result<bool, String> {

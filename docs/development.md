@@ -4,6 +4,98 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 [basic configuration](basic-configuration.md). For HTTP model profiles see
 [model configuration](model-configuration.md).
 
+## GitHub Pages tutorials
+
+The website's [tutorial directory](tutorials.html) links to one independent page
+per article under `docs/tutorials/`, generated from `docs/wechat/*.md` and matching
+English translations in `docs/wechat/en/`. The directory groups compact cards under
+three dividers: Basics (基础入门), Tips (使用技巧), and Advanced (进阶).
+Wisp CLI (Wisp 命令行) is an independent tutorial in Advanced, alongside ACP configuration.
+The language switch changes group headings, titles, complete article text, captions,
+examples, source links, and previous/next navigation. Each language uses screenshots
+of the corresponding app interface; English assets live under
+`docs/assets/tutorials/en/`. Article links open the corresponding tutorial
+page; other Markdown documentation links open the repository source. Each article
+offers a return link at the top and bottom and previous/next navigation. Returning
+to the directory restores the matching card via its stable anchor.
+
+After editing or adding an article, regenerate the checked-in page:
+
+```bash
+python3 -m pip install -r docs/requirements-pages.txt
+python3 docs/build_tutorials.py
+python3 docs/build_tutorials.py --check
+python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
+```
+
+Each article must start with a level-one title. `READING_ORDER` in the generator
+puts Quick Start first, then the four introductory tutorials, MCP, Skills, trajectories,
+research journey, and the advanced CLI and ACP tutorials; other articles are appended alphabetically.
+`TUTORIAL_GROUPS` defines the directory sections. Chinese title prefixes select Basics
+or Tips; other articles appear in Advanced. Filenames determine
+stable article URLs and directory card anchors. Edit the page shell outside the generated
+markers in `docs/tutorials.html`; edit both language sources when updating articles.
+The generator rejects missing English translations instead of silently showing
+Chinese content in English mode. Relative links in English sources use their own
+`en/` directory as the base (for example, `../../assets/` for screenshots).
+The Pages workflow regenerates both the directory and article pages before
+uploading them. Do not hand-edit the generated files under `docs/tutorials/`.
+
+For a manual smoke check, serve `docs` with `python3 -m http.server --directory docs
+8080`. Open the homepage, follow Tutorials in the header or footer, and check all
+directory links, the Skills code example, and the tutorial screenshots. Each
+card should open only its own article. Check both return links, previous/next
+navigation, browser Back, and refreshing an article's direct URL.
+Repeat at a narrow mobile width and switch to English; the surrounding navigation
+and all article text should switch language. Reload a direct `?lang=en` URL,
+follow another tutorial, and return to the directory; English must persist even
+when browser storage is unavailable. The language is carried in local HTML links.
+
+The homepage links directly to Quick Start. Models and ACP are accessed through
+the tutorial directory; the former standalone configuration HTML pages and their
+navigation entries have been removed without redirect pages.
+
+The tutorial screenshots use the real frontend with localized mock data. The
+English set also covers ACP, the trajectory inspector, and the actual Chromium
+extension manager in a fresh offline profile. Regenerate them without API keys,
+real servers, or live website access:
+
+```bash
+cd ui-tests
+WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-screenshots.spec.ts
+# Only regenerate the English assets:
+WISP_TUTORIAL_LOCALE=en WISP_TUTORIAL_SHOTS=../docs/assets/tutorials npx playwright test tests/tutorial-screenshots.spec.ts
+```
+
+The capture tests normally write to Playwright's output directory; only the
+explicit environment variable updates the published assets. Their demo account,
+host, terminal output, and conversation data are labeled as examples in the
+articles. Quick Start captures all four onboarding steps, project creation, and a
+first conversation with a deterministic mock reply; it never calls a model API.
+Chinese assets retain their existing paths; English captures go into `en/`.
+The English screenshot tests reject visible Chinese text, including input values.
+The Chrome/Chromium installation screenshot uses Playwright's full Chromium
+binary, included by `npx playwright install chromium`, rather than headless shell.
+On macOS, the test uses a temporary launcher with `AppleLanguages` to select
+English for native browser pages without changing the user's language settings.
+
+The [Skills catalog](skills.html) groups all bundled Skills into research tasks.
+Reviewed Chinese and English summaries live in `docs/skills-catalog.json`.
+`docs/build_skills.py` checks the catalog against `skills/*/SKILL.md` before
+generating the page; adding or removing a bundled Skill also requires updating
+its catalog entry. To regenerate and verify it:
+
+```bash
+python3 docs/build_skills.py
+python3 docs/build_skills.py --check
+python3 -m unittest discover -s docs -p 'test_build_*.py'
+```
+
+Website copy lives in `docs/assets/i18n.js`; keep the static Chinese fallback in
+the homepage and MCP page consistent with it. Research-task cards are illustrative
+requests, not attributed testimonials. The privacy FAQ distinguishes local
+storage from content sent to configured model or data services.
+
 ## Build from source
 
 Prerequisites:
@@ -340,8 +432,9 @@ wisp-science/
   [`w4n9H/mangopi-cli`](https://github.com/w4n9H/mangopi-cli) (Apache-2.0).
 - `skills/` vendored from the upstream
   `wisp-science` asset bundle (Apache-2.0).
-- `skills/bear-*` from [bear-research-skills](https://github.com/fei0810/bear-research-skills)
-  (CC BY-NC-SA 4.0); requires `scimaster-cli` for live retrieval.
+- [bear-research-skills](https://github.com/fei0810/bear-research-skills)
+  is available as an optional Skills marketplace source, rather than bundled
+  files. Its CC BY-NC-SA 4.0 license and `scimaster-cli` dependency apply when installed.
 - `python/kernel_worker.py` protocol adapted from the upstream operon kernel
   worker, with POSIX-only `resource`/`/proc`/`SIGINT` machinery dropped for
   Windows.

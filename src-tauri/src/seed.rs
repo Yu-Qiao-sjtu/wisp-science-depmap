@@ -79,7 +79,7 @@ pub(super) fn list_demos_cmd() -> Vec<DemoInfo> {
 #[tauri::command(rename = "load_demo")]
 pub(super) fn load_demo_cmd(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<Demo, String> {
     let ap = state.require_active(window.label())?;

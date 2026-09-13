@@ -28,7 +28,7 @@ impl TurnOrigin {
 pub(crate) async fn send_message(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
     message: String,
     attachments: Option<Vec<String>>,
@@ -416,6 +416,12 @@ pub(crate) async fn send_message_inner(
     }
     let mut guard = rt.agent.lock().await;
     rt.discard_stale_agent(&mut guard);
+    if crate::mcp_connections::host()
+        .needs_catalog_refresh(&frame_id)
+        .await
+    {
+        *guard = None;
+    }
     let _progress_subscription =
         progress_observer_id.and_then(|id| channels::activate_progress_observer(id, &frame_id));
     if rt.deleted.load(Ordering::SeqCst) {
@@ -425,7 +431,7 @@ pub(crate) async fn send_message_inner(
     // session. A queued follow-up may have been accepted before the previous
     // turn ended; reading its profile earlier would rebuild the invalidated
     // Agent with the model that was selected at enqueue time.
-    let vision_cfg = build_vision_provider_config(&state.store).await;
+    let vision_cfg = build_vision_provider_config(&state.store, &frame_id).await;
     let fallback_max_context = state
         .store
         .get_setting("max_context")
@@ -460,13 +466,24 @@ pub(crate) async fn send_message_inner(
     let delegation_enabled =
         delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
     let plan_mode_enabled = plan_mode::session_plan_mode(&state.store, &frame_id).await;
-    let (provider, api_url, model, api_key, max_tokens, reasoning_effort, service_tier) =
-        match &specialist {
-            Some(spec) if !spec.model_id.trim().is_empty() => {
-                specialists::specialist_llm(&state.store, spec).await
-            }
-            _ => load_session_settings(&state.store, &frame_id).await,
-        };
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = match &specialist {
+        Some(spec) if !spec.model_id.trim().is_empty() => {
+            specialists::specialist_llm(&state.store, spec).await
+        }
+        _ => load_session_settings(&state.store, &frame_id).await,
+    };
     let cfg = build_provider_config(
         &provider,
         &api_url,
@@ -475,6 +492,11 @@ pub(crate) async fn send_message_inner(
         max_tokens,
         &reasoning_effort,
         &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&frame_id),
     )?;
     let primary_supports_vision = models::supports_vision(
         &state.store,
@@ -553,11 +575,13 @@ pub(crate) async fn send_message_inner(
             &mut agent,
             models::image_generation_config(&state.store).await,
             llm_proxy(),
+            &frame_id,
         );
         add_configured_video_generation_tool(
             &mut agent,
             models::video_generation_config(&state.store).await,
             llm_proxy(),
+            &frame_id,
         );
         agent.add_tool(Box::new(browser_bridge::BrowserSetupTool::new(
             state.browser_bridge.clone(),
@@ -1416,7 +1440,7 @@ pub(crate) fn spawn_queue_driver(
 pub(crate) async fn enqueue_turn(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     message: String,
@@ -1519,7 +1543,7 @@ pub(crate) fn reclaim_unconsumed_cutin(
 pub(crate) async fn queued_turn_action(
     state: State<'_, AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     session_id: String,
     id: u64,
     action: String,
@@ -1591,6 +1615,11 @@ pub(crate) async fn stop_agent(
     state: State<'_, AppState>,
     session_id: Option<String>,
 ) -> Result<(), String> {
+    if let Some(id) = session_id.as_deref().filter(|s| !s.is_empty()) {
+        state.mcp_app_tool_bridges.cancel_for_frame(id);
+    } else {
+        state.mcp_app_tool_bridges.cancel_all();
+    }
     // Cancel only the named session's turn; other conversations keep running.
     let targets: Vec<(String, Arc<SessionRuntime>)> =
         match session_id.as_deref().filter(|s| !s.is_empty()) {

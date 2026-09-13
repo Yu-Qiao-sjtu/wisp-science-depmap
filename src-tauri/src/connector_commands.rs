@@ -6,9 +6,10 @@ use super::{
     save_json_setting, save_mcp_connections, window_bound_project_id, AppState, McpConnection,
     McpHttpAuth, McpTransport,
 };
+use crate::workspace_surface::WorkspaceSurface;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use tauri::{State, WebviewWindow};
+use tauri::State;
 
 #[derive(Serialize, Clone)]
 pub(super) struct McpConnectionsView {
@@ -66,6 +67,9 @@ pub(super) async fn update_mcp_connection(
     if removed_oauth {
         crate::mcp_oauth::forget(&connection_id);
     }
+    crate::mcp_connections::host()
+        .invalidate_connector(&connection_id)
+        .await;
     clear_idle_agents(&state).await;
     Ok(())
 }
@@ -174,7 +178,7 @@ fn bundled_connector_infos(
 #[tauri::command]
 pub(super) async fn list_connectors(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
 ) -> Result<ConnectorsView, String> {
     let store = &state.store;
     // Unbound windows show the inherited global defaults without writing them.
@@ -238,7 +242,7 @@ pub(super) async fn set_connector_enabled(
 #[tauri::command]
 pub(super) async fn set_tool_approval(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     tool: String,
     mode: String,
 ) -> Result<(), String> {
@@ -257,7 +261,7 @@ pub(super) async fn set_tool_approval(
 #[tauri::command]
 pub(super) async fn set_approval_scope(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     scope: String,
 ) -> Result<(), String> {
     let project_id = persist_approval_scope_overlay(
@@ -274,7 +278,7 @@ pub(super) async fn set_approval_scope(
 #[tauri::command]
 pub(super) async fn set_connector_skip_approvals(
     state: State<'_, AppState>,
-    window: WebviewWindow,
+    window: WorkspaceSurface,
     key: String,
     enabled: bool,
 ) -> Result<(), String> {

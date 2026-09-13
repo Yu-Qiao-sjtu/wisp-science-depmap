@@ -147,9 +147,8 @@ impl AnthropicProvider {
 
     async fn request(&self, body: Value) -> Result<Value> {
         let resp = self
-            .client
-            .post(self.endpoint())
-            .headers(self.headers())
+            .cfg
+            .request_headers(self.client.post(self.endpoint()).headers(self.headers()))
             .json(&body)
             .send()
             .await?;
@@ -420,9 +419,8 @@ impl Provider for AnthropicProvider {
     ) -> Result<Completion> {
         let (_, _, body) = self.build_body(messages, tools, true);
         let resp = self
-            .client
-            .post(self.endpoint())
-            .headers(self.headers())
+            .cfg
+            .request_headers(self.client.post(self.endpoint()).headers(self.headers()))
             .json(&body)
             .send()
             .await?;

@@ -5,6 +5,7 @@
 //! pre-shared token. The action surface is a closed list and never enters the
 //! Agent/tool execution path.
 
+use crate::workspace_surface::WorkspaceManager;
 use crate::{
     desktop_lifecycle,
     device_hub::DeviceHub,
@@ -360,7 +361,7 @@ impl SessionFocus for TauriSessionFocus {
             .state::<crate::AppState>()
             .session_surface_labels(session_id, Some(&project_id))
             .into_iter()
-            .filter(|label| self.app.get_webview_window(label).is_some())
+            .filter(|label| self.app.workspace_surface(label).is_some())
             .min_by_key(|label| (label == "main", label.clone()))
             .unwrap_or_else(|| "main".into());
         desktop_lifecycle::activate_workspace_window(

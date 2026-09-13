@@ -14,7 +14,7 @@ Wisp supports three deliberately different ways to bring a project onto a device
   available. It registers the folder in place and imports the recoverable message
   timelines into a `Recovered` conversation folder.
 
-Opening a folder in place creates a new local Wisp project record. Conversation
+Opening an unregistered folder in place creates a new local Wisp project record. Conversation
 history and other records that exist only in another device's Wisp database are
 not recovered from a plain folder copy; use ZIP export/import when those records
 must move too. Workspace conversation recovery is a best-effort disaster fallback,
@@ -43,6 +43,27 @@ copy.
 For a folder you copied yourself, choose **Import project → Open a folder in
 place** instead. Confirm its local name and path; Wisp registers that exact path
 without creating a duplicate workspace.
+
+If the folder is already registered, Wisp instead shows **Choose an existing
+project**, with the name, full project ID, workspace path, and conversation count
+for every matching project. Select the identity whose history you want to open.
+Older databases can contain several project IDs for the same directory, even
+with identical names. Each keeps its own conversations and groups. Opening one
+does not merge projects, reassign conversations, or import `.wisp/history` JSON.
+Cancelling leaves the active project unchanged. Projects hidden by Privacy mode
+remain hidden in this chooser.
+
+Folder matching uses the existing local filesystem path comparison, resolving
+existing aliases with canonical paths (including Windows junctions and symlinks).
+On Windows, canonical paths are compared without ASCII case differences. This
+lookup is read-only and does not infer that matching projects should be merged.
+
+When conversations appear missing after an update but remain in `wisp.sqlite`,
+try this existing-project chooser before archive recovery. Session visibility is
+scoped to project ID, not just the workspace path. A small `.wisp/history`
+directory does not establish that database conversations were deleted. The
+chooser provides access to existing identities; it does not diagnose which
+version or operation originally created duplicates or changed window restoration.
 
 ## Recovering conversations from an orphaned workspace
 

@@ -11,7 +11,7 @@ use super::{
     reclaim_unconsumed_cutin, resolve_acp_artifact_references, resolve_composer_references,
     resolve_reader_references, resolve_review_backend, resolve_workspace, session_runtime_status,
     should_hide_app_on_macos_close, should_persist_ui_event, specialist_skill_index,
-    ui_watchdog_note_unfocused, ui_watchdog_requires_reload, user_message_start, AgentEvent,
+    user_message_start, AgentEvent,
     ComposerReferenceArg, McpConnection, McpHttpAuth, McpTransport, ProjectActivityLocks,
     QueuedItem, SessionRuntime, SkillInfo, StartupReport, StartupTimeline,
     MAX_PENDING_UI_EVENT_BYTES, UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
@@ -20,6 +20,93 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
+
+#[test]
+fn model_request_scope_survives_rebuilds_and_standalone_calls_are_isolated() {
+    let config = |session_id| {
+        super::build_provider_config(
+            "openai",
+            "https://opencode.ai/zen/go/v1",
+            "fake-key",
+            "kimi-k3",
+            1024,
+            "",
+            "",
+            "",
+            true,
+            None,
+            "",
+            session_id,
+        )
+        .unwrap()
+    };
+    assert_eq!(config(Some("frame-a")).session_id, "frame-a");
+    assert_eq!(
+        config(Some("frame-a")).session_id,
+        config(Some("frame-a")).session_id
+    );
+    assert_ne!(
+        config(Some("frame-a")).session_id,
+        config(Some("frame-b")).session_id
+    );
+    assert_ne!(config(None).session_id, config(None).session_id);
+}
+
+#[test]
+fn model_identity_policy_is_preserved_and_header_names_are_validated() {
+    let config = |name| {
+        super::build_provider_config(
+            "openai",
+            "https://gateway.example/v1",
+            "fake-key",
+            "model",
+            1024,
+            "",
+            "",
+            "retained-client/1.0",
+            false,
+            Some(true),
+            name,
+            Some("frame-test"),
+        )
+    };
+    let cfg = config("X-Custom-Session").unwrap();
+    assert!(!cfg.send_user_agent);
+    assert_eq!(cfg.send_session_id, Some(true));
+    assert_eq!(cfg.session_header_name, "x-custom-session");
+    assert_eq!(cfg.user_agent, "retained-client/1.0");
+    assert_eq!(cfg.session_id, "frame-test");
+    assert!(config("Authorization").is_err());
+    assert!(config("x-session\r\nx-injected").is_err());
+}
+
+#[test]
+fn model_user_agent_is_validated_before_building_a_provider() {
+    let config = |value| {
+        super::build_provider_config(
+            "openai",
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            1024,
+            "",
+            "",
+            value,
+            true,
+            None,
+            "",
+            None,
+        )
+    };
+    assert_eq!(
+        config("  research-client/1.0  ").unwrap().user_agent,
+        "research-client/1.0"
+    );
+    assert_eq!(config("").unwrap().user_agent, "");
+    assert!(config("client\r\nX-Injected: value")
+        .unwrap_err()
+        .contains("User-Agent"));
+}
 
 #[tokio::test]
 async fn exploration_creation_shares_project_activity_but_serializes_round_initialization() {
@@ -234,6 +321,7 @@ impl wisp_tools::McpAppServer for FakeAppServer {
 
 fn fake_app_bridge(frame_id: &str, connector_id: &str, tool: &str) -> super::McpAppToolBridge {
     super::McpAppToolBridge {
+        generation: 0,
         frame_id: frame_id.into(),
         server: Arc::new(FakeAppServer {
             connector_id: connector_id.into(),
@@ -295,6 +383,25 @@ async fn parallel_mcp_app_instances_keep_separate_bridges() {
     assert!(bridges.get(motif).is_none());
 }
 
+#[test]
+fn mcp_app_stale_cleanup_cannot_remove_replacement_generation() {
+    let bridges = super::McpAppBridges::default();
+    let id = "mcp-app:session-a:figures";
+    bridges.register(
+        id.into(),
+        fake_app_bridge("session-a", "figure-library", "preview"),
+    );
+    let old = bridges.get(id).unwrap().generation;
+    bridges.register(
+        id.into(),
+        fake_app_bridge("session-a", "figure-library", "preview"),
+    );
+    let new = bridges.get(id).unwrap().generation;
+    assert_ne!(old, new);
+    assert!(!bridges.close_generation(id, Some(old)));
+    assert!(bridges.close_generation(id, Some(new)));
+}
+
 #[tokio::test]
 async fn mcp_app_host_timeout_fails_only_the_call() {
     let server = FakeAppServer {
@@ -306,7 +413,7 @@ async fn mcp_app_host_timeout_fails_only_the_call() {
         &server,
         "figure_preview_exact",
         &serde_json::json!({}),
-        std::time::Duration::from_millis(15),
+        Some(std::time::Duration::from_millis(15)),
     )
     .await
     .unwrap_err();
@@ -321,7 +428,7 @@ async fn mcp_app_host_timeout_fails_only_the_call() {
         &fast,
         "figure_preview_exact",
         &serde_json::json!({}),
-        std::time::Duration::from_millis(50),
+        None,
     )
     .await
     .unwrap();
@@ -476,7 +583,7 @@ fn image_helper_loads_supported_extension_for_model_input() {
     // Small images do not need the UI confirmation path; exercise the shared
     // loader directly through its image helper here.
     let result = wisp_tools::image::view_image(&uploads.join("plot.PNG").to_string_lossy());
-    let images = vec![result.image.unwrap()];
+    let images = result.images;
 
     assert_eq!(images.len(), 1);
     assert!(images[0].data_url.starts_with("data:image/png;base64,"));
@@ -521,6 +628,7 @@ fn configured_image_generation_tool_is_available_without_a_specialist() {
             super::models::ImageGenerationOptions::default(),
         )),
         Some("none".into()),
+        "frame-test",
     );
 
     assert!(agent.tools.get("generate_image").is_some());
@@ -2317,9 +2425,13 @@ fn project_window_url_carries_the_target_session() {
 fn default_capability_grants_ipc_to_blank_windows() {
     let spec: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-    let windows: Vec<&str> = spec["windows"]
+    assert!(
+        spec.get("windows").is_none(),
+        "window-scoped grants would leak to MCP child WebViews"
+    );
+    let windows: Vec<&str> = spec["webviews"]
         .as_array()
-        .expect("default capability lists windows")
+        .expect("default capability lists primary WebViews")
         .iter()
         .filter_map(|value| value.as_str())
         .collect();
@@ -2918,31 +3030,6 @@ fn desktop_app_icon_native_catalog_matches_its_sources_and_bundle_config() {
     assert_eq!(images[1]["value"], "wisp-dark.svg");
 }
 
-#[test]
-fn ui_watchdog_reload_decision() {
-    // Never fired a beat (fresh boot, or beat cleared after a reload): the
-    // watchdog must wait for fresh beats, not reload on startup silence.
-    assert!(!ui_watchdog_requires_reload(None, None));
-    // Healthy stream.
-    assert!(!ui_watchdog_requires_reload(Some(5), None));
-    // Freshly reloaded, still loading: inside the cooldown.
-    assert!(!ui_watchdog_requires_reload(Some(120), Some(30)));
-    // Dead renderer, first recovery.
-    assert!(ui_watchdog_requires_reload(Some(120), None));
-    // Dead again after the cooldown expired.
-    assert!(ui_watchdog_requires_reload(Some(120), Some(180)));
-}
-
-#[test]
-fn ui_watchdog_unfocused_silence_is_not_stale() {
-    let mut beat = Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
-    ui_watchdog_note_unfocused(&mut beat);
-    assert!(beat.unwrap().elapsed() < std::time::Duration::from_secs(1));
-    let mut none = None;
-    ui_watchdog_note_unfocused(&mut none);
-    assert!(none.is_none());
-}
-
 async fn open_temp_store(prefix: &str) -> (wisp_store::Store, PathBuf) {
     let path = std::env::temp_dir().join(format!("{prefix}_{}.sqlite", uuid::Uuid::new_v4()));
     let store = wisp_store::Store::open(&path).await.unwrap();
@@ -3246,4 +3333,27 @@ fn dump_child_env(pairs: &[(OsString, OsString)]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+#[tokio::test(start_paused = true)]
+async fn mcp_app_default_allows_calls_longer_than_old_limits() {
+    assert!(super::MCP_APP_TOOL_CALL_TIMEOUT.is_none());
+    let task = tokio::spawn(async {
+        let server = FakeAppServer {
+            connector_id: "figure-library".into(),
+            tool: "figure_preview_exact".into(),
+            delay: Some(std::time::Duration::from_secs(130)),
+        };
+        super::invoke_mcp_app_server_tool(
+            &server,
+            "figure_preview_exact",
+            &serde_json::json!({}),
+            super::MCP_APP_TOOL_CALL_TIMEOUT,
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(121)).await;
+    assert!(!task.is_finished());
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    assert!(task.await.unwrap().is_ok());
 }

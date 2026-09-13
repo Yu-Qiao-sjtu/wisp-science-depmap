@@ -85,7 +85,7 @@ fn resolve_runtime_key(
 #[tauri::command]
 pub(super) async fn list_runtimes(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<wisp_runtime::RuntimeInfo>, String> {
     let (_, scope) =
         exploration_commands::working_project_for_active_frame(&state, window.label()).await?;
@@ -101,7 +101,7 @@ pub(super) async fn list_runtimes(
 #[tauri::command]
 pub(super) async fn inspect_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     project_id: String,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
@@ -157,7 +157,7 @@ pub(crate) struct RuntimeExecutionSummary {
 #[tauri::command]
 pub(super) async fn execute_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
     code: String,
@@ -206,7 +206,7 @@ pub(super) async fn execute_runtime(
 #[tauri::command]
 pub(super) async fn execute_runtime_script(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
     script_path: String,
@@ -290,7 +290,7 @@ async fn finish_runtime_execution(
 #[tauri::command]
 pub(super) async fn start_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
 ) -> Result<wisp_runtime::RuntimeInfo, String> {
@@ -316,7 +316,7 @@ pub(super) async fn start_runtime(
 #[tauri::command]
 pub(super) async fn dismiss_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     runtime_id: String,
 ) -> Result<(), String> {
     let (_, scope) =
@@ -344,7 +344,7 @@ pub(super) async fn dismiss_runtime(
 #[tauri::command]
 pub(super) async fn stop_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     project_id: String,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
@@ -393,7 +393,7 @@ pub(super) async fn stop_runtime(
 #[tauri::command]
 pub(super) async fn restart_runtime(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     project_id: String,
     context_id: String,
     language: wisp_runtime::RuntimeLanguage,
@@ -447,7 +447,7 @@ pub(super) async fn restart_runtime(
 #[tauri::command]
 pub(super) async fn list_runs(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
 ) -> Result<Vec<wisp_store::RunSummary>, String> {
     let (_, scope) =
         exploration_commands::working_project_for_active_frame(&state, window.label()).await?;
@@ -461,7 +461,7 @@ pub(super) async fn list_runs(
 #[tauri::command]
 pub(super) async fn get_run_detail(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<wisp_store::RunRecord, String> {
     let (_, scope) =
@@ -485,7 +485,7 @@ pub(super) async fn get_run_detail(
 #[tauri::command]
 pub(super) async fn cancel_run(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<wisp_store::RunRecord, String> {
     let (ap, scope) =
@@ -524,7 +524,7 @@ pub(super) async fn cancel_run(
 #[tauri::command]
 pub(super) async fn harvest_run(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<wisp_store::RunRecord, String> {
     let (ap, scope) =
@@ -560,7 +560,7 @@ pub(super) async fn harvest_run(
 
 async fn scoped_run(
     state: &State<'_, AppState>,
-    window: &tauri::WebviewWindow,
+    window: &crate::workspace_surface::WorkspaceSurface,
     run_id: &str,
 ) -> Result<(), String> {
     let (ap, scope) =
@@ -592,7 +592,7 @@ async fn scoped_run(
 #[tauri::command]
 pub(super) async fn list_run_workspace_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
     path: Option<String>,
     name_filter: Option<String>,
@@ -618,7 +618,7 @@ pub(super) async fn list_run_workspace_files(
 #[tauri::command]
 pub(super) async fn download_run_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
     files: Option<Vec<String>>,
     dirs: Option<Vec<String>>,
@@ -645,7 +645,7 @@ pub(super) async fn download_run_files(
 #[tauri::command]
 pub(super) async fn should_prompt_run_review(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<bool, String> {
     scoped_run(&state, &window, &run_id).await?;
@@ -660,7 +660,7 @@ pub(super) async fn should_prompt_run_review(
 #[tauri::command]
 pub(super) async fn dismiss_run_review(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
 ) -> Result<(), String> {
     scoped_run(&state, &window, &run_id).await?;
@@ -676,7 +676,7 @@ pub(super) async fn dismiss_run_review(
 #[tauri::command]
 pub(super) async fn delete_run_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
     paths: Vec<String>,
 ) -> Result<(), String> {
@@ -694,7 +694,7 @@ pub(super) async fn delete_run_files(
 #[tauri::command]
 pub(super) async fn list_remote_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
 ) -> Result<Vec<crate::run_context::remote_files::RemoteFileView>, String> {
     let (ap, _) =
@@ -707,7 +707,7 @@ pub(super) async fn list_remote_files(
 #[tauri::command]
 pub(super) async fn remove_remote_files(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     ids: Vec<String>,
     force: Option<bool>,
@@ -741,7 +741,7 @@ pub(super) async fn remove_remote_files(
 #[tauri::command]
 pub(super) async fn context_disposal_report(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
 ) -> Result<crate::run_context::remote_files::ContextDisposalReport, String> {
     let (ap, _) =
@@ -760,7 +760,7 @@ pub(super) async fn context_disposal_report(
 #[tauri::command]
 pub(super) async fn cleanup_run_workspace(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     run_id: String,
     force: Option<bool>,
 ) -> Result<wisp_store::RunRecord, String> {

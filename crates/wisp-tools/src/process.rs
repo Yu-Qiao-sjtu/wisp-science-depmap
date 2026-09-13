@@ -214,8 +214,10 @@ impl ProcessTree {
                 return Ok(true);
             }
             let error = io::Error::last_os_error();
+            if self.group_is_gone(&error) {
+                return Ok(false);
+            }
             return match error.raw_os_error() {
-                Some(libc::ESRCH) => Ok(false),
                 Some(libc::EPERM) => Ok(true),
                 _ => Err(error),
             };
@@ -262,19 +264,37 @@ impl ProcessTree {
     }
 
     #[cfg(unix)]
-    /// Returns whether the target process group existed when the signal was
-    /// issued. ESRCH permanently disarms this numeric PGID.
+    /// Returns whether the group may still contain live members. Missing
+    /// groups and confirmed macOS zombie-only groups disarm this numeric PGID.
     fn signal_group(&self, signal: libc::c_int) -> io::Result<bool> {
         let result = unsafe { libc::kill(-self.process_group, signal) };
         if result == 0 {
             return Ok(true);
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
+        if self.group_is_gone(&error) {
             Ok(false)
         } else {
             Err(error)
         }
+    }
+
+    #[cfg(unix)]
+    fn group_is_gone(&self, error: &io::Error) -> bool {
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return true;
+        }
+        // Darwin killpg skips zombies and returns EPERM when none of the
+        // remaining members can receive a signal. Do not confuse that with a
+        // real permission failure, or reap the leader before tree signalling.
+        #[cfg(target_os = "macos")]
+        if error.raw_os_error() == Some(libc::EPERM) {
+            return confirmed_zombie_group(
+                || macos_group_members(self.process_group),
+                |pid| macos_group_member_is_zombie(pid, self.process_group),
+            );
+        }
+        false
     }
 
     #[cfg(windows)]
@@ -323,6 +343,86 @@ impl ProcessTree {
             job,
         })
     }
+}
+
+// This fallback is used only after EPERM. Any incomplete or changing view is
+// inconclusive, so the original permission error remains visible. The second
+// membership snapshot catches children spawned between listing a live parent
+// and observing that parent as a zombie. No child is reaped by these queries.
+#[cfg(target_os = "macos")]
+fn confirmed_zombie_group(
+    mut members: impl FnMut() -> Option<Vec<libc::pid_t>>,
+    mut is_zombie: impl FnMut(libc::pid_t) -> bool,
+) -> bool {
+    let Some(before) = members().filter(|pids| !pids.is_empty()) else {
+        return false;
+    };
+    before.iter().all(|pid| is_zombie(*pid)) && members().as_ref() == Some(&before)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_group_members(process_group: libc::pid_t) -> Option<Vec<libc::pid_t>> {
+    // sys/proc_info.h; this selector is not exported by our libc version.
+    const PROC_PGRP_ONLY: u32 = 2;
+    // Bound allocation if the OS returns an unexpected size. Inconclusive
+    // queries preserve EPERM rather than asserting that the group is dead.
+    const MAX_SNAPSHOT_BYTES: libc::c_int = 4 * 1024 * 1024;
+    let pid_size = std::mem::size_of::<libc::pid_t>();
+    // SAFETY: a null buffer and zero size request the required buffer size.
+    let needed = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            process_group as u32,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if needed <= 0 || needed > MAX_SNAPSHOT_BYTES {
+        return None;
+    }
+    let mut pids = vec![0; (needed as usize).div_ceil(pid_size) + 32];
+    let capacity = (pids.len() * pid_size) as libc::c_int;
+    // SAFETY: pids is aligned, initialized storage of exactly capacity bytes.
+    let written = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            process_group as u32,
+            pids.as_mut_ptr().cast(),
+            capacity,
+        )
+    };
+    // A full buffer may be truncated if the group grew between queries.
+    if written <= 0 || written >= capacity || written as usize % pid_size != 0 {
+        return None;
+    }
+    pids.truncate(written as usize / pid_size);
+    if pids.iter().any(|pid| *pid <= 0) {
+        return None;
+    }
+    pids.sort_unstable();
+    Some(pids)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_group_member_is_zombie(pid: libc::pid_t, process_group: libc::pid_t) -> bool {
+    // SAFETY: proc_bsdinfo is a C record whose fields all permit zero values.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as libc::c_int;
+    // SAFETY: info provides the buffer required by this flavor. arg=1 asks
+    // Darwin to include unreaped zombies. Query failures are inconclusive.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            1,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    written == size
+        && info.pbi_pid == pid as u32
+        && info.pbi_pgid == process_group as u32
+        && info.pbi_status == libc::SZOMB
 }
 
 impl Drop for ProcessTree {
@@ -422,5 +522,105 @@ mod tests {
 
         assert!(!tree.is_running().unwrap());
         assert_eq!(tree.state.load(Ordering::SeqCst), TREE_DISARMED);
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn wait_for_zombie(pid: libc::pid_t) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+                let size = std::mem::size_of_val(&info) as libc::c_int;
+                // arg=1 includes unreaped zombies; do not call Child::try_wait
+                // here, since reaping would hide the macOS regression.
+                let read = unsafe {
+                    libc::proc_pidinfo(
+                        pid,
+                        libc::PROC_PIDTBSDINFO,
+                        1,
+                        &mut info as *mut _ as *mut libc::c_void,
+                        size,
+                    )
+                };
+                if read == size && info.pbi_status == libc::SZOMB {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("child must become an unreaped zombie");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_zombie_group_disarms_without_losing_the_child_exit_status() {
+        use super::*;
+        // Exercise each entry point with a fresh, still-armed tree.
+        for operation in ["probe", "term", "kill"] {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exit 23"]).kill_on_drop(true);
+            ProcessTree::configure(&mut command);
+            let mut child = command.spawn().unwrap();
+            let tree = ProcessTree::attach(&child).unwrap();
+            wait_for_zombie(tree.process_group).await;
+            assert_eq!(unsafe { libc::kill(-tree.process_group, 0) }, -1);
+            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+            match operation {
+                "probe" => assert!(!tree.is_running().unwrap()),
+                "term" => tree.terminate_gracefully().unwrap(),
+                _ => tree.terminate_forcefully().unwrap(),
+            }
+            assert_eq!(tree.state.load(Ordering::SeqCst), TREE_DISARMED);
+            tree.terminate_gracefully().unwrap();
+            tree.terminate_forcefully().unwrap();
+            assert_eq!(child.wait().await.unwrap().code(), Some(23));
+            assert!(!tree.is_running().unwrap());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_zombie_confirmation_rejects_unknown_live_or_changed_membership() {
+        use super::confirmed_zombie_group;
+        for snapshots in [
+            [None, None],
+            [Some(vec![]), Some(vec![])],
+            [Some(vec![1]), None],
+            [Some(vec![1]), Some(vec![1, 2])],
+            [Some(vec![1, 2]), Some(vec![1])],
+        ] {
+            let mut snapshots = snapshots.into_iter();
+            assert!(!confirmed_zombie_group(
+                || snapshots.next().flatten(),
+                |_| true
+            ));
+        }
+        assert!(!confirmed_zombie_group(|| Some(vec![1, 2]), |pid| pid == 1));
+        assert!(confirmed_zombie_group(|| Some(vec![1, 2]), |_| true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_live_group_does_not_turn_permission_errors_into_success() {
+        use super::*;
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        ProcessTree::configure(&mut command);
+        let mut child = command.spawn().unwrap();
+        let tree = ProcessTree::attach(&child).unwrap();
+        // Inject EPERM without requiring a privileged/foreign process in tests.
+        assert!(!tree.group_is_gone(&io::Error::from_raw_os_error(libc::EPERM)));
+        assert!(!tree.group_is_gone(&io::Error::from_raw_os_error(libc::EACCES)));
+        assert_eq!(tree.state.load(Ordering::SeqCst), TREE_ACTIVE);
+        assert!(tree.is_running().unwrap());
+        tree.terminate_forcefully().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!tree.is_running().unwrap());
     }
 }

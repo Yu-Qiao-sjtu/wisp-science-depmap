@@ -28,9 +28,11 @@ mod project_sync;
 mod project_transfer;
 mod projects;
 mod provenance;
+mod publication_sources;
 mod publications;
 mod remote_staging;
 mod research;
+mod research_journey;
 mod resources;
 mod runs;
 mod schedules;
@@ -177,12 +179,14 @@ const RUN_LOG_PULL_MIGRATION: &str = "0050_run_log_pull";
 const ORPHAN_FILE_RETENTION_MIGRATION: &str = "0051_orphan_file_retention";
 const RUN_REVIEW_DISMISSED_MIGRATION: &str = "0052_run_review_dismissed";
 const SESSION_SERVICE_TIER_MIGRATION: &str = "0053_session_service_tier";
-const MCP_APP_SNAPSHOTS_MIGRATION: &str = "0054_mcp_app_snapshots";
+const RESEARCH_JOURNAL_MIGRATION: &str = "0054_research_journal";
+const EXPLORATION_HISTORY_MIGRATION: &str = "0055_exploration_history";
+const MCP_APP_SNAPSHOTS_MIGRATION: &str = "0056_mcp_app_snapshots";
 const MCP_APP_SNAPSHOTS_MIGRATION_SQL: &str =
-    include_str!("../migrations/0054_mcp_app_snapshots.sql");
-const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION: &str = "0055_scientific_evidence_ledger";
+    include_str!("../migrations/0056_mcp_app_snapshots.sql");
+const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION: &str = "0057_scientific_evidence_ledger";
 const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL: &str =
-    include_str!("../migrations/0055_scientific_evidence_ledger.sql");
+    include_str!("../migrations/0057_scientific_evidence_ledger.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -726,6 +730,28 @@ impl Store {
             Self::add_columns_if_missing(pool, "frames", &[("service_tier", "TEXT")]).await?;
             Self::record_migration(pool, SESSION_SERVICE_TIER_MIGRATION).await?;
         }
+        // Append-only daily notes are separate from scientific decisions.
+        if !Self::migration_applied(pool, RESEARCH_JOURNAL_MIGRATION).await? {
+            Self::execute_sql_script(
+                pool,
+                include_str!("../migrations/0054_research_journal.sql"),
+            )
+            .await?;
+            Self::record_migration(pool, RESEARCH_JOURNAL_MIGRATION).await?;
+        }
+
+        if !Self::migration_applied(pool, EXPLORATION_HISTORY_MIGRATION).await? {
+            Self::add_columns_if_missing(
+                pool,
+                "exploration_checkpoints",
+                &[("source_ui_event_head_seq", "INTEGER")],
+            )
+            .await?;
+            sqlx::query("UPDATE exploration_checkpoints SET source_ui_event_head_seq=source_ui_event_seq WHERE source_ui_event_head_seq IS NULL")
+                .execute(pool).await?;
+            Self::record_migration(pool, EXPLORATION_HISTORY_MIGRATION).await?;
+        }
+
         if !Self::migration_applied(pool, MCP_APP_SNAPSHOTS_MIGRATION).await? {
             Self::execute_sql_script(pool, MCP_APP_SNAPSHOTS_MIGRATION_SQL).await?;
             Self::record_migration(pool, MCP_APP_SNAPSHOTS_MIGRATION).await?;

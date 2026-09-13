@@ -2,8 +2,7 @@
 
 use crate::bindings::{arm_caption_drag, open_external_url, window_control};
 use crate::i18n::{t, Locale};
-use leptos::{ev, window_event_listener, *};
-use wasm_bindgen::JsCast;
+use leptos::*;
 
 type MenuItem = (&'static str, &'static str, &'static str); // action, i18n key, shortcut
 
@@ -127,17 +126,14 @@ pub(super) fn WindowTitlebar(
         ("help", "menu.help", HELP_ITEMS, HELP_ITEMS),
     ];
 
-    window_event_listener(ev::keydown, move |ev| {
-        let Some(ev) = ev.dyn_ref::<web_sys::KeyboardEvent>() else {
-            return;
-        };
-        if ev.key() != "Escape" || ev.default_prevented() || crate::text::ime_composing(ev) {
-            return;
-        }
-        if open.get().is_some() {
-            ev.prevent_default();
+    // Menus sit above project pages, so consume Escape before the app closes
+    // the underlying research journey or another page.
+    crate::window_capture_escape(move || {
+        if open.get_untracked().is_some() {
             open.set(None);
+            return true;
         }
+        false
     });
 
     view! {

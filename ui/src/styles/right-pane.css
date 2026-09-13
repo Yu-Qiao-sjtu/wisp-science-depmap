@@ -850,3 +850,9 @@ button.run-status:hover { filter:brightness(0.96); }
 .highlight-text { flex: 1; min-width: 0; text-align: left; background: none; border: none; margin: 0; padding: 2px 0 2px 10px; border-left: 3px solid var(--clay); color: var(--text); font: inherit; font-size: 13px; line-height: 1.55; cursor: pointer; white-space: pre-wrap; word-break: break-word; }
 .highlight-text:hover { color: var(--clay-strong); }
 .highlight-actions { display: flex; flex-direction: column; gap: 2px; }
+.center-mcp-app[data-mcp-backend="native-child"] { display: flex; flex-direction: column; min-height: 0; }
+.mcp-app-isolation-controls { display: flex; gap: 8px; align-items: center; padding: 6px 10px; flex: 0 0 auto; font-size: 12px; }
+.mcp-app-isolation-controls span { flex: 1; opacity: .75; }
+.mcp-app-isolation-controls button { flex: 0 0 auto; }
+.mcp-app-native-content { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; }
+.mcp-app-native-status { padding: 16px; }

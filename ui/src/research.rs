@@ -315,7 +315,7 @@ fn empty_graph(locale: Locale) -> View {
     .into_view()
 }
 
-fn research_graph_list(
+pub(super) fn research_graph_list(
     locale: Locale,
     graph: &ResearchGraph,
     selected_edge: RwSignal<Option<ResearchEdge>>,
@@ -372,7 +372,7 @@ fn research_graph_list(
     .into_view()
 }
 
-fn research_graph_canvas(
+pub(super) fn research_graph_canvas(
     locale: Locale,
     graph: &ResearchGraph,
     selected_edge: RwSignal<Option<ResearchEdge>>,
@@ -449,7 +449,7 @@ fn research_graph_canvas(
     .into_view()
 }
 
-fn research_edge_detail(
+pub(super) fn research_edge_detail(
     locale: Locale,
     graph: &ResearchGraph,
     edge: ResearchEdge,

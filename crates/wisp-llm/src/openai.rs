@@ -231,9 +231,8 @@ impl OpenAiProvider {
             let has_next = index + 1 < endpoints.len();
             self.log_dispatch(endpoint, &body, false);
             let resp = self
-                .client
-                .post(endpoint)
-                .headers(self.headers())
+                .cfg
+                .request_headers(self.client.post(endpoint).headers(self.headers()))
                 .json(&body)
                 .send()
                 .await?;
@@ -274,9 +273,8 @@ impl OpenAiProvider {
             let has_next = index + 1 < endpoints.len();
             self.log_dispatch(endpoint, body, true);
             let resp = self
-                .client
-                .post(endpoint)
-                .headers(self.headers())
+                .cfg
+                .request_headers(self.client.post(endpoint).headers(self.headers()))
                 .json(body)
                 .send()
                 .await?;

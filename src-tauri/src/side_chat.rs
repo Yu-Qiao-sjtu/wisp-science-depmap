@@ -57,6 +57,8 @@ pub(crate) enum SideChatScope {
     Session,
     Comparison,
     Lookup,
+    #[serde(skip)]
+    Fallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,11 +69,10 @@ pub(crate) struct SideChatIntent {
 }
 
 impl SideChatIntent {
-    /// Host fallback when the HTTP classifier cannot run (ACP-only, no key).
-    /// Session scope still answers progress/status questions from recent turns.
+    /// Best-effort retrieval when classification is unavailable or fails.
     pub(crate) fn session_fallback(question: &str) -> Self {
         Self {
-            scope: SideChatScope::Session,
+            scope: SideChatScope::Fallback,
             prefer_recent: true,
             query_terms: search_terms(question),
         }
@@ -317,18 +318,29 @@ pub(crate) fn parse_side_chat_intent(raw: &str) -> Result<SideChatIntent, String
     ))
 }
 
-pub(crate) async fn classify_intent(
+pub(crate) async fn classify_intent(llm: &dyn Provider, question: &str) -> SideChatIntent {
+    classify_intent_with_timeout(llm, question, INTENT_TIMEOUT).await
+}
+
+async fn classify_intent_with_timeout(
     llm: &dyn Provider,
     question: &str,
-) -> Result<SideChatIntent, String> {
-    let completion = tokio::time::timeout(
-        INTENT_TIMEOUT,
-        llm.complete(&intent_messages(question), &[]),
-    )
-    .await
-    .map_err(|_| "Side-chat intent classification timed out.".to_string())?
-    .map_err(|error| format!("Side-chat intent classification failed: {error}"))?;
-    parse_side_chat_intent(&completion.content)
+    timeout: Duration,
+) -> SideChatIntent {
+    let failure =
+        match tokio::time::timeout(timeout, llm.complete(&intent_messages(question), &[])).await {
+            Ok(Ok(completion)) => match parse_side_chat_intent(&completion.content) {
+                Ok(intent) => return intent,
+                Err(_) => "invalid_intent",
+            },
+            Ok(Err(_)) => "provider_error",
+            Err(_) => "timeout",
+        };
+    tracing::warn!(
+        reason = failure,
+        "Side-chat intent classification unavailable; using recent session evidence"
+    );
+    SideChatIntent::session_fallback(question)
 }
 
 fn is_cjk(character: char) -> bool {
@@ -592,7 +604,7 @@ pub(crate) fn retrieve_evidence(
     let mut latest = HashSet::<usize>::new();
 
     match intent.scope {
-        SideChatScope::Session => {
+        SideChatScope::Session | SideChatScope::Fallback => {
             for index in recent_context(entries, RECENT_CONTEXT) {
                 latest.insert(index);
                 push_index(&mut selected, index);
@@ -699,6 +711,9 @@ fn scope_instruction(scope: SideChatScope) -> &'static str {
         }
         SideChatScope::Lookup => {
             "Classified scope: lookup. Answer only if the evidence actually covers the asked content. If it does not, say that the current conversation does not contain enough information."
+        }
+        SideChatScope::Fallback => {
+            "Intent classification was unavailable. The sources are best-effort recent conversation context plus question-term matches, not proof that the question is about progress. Interpret the original question yourself and answer only if these sources support it. For comparisons, do not assume the full history is present. If the evidence is insufficient, say that the current conversation does not contain enough information."
         }
     }
 }
@@ -992,6 +1007,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn classifier_timeout_falls_back_and_allows_answer() {
+        assert_fallback_allows_answer(ScriptedCompletion {
+            delay_ms: 60_000,
+            ..Default::default()
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn classifier_provider_error_falls_back_and_allows_answer() {
+        assert_fallback_allows_answer(ScriptedCompletion {
+            api_error: Some(wisp_llm::ScriptedApiError {
+                status: 503,
+                body: "Temporarily unavailable".into(),
+            }),
+            ..Default::default()
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn classifier_invalid_json_falls_back_and_allows_answer() {
+        assert_fallback_allows_answer(ScriptedCompletion {
+            content: "I cannot classify this question.".into(),
+            ..Default::default()
+        })
+        .await;
+    }
+
+    async fn assert_fallback_allows_answer(classification: ScriptedCompletion) {
+        let llm = ScriptedProvider::new(
+            "test",
+            vec![
+                classification,
+                ScriptedCompletion {
+                    content: "QC plots are complete [S2].".into(),
+                    ..Default::default()
+                },
+            ],
+        );
+        let question = "这个 Scanpy 数据分析是否有做完？";
+        let intent = classify_intent_with_timeout(&llm, question, Duration::from_millis(10)).await;
+        assert_eq!(intent.scope, SideChatScope::Fallback);
+        assert!(intent.prefer_recent);
+        assert!(intent.query_terms.iter().any(|term| term == "scanpy"));
+        let mut history = vec![entry(1, 1, "assistant", "Started Scanpy analysis.")];
+        for seq in 2..10 {
+            history.push(entry(seq, seq as usize, "assistant", "Intermediate work."));
+        }
+        history.push(entry(10, 10, "assistant", "QC plots are complete."));
+        let evidence = retrieve_evidence(question, &history, &intent);
+        assert!(evidence.iter().any(|item| item.source_id == "event-1"));
+        assert!(evidence.iter().any(|item| item.source_id == "event-10"));
+        assert!(evidence.len() <= MAX_EVIDENCE);
+        let prompt = answer_prompt("session-1", 10, question, &evidence, &intent);
+        assert!(prompt.contains(question));
+        assert!(prompt.contains("Intent classification was unavailable"));
+        assert!(prompt.contains("If the evidence is insufficient"));
+        assert!(!prompt.contains("Classified scope: session"));
+        let answer = llm
+            .complete(
+                &[Message::system(SYSTEM_PROMPT), Message::user(prompt)],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(answer.content.contains("QC plots are complete"));
+        let snapshot = llm.snapshot();
+        assert_eq!(snapshot.requests.len(), 2);
+        assert!(snapshot
+            .requests
+            .iter()
+            .all(|request| request.tool_names.is_empty()));
+        assert_eq!(snapshot.remaining_completions, 0);
+    }
+
+    #[test]
+    fn fallback_does_not_invent_evidence_or_accept_model_selected_fallback() {
+        let question = "这个数据分析是否有做完？";
+        let intent = SideChatIntent::session_fallback(question);
+        assert!(retrieve_evidence(question, &[], &intent).is_empty());
+        assert!(parse_side_chat_intent(r#"{"scope":"fallback"}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn successful_lookup_classification_keeps_no_evidence_behavior() {
+        let llm = ScriptedProvider::new(
+            "test",
+            vec![ScriptedCompletion {
+                content: r#"{"scope":"lookup","prefer_recent":false,"query_terms":["invoices"]}"#
+                    .into(),
+                ..Default::default()
+            }],
+        );
+        let question = "Where are the invoices?";
+        let intent = classify_intent(&llm, question).await;
+        assert_eq!(intent.scope, SideChatScope::Lookup);
+        assert!(!intent.prefer_recent);
+        let history = vec![entry(1, 1, "assistant", "QC plots are complete.")];
+        assert!(retrieve_evidence(question, &history, &intent).is_empty());
+    }
+
+    #[tokio::test]
     async fn classifier_uses_model_json_not_question_keywords() {
         let llm = ScriptedProvider::new(
             "test",
@@ -1001,7 +1119,7 @@ mod tests {
             }],
         );
         let question = "目前这件事做到哪一步了？";
-        let intent = classify_intent(&llm, question).await.unwrap();
+        let intent = classify_intent(&llm, question).await;
         assert_eq!(intent.scope, SideChatScope::Session);
         let history = vec![entry(
             1,

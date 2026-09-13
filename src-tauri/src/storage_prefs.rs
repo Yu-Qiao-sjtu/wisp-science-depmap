@@ -23,7 +23,7 @@ pub(crate) struct ContextStoragePrefsView {
 #[tauri::command]
 pub(crate) async fn get_context_storage_prefs(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
 ) -> Result<ContextStoragePrefsView, String> {
     let (ap, _) =
@@ -41,7 +41,7 @@ pub(crate) async fn get_context_storage_prefs(
 #[tauri::command]
 pub(crate) async fn set_context_storage_prefs(
     state: State<'_, AppState>,
-    window: tauri::WebviewWindow,
+    window: crate::workspace_surface::WorkspaceSurface,
     context_id: String,
     remote_data_root: String,
     remote_workdir_root: String,

@@ -8,6 +8,8 @@ use wasm_bindgen::JsValue;
 
 #[derive(Clone, Copy)]
 pub(super) struct ProjectLandingState {
+    pub(super) home_dialog_open: RwSignal<bool>,
+    pub(super) home_calendar_open: RwSignal<bool>,
     pub(super) show_projects: RwSignal<bool>,
     pub(super) demo_mode: RwSignal<bool>,
     pub(super) items: RwSignal<Vec<ChatItem>>,
@@ -33,12 +35,15 @@ pub(super) fn ProjectLanding(
     state: ProjectLandingState,
     open_project: Callback<String>,
     open_project_session: Callback<(String, String)>,
+    open_project_journey: Callback<(String, i64)>,
     open_scratch: Callback<()>,
     open_settings: Callback<Option<String>>,
     open_library: Callback<()>,
     open_project_export: Callback<(String, String)>,
 ) -> impl IntoView {
     let ProjectLandingState {
+        home_calendar_open,
+        home_dialog_open,
         show_projects,
         demo_mode,
         items,
@@ -81,12 +86,15 @@ pub(super) fn ProjectLanding(
             view! {
                 <ProjectsScreen
                     locale=locale
+                    calendar_open=home_calendar_open
+                    dialog_open=home_dialog_open
                     running=running
                     approval_pending=approval_pending.read_only()
                     sync_actions_available=sync_actions_available.read_only()
                     open_error=project_open_error
                     on_open=open_project
                     on_open_session=open_project_session
+                    on_open_journey=open_project_journey
                     on_open_artifact=on_open_artifact
                     on_open_settings=on_open_settings
                     on_open_library=open_library
