@@ -58,8 +58,8 @@ Effect minus the rest mean. It is not log fold-change and must not be labelled
 The current table has no validated housekeeping/common-essential exclusion
 field, so `selective` must not be paraphrased as `non-housekeeping`.
 
-`tcga_expression_survival` aligns genes by Ensembl gene ID with an explicit
-gene-symbol fallback, uses primary cancer samples only, keeps one sample per
+`tcga_expression_survival` aligns genes by exact gene symbol with an explicit
+Ensembl-ID fallback, uses primary cancer samples only, keeps one sample per
 patient, transforms TPM as `log2(TPM+1)`, and reports a univariate Breslow
 Cox score test at beta zero. Its signed z statistic is positive when higher
 expression is associated with higher event hazard and negative in the opposite

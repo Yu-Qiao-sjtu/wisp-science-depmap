@@ -93,42 +93,43 @@ load_rdata_matrix <- function(path) {
 }
 
 match_expression <- function(paths, genes, project) {
+  symbol <- load_rdata_matrix(paths$expression_symbol)
+  rownames(symbol) <- toupper(rownames(symbol))
+  columns <- first_primary_columns(colnames(symbol), project)
+  if (!length(columns)) {
+    stop("no eligible primary cancer samples in ", paths$expression_symbol)
+  }
+  symbol <- symbol[, columns, drop = FALSE]
+  colnames(symbol) <- patient_id(colnames(symbol))
+  symbol_rows <- match(genes$symbol, rownames(symbol))
+  symbol_matched <- which(!is.na(symbol_rows))
+  values <- log2(pmax(symbol[symbol_rows[symbol_matched], , drop = FALSE], 0) + 1)
+  gene_index <- symbol_matched
+  mapping_basis <- rep("gene_symbol", length(symbol_matched))
+
+  unmatched <- which(is.na(symbol_rows))
   ensembl <- load_rdata_matrix(paths$expression_ensembl)
   rownames(ensembl) <- sub("\\..*$", "", rownames(ensembl))
-  columns <- first_primary_columns(colnames(ensembl), project)
-  if (!length(columns)) {
-    stop("no eligible primary cancer samples in ", paths$expression_ensembl)
-  }
-  ensembl <- ensembl[, columns, drop = FALSE]
+  ensembl_columns <- first_primary_columns(colnames(ensembl), project)
+  ensembl <- ensembl[, ensembl_columns, drop = FALSE]
   colnames(ensembl) <- patient_id(colnames(ensembl))
-  ensembl_rows <- match(genes$ensembl_gene_id, rownames(ensembl))
-  ensembl_matched <- which(!is.na(ensembl_rows))
-  values <- log2(pmax(ensembl[ensembl_rows[ensembl_matched], , drop = FALSE], 0) + 1)
-  gene_index <- ensembl_matched
-  mapping_basis <- rep("ensembl_gene_id", length(ensembl_matched))
-
-  unmatched <- which(is.na(ensembl_rows))
-  symbol <- load_rdata_matrix(paths$expression_symbol)
-  symbol_columns <- first_primary_columns(colnames(symbol), project)
-  symbol <- symbol[, symbol_columns, drop = FALSE]
-  colnames(symbol) <- patient_id(colnames(symbol))
-  patient_columns <- match(colnames(ensembl), colnames(symbol))
+  patient_columns <- match(colnames(symbol), colnames(ensembl))
   if (anyNA(patient_columns)) {
-    stop("Ensembl and symbol expression matrices have different primary patients for ", project)
+    stop("symbol and Ensembl expression matrices have different primary patients for ", project)
   }
-  symbol_rows <- match(genes$symbol[unmatched], rownames(symbol))
-  fallback <- which(!is.na(symbol_rows))
+  ensembl_rows <- match(genes$ensembl_gene_id[unmatched], rownames(ensembl))
+  fallback <- which(!is.na(ensembl_rows))
   if (length(fallback)) {
     fallback_values <- log2(pmax(
-      symbol[symbol_rows[fallback], patient_columns, drop = FALSE], 0
+      ensembl[ensembl_rows[fallback], patient_columns, drop = FALSE], 0
     ) + 1)
     values <- rbind(values, fallback_values)
     gene_index <- c(gene_index, unmatched[fallback])
-    mapping_basis <- c(mapping_basis, rep("symbol_fallback", length(fallback)))
+    mapping_basis <- c(mapping_basis, rep("ensembl_fallback", length(fallback)))
   }
   storage.mode(values) <- "double"
   list(
-    gene_index = gene_index, values = values, patients = colnames(ensembl),
+    gene_index = gene_index, values = values, patients = colnames(symbol),
     mapping_basis = mapping_basis
   )
 }
@@ -264,8 +265,8 @@ build_project <- function(project, genes, survival, args, staging_root) {
     depmap_lineage = unname(PROJECT_LINEAGES[[project]]),
     target_gene_count = nrow(genes),
     expression_matched_gene_count = length(expression$gene_index),
-    expression_ensembl_matched_gene_count = sum(expression$mapping_basis == "ensembl_gene_id"),
-    expression_symbol_fallback_gene_count = sum(expression$mapping_basis == "symbol_fallback"),
+    expression_symbol_matched_gene_count = sum(expression$mapping_basis == "gene_symbol"),
+    expression_ensembl_fallback_gene_count = sum(expression$mapping_basis == "ensembl_fallback"),
     expression_primary_tumour_n = length(expression$patients),
     selected_sample_type_codes = primary_sample_types(project),
     endpoints = ENDPOINTS,
