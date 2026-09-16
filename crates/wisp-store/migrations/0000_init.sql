@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS projects (
     description   TEXT,
     workspace_dir TEXT NOT NULL DEFAULT '',
     default_specialist_id TEXT NOT NULL DEFAULT '',
+    starred       INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     run_retention_days        INTEGER,
