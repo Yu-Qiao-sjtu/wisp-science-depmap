@@ -6,9 +6,9 @@ use crate::app_support::{
     import_custom_css_from_input, join_tags, js_error_text, model_form_entry, new_acp_form,
     new_conn_form, new_model_form, profile_to_form, provider_entries_are_pristine,
     quick_action_label, reviewer_backend_key, reviewer_backend_label,
-    reviewer_missing_acp_profile_id, set_reviewer_backend, settings_section_label,
-    settings_subpage_label, show_toast, skill_matches_filter, start_session_drag,
-    DefaultAnalysisSelect, CRED_GROUPS,
+    reviewer_missing_acp_profile_id, set_reviewer_backend, settings_nav_entry_matches,
+    settings_section_label, settings_subpage_label, show_toast, skill_matches_filter,
+    start_session_drag, DefaultAnalysisSelect, CRED_GROUPS, SETTINGS_NAV_GROUPS,
 };
 use crate::bindings::{invoke, invoke_checked, is_mac, is_windows, open_external_url};
 use crate::dto::*;
@@ -34,50 +34,6 @@ fn session_identity_enabled(form: &ModelForm) -> bool {
             })
     })
 }
-
-// Navigation metadata also supplies search aliases; page labels retain their
-// existing translations and routes.
-const SETTINGS_NAV_GROUPS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "settings.nav.preferences",
-        &[
-            ("general", "notifications updates language 通知 更新 语言"),
-            ("session", "context tokens conversation 上下文 对话"),
-            ("appearance", "theme font 主题 字体"),
-            ("pet", "companion 桌宠"),
-        ],
-    ),
-    (
-        "settings.nav.ai",
-        &[
-            ("models", "api key acp provider 模型 密钥 服务商"),
-            ("quick-actions", "shortcuts 快捷"),
-            ("workflows", "automation 自动化"),
-            ("specialists", "agents 专家 智能体"),
-            ("memory", "notes habits 笔记 习惯"),
-        ],
-    ),
-    (
-        "settings.nav.tools",
-        &[
-            ("skills", "skill 技能"),
-            ("plugins", "mcp 插件"),
-            ("browser", "web 浏览器"),
-            ("connections", "connectors integrations 连接 集成"),
-            ("channels", "sync feishu weixin device 同步 飞书 微信 设备"),
-        ],
-    ),
-    (
-        "settings.nav.system",
-        &[
-            ("credentials", "api key token secrets 密钥 令牌"),
-            ("permissions", "approval security 审批 安全"),
-            ("environments", "python ssh wsl runtime 环境 运行时"),
-            ("storage", "disk cache 磁盘 缓存"),
-            ("usage", "tokens cost 用量 费用"),
-        ],
-    ),
-];
 
 #[component]
 fn SettingsNavigation(
@@ -106,10 +62,7 @@ fn SettingsNavigation(
                 let mut count = 0;
                 let groups = SETTINGS_NAV_GROUPS.iter().filter_map(|(group, entries)| {
                     let entries = entries.iter().filter(|(section, aliases)| {
-                        let haystack = format!("{} {} {} {aliases}", t(loc, group),
-                            settings_section_label(Locale::En, section),
-                            settings_section_label(Locale::Zh, section)).to_lowercase();
-                        query.split_whitespace().all(|word| haystack.contains(word))
+                        settings_nav_entry_matches(&query, group, section, aliases, loc)
                     }).collect::<Vec<_>>();
                     count += entries.len();
                     (!entries.is_empty()).then(|| view! {
@@ -1464,6 +1417,17 @@ pub(super) fn SettingsView(
     // form directly in the view gate remounts the inputs on every keystroke.
     let model_form_is_edit =
         create_memo(move |_| model_form.get().is_some_and(|form| form.id.is_some()));
+    // The chat/image/video fields must also keep their DOM nodes while values
+    // change, otherwise token edits remount the focused input (#1243).
+    let model_form_media_kind = create_memo(move |_| {
+        let form = model_form.get();
+        let image = form.as_ref().is_some_and(|f| f.is_image_model());
+        let video = !image
+            && form
+                .as_ref()
+                .is_some_and(|f| is_video_generation_model(&f.model));
+        (image, video)
+    });
     let memory_projects = create_rw_signal(Vec::<ProjectSummary>::new());
     let memory_project_menu_open = create_rw_signal(false);
     let global_memory_edit_id = create_rw_signal(None::<String>);
@@ -3321,10 +3285,7 @@ pub(super) fn SettingsView(
                                                 placeholder=move || t(locale.get(), "settings.label_ph")
                                                 on:input=move |ev| model_form.update(|o| if let Some(o)=o { o.label = event_target_input(&ev).value(); }) /></label>
                                         {move || {
-                                            let image = model_form.get().is_some_and(|f| f.is_image_model());
-                                            // A model id is never both image and video, but keep the
-                                            // branches mutually exclusive anyway.
-                                            let video = !image && model_form.get().is_some_and(|f| is_video_generation_model(&f.model));
+                                            let (image, video) = model_form_media_kind.get();
                                             if video {
                                                 view! {
                                                     <label>{move || t(locale.get(), "settings.video_duration")}
