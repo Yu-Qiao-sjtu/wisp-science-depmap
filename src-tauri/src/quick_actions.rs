@@ -1163,7 +1163,6 @@ fn depmap_topic_task(
     instruction: &str,
     depends_on: &[&str],
     capabilities: &[&str],
-    skill_ids: &[&str],
     specialist_id: Option<&str>,
     output_schema: Value,
 ) -> dynamic_workflow::DynamicAgentTaskProposal {
@@ -1174,7 +1173,7 @@ fn depmap_topic_task(
         task_kind: wisp_core::WorkflowTaskKind::Agent,
         run_activity: None,
         capabilities: capabilities.iter().map(|value| (*value).into()).collect(),
-        skill_ids: skill_ids.iter().map(|value| (*value).into()).collect(),
+        skill_ids: vec![],
         specialist_id: specialist_id.map(str::to_string),
         output_schema: Some(output_schema),
         isolated: false,
@@ -1196,7 +1195,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Act as the project DepMap specialist. Call depmap_query exactly once with mode=lineage_catalog and the canonical cancer lineage, whether or not a gene was supplied. This task inventories cancer-level module availability only and must not duplicate the gene-level depmap_evidence task. Inventory dependency, co-dependency, expression, CNV, drug, pathway, and enrichment coverage; preserve release, sample or eligibility metadata, retention rules, evidence references, and coverage gaps. Do not claim that a module is analyzable merely because a raw file exists, do not rank genes, and do not call a new statistical test pure query work.",
                 &[],
                 &["depmap_read"],
-                &["depmap-knowledge-query"],
                 Some(crate::specialists::DEPMAP_SPECIALIST_ID),
                 depmap_cancer_inventory_schema(),
             ),
@@ -1205,7 +1203,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Act as the project DepMap specialist. If the exact recent user requests contain an explicit gene symbol and a canonical cancer lineage, call depmap_evidence once for that gene and lineage. If the user supplied no gene, do not invent one, do not repeat a provider-wide catalog query, and do not call depmap_evidence with an empty gene: return a schema-valid gene_not_supplied coverage gap so downstream tasks remain explicitly cancer/direction-level. Do not load historical Runs for this query-only task. For a real gene bundle, use focus.core.requested_lineage_summary for current lineage counts and descriptive values; never import a rank, p-value, or sample count from memory. Use depmap_query only for one surgical follow-up not present in the bundle. Cover core dependency, lineage networks, mutation, CNV, pathway/TF enrichment, and drug evidence when available. Preserve exact numbers, metric type, sample sizes, correction status, scope, release provenance, evidence references, and coverage gaps. Mutation/CNV mean differences are not correlations; damaging events are not automatically pathogenic. If no row survives multiple-testing correction, report the null result and do not turn nominal targets into a mechanism or drug hypothesis. A continuous association does not define a high/low subgroup, and one significant section is not the only significant signal when another section also has FDR below threshold. `not_testable` and `INELIGIBLE` are current-provider eligibility states, not proof that a biological route is infeasible. A zero count below a descriptive dependency cutoff must be reported as that observation, not as a categorical no-dependency conclusion. Do not run a new analysis, infer a subgroup from aggregate summaries, or name a drug without returned evidence.",
                 &[],
                 &["depmap_read"],
-                &["depmap-knowledge-query"],
                 Some(crate::specialists::DEPMAP_SPECIALIST_ID),
                 depmap_evidence_schema(),
             ),
@@ -1214,7 +1211,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Search verified scholarly evidence for the exact cancer and research direction in the recent user requests, adding the supplied gene only when the user explicitly named one. Never invent an anchor gene. Begin broadly, then adapt the next query to unresolved downstream claim classes, contradictions, identifier gaps, and treatment or clinical claims actually encountered. Batch identifier metadata, deduplicate before fetching details, and never fetch the same identifier batch twice. Treat search snippets, AI summaries, title matches, and reference-list mentions as candidate leads only. Maintain a claim ledger with candidate, verified, contradicted, or retracted status; only a primary abstract/full-text check plus a stable PMID, PMCID, DOI, or publisher URL can verify a claim. A corrected or retracted lead must not flow downstream. Stop by evidence saturation rather than a predetermined query or tool-call count: finish when additional queries no longer change the verified established-findings, contradiction, open-question, or prior-art map. If a source is unavailable or a claim class remains unsupported, return the verified partial evidence set with an explicit coverage gap instead of silently extending the search or inventing support. Always reserve a final synthesis step so the task returns a schema-valid result. Never replace this task with browser work, nested delegation, or another Workflow. Separate established findings, contradictions, and genuinely open questions. A negative search means only 'not found within the searched scope'; never claim nobody has done it, a unique gap, or proof that a topic is unpublished. Return traceable paper identifiers for every mechanism, treatment, novelty, or clinical claim used downstream. Never treat a Skill description or model memory as literature evidence, and never invent citations or identifiers. Prefer recent primary studies and high-quality reviews.",
                 &[],
                 &["literature_search"],
-                &["literature-review"],
                 None,
                 depmap_novelty_schema(),
             ),
@@ -1223,7 +1219,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Using only the DepMap evidence and novelty landscape dependency results, propose 3 to 6 distinct, testable cancer research topics. Every topic must identify its cancer context, falsifiable hypothesis, exact DepMap basis, traceable literature basis, defensible novelty claim, validation plan, expected figures, and key risks. Treat a DepMap lineage as a model-grouping proxy rather than a clinical histology: do not silently narrow Liver to HCC, add an unrequested control lineage, or name cell lines without current model metadata. A non-significant top list is a null result and its nominal targets must not seed a biological module, named drug, or mechanism. A continuous expression-dependency association is not a TF-high screen, high/low contrast, selective dependency, or synthetic lethality; any such subgroup analysis belongs in the validation plan as new computation. Use only verified claims from the novelty claim ledger. Phrase negative searches as not found within the searched scope, never as nobody has done it or a unique gap. Do not disguise a generic correlation as a novel mechanism, relabel a mean difference as correlation, attach an unsupported drug, or call a proposed matrix/test/FDR calculation an already completed query.",
                 &["cancer_data_inventory", "depmap_evidence", "novelty_landscape"],
                 &["reasoning"],
-                &[],
                 None,
                 depmap_topics_schema(),
             ),
@@ -1232,7 +1227,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Independently review every candidate topic for novelty. Check prior-art collision, whether the proposed mechanism is already established, whether the DepMap angle is genuinely differentiating, and whether the topic closes a specific knowledge gap. Score every topic from 1 to 5 and state the next literature or data check that could falsify its innovation claim. Use only verified entries from the novelty claim ledger and dependency results; do not revive candidate, contradicted, or retracted claims, infer proof of absence from a negative search, or invent citations.",
                 &["novelty_landscape", "candidate_topics"],
                 &["reasoning", "review"],
-                &["literature-review"],
                 None,
                 depmap_review_schema("innovation"),
             ),
@@ -1241,7 +1235,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Critically review every candidate topic for data coverage, cohort size, confounding, statistical testability, experimental tractability, reproducibility, cost, and likely failure modes. Score each topic from 1 to 5 and identify the next validation needed. Use only dependency results.",
                 &["cancer_data_inventory", "depmap_evidence", "candidate_topics"],
                 &["reasoning", "review"],
-                &["analysis-workflow"],
                 None,
                 depmap_review_schema("feasibility"),
             ),
@@ -1250,7 +1243,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                 "Critically review every candidate topic for biomarker definition, patient stratification, target or drug actionability, resistance hypotheses, preclinical models, clinical evidence, and translational barriers. Score each topic from 1 to 5. Treat DepMap associations as hypothesis-generating, not clinical validation.",
                 &["depmap_evidence", "novelty_landscape", "candidate_topics"],
                 &["reasoning", "review"],
-                &[],
                 None,
                 depmap_review_schema("clinical_translation"),
             ),
@@ -1262,7 +1254,6 @@ fn depmap_topic_base_proposal() -> dynamic_workflow::DynamicAgentWorkflowProposa
                     "clinical_translation_review"
                 ],
                 &["reasoning"],
-                &[],
                 None,
                 depmap_topic_report_schema(),
             ),
@@ -1313,7 +1304,6 @@ fn depmap_selected_topic_report_proposal() -> dynamic_workflow::DynamicAgentWork
                 "Re-query and freeze the bounded evidence needed for the selected topic. Verify the exact gene, cancer context, dataset release, sample counts, statistics, correction status, coverage gaps, and evidence references. If required analysis is missing or not validated, list it as blocking and do not manufacture report claims.",
                 &[],
                 &["depmap_read", "project_read"],
-                &["depmap-knowledge-query"],
                 Some(crate::specialists::DEPMAP_SPECIALIST_ID),
                 depmap_evidence_schema(),
             ),
@@ -1322,7 +1312,6 @@ fn depmap_selected_topic_report_proposal() -> dynamic_workflow::DynamicAgentWork
                 "Create the actual evidence-backed figures under analysis/depmap-agent/reports/<gene>-<cancer>-<topic>/figures/. Use only exact dependency evidence, include readable labels and sample sizes, and write a caption with evidence references for every figure. If evidence is insufficient, return the omission as a limitation instead of drawing a decorative or inferred plot.",
                 &["report_evidence"],
                 &["visualization"],
-                &["figure-style", "figure-composer"],
                 None,
                 depmap_report_file_schema(),
             ),
@@ -1331,7 +1320,6 @@ fn depmap_selected_topic_report_proposal() -> dynamic_workflow::DynamicAgentWork
                 "Write copy-ready Results, Methods, and figure legends under analysis/depmap-agent/reports/<gene>-<cancer>-<topic>/. Match the requested language; for English use publication-style scientific English. Results may report only evidence supplied by report_evidence, Methods must preserve release, cohort, statistics, thresholds, correction and software provenance, and every unsupported mechanistic or clinical statement must be marked as interpretation or limitation.",
                 &["report_evidence"],
                 &["project_write"],
-                &[],
                 None,
                 depmap_report_file_schema(),
             ),
@@ -1340,7 +1328,6 @@ fn depmap_selected_topic_report_proposal() -> dynamic_workflow::DynamicAgentWork
                 "Assemble report.md and report.html in the selected topic report directory. Combine the research rationale, exact evidence, innovation/feasibility/clinical arguments from the selected topic, generated figures, captions, Results, Methods, limitations, and provenance. Use relative image links, provide a copy-ready section index, and return every created path. Do not call a blueprint or missing file a completed report.",
                 &["report_evidence", "report_figures", "report_sections"],
                 &["project_write"],
-                &[],
                 None,
                 depmap_report_file_schema(),
             ),
@@ -2487,7 +2474,7 @@ mod tests {
             evidence.specialist_id.as_deref(),
             Some(crate::specialists::DEPMAP_SPECIALIST_ID)
         );
-        assert_eq!(evidence.skill_ids, ["depmap-knowledge-query"]);
+        assert!(proposal.tasks.iter().all(|task| task.skill_ids.is_empty()));
         assert_eq!(evidence.capabilities, ["depmap_read"]);
         assert!(evidence.instruction.contains("call depmap_evidence once"));
         assert!(evidence.instruction.contains("gene_not_supplied"));
@@ -2640,10 +2627,7 @@ mod tests {
             report.tasks[0].capabilities,
             ["depmap_read", "project_read"]
         );
-        assert_eq!(
-            report.tasks[1].skill_ids,
-            ["figure-style", "figure-composer"]
-        );
+        assert!(report.tasks.iter().all(|task| task.skill_ids.is_empty()));
         assert!(report.tasks[1]
             .capabilities
             .contains(&"visualization".into()));
