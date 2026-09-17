@@ -7051,7 +7051,7 @@ struct SharedLogFile(Arc<StdMutex<std::fs::File>>);
 impl SharedLogFile {
     fn create() -> Option<Self> {
         let dir = dirs::data_dir()?
-            .join("science.wisp-science")
+            .join("science.wisp-depmap")
             .join("wisp-depmap")
             .join("logs");
         std::fs::create_dir_all(&dir).ok()?;

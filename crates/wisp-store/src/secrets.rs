@@ -27,7 +27,7 @@ impl Secret {
 mod backend {
     use keyring::Entry;
 
-    const SERVICE: &str = "wisp";
+    const SERVICE: &str = "wisp-depmap";
 
     pub fn set(name: &str, value: &str) -> anyhow::Result<()> {
         Entry::new(SERVICE, name)?.set_password(value)?;
@@ -57,7 +57,7 @@ mod backend {
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
-            .join(".wisp-science-dev-secrets.json")
+            .join(".wisp-depmap-dev-secrets.json")
     }
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
