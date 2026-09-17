@@ -95,6 +95,10 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "dependency_to_mutation",
             intents["mutation_to_dependency"]["confusable_with"],
         )
+        self.assertIn(
+            "{source_gene}",
+            intents["mutation_to_dependency"]["precise_prompt_template_zh"],
+        )
         self.assertEqual(
             result["routing_policy"]["critical_direction_ambiguity"],
             "clarify_before_query",

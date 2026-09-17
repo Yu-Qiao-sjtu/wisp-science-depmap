@@ -245,6 +245,14 @@ evidence until the direction is resolved. A model-generated confidence number
 is not treated as a calibrated probability. Missing optional display fields
 may use documented defaults; missing or ambiguous scientific direction may not.
 
+The route includes a native `ask_user` card payload for missing critical fields
+or direction ambiguity. A critical mutation/dependency direction shows two
+plain-language cards: fix the mutation and query dependency targets, or fix the
+dependency target and query associated mutations. An out-of-scope expression
+causes the Agent to read the lightweight MCP capability catalog and offer only
+the two to four nearest supported modules. Selecting a card becomes the next
+user message, so the normal typed route runs again with the clarified intent.
+
 The product contract therefore does not depend on enumerating every synonym.
 Examples and aliases improve recall, while closed schemas, deterministic
 validation, clarification, and regression cases prevent silent execution of a

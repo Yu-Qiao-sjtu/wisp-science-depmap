@@ -597,6 +597,39 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     }
 
     let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
+    let clarification_gene = gene
+        .as_deref()
+        .or(target_gene.as_deref())
+        .or(source_gene.as_deref())
+        .unwrap_or("指定基因");
+    let clarification_card = match ambiguity {
+        "critical_direction" => json!({
+            "question": "这个问题有两个不同的分析方向。你希望固定哪一端？",
+            "options": [
+                {
+                    "label": format!("固定 {clarification_gene} 突变，查询依赖靶点"),
+                    "description": format!("把 {clarification_gene} 作为突变锚点，查询哪些 CRISPR dependency 靶基因发生变化。")
+                },
+                {
+                    "label": format!("固定 {clarification_gene} dependency，查询相关突变"),
+                    "description": format!("把 {clarification_gene} 作为依赖靶点，查询哪些基因突变会改变对它的依赖。")
+                }
+            ],
+            "allow_freeform": true
+        }),
+        "out_of_scope" => json!({
+            "question": "当前表述还不能对应到一个确定的 DepMap 分析模块。请选择最接近的方向，或补充你的研究问题。",
+            "options": [],
+            "allow_freeform": true,
+            "next_action": "read_depmap_capabilities_then_offer_two_to_four_matching_options"
+        }),
+        _ if !missing.is_empty() => json!({
+            "question": format!("继续这个分析还需要：{}。", missing.join("、")),
+            "options": [],
+            "allow_freeform": true
+        }),
+        _ => Value::Null,
+    };
     let recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
         ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => json!({
             "tool": TOOL_NAME,
@@ -643,6 +676,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "alternative_intents": alternative_intents,
         "ambiguity": ambiguity,
         "ambiguity_reason": ambiguity_reason,
+        "clarification_card": clarification_card,
         "execution_level": execution_level,
         "requires_user_input": requires_user_input,
         "missing_fields": missing,
@@ -2709,6 +2743,7 @@ mod tests {
     fn agent_route_blocks_critical_direction_ambiguity() {
         let route = depmap_route(&json!({
             "intent":"gene_pair_evidence",
+            "gene":"TP53",
             "source_gene":"TP53",
             "target_gene":"GPX4",
             "alternative_intents":["gene_evidence"],
@@ -2719,6 +2754,18 @@ mod tests {
         assert_eq!(route["state"], "needs_input");
         assert_eq!(route["decision"], "clarify");
         assert_eq!(route["requires_user_input"], true);
+        assert_eq!(
+            route["clarification_card"]["options"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            route["clarification_card"]["options"][0]["label"],
+            "固定 TP53 突变，查询依赖靶点"
+        );
+        assert_eq!(route["clarification_card"]["allow_freeform"], true);
         assert_eq!(
             route["guardrails"]["critical_direction_ambiguity_requires_clarification"],
             true
