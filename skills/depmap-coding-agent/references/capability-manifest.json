@@ -249,7 +249,7 @@
       ],
       "inputs": [
         "gene_effect_csv",
-        "expression_tpm_logp1_csv",
+        "expression_csv",
         "model_csv"
       ],
       "operations": [
