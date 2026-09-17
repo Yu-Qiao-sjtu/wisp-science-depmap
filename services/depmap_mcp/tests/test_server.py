@@ -133,6 +133,10 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(result["request"]["mode"], "analysis_catalog")
+        self.assertEqual(
+            result["presentation_contract"]["answer_type"], "analysis_inventory"
+        )
+        self.assertTrue(result["presentation_contract"]["do_not_answer_with_paths_only"])
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)

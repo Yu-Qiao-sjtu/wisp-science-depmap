@@ -87,6 +87,20 @@ point needed:
    project SQLite ledger. `depmap_evidence_history` can recover the exact
    evidence in the current conversation without treating model memory as data.
 
+The user-facing path has a separate interpretation layer:
+
+```text
+user intent → directory index → bounded remote data query → structured result
+→ model interpretation → result-first user answer
+```
+
+The directory index chooses the validated result source; it is not normally the
+answer. Except for explicit inventory questions, the Agent must lead with the
+returned genes, cohorts, estimates, sample counts, direction, and adjusted
+significance, explain their biological meaning and limits, and place release and
+provenance last. A `depmap://` location is supporting traceability metadata and
+must never replace an available scientific result.
+
 This provides multi-session inheritance of identity and work state without
 copying old chat transcripts into the model context.
 

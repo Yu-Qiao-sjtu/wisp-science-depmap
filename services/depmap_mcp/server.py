@@ -401,6 +401,7 @@ class DepMapEvidenceService:
             "evidence": portable,
         }
         digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+        inventory_only = tool == "depmap_analysis_catalog"
         return {
             "schema_version": 1,
             "evidence_id": f"depmap-{self.settings.release.lower()}-{digest[:24]}",
@@ -410,6 +411,18 @@ class DepMapEvidenceService:
             "new_analysis_started": False,
             "request": request,
             "evidence": portable,
+            "presentation_contract": {
+                "answer_type": "analysis_inventory" if inventory_only else "scientific_result",
+                "primary_content": (
+                    "completed modules, analysis units, and coverage state"
+                    if inventory_only
+                    else "returned biological entities, estimates, sample counts, uncertainty, adjusted significance, and direction"
+                ),
+                "model_must_interpret": True,
+                "provenance_is_supporting_metadata": True,
+                "do_not_answer_with_paths_only": True,
+                "do_not_promote_catalog_status_to_biological_result": True,
+            },
         }
 
     async def _execute(self, query: dict[str, Any]) -> dict[str, Any]:

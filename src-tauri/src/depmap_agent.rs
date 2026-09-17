@@ -780,8 +780,18 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "workflow_semantic_match_alone_is_sufficient": false,
             "do_not_invent_missing_entities": true,
             "model_confidence_is_not_a_calibrated_probability": true,
-            "critical_direction_ambiguity_requires_clarification": true
-        }
+            "critical_direction_ambiguity_requires_clarification": true,
+            "catalog_is_routing_metadata_unless_inventory_requested": true,
+            "never_answer_a_scientific_question_with_paths_or_module_status_only": true
+        },
+        "response_pipeline": [
+            "resolve_user_intent",
+            "select_catalog_entry",
+            "retrieve_bounded_remote_result",
+            "transport_structured_evidence_to_model",
+            "interpret_with_metric_semantics",
+            "answer_user_with_results_first_and_provenance_last"
+        ]
     }))
 }
 
@@ -2713,6 +2723,15 @@ mod tests {
         assert_eq!(cancer_only["requires_approval"], false);
         assert_eq!(cancer_only["entities"]["canonical_lineage"], "Bowel");
         assert_eq!(cancer_only["allowed_next_tools"], json!(["depmap_query"]));
+        assert_eq!(
+            cancer_only["response_pipeline"][5],
+            "answer_user_with_results_first_and_provenance_last"
+        );
+        assert_eq!(
+            cancer_only["guardrails"]
+                ["never_answer_a_scientific_question_with_paths_or_module_status_only"],
+            true
+        );
 
         let dependency_ranking = depmap_route(&json!({
             "intent":"cancer_dependency_ranking",
