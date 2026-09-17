@@ -5,7 +5,7 @@ defaults:
   max_context_tokens: 128000
   max_rounds: 4
   timeout_ms: 60000
-  max_tool_calls: 2
+  max_tool_calls: 3
   max_tool_errors: 0
   max_input_tokens: 120000
 
@@ -14,6 +14,16 @@ cases:
     description: Colloquial Chinese still fixes the mutated gene as the source.
     tags: [depmap, intent, colloquial, mutation-direction]
     prompt: TP53坏掉以后，癌细胞最离不开哪些别的基因？查已有结果就行。
+    context_seed: &depmap_route_context
+      - role: system
+        content: >-
+          You are the DepMap Agent. For every new DepMap request, call
+          depmap_agent_route exactly once with a typed intent and only entities
+          supplied by the user. When two scientific directions remain plausible,
+          include the alternative intent and set ambiguity=critical_direction.
+          When the route returns clarification_card, call ask_user with that exact
+          question, options, and allow_freeform value, then end the turn. Never
+          query scientific evidence while clarification is required.
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -21,7 +31,7 @@ cases:
         schema: &route_schema
           type: object
           properties:
-            intent: {type: string, enum: [provider_status, analysis_inventory, lineage_resolution, cancer_inventory, cancer_dependency_ranking, cancer_direction_discovery, mutation_anchor_discovery, mutation_to_dependency, dependency_to_mutation, expression_biomarker_model, tf_activity_to_dependency, true_love_gene_catalog, tcga_expression_survival, subtype_evidence, coamplification_evidence, three_d_evidence, gene_evidence, gene_pair_evidence, drug_gene_evidence]}
+            intent: {type: string, enum: [provider_status, analysis_inventory, lineage_resolution, cancer_inventory, cancer_dependency_ranking, cancer_direction_discovery, mutation_anchor_discovery, mutation_to_dependency, dependency_to_mutation, expression_biomarker_model, tf_activity_to_dependency, true_love_gene_catalog, tcga_expression_survival, subtype_evidence, coamplification_evidence, three_d_evidence, gene_evidence, gene_pair_evidence, drug_gene_evidence, evidence_comparison, study_support_mapping, result_interpretation, topic_exploration, literature_validation, new_analysis, report_generation]}
             gene: {type: string}
             cancer: {type: string}
             source_gene: {type: string}
@@ -31,11 +41,16 @@ cases:
             transcription_factor: {type: string}
             catalog: {type: string, enum: [stable_negative_rank1, negative_r_lt_minus_0_3, positive_reciprocal_top20]}
             partner_gene: {type: string}
+            contrast_id: {type: string}
+            project: {type: string}
             endpoint: {type: string, enum: [OS, DSS, DFI, PFI]}
             family: {type: string}
+            cohort: {type: string}
+            layer: {type: string, enum: [exhaustive_high_confidence, lineage_adjusted]}
             alternative_intents: {type: array, items: {type: string}, maxItems: 3, uniqueItems: true}
             ambiguity: {type: string, enum: [none, missing_entity, critical_direction, out_of_scope]}
             ambiguity_reason: {type: string}
+            explicit_workflow_request: {type: boolean}
           required: [intent]
           additionalProperties: false
         result: &routed_result '{"state":"routed","decision":"execute","response_pipeline":["resolve_user_intent","select_catalog_entry","retrieve_bounded_remote_result"]}'
@@ -57,6 +72,7 @@ cases:
     description: Reverse wording fixes a dependency target and searches mutation events.
     tags: [depmap, intent, mutation-direction]
     prompt: 固定 GPX4 这个敏感靶点，看看什么基因突变会让它更依赖。
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -79,28 +95,39 @@ cases:
     description: A gene plus vague mutation/dependency wording must trigger clarification.
     tags: [depmap, intent, ambiguity, mutation-direction]
     prompt: 帮我看一下 KRAS 的突变和依赖关系。
-    allowed_tools: [depmap_agent_route, attempt_completion]
+    context_seed: *depmap_route_context
+    allowed_tools: [depmap_agent_route, ask_user]
     fixture_tools:
       depmap_agent_route:
         description: Classify a DepMap request. Choose the scientific intent, extract entities, and mark critical direction ambiguity instead of guessing.
         schema: *route_schema
-        result: '{"state":"needs_input","decision":"clarify","clarification_card":{"question":"固定突变还是固定 dependency？"}}'
+        result: '{"state":"needs_input","decision":"clarify","clarification_card":{"question":"这个问题有两个不同的分析方向。你希望固定哪一端？","options":[{"label":"固定 KRAS 突变，查询依赖靶点","description":"把 KRAS 作为突变锚点。"},{"label":"固定 KRAS dependency，查询相关突变","description":"把 KRAS 作为依赖靶点。"}],"allow_freeform":true}}'
     script:
       - tool_calls:
           - {id: route-1, name: depmap_agent_route, arguments: {intent: mutation_to_dependency, source_gene: KRAS, alternative_intents: [dependency_to_mutation], ambiguity: critical_direction}}
       - tool_calls:
-          - {id: done-1, name: attempt_completion, arguments: {result: "需要澄清：固定 KRAS 突变查依赖，还是固定 KRAS dependency 查突变？"}}
+          - id: clarify-1
+            name: ask_user
+            arguments:
+              question: 这个问题有两个不同的分析方向。你希望固定哪一端？
+              options:
+                - {label: 固定 KRAS 突变，查询依赖靶点, description: 把 KRAS 作为突变锚点。}
+                - {label: 固定 KRAS dependency，查询相关突变, description: 把 KRAS 作为依赖靶点。}
+              allow_freeform: true
     expect:
-      completion_contains: [澄清, KRAS, dependency]
-      required_tools: [depmap_agent_route, attempt_completion]
+      required_tools: [depmap_agent_route, ask_user]
+      forbidden_tools: [attempt_completion, depmap_query, depmap_evidence, shell, read, write, edit, run_in_context]
+      tool_order: [depmap_agent_route, ask_user]
       tool_args:
         - {name: depmap_agent_route, pointer: /ambiguity, equals: critical_direction}
         - {name: depmap_agent_route, pointer: /alternative_intents/0, equals: dependency_to_mutation}
+        - {name: ask_user, pointer: /allow_freeform, equals: true}
 
   - id: typo-anchor-discovery
     description: A common Chinese typo does not hide lineage mutation-anchor discovery.
     tags: [depmap, intent, typo, anchor]
     prompt: 肺腺癌里有那些突变基因适合拿来当描点，后面做依赖分析？
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -123,6 +150,7 @@ cases:
     description: Asking whether two genes are related routes to the multimodal pair query.
     tags: [depmap, intent, colloquial, pair]
     prompt: ESR1 跟 FOXA1 到底搭不搭？表达相关和敲除依赖都给我看。
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -146,6 +174,7 @@ cases:
     description: Explicit TF activity routes to inferred TF activity rather than ordinary expression evidence.
     tags: [depmap, intent, tf, confusable]
     prompt: STAT3 转录因子活性跟哪些 CRISPR dependency 最相关？
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -168,6 +197,7 @@ cases:
     description: Informal True Love Gene terminology maps to the exhaustive negative catalog.
     tags: [depmap, intent, synonym, true-love]
     prompt: 给我找全量的负相关真爱基因，r 小于负 0.3 的都保留。
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -190,6 +220,7 @@ cases:
     description: Mixed Chinese-English modeling language routes to predictive biomarker modeling.
     tags: [depmap, intent, mixed-language, biomarker]
     prompt: 能不能给 WRN dependency 做一个 expression biomarker 的 LASSO 模型？
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -212,6 +243,7 @@ cases:
     description: A multi-intent request selects the actionable anchor query and retains inventory as an alternative.
     tags: [depmap, intent, multi-intent, anchor]
     prompt: 先告诉我肝癌有哪些现成分析，重点列出能作为突变锚点的基因。
+    context_seed: *depmap_route_context
     allowed_tools: [depmap_agent_route, attempt_completion]
     fixture_tools:
       depmap_agent_route:
@@ -234,20 +266,22 @@ cases:
     description: An underspecified broad request is not forced into a scientific module.
     tags: [depmap, intent, ambiguity, out-of-scope]
     prompt: 帮我看看这个东西有没有意思，最好给个结论。
-    allowed_tools: [depmap_agent_route, attempt_completion]
+    context_seed: *depmap_route_context
+    allowed_tools: [depmap_agent_route, ask_user]
     fixture_tools:
       depmap_agent_route:
         description: Classify a DepMap request. Choose the scientific intent, extract entities, and mark critical direction ambiguity instead of guessing.
         schema: *route_schema
-        result: '{"state":"needs_input","decision":"clarify","clarification_card":{"allow_freeform":true}}'
+        result: '{"state":"needs_input","decision":"clarify","clarification_card":{"question":"请补充研究对象和分析方向。","options":[],"allow_freeform":true}}'
     script:
       - tool_calls:
           - {id: route-1, name: depmap_agent_route, arguments: {intent: gene_evidence, ambiguity: out_of_scope, ambiguity_reason: 缺少研究对象和问题方向}}
       - tool_calls:
-          - {id: done-1, name: attempt_completion, arguments: {result: "当前问题缺少研究对象和分析方向，需要补充后再查询。"}}
+          - {id: clarify-1, name: ask_user, arguments: {question: 请补充研究对象和分析方向。, options: [], allow_freeform: true}}
     expect:
-      completion_contains: [缺少, 方向]
-      required_tools: [depmap_agent_route, attempt_completion]
+      required_tools: [depmap_agent_route, ask_user]
+      forbidden_tools: [attempt_completion, depmap_query, depmap_evidence, shell, read, write, edit, run_in_context]
+      tool_order: [depmap_agent_route, ask_user]
       tool_args:
         - {name: depmap_agent_route, pointer: /ambiguity, equals: out_of_scope}
-
+        - {name: ask_user, pointer: /allow_freeform, equals: true}
