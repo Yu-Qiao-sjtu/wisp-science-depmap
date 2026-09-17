@@ -29,7 +29,7 @@ for (const locale of ["en", "zh"]) {
       await expect(userAgent).toHaveAccessibleName(/User-Agent/);
       await expect(userAgent).toHaveAccessibleDescription(/research-client\/1.0/);
       await expect(sessionName).toHaveAccessibleDescription(/x-opencode-session/);
-      await expect(agentPreview).toHaveText("User-Agent: wisp-science");
+      await expect(agentPreview).toHaveText("User-Agent: wisp-depmap");
       await userAgent.fill("research-client/1.0");
       await expect(agentPreview).toHaveText("User-Agent: research-client/1.0");
       await page.getByTestId("model-send-user-agent").uncheck();
@@ -39,7 +39,7 @@ for (const locale of ["en", "zh"]) {
       await expect(userAgent).toHaveValue("research-client/1.0");
       await expect(agentPreview).toHaveText("User-Agent: research-client/1.0");
       await userAgent.fill("");
-      await expect(agentPreview).toHaveText("User-Agent: wisp-science");
+      await expect(agentPreview).toHaveText("User-Agent: wisp-depmap");
       if (mode === "edit") await expect(sessionPreview).toHaveText(disabled);
       await page.getByTestId("model-send-session-id").check();
       const generated = locale === "zh" ? "<Wisp 自动生成的会话 ID>" : "<automatically generated conversation ID>";

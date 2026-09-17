@@ -2216,7 +2216,7 @@ test("composer @ # and / add typed context references", async ({ page }) => {
   await expect(composerInput).toBeFocused();
 
   await composerInput.pressSequentially("#project");
-  await expect(page.locator(".mention-menu")).toContainText("Search every session in wisp-science");
+  await expect(page.locator(".mention-menu")).toContainText("Search every session in wisp-depmap");
   await page.locator(".mention-menu .mention-item").first().click();
   await expect(composerInput).toHaveValue("");
   await expect(composerInput).toBeFocused();
@@ -13763,7 +13763,7 @@ test("Windows uses the integrated title bar without covering the project landing
     ((window as any).__skillInvokeLog ?? [])
       .filter((c: any) => c.cmd === "open_external_url")
       .map((c: any) => (c.args instanceof Map ? c.args.get("url") : c.args?.url))
-  )).toContain("https://github.com/xuzhougeng/wisp-science#readme");
+  )).toContain("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap#readme");
 
   await context.close();
 });
@@ -15869,7 +15869,7 @@ test("an SVG star saves a Notebook cell in the global library", async ({ page })
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(page.getByTestId("library-screen")).toBeVisible();
   await expect(page.locator('.library-card[data-library-kind="code"]')).toContainText("zcat counts.txt.gz");
-  await expect(page.locator('.library-card[data-library-kind="code"]')).toContainText("wisp-science / Current analysis");
+  await expect(page.locator('.library-card[data-library-kind="code"]')).toContainText("wisp-depmap / Current analysis");
 
   // Library search runs against SQLite so full saved source remains searchable
   // even though the global list only carries bounded previews.
@@ -16102,7 +16102,7 @@ test("a ?project window opens straight into the project, skipping the landing (#
   await expect.poll(async () => page.evaluate(() =>
     ((window as any).__skillInvokeLog ?? []).some((c: any) => c.cmd === "open_project"),
   )).toBe(true);
-  await expect(page).toHaveTitle("wisp-depmap \u2014 wisp-science");
+  await expect(page).toHaveTitle("wisp-depmap \u2014 wisp-depmap");
 });
 
 test("specialists page configures the builtin Reader and saves a custom specialist", async ({ page }) => {
