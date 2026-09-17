@@ -1,7 +1,7 @@
 # 损伤性突变与基因依赖概率差异分析
 
 本模块新增 26Q1 Dependency 概率口径分析，不覆盖既有 Gene Effect 结果。
-服务器根目录：/home/data/gz0548/depmap-26q1/analysis-modules/损伤性突变-基因依赖概率差异分析
+仓库模块路径：`analysis-modules/损伤性突变-基因依赖概率差异分析/`。大结果保存在受控计算环境中，公开文档不记录服务器地址。
 
 ## 科学问题与输入
 
@@ -14,7 +14,7 @@ https://storage.googleapis.com/shared-portal-files/Tools/26Q1_Mutation_Pipeline_
 
 ## 方法与原始 07 的关系
 
-原始参考：D:/New-PHD/depmap/tm00-script/scripts/07_mutant_dependency_26Q1.R。
+原始参考：TM00 `07_mutant_dependency_26Q1.R`；公开文档仅记录脚本名，不记录本地来源路径。
 沿用双侧 Welch t 检验与 Dependency 连续概率，正的 Mut-control 差值表示突变组依赖概率更高。
 每个基因对按有效依赖观测检查 Mut>=5、control>=10。
 正向 BH 在单个突变基因的全部靶点内计算；反向 BH 在单个靶点的全部合格突变源内独立计算。
