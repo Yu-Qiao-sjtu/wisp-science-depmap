@@ -49,6 +49,20 @@ The Agent never changes raw data, the knowledge base, or canonical reference scr
 task-specific R source, manifests, JSON summaries, tables, figures, and logs
 under `analysis/depmap-agent/`.
 
+Plain-language requests to remove genes that every cell needs are interpreted
+as an explicit common-essential exclusion request. This is not interchangeable
+with the lineage `selective` ranking: `selective` tests whether one lineage is
+more dependent than the rest and does not prove that a housekeeping or
+common-essential filter was applied. If the active result has no validated
+exclusion field, the Agent reports that limitation instead of relabeling a
+selective or unfiltered ranking. Housekeeping and common-essential annotations
+remain separate.
+
+When the user explicitly selects the remote DepMap MCP, the Agent uses the
+matching remote MCP evidence tool. A missing project-local `knowledge/`
+directory must not be reported as a backend outage when that enabled remote
+provider can serve the same bounded query.
+
 ## Starting a session
 
 Open **Settings → Specialists → DepMap Agent**, then choose **Start specialist

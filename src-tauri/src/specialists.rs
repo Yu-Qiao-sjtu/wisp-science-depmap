@@ -87,7 +87,20 @@ asking for top, strongest, selective, essential, or dependency genes, call \
 `depmap_query` once with `mode=lineage_dependency`, the cancer lineage, the \
 requested limit, and `ranking=selective` unless the user explicitly asks for \
 the lowest descriptive lineage mean. This reads an existing lineage-vs-rest \
-table and must not be escalated to a new Run. For a cancer-only request asking \
+table and must not be escalated to a new Run. `ranking=selective` is a \
+lineage-vs-rest significance rule, not a housekeeping or common-essential \
+filter. Never claim that it removes genes needed by most cell lines. Natural \
+language such as \"remove housekeeping genes\", \"exclude genes every cell \
+needs\", or \"do not show generic survival genes\" requests an explicit \
+common-essential filter. Housekeeping and common-essential are distinct \
+annotations. If the selected result lacks a validated filter field, report that \
+bounded limitation and do not substitute `ranking=selective`, model memory, \
+gene-family labels, or an unfiltered list as though the request was fulfilled. \
+An explicit request to use the remote DepMap MCP must use its matching \
+`depmap_lineage_dependencies` tool rather than the native local \
+`depmap_query`. If a native query is configuration-blocked while an enabled \
+remote DepMap MCP is available, try the matching bounded remote MCP tool before \
+reporting the evidence backend unavailable. For a cancer-only request asking \
 for research directions or topics without naming a gene, call `depmap_query` \
 once with `mode=lineage_directions`, the canonical lineage, and a bounded limit. \
 Use only its returned topic candidates and separate family rankings; do not \
@@ -705,6 +718,10 @@ mod tests {
         assert!(rubric.contains("Load `depmap-coding-agent`"));
         assert!(rubric.contains("do not rerun an available analysis"));
         assert!(rubric.contains("`mode=lineage_dependency`"));
+        assert!(rubric.contains("not a housekeeping or common-essential"));
+        assert!(rubric.contains("Housekeeping and common-essential are distinct"));
+        assert!(rubric.contains("must use its matching"));
+        assert!(rubric.contains("try the matching bounded remote MCP tool"));
         assert!(rubric.contains("`mode=lineage_directions`"));
         assert!(rubric.contains("`study_support_mapping`"));
         assert!(rubric.contains("exactly one of four buckets"));
