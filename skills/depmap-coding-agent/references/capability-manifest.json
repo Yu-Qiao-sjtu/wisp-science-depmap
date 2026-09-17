@@ -243,11 +243,26 @@
         "symmetric": false
       },
       "scripts": [
-        "04_predivtive_biomarkers.R"
+        "04_predivtive_biomarkers.R",
+        "build_predictive_biomarker_model.R",
+        "validate_predictive_biomarker_model.R"
       ],
       "inputs": [
-        "gene_effect_rds",
-        "expression_rds"
+        "gene_effect_csv",
+        "expression_tpm_logp1_csv",
+        "model_csv"
+      ],
+      "operations": [
+        {
+          "id": "query_expression_dependency_association",
+          "execution_mode": "precomputed"
+        },
+        {
+          "id": "train_expression_dependency_model",
+          "execution_mode": "on_demand_cached",
+          "required_entities": ["dependency_target_gene"],
+          "validation": ["nested_cross_validation", "leave_one_lineage_out"]
+        }
       ]
     },
     {

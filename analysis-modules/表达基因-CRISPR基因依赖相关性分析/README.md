@@ -22,6 +22,9 @@
 |---|---|
 | `scripts/01_read_depmap.r` | TM00 输入清洗与三表对齐脚本 |
 | `scripts/04_predivtive_biomarkers.R` | 固定依赖靶基因、扫描表达 biomarker 的 TM00 脚本 |
+| `scripts/build_predictive_biomarker_model.R` | 无泄漏嵌套交叉验证的 LASSO、随机森林和留一癌种验证 |
+| `scripts/build_biomarker_target_eligibility.R` | 为全部 Gene Effect 靶基因生成建模资格和优先级目录 |
+| `scripts/validate_predictive_biomarker_model.R` | 检查预测、指标、特征稳定性和结果完整性 |
 | `scripts/05_from_gene_to_dependency.R` | 固定表达基因、扫描依赖靶基因及下游富集的 TM00 脚本 |
 | `scripts/05_build_expression_dependency_matrix.R` | 26Q1 全局完整矩阵生成脚本 |
 | `scripts/17_build_lineage_sparse_networks.R` | 26Q1 癌种内稀疏网络脚本；其中 `family=expression_dependency` 属于本模块 |
@@ -44,4 +47,4 @@
 - 癌种内表达—依赖网络：已完成 24 个合格谱系，约 2.219 GiB。
 - 两部分合计约 6.269 GiB，占 182.073 GiB 主知识库约 3.4%。
 
-这里的“已完成”指相关性批量计算和结果落盘完成。TM00 04 中的 LASSO/随机森林，以及 TM00 05 中的 GSEA、PROGENy 和 TF 活性分析，不属于这两个矩阵结果。GSEA 现在作为按需能力执行：用户提出一个表达源基因和富集意图时读取完整相关性行，生成并缓存独立的可审查结果包。
+单变量相关性、TM00 04 的 LASSO/随机森林建模、GSEA、PROGENy 和 TF 活性是不同结果实体。预测性 biomarker 现在按依赖靶基因按需训练，使用嵌套交叉验证和留一癌种验证，避免旧脚本先用全数据筛 Top50 造成的信息泄漏。GSEA 仍作为按需能力执行：用户提出一个表达源基因和富集意图时读取完整相关性行，生成并缓存独立的可审查结果包。

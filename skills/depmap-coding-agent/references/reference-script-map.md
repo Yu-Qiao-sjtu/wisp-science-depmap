@@ -12,7 +12,7 @@ review rather than defaults to copy.
 | `core_ingestion` | `01_read_depmap.r` | Load and align core DepMap matrices; create reusable R objects | Gene Effect, Dependency Probability, expression, Model, damaging mutation matrix |
 | `gene_correlation` | `02_gene_gene_correlation.R` | Pairwise expression correlation | `ccle_exprSet.rds` |
 | `co_dependency` | `03_co_dependency.R` | Genome-wide co-dependency ranking and matrix output | `depmap_geneEffect.rds` |
-| `predictive_biomarkers` | `04_predivtive_biomarkers.R` | Correlation and ML predictive biomarkers | Gene Effect RDS, expression RDS |
+| `predictive_biomarkers` | `04_predivtive_biomarkers.R`, `build_predictive_biomarker_model.R` | Precomputed correlation plus on-demand leakage-controlled LASSO/random-forest predictive biomarkers | Gene Effect CSV, expression TPM log1p CSV, Model CSV |
 | `gene_to_dependency` | `05_from_gene_to_dependency.R` | Gene-centered dependency, pathway, TF, and enrichment analyses; its `pathway_enrichment` operation runs the reviewed on-demand GSEA executable | Gene Effect RDS and expression RDS; the GSEA operation uses the complete expression-dependency block matrix and Hallmark/Reactome or a versioned custom GMT |
 | `pathway_ml` | `05.1_ml_pathway.R` | Penalized regression and random-forest pathway models | PROGENy scores RDS, Gene Effect RDS |
 | `synthetic_lethal_screen` | `05.2_synthetic_lethal.R` | Observational synthetic-lethal candidate screening | Co-dependency matrix RDS |
