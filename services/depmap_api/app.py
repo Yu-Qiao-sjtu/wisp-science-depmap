@@ -51,6 +51,7 @@ THREE_D_FAMILIES = {
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
+    "mutation_anchor": {"lineage"},
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
@@ -76,6 +77,7 @@ MODE_REQUIRED_FIELDS = {
 }
 MODE_OPTIONAL_FIELDS = {
     "analysis_catalog": {"module", "completion_state", "limit"},
+    "mutation_anchor": {"event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "limit"},
     "lineage_directions": {"limit"},
@@ -388,6 +390,7 @@ class QueryRequest(BaseModel):
 
     mode: Literal[
         "analysis_catalog",
+        "mutation_anchor",
         "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
@@ -400,6 +403,8 @@ class QueryRequest(BaseModel):
     gene: str | None = None
     module: str | None = None
     completion_state: Literal["COMPLETE", "UNVERIFIED"] | None = None
+    anchor_tier: Literal["priority", "strict", "standard"] | None = None
+    include_common_essential: bool | None = None
     source: str | None = None
     target: str | None = None
     limit: int | None = Field(default=None, ge=1, le=100)
@@ -427,7 +432,7 @@ class QueryRequest(BaseModel):
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "module", "completion_state", "source", "target", "limit", "event", "lineage",
+            "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage",
@@ -473,7 +478,7 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
-        for name in (supplied - {"limit", "reciprocal"}):
+        for name in (supplied - {"limit", "reciprocal", "include_common_essential"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
@@ -752,6 +757,50 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     sql = (
         "SELECT analysis_id,module,analysis_unit,completion_state,completion_basis,"
         "release,family,dataset,method,manifest_path FROM analysis_catalog"
+    )
+
+
+def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    lineage = _canonical_lineage_label(query["lineage"])
+    lineage_dir = lineage.replace(" ", "_").replace("/", "_")
+    root = (
+        settings.knowledge_root / "analysis-modules" / "癌种内突变锚定基因选择"
+        / "cancer_anchor_catalog_v2" / "by_cancer" / lineage_dir
+    )
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="mutation_anchor", lineage=lineage,
+            reason="the requested lineage has no completed mutation-anchor catalog",
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    if str(manifest.get("status", "")).lower() != "complete":
+        return _evidence_response(
+            "NOT_COMPUTED", mode="mutation_anchor", lineage=lineage,
+            reason="the mutation-anchor catalog is not marked complete", manifest=manifest,
+        )
+    tier = query.get("anchor_tier") or "priority"
+    relative = {
+        "priority": "results/priority_role_matched_candidates.csv",
+        "strict": "results/strict_functional_candidates.csv",
+        "standard": "results/functional_candidates.csv",
+    }[tier]
+    path = root / relative
+    rows = _read_csv_records(path) if path.is_file() else []
+    event = query.get("event")
+    if event:
+        rows = [row for row in rows if str(row.get("matrix", "")).lower() == event.lower()]
+    if not query.get("include_common_essential", False):
+        rows = [row for row in rows if str(row.get("is_common_essential", "")).upper() != "TRUE"]
+    limit = min(int(query.get("limit") or 20), 100)
+    rows = rows[:limit]
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="mutation_anchor", lineage=lineage,
+        reason="eligible mutation anchors with analyzable Mut/WT support; candidate status is not a dependency association",
+        anchor_tier=tier, event=event, rows=rows, returned_count=len(rows),
+        cohort_n=manifest.get("cohort_n"), thresholds=manifest.get("thresholds"),
+        event_definitions=manifest.get("event_definitions"), manifest=manifest,
+        provenance=[str(manifest_path), str(path)],
     )
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
@@ -2191,6 +2240,8 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     if query["mode"] == "analysis_catalog":
         return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
+    if query["mode"] == "mutation_anchor":
+        return await asyncio.to_thread(_run_mutation_anchor_query, settings, query)
     if query["mode"] == "lineage_catalog":
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":

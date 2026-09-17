@@ -78,7 +78,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "examples_zh": ["肺癌有哪些突变基因可以选", "在结肠癌里选突变锚点"],
         "precise_prompt_template_zh": "在{lineage}中列出可作为后续依赖分析锚点的{event}突变基因，并说明样本数与筛选依据。",
         "confusable_with": ["mutation_to_dependency"],
-        "mcp_tool": "depmap_lineage_direction_discovery",
+        "mcp_tool": "depmap_mutation_anchor_evidence",
     },
     {
         "intent": "mutation_to_dependency",
@@ -204,6 +204,16 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "scope": "global",
             "cohort_policy": "1140_matched_expression_and_gene_effect_models",
             "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
+        }
+    if mode == "mutation_anchor":
+        return {
+            "metric": "mutation_event_prevalence_and_analyzable_group_support",
+            "analysis_label": "lineage_mutation_anchor_selection",
+            "data_modality": "damaging_or_hotspot_mutation",
+            "relation_type": "candidate_eligibility",
+            "scope": "one_depmap_lineage",
+            "cohort_policy": "Mut/WT thresholds recorded in the returned manifest",
+            "interpretation": "candidate status means sufficient group support for downstream dependency testing; it is not a significant dependency association",
         }
     if mode == "biomarker_target":
         return {
@@ -869,6 +879,27 @@ class DepMapEvidenceService:
         item = await self._execute(query)
         return self._envelope(tool="depmap_analysis_catalog", request=query, evidence=item)
 
+    async def mutation_anchor_evidence(
+        self,
+        lineage: str,
+        event: Literal["damaging", "hotspot"] | None = None,
+        anchor_tier: Literal["priority", "strict", "standard"] = "priority",
+        include_common_essential: bool = False,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "mutation_anchor", "lineage": lineage,
+            "anchor_tier": anchor_tier,
+            "include_common_essential": include_common_essential, "limit": limit,
+        }
+        if event:
+            query["event"] = event
+        item = await self._execute(query)
+        canonical = item.get("query", {}).get("lineage", lineage)
+        request = dict(query)
+        request["lineage"] = canonical
+        return self._envelope(tool="depmap_mutation_anchor_evidence", request=request, evidence=item)
+
     async def subtype_evidence(
         self,
         gene: str | None = None,
@@ -1099,6 +1130,28 @@ def build_mcp_server(
     )
     async def depmap_analysis_catalog(module: str | None = None, limit: int = 100) -> dict[str, Any]:
         return await service.analysis_catalog(module, limit)
+
+    @mcp.tool(
+        title="DepMap lineage mutation-anchor candidates",
+        description=(
+            "Return actual selectable mutation-anchor rows for one DepMap lineage, "
+            "including event type, Mut/WT counts, prevalence, selection tier, gene role, "
+            "common-essential flag, and interpretation. Candidate status indicates "
+            "analyzable group support, not a dependency association."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_mutation_anchor_evidence(
+        lineage: str,
+        event: Literal["damaging", "hotspot"] | None = None,
+        anchor_tier: Literal["priority", "strict", "standard"] = "priority",
+        include_common_essential: bool = False,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.mutation_anchor_evidence(
+            lineage, event, anchor_tier, include_common_essential, limit
+        )
 
     @mcp.tool(
         title="DepMap analysis capability catalog",

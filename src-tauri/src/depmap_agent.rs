@@ -387,11 +387,12 @@ fn depmap_route_schema() -> Value {
             "intent": {
                 "type":"string",
                 "enum":[
-                    "provider_status", "lineage_resolution", "cancer_inventory",
+                    "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking",
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
+                    "tf_activity_to_dependency", "true_love_gene_catalog",
                     "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
@@ -403,14 +404,18 @@ fn depmap_route_schema() -> Value {
             "source_gene": {"type":"string"},
             "target_gene": {"type":"string"},
             "drug": {"type":"string"},
+            "event": {"type":"string","enum":["damaging","hotspot"]},
+            "transcription_factor": {"type":"string"},
+            "catalog": {"type":"string","enum":["stable_negative_rank1","negative_r_lt_minus_0_3","positive_reciprocal_top20"]},
             "alternative_intents": {
                 "type":"array",
                 "items":{"type":"string","enum":[
-                    "provider_status", "lineage_resolution", "cancer_inventory",
+                    "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking", "cancer_direction_discovery",
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
                     "expression_biomarker_model",
+                    "tf_activity_to_dependency", "true_love_gene_catalog",
                     "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
@@ -446,6 +451,9 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let source_gene = non_empty_arg(args, "source_gene");
     let target_gene = non_empty_arg(args, "target_gene");
     let drug = non_empty_arg(args, "drug");
+    let event = non_empty_arg(args, "event");
+    let transcription_factor = non_empty_arg(args, "transcription_factor");
+    let catalog = non_empty_arg(args, "catalog");
     let alternative_intents = args
         .get("alternative_intents")
         .and_then(Value::as_array)
@@ -509,6 +517,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("target_gene");
             }
         }
+        "tf_activity_to_dependency" => {
+            if transcription_factor.is_none() {
+                missing.push("transcription_factor");
+            }
+        }
+        "true_love_gene_catalog" => {
+            if catalog.is_none() {
+                missing.push("catalog");
+            }
+        }
         "drug_gene_evidence" => {
             if drug.is_none() {
                 missing.push("drug");
@@ -518,6 +536,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             }
         }
         "provider_status"
+        | "analysis_inventory"
         | "evidence_comparison"
         | "result_interpretation"
         | "topic_exploration"
@@ -546,6 +565,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 false,
                 "Check only the configured provider health.",
                 vec![TOOL_NAME],
+            ),
+            "analysis_inventory" => (
+                "L1_DIRECT",
+                false,
+                "Query the unified completed-analysis directory index; use module status as the answer only because the user explicitly requested an inventory.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "lineage_resolution" | "cancer_inventory" => (
                 "L1_DIRECT",
@@ -592,8 +617,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "mutation_anchor_discovery" => (
                 "L2_INVESTIGATE",
                 false,
-                "Read the bounded precomputed lineage direction bundle and retain only supported mutation-anchor candidates.",
-                vec![TOOL_NAME],
+                "Query the dedicated lineage mutation-anchor catalog and return actual candidate rows with Mut/WT support and event semantics.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "mutation_to_dependency" | "dependency_to_mutation" => (
                 "L1_DIRECT",
@@ -605,6 +630,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "L1_DIRECT",
                 false,
                 "Query the indexed target eligibility and validated model-cache state. Start computation only when the user explicitly requests training and the target is not already cached.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
+            ),
+            "tf_activity_to_dependency" | "true_love_gene_catalog" => (
+                "L1_DIRECT",
+                false,
+                "Use the matching bounded MCP evidence tool and return its structured scientific rows.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "evidence_comparison" | "topic_exploration" => (
@@ -706,14 +737,20 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "single_call": true
         }),
         ("mutation_anchor_discovery", Some(lineage)) if !requires_user_input => json!({
-            "tool": TOOL_NAME,
+            "tool": "depmap_mutation_anchor_evidence",
             "arguments": {
-                "mode": "lineage_directions",
                 "lineage": lineage,
+                "event": event,
+                "anchor_tier": "priority",
+                "include_common_essential": false,
                 "limit": 20
             },
-            "single_call": true,
-            "output_filter": "mutation_anchor_candidates_only"
+            "single_call": true
+        }),
+        ("analysis_inventory", _) if !requires_user_input => json!({
+            "tool": "depmap_analysis_catalog",
+            "arguments": {"limit": 100},
+            "single_call": true
         }),
         ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => json!({
             "tool": TOOL_NAME,
@@ -748,6 +785,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "single_call": true,
             "next_action": "reuse_cached_model_or_offer_approval_gated_on_demand_training"
         }),
+        ("tf_activity_to_dependency", _) if !requires_user_input => json!({
+            "tool": "depmap_tf_dependency_evidence",
+            "arguments": {"transcription_factor": transcription_factor, "target": target_gene, "limit": 20},
+            "single_call": true
+        }),
+        ("true_love_gene_catalog", _) if !requires_user_input => json!({
+            "tool": "depmap_true_love_evidence",
+            "arguments": {"catalog": catalog, "gene": gene, "limit": 20},
+            "single_call": true
+        }),
         _ => Value::Null,
     };
     Ok(json!({
@@ -770,7 +817,10 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "canonical_lineage": canonical_lineage,
             "source_gene": source_gene,
             "target_gene": target_gene,
-            "drug": drug
+            "drug": drug,
+            "event": event,
+            "transcription_factor": transcription_factor,
+            "catalog": catalog
         },
         "strategy": strategy,
         "recommended_query": recommended_query,
@@ -2713,6 +2763,13 @@ mod tests {
 
     #[test]
     fn agent_route_keeps_ordinary_requests_out_of_workflows() {
+        let inventory = depmap_route(&json!({"intent":"analysis_inventory"})).unwrap();
+        assert_eq!(inventory["execution_level"], "L1_DIRECT");
+        assert_eq!(
+            inventory["recommended_query"]["tool"],
+            "depmap_analysis_catalog"
+        );
+
         let cancer_only = depmap_route(&json!({
             "intent":"cancer_inventory",
             "cancer":"结肠癌"
@@ -2766,6 +2823,22 @@ mod tests {
         );
         assert_eq!(directions["recommended_query"]["single_call"], true);
         assert_eq!(directions["allowed_next_tools"], json!(["depmap_query"]));
+
+        let anchors = depmap_route(&json!({
+            "intent":"mutation_anchor_discovery",
+            "cancer":"肺癌",
+            "event":"damaging"
+        }))
+        .unwrap();
+        assert_eq!(
+            anchors["recommended_query"]["tool"],
+            "depmap_mutation_anchor_evidence"
+        );
+        assert_eq!(anchors["recommended_query"]["arguments"]["lineage"], "Lung");
+        assert_eq!(
+            anchors["recommended_query"]["arguments"]["event"],
+            "damaging"
+        );
 
         let support_mapping = depmap_route(&json!({
             "intent":"study_support_mapping",
@@ -2877,6 +2950,9 @@ mod tests {
         assert!(intents.contains(&json!("mutation_to_dependency")));
         assert!(intents.contains(&json!("dependency_to_mutation")));
         assert!(intents.contains(&json!("expression_biomarker_model")));
+        assert!(intents.contains(&json!("analysis_inventory")));
+        assert!(intents.contains(&json!("tf_activity_to_dependency")));
+        assert!(intents.contains(&json!("true_love_gene_catalog")));
     }
 
     #[test]

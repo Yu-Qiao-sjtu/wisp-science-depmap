@@ -23,6 +23,15 @@ from services.depmap_api.app import (
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_mutation_anchor_has_explicit_lineage_event_and_tier_contract(self):
+        request = QueryRequest(
+            mode="mutation_anchor", lineage="Lung", event="damaging",
+            anchor_tier="priority", include_common_essential=False, limit=20,
+        )
+        self.assertEqual(request.bounded_dict()["lineage"], "Lung")
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="mutation_anchor", event="damaging")
+
     def test_tf_dependency_accepts_exact_pair_or_bounded_top_query(self):
         exact = QueryRequest(mode="tf_dependency", source="STAT3", target="GPX4", limit=20)
         self.assertEqual(exact.bounded_dict()["target"], "GPX4")
