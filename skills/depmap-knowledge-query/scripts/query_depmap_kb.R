@@ -136,6 +136,29 @@ if(a$mode=="lineage"){map<-c(damaging="lineage_damaging_mutation_dependency",cus
 if(a$mode=="pathway"){p<-file.path(full,"progeny_dependency","progeny_pathway_dependency_associations.csv");x<-fread(p);hit<-x[toupper(pathway)==toupper(a$pathway)&clean(target_gene)==clean(a$target)];emit(list(mode="pathway",result=hit,provenance=p));quit(save="no")}
 if(a$mode=="drug"){module<-paste0("prism_auc_",a$omic,"_correlation");root<-file.path(full,module);d<-fread(file.path(root,"drug_order.csv"));g<-fread(file.path(root,"feature_gene_order.csv"));i<-which(toupper(d$CompoundID)==toupper(a$drug)|toupper(d$ConditionCompoundName)==toupper(a$drug));j<-which(clean(g$symbol)==clean(a$target));if(!length(i)||!length(j))stop("drug or target not found");st<-floor((i-1L)/16L)*16L+1L;en<-min(st+15L,nrow(d));p<-file.path(root,"blocks",sprintf("block_%05d_%05d.rds",st,en));x<-readRDS(p);k<-i-st+1L;emit(list(mode="drug",drug=d[i],target=g$symbol[j],omic=a$omic,n=x$n[k,j],pearson_r=x$pearson_r[k,j],p_value=x$p_value[k,j],fdr=x$fdr[k,j],provenance=p));quit(save="no")}
 
+if(a$mode=="tf_dependency"){
+  root<-file.path(kb,"analysis-modules","转录因子活性-CRISPR基因依赖相关性分析","results","tf_activity_dependency_26Q1_v2")
+  manifest_path<-file.path(root,"manifest.json")
+  if(!file.exists(manifest_path)){emit(list(mode=a$mode,status="MODULE_UNAVAILABLE",reason="the completed TF-activity dependency module is not installed",provenance=root));quit(save="no")}
+  manifest<-fromJSON(manifest_path,simplifyVector=TRUE)
+  if(!identical(manifest$status,"complete")){emit(list(mode=a$mode,status="NOT_COMPUTED",reason="TF-activity dependency manifest is not complete",manifest=manifest,provenance=manifest_path));quit(save="no")}
+  tf<-clean(a$source);target<-if(is.null(a$target))NA_character_ else clean(a$target);limit<-if(is.null(a$limit))20L else as.integer(a$limit)
+  ord<-fread(file.path(root,"tf_order.csv"));idx<-match(tf,clean(ord$TF))
+  compact<-list(status=manifest$status,release=manifest$release,common_model_count=manifest$common_model_count,tf_count=manifest$tf_count,target_gene_count=manifest$target_gene_count,minimum_pair_n_for_fdr_and_ranking=manifest$minimum_pair_n_for_fdr_and_ranking,multiple_testing=manifest$multiple_testing)
+  if(is.na(idx)){emit(list(mode=a$mode,status="INELIGIBLE",reason="requested TF is absent from the DoRothEA A-C/ULM activity universe",source=tf,target=target,manifest=compact,provenance=file.path(root,"tf_order.csv")));quit(save="no")}
+  if(is.na(target)){
+    p<-file.path(root,"top_hits.csv.gz");rows<-fread(p)[clean(TF)==tf&rank<=limit];setorder(rows,direction,rank)
+    emit(list(mode=a$mode,status=if(nrow(rows))"FOUND" else "NOT_RETAINED",reason=if(nrow(rows))"bounded positive and negative precomputed rankings" else "no eligible retained ranking rows",source=tf,target=NA_character_,rows=rows,manifest=compact,provenance=c(manifest_path,p)));quit(save="no")
+  }
+  paths<-list.files(file.path(root,"blocks"),pattern="^block_[0-9]+_[0-9]+\\.rds$",full.names=TRUE)
+  bounds<-t(vapply(basename(paths),function(q)as.integer(strsplit(sub("\\.rds$","",sub("^block_","",q)),"_",fixed=TRUE)[[1L]]),integer(2)))
+  hit<-which(bounds[,1L]<=idx&bounds[,2L]>=idx);if(!length(hit))stop("TF block not found")
+  p<-paths[hit[1L]];x<-readRDS(p);i<-match(idx,x$tf_index);j<-match(target,clean(x$target_genes))
+  if(is.na(j)){emit(list(mode=a$mode,status="NOT_COMPUTED",reason="target gene is absent from the Gene Effect target universe",source=tf,target=target,manifest=compact,provenance=file.path(root,"target_gene_order.csv")));quit(save="no")}
+  row<-data.table(TF=x$tf_names[i],target_gene=x$target_genes[j],correlation=x$correlation[i,j],pair_n=x$pair_n[i,j],eligible_for_fdr=x$pair_n[i,j]>=manifest$minimum_pair_n_for_fdr_and_ranking,p_value=x$p_value[i,j],fdr=x$fdr[i,j])
+  emit(list(mode=a$mode,status="FOUND",reason="exact pair retrieved from the completed full matrix",source=tf,target=target,rows=row,manifest=compact,provenance=c(manifest_path,p)));quit(save="no")
+}
+
 sparse_modes<-c("lineage_catalog","lineage_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
 if(a$mode%in%sparse_modes){
   if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for sparse lineage queries")

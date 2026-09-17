@@ -99,6 +99,15 @@
         "depmap-26q1-tcga/project_catalog.csv",
         "depmap-26q1-tcga/projects"
       ]
+    },
+    {
+      "id": "tf_activity_dependency",
+      "mode": "tf_dependency",
+      "required_paths": [
+        "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/results/tf_activity_dependency_26Q1_v2/manifest.json",
+        "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/results/tf_activity_dependency_26Q1_v2/blocks",
+        "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/results/tf_activity_dependency_26Q1_v2/top_hits.csv.gz"
+      ]
     }
   ],
   "known_non_coverage": [
