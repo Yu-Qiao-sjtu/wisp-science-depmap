@@ -2,6 +2,7 @@ mod eval;
 mod rpc;
 mod runs;
 mod trajectory_eval;
+mod workflows;
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
@@ -1015,6 +1016,15 @@ async fn main() -> Result<()> {
         run_store.clone(),
         run_manager.clone(),
         runs::CLI_PROJECT_ID,
+    );
+    workflows::register(
+        &mut agent.tools,
+        run_store.clone(),
+        skills.clone(),
+        cfg.clone(),
+        run_manager.clone(),
+        max_context,
+        max_iter,
     );
     let compute = wisp_runs::cli_compute_section(&run_store).await;
     agent.seed_system_prompt(&skills, Some(compute));

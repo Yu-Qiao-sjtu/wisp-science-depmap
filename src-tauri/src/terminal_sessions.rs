@@ -687,7 +687,9 @@ mod tests {
         // ConPTY asks xterm for the cursor position before launching the shell.
         // This headless test supplies the same terminal response.
         session.write("\u{1b}[1;1R").unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // A loaded CI runner can take well over ten seconds to spawn ConPTY
+        // and reach the first prompt; poll cheaply until a full minute.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while !String::from_utf8_lossy(&lock(&session.output).scrollback).contains("terminal-ready")
         {
             assert!(

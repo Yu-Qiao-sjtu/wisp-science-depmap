@@ -187,6 +187,10 @@ const MCP_APP_SNAPSHOTS_MIGRATION_SQL: &str =
 const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION: &str = "0057_scientific_evidence_ledger";
 const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL: &str =
     include_str!("../migrations/0057_scientific_evidence_ledger.sql");
+// The DepMap fork already shipped migrations 0056 and 0057 before the
+// upstream project-stars migration arrived. Give the upstream migration a
+// new durable id so existing fork databases do not mistake it for 0056.
+const PROJECT_STARS_MIGRATION: &str = "0058_project_stars";
 
 #[derive(Clone)]
 pub struct Store {
@@ -224,8 +228,11 @@ impl Store {
             // connections a second writer would otherwise get SQLITE_BUSY
             // immediately (default timeout is 0) and fail. Wait for the lock
             // instead — concurrent tasks writing the same store (e.g. message +
-            // provenance persistence) must serialize, not error out.
-            .busy_timeout(std::time::Duration::from_secs(5));
+            // provenance persistence) must serialize, not error out. Five
+            // seconds is not enough on a loaded Windows runner where Defender
+            // scans every temp-database write, so harvest/lease tests were
+            // failing with "database is locked".
+            .busy_timeout(std::time::Duration::from_secs(30));
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
             .connect_with(opts)
@@ -759,6 +766,15 @@ impl Store {
         if !Self::migration_applied(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION).await? {
             Self::execute_sql_script(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL).await?;
             Self::record_migration(pool, SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, PROJECT_STARS_MIGRATION).await? {
+            Self::add_columns_if_missing(
+                pool,
+                "projects",
+                &[("starred", "INTEGER NOT NULL DEFAULT 0")],
+            )
+            .await?;
+            Self::record_migration(pool, PROJECT_STARS_MIGRATION).await?;
         }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was

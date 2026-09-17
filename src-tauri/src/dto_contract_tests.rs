@@ -9,6 +9,24 @@
 use serde_json::json;
 
 #[test]
+fn workflow_conversion_progress_preserves_request_identity_and_stage() {
+    use wisp_dto::{WorkflowConversionProgress, WorkflowConversionStage};
+    let progress = WorkflowConversionProgress {
+        conversion_id: "conversion-window-a-1".into(),
+        stage: WorkflowConversionStage::Repairing,
+    };
+    let wire = serde_json::to_value(&progress).unwrap();
+    assert_eq!(
+        wire,
+        json!({"conversion_id":"conversion-window-a-1", "stage":"repairing"})
+    );
+    assert_eq!(
+        serde_json::from_value::<WorkflowConversionProgress>(wire).unwrap(),
+        progress
+    );
+}
+
+#[test]
 fn mcp_app_isolation_dtos_keep_js_camel_case_and_page_generation() {
     let handle = wisp_dto::McpAppChildHandle {
         owner_epoch: "page-1".into(),
@@ -692,4 +710,40 @@ fn transfer_progress_preserves_indeterminate_and_accepts_legacy_records() {
     assert!(ui.indeterminate);
     assert_eq!(ui.total_bytes, 1024);
     assert_eq!(ui.completed_bytes, 0);
+}
+
+#[test]
+fn native_approval_snapshot_and_resolution_share_the_request_contract() {
+    let request = super::ConfirmRequest::new(
+        "frame",
+        "Approve transfer?".into(),
+        "transfer_between_contexts",
+        "CPU3 to local".into(),
+    );
+    let loaded: wisp_dto::PendingToolApproval = roundtrip(&request);
+    assert_eq!(loaded.approval_id, request.approval_id);
+    assert_eq!(loaded.frame_id, "frame");
+    assert_eq!(loaded.tool, "transfer_between_contexts");
+    let page: wisp_dto::LoadedSessionPage = serde_json::from_value(json!({
+        "items": [], "next_before_seq": null, "user_offset": 0, "pending_approvals": [loaded]
+    }))
+    .unwrap();
+    assert_eq!(page.pending_approvals[0].preview, "CPU3 to local");
+    let legacy: wisp_dto::LoadedSessionPage = serde_json::from_value(json!({
+        "items": [], "next_before_seq": null, "user_offset": 0
+    }))
+    .unwrap();
+    assert!(legacy.pending_approvals.is_empty());
+}
+
+#[test]
+fn project_summary_star_defaults_for_older_payloads_and_roundtrips() {
+    let legacy = json!({"id": "p", "name": "Project"});
+    let mut summary: wisp_dto::ProjectSummary = serde_json::from_value(legacy).unwrap();
+    assert!(!summary.starred);
+    summary.starred = true;
+    let payload = serde_json::to_value(&summary).unwrap();
+    assert_eq!(payload["starred"], true);
+    let decoded: wisp_dto::ProjectSummary = serde_json::from_value(payload).unwrap();
+    assert!(decoded.starred);
 }

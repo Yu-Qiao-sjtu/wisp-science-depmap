@@ -4319,14 +4319,17 @@ test("Quick Actions opens its bound graph in the standalone Workflow Studio", as
     return {
       inside: buttons.every((button) => button.left >= bounds.left
         && button.right <= bounds.right),
-      stacked: buttons.length === 2 && buttons[1].top > buttons[0].bottom,
+      singleEntry: buttons.length === 1,
     };
   });
-  expect(libraryLayout).toEqual({ inside: true, stacked: true });
+  expect(libraryLayout).toEqual({ inside: true, singleEntry: true });
   const studioBox = await studio.boundingBox();
   const viewport = page.viewportSize()!;
   expect(studioBox?.width ?? 0).toBeGreaterThan(viewport.width * 0.95);
   expect(studioBox?.height ?? 0).toBeGreaterThan(viewport.height * 0.85);
+  // The name is edited in the header, without opening Workflow configuration.
+  await expect(studio.getByTestId("workflow-name")).toBeVisible();
+  await expect(studio.getByTestId("workflow-name")).toHaveAttribute("maxlength", "100");
   await expect(studio.getByTestId("workflow-name"))
     .toHaveValue("Literature evidence review");
   const nodes = studio.getByTestId("workflow-graph-node");
@@ -4348,7 +4351,7 @@ test("Quick Actions opens its bound graph in the standalone Workflow Studio", as
 
   await nodes.filter({ hasText: "synthesize" })
     .getByTestId("workflow-graph-node-select")
-    .click();
+    .dblclick();
   const inspector = studio.getByTestId("workflow-graph-inspector");
   await expect(inspector.getByTestId("dynamic-task-id")).toHaveValue("synthesize");
   await inspector.locator("details.dynamic-agent-advanced > summary").click();
@@ -4357,53 +4360,16 @@ test("Quick Actions opens its bound graph in the standalone Workflow Studio", as
   await timeout.fill("0");
   await expect(timeout).toHaveValue("0");
   await expect(inspector.getByTestId("workflow-graph-remove-edge")).toHaveCount(2);
-  const skillPicker = inspector.getByTestId("dynamic-task-skills");
-  await expect(skillPicker.getByTestId("dynamic-task-skill-option")).toHaveCount(0);
-  await skillPicker.getByTestId("dynamic-task-skill-search").fill("literature");
-  await expect(skillPicker.getByTestId("dynamic-task-skill-option")).toHaveCount(1);
-  await expect(skillPicker.getByTestId("dynamic-task-skill-option"))
-    .toContainText("literature-review");
+  await expect(inspector.getByTestId("dynamic-task-skills")).toHaveCount(0);
 
-  const resizer = studio.getByTestId("workflow-graph-resizer");
-  await expect(resizer).toHaveAttribute("role", "separator");
-  const inspectorBeforeResize = await inspector.boundingBox();
-  await resizer.evaluate((handle) => {
-    const rect = handle.getBoundingClientRect();
-    const startX = rect.left + rect.width / 2;
-    const startY = rect.top + 60;
-    handle.dispatchEvent(new PointerEvent("pointerdown", {
-      bubbles: true,
-      button: 0,
-      pointerId: 17,
-      clientX: startX,
-      clientY: startY,
-    }));
-    handle.dispatchEvent(new PointerEvent("pointermove", {
-      bubbles: true,
-      buttons: 1,
-      pointerId: 17,
-      clientX: startX - 80,
-      clientY: startY,
-    }));
-    handle.dispatchEvent(new PointerEvent("pointerup", {
-      bubbles: true,
-      button: 0,
-      pointerId: 17,
-      clientX: startX - 80,
-      clientY: startY,
-    }));
-  });
-  await expect.poll(async () => {
-    const resized = await inspector.boundingBox();
-    return inspectorBeforeResize && resized
-      ? Math.round(resized.width - inspectorBeforeResize.width)
-      : 0;
-  }).toBeGreaterThan(60);
-  await expect(studio.getByTestId("workflow-graph-minimap")).toBeVisible();
+
+  await expect(inspector).toHaveAttribute("role", "dialog");
+  await page.keyboard.press("Escape");
+  const fitZoom = Number((await studio.getByTestId("workflow-graph-fit").innerText()).replace("%", ""));
   await studio.getByTestId("workflow-graph-zoom-in").click();
-  await expect(studio.getByTestId("workflow-graph-fit")).toHaveText("110%");
+  await expect(studio.getByTestId("workflow-graph-fit")).toHaveText(`${Math.min(fitZoom + 10, 140)}%`);
   await studio.getByTestId("workflow-graph-fit").click();
-  await expect(studio.getByTestId("workflow-graph-fit")).toHaveText("100%");
+  await expect(studio.getByTestId("workflow-graph-fit")).toHaveText(`${fitZoom}%`);
   await expect(studio.getByTestId("workflow-save")).toHaveText("Save as copy");
   const typography = await studio.evaluate((root) => {
     const save = root.querySelector('[data-testid="workflow-save"]')!;
@@ -4470,7 +4436,7 @@ test("Workflow library includes the Wisp-native seven-node method-search DAG", a
     '[data-testid="workflow-graph-node"][data-node-id="method_search"]',
   );
   await expect(activityNode).toHaveClass(/run-activity/);
-  await activityNode.getByTestId("workflow-graph-node-select").click();
+  await activityNode.getByTestId("workflow-graph-node-select").dblclick();
   const inspector = studio.getByTestId("workflow-graph-inspector");
   await expect(inspector.getByTestId("dynamic-task-type"))
     .toHaveValue("run_activity");
@@ -4479,24 +4445,26 @@ test("Workflow library includes the Wisp-native seven-node method-search DAG", a
     .toHaveValue("prepare_contract");
   await expect(inspector.getByTestId("run-activity-max-candidates")).toHaveValue("20");
   await expect(inspector.getByTestId("dynamic-task-capabilities")).toBeHidden();
-  await expect(inspector.getByTestId("dynamic-task-skills")).toBeHidden();
+  await expect(inspector.getByTestId("dynamic-task-skills")).toHaveCount(0);
   await expect(inspector.getByTestId("dynamic-task-specialist")).toBeHidden();
   await expect(studio.getByTestId("workflow-save")).toHaveText("Save as copy");
 });
 
-test("Skill Portfolio Planner uses the selected model and opens an unbudgeted editable DAG", async ({ page }) => {
+test("Workflow conversion uses the selected model and opens an unbudgeted editable DAG", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Workflows");
   const studio = page.getByTestId("workflow-studio");
 
-  await studio.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
   await expect(page.getByTestId("portfolio-planner-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("portfolio-planner-overlay")).toBeHidden();
 
-  await studio.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
   await expect(page.getByTestId("portfolio-planner-overlay")).toContainText(
-    "Ask a selected model to build an explainable workflow",
+    "Turn method documents into a reusable workflow",
   );
   await expect(page.getByTestId("portfolio-tier")).toHaveCount(0);
   await expect(page.getByTestId("portfolio-total")).toHaveCount(0);
@@ -4504,42 +4472,35 @@ test("Skill Portfolio Planner uses the selected model and opens an unbudgeted ed
   await page.getByTestId("portfolio-model").selectOption("opus");
   await page.getByTestId("portfolio-request").fill("Design an oncology omics study");
   await page.getByTestId("portfolio-generate").click();
-  await expect.poll(() => lastInvokeArgs(page, "plan_skill_portfolio")).toEqual({
+  await expect.poll(() => lastInvokeArgs(page, "plan_skill_portfolio")).toMatchObject({
     request: {
       request: "Design an oncology omics study",
       model_id: "opus",
     },
   });
   const card = page.getByTestId("portfolio-plan-card");
-  await expect(card).toContainText("3 tasks · 2 Skills · planned by opus-4.8");
-  await expect(card).toContainText("Task budgets are unset");
-  await card.getByTestId("portfolio-edit-studio").click();
+  await expect(card).toContainText("3 nodes · 2 source methods · opus-4.8");
+  await expect(card).toContainText("Review instructions, requested permissions and output contracts");
+  await page.getByTestId("portfolio-edit-studio").click();
   await expect(studio.getByTestId("workflow-graph-node")).toHaveCount(3);
   await expect(studio.getByTestId("workflow-graph-edge")).toHaveCount(2);
 });
 
-test("Workflow Studio reuses the roundtable generator and saves a Quick Action binding", async ({ page }) => {
+test("Workflow Studio copies the roundtable template and saves a Quick Action binding", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Workflows");
   const studio = page.getByTestId("workflow-studio");
   await expect(studio).toBeVisible();
 
   await studio.getByTestId("workflow-new").click();
-  await studio.getByTestId("workflow-studio-config").locator(":scope > summary").click();
+  await page.getByTestId("workflow-new-use-template").click();
+  await page.getByTestId("workflow-new-template").filter({ hasText: "Roundtable" }).click();
   await studio.getByTestId("workflow-name").fill("Architecture roundtable");
   await studio.getByTestId("workflow-goal").fill("Choose a website architecture");
-  await studio.getByTestId("roundtable-template").locator("summary").click();
-  await studio.getByTestId("roundtable-apply").click();
+  await expect(studio.getByTestId("roundtable-template")).toHaveCount(0);
   await expect(studio.getByTestId("workflow-graph-node")).toHaveCount(5);
   await expect(studio.getByTestId("workflow-graph-edge")).toHaveCount(6);
-  const skillPicker = studio.getByTestId("workflow-graph-inspector")
-    .getByTestId("dynamic-task-skills");
-  await skillPicker.getByTestId("dynamic-task-skill-search").fill("analysis");
-  await skillPicker.getByTestId("dynamic-task-skill-option")
-    .filter({ hasText: "analysis-workflow" })
-    .click();
-  await expect(skillPicker.getByTestId("dynamic-task-selected-skills"))
-    .toContainText("analysis-workflow · bundled");
+  await expect(studio.getByTestId("dynamic-task-skills")).toHaveCount(0);
   await studio.getByTestId("workflow-save").click();
 
   await expect.poll(() => lastInvokeArgs(page, "save_workflow_template")).toMatchObject({
@@ -4549,7 +4510,7 @@ test("Workflow Studio reuses the roundtable generator and saves a Quick Action b
       proposal: {
         goal: "Choose a website architecture",
         tasks: [
-          { id: "seat_1_opening", depends_on: [], skill_ids: ["analysis-workflow"] },
+          { id: "seat_1_opening", depends_on: [], skill_ids: [] },
           { id: "seat_2_opening", depends_on: [] },
           {
             id: "seat_1_review",
@@ -4592,19 +4553,25 @@ test("Workflow graph edits nodes and dependencies directly on the canvas", async
   await openSettingsSection(page, "Workflows");
   const studio = page.getByTestId("workflow-studio");
   await studio.getByTestId("workflow-new").click();
-  await studio.getByTestId("workflow-studio-config").locator(":scope > summary").click();
+  await page.getByTestId("workflow-new-scratch").click();
   await studio.getByTestId("workflow-name").fill("Graph pipeline");
   await studio.getByTestId("workflow-goal").fill("Compare two branches");
+  await studio.getByTestId("workflow-graph-node-select").first().dblclick();
 
   const inspector = studio.getByTestId("workflow-graph-inspector");
   await inspector.getByTestId("dynamic-task-id").fill("fetch_a");
   await inspector.getByTestId("dynamic-task-instruction").fill("Fetch branch A");
+  await page.keyboard.press("Escape");
+  await studio.getByTestId("workflow-graph-add-menu-toggle").click();
   await studio.getByTestId("workflow-graph-add-node").click();
   await inspector.getByTestId("dynamic-task-id").fill("fetch_b");
   await inspector.getByTestId("dynamic-task-instruction").fill("Fetch branch B");
+  await page.keyboard.press("Escape");
+  await studio.getByTestId("workflow-graph-add-menu-toggle").click();
   await studio.getByTestId("workflow-graph-add-after").click();
   await inspector.getByTestId("dynamic-task-id").fill("merge");
   await inspector.getByTestId("dynamic-task-instruction").fill("Merge both branches");
+  await page.keyboard.press("Escape");
 
   const byId = (id: string) =>
     studio.locator(`[data-testid="workflow-graph-node"][data-node-id="${id}"]`);
@@ -4635,10 +4602,12 @@ test("Workflow graph edits nodes and dependencies directly on the canvas", async
   ).getByTestId("workflow-graph-edge-delete").click({ force: true });
   await expect(studio.getByTestId("workflow-graph-edge")).toHaveCount(1);
 
+  await byId("merge").getByTestId("workflow-graph-node-select").dblclick();
   await inspector.getByTestId("workflow-graph-remove-edge")
     .filter({ hasText: "fetch_b" })
     .click();
   await expect(studio.getByTestId("workflow-graph-edge")).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
   await byId("fetch_b").getByTestId("workflow-graph-connect").click();
   await byId("merge").getByTestId("workflow-graph-node-select").click();
@@ -4660,6 +4629,7 @@ test("Workflow graph edits nodes and dependencies directly on the canvas", async
   await expect(studio.getByTestId("workflow-graph-node")).toHaveCount(nodeCountBeforeDblclick + 1);
   await inspector.getByTestId("dynamic-task-id").fill("fetch_c");
   await inspector.getByTestId("dynamic-task-instruction").fill("Fetch branch C");
+  await page.keyboard.press("Escape");
 
   await byId("fetch_a").getByTestId("workflow-graph-delete-node").click();
   await expect(studio.getByTestId("workflow-graph-node")).toHaveCount(3);
@@ -5631,6 +5601,33 @@ test("selected workspace code tells the agent to edit its source and refreshes a
   });
   await expect(preview).toHaveAttribute("data-file-revision", "1");
   await expect(preview.locator(".rp-code-body code")).toContainText("plot(df$x, df$y)");
+});
+
+test("same-value writes never remount the right pane or center preview", async ({ page }) => {
+  await enterApp(page);
+  const filesButton = page.locator(".side-btn", { hasText: "Files" });
+  await filesButton.click();
+  await page.locator('[data-workspace-path="analysis.R"]').click({ button: "right" });
+  await page.locator(".ctx-menu").getByRole("button", { name: "Open in center" }).click();
+  const preview = page.locator('.center-file-preview[data-file-path="analysis.R"]');
+  await expect(preview.locator(".rp-code-body code")).toContainText("plot(1:3)");
+  await expect(page.locator(".rightpane")).toBeVisible();
+  await page.evaluate(() => {
+    (document.querySelector(".rightpane") as any).__mounted = true;
+    (document.querySelector(".center-file-preview") as any).__mounted = true;
+  });
+
+  // Both surfaces animate in from opacity 0; rebuilding them for an unchanged
+  // value is the visible flash. Re-opening the already-open Files tab and a
+  // FileChanged for some other path are both same-value writes for them.
+  await filesButton.click();
+  await emitTauriEvent(page, "agent", { kind: "FileChanged", frame_id: "t1", path: "/mock/root/other.txt" });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  expect(await page.evaluate(() => [
+    Boolean((document.querySelector(".rightpane") as any)?.__mounted),
+    Boolean((document.querySelector(".center-file-preview") as any)?.__mounted),
+  ])).toEqual([true, true]);
+  await expect(preview).toHaveAttribute("data-file-revision", "0");
 });
 
 test("notebook preview renders saved rich outputs without active content", async ({ page }) => {
@@ -9622,6 +9619,41 @@ test("composer Fast lightning hides for ACP and unsupported HTTP providers", asy
   await expect(page.getByTestId("composer-fast-toggle")).toHaveCount(0);
 });
 
+for (const [label, field, value] of [
+  ["Max output tokens", "max_tokens", "4096"],
+  ["Context window (tokens)", "context_window", "32768"],
+] as const) {
+  test(`model settings keeps ${field} focused while typing and deleting (#1243)`, async ({ page }) => {
+    await enterApp(page);
+    await openModelsSettings(page);
+    const input = page.getByLabel(label, { exact: true });
+    await input.click();
+    await page.keyboard.press("ControlOrMeta+A");
+    // Use the keyboard after one click: fill() would hide input remounts.
+    for (let i = 0; i < value.length; i++) {
+      await page.keyboard.type(value[i]);
+      await expect(input).toBeFocused();
+      await expect(input).toHaveValue(value.slice(0, i + 1));
+    }
+    for (let length = value.length - 1; length > 0; length--) {
+      await page.keyboard.press("Backspace");
+      await expect(input).toBeFocused();
+      await expect(input).toHaveValue(value.slice(0, length));
+    }
+    await page.keyboard.type(value.slice(1));
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(value);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => lastInvokeArgs(page, "save_model"))
+      .toMatchObject({ profile: { [field]: Number(value) } });
+    const stored = await page.evaluate(async () => {
+      const models = await (window as any).__TAURI__.core.invoke("list_models");
+      return models.find((model: any) => model.model === "deepseek-v4-pro");
+    });
+    expect(stored).toMatchObject({ [field]: Number(value) });
+  });
+}
+
 test("model settings rejects max output tokens above the known ceiling", async ({ page }) => {
   await enterApp(page);
   await openModelsSettings(page);
@@ -12330,7 +12362,7 @@ test("opening a long conversation lands at the latest message and stays stable o
 });
 
 for (const delayedFont of [false, true]) {
-  test(`switching conversations restores each reading position (#849)${delayedFont ? " with delayed fonts" : ""}`, async ({ page }) => {
+  test(`reopening a conversation lands at latest after reading older messages${delayedFont ? " with delayed fonts" : ""}`, async ({ page }) => {
     let releaseFont = () => {};
     if (delayedFont) {
       const fontGate = new Promise<void>((resolve) => { releaseFont = resolve; });
@@ -12359,10 +12391,17 @@ for (const delayedFont of [false, true]) {
     await expect(page.locator(".empty")).toBeVisible();
     await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
     await expect(page.getByText(/Window page 0 row 19/)).toBeVisible();
-    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-      .toBeGreaterThan(readingTop - 40);
-    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
-      .toBeLessThan(readingTop + 40);
+    await expect.poll(() => scroller.evaluate((element) =>
+      element.scrollHeight - element.clientHeight - element.scrollTop,
+    )).toBeLessThan(8);
+    await expect(page.locator("#chat-jump-pill")).not.toHaveClass(/visible/);
+    expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(readingTop + 40);
+
+    // Opening starts at latest, but reading older messages in this session
+    // must still disable follow and keep the jump-to-latest control useful.
+    await scroller.hover();
+    await page.mouse.wheel(0, -320);
+    await expect(page.locator("#chat-jump-pill")).toHaveClass(/visible/);
   });
 }
 
@@ -12737,6 +12776,62 @@ test("MCP App opens as a persistent center tab and delivers tool data", async ({
       structuredContent: { recordId: "pet-28a", length: 5369 },
     },
   });
+  const sendCountBeforeContextNotice = (await invokeArgsList(page, "send_message")).length;
+  await page.evaluate(({ frameId }) => {
+    (window as any).__tauriEmit("agent", {
+      kind: "AppContextUpdate",
+      frame_id: frameId,
+      context_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      instance_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      app_name: "Motif test app",
+      update_mode: "replace",
+      state: "active",
+      summary: "Active record: pET-28a(+)",
+      structured_preview: JSON.stringify({ recordId: "pet-28a", length: 5369 }),
+    });
+  }, { frameId });
+  const contextNotice = page.getByTestId("mcp-app-context-attachment");
+  await expect(contextNotice).toContainText("Motif test app");
+  await expect(contextNotice.locator(".composer-reference-card")).toHaveAttribute(
+    "title",
+    "Active record: pET-28a(+)",
+  );
+  await expect(contextNotice).toContainText("MCP App context");
+  await expect.poll(() => invokeArgsList(page, "send_message")).toHaveLength(sendCountBeforeContextNotice);
+  await contextNotice.getByRole("button", { name: "Remove attachment" }).click();
+  await expect(page.getByTestId("mcp-app-context-attachment")).toHaveCount(0);
+  await expect.poll(() => lastInvokeArgs(page, "update_mcp_app_context")).toMatchObject({ context: {} });
+
+  await page.evaluate(({ frameId }) => {
+    (window as any).__tauriEmit("agent", {
+      kind: "AppContextUpdate",
+      frame_id: frameId,
+      context_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      instance_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      app_name: "Motif test app",
+      update_mode: "replace",
+      state: "replaced",
+      summary: "Active record: pBR322",
+      structured_preview: null,
+    });
+  }, { frameId });
+  await expect(page.getByTestId("mcp-app-context-attachment")).toHaveCount(1);
+  await expect(page.getByTestId("mcp-app-context-attachment")).toContainText("Motif test app");
+  await page.evaluate(({ frameId }) => {
+    (window as any).__tauriEmit("agent", {
+      kind: "AppContextUpdate",
+      frame_id: frameId,
+      context_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      instance_id: `mcp-app:${frameId}:ui://motif/workbench.html`,
+      app_name: "Motif test app",
+      update_mode: "clear",
+      state: "cleared",
+      summary: "",
+      structured_preview: null,
+    });
+  }, { frameId });
+  await expect(page.getByTestId("mcp-app-context-attachment")).toHaveCount(0);
+
   const frame = page.locator('iframe[title="Motif test app"]');
   await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
   const appTab = page.locator('.center-tab[data-center-path^="mcp-app:"]');
@@ -14761,7 +14856,7 @@ test("context-limit recovery can continue in a new session with the old one atta
   });
 });
 
-test("a leftover proxy connect error points at Model API proxy", async ({ page }) => {
+test("a leftover proxy connect error points at General Network settings", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("hello");
   await page.getByRole("button", { name: "Send" }).click();
@@ -14776,8 +14871,10 @@ test("a leftover proxy connect error points at Model API proxy", async ({ page }
 
   const card = page.locator(".finding.err");
   await expect(card).toBeVisible();
-  await expect(card.locator(".finding-body")).toContainText("Model API proxy");
-  await expect(card.locator(".finding-body")).toContainText("none");
+  await expect(card.locator(".finding-title")).toContainText("via leftover HTTPS_PROXY=http://127.0.0.1:7890");
+  await expect(card.locator(".finding-body")).toContainText("Settings → General → Network");
+  await expect(card.locator(".finding-body")).toContainText("Direct");
+  await expect(card.locator(".finding-body")).not.toContainText("Settings → Models");
 });
 
 test("pet stays off until the user explicitly configures its directory", async ({ page }) => {
@@ -14962,6 +15059,29 @@ test("notification navigation opens the project and session that need the user (
 
   await expect.poll(() => lastInvokeArgs(page, "open_project")).toMatchObject({ id: "other" });
   await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame" });
+});
+
+test("open-session for the project already on screen switches conversations without rebuilding the shell", async ({ page }) => {
+  await page.goto("/");
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__tauriListenerReady("open-session"),
+  )).toBe(true);
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame" });
+  await expect(page.locator("#chat-scroller")).toBeVisible();
+  const projectOpens = await invokeCount(page, "open_project");
+  const sessionLoads = await invokeCount(page, "load_session");
+  // The backend replays a turn-end notification target on the next window
+  // focus. Tearing the shell down for a conversation that is already visible
+  // is the "page flashes on the first click after a reply" report on Windows.
+  await page.evaluate(() => { (document.getElementById("chat-scroller") as any).__sameNode = true; });
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame-2" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame-2" });
+  expect(await invokeCount(page, "load_session")).toBe(sessionLoads + 1);
+  expect(await invokeCount(page, "open_project")).toBe(projectOpens);
+  expect(await page.evaluate(() => (document.getElementById("chat-scroller") as any)?.__sameNode === true)).toBe(true);
+  await expect(page.locator(".app-entering")).toHaveCount(0);
 });
 
 test("a sync conflict requires an explicit authoritative device choice", async ({ page }) => {
@@ -16849,4 +16969,431 @@ test("Generated folders stay open when another reply updates an existing artifac
   await expect(newReply.locator(".generated-artifact-tree")).not.toBeVisible();
   await page.locator("#chat-scroller").evaluate(el => el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
   await reply.locator(".message-artifacts").screenshot({ path: test.info().outputPath("generated-folders-after-update.png") });
+});
+
+
+test("independent Workflow conversion selects source methods without creating Skill-bound nodes", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Workflows");
+  const studio=page.getByTestId("workflow-studio");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-source-manual").click();
+  await page.locator('[data-testid="portfolio-source-skill"][value="analysis-workflow"]').check();
+  await page.getByTestId("portfolio-request").fill("Convert this method into independent roles and output contracts");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page,"plan_skill_portfolio")).toMatchObject({request:{source_skill_ids:["analysis-workflow"]}});
+  await page.getByTestId("portfolio-edit-studio").click();
+  await expect(studio.getByTestId("dynamic-task-skills")).toHaveCount(0);
+  await expect(studio.getByTestId("workflow-legacy-warning")).toHaveCount(0);
+  await studio.getByTestId("workflow-save").click();
+  await expect.poll(() => lastInvokeArgs(page,"save_workflow_template")).toMatchObject({conversionSourceSha256:"fixture-conversion-source"});
+  const args=await lastInvokeArgs(page,"save_workflow_template");
+  expect(args.template.proposal.tasks.every((task:any) => task.skill_ids.length===0)).toBe(true);
+  expect(args.template.proposal.approval_policy).toBe("review_all");
+});
+
+
+test("Workflow conversion reviews source provenance, real node contracts and multiple selected methods", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await expect(page.getByTestId("portfolio-source-auto")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("portfolio-generate")).toBeDisabled();
+  await page.getByTestId("portfolio-request").fill("Produce an evidence-grounded analysis and report");
+  await page.getByTestId("portfolio-source-manual").click();
+  await expect(page.getByTestId("portfolio-source-manual")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("portfolio-source-auto")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("portfolio-generate")).toBeDisabled();
+  await page.getByTestId("portfolio-source-search").fill("analysis");
+  await page.getByTestId("portfolio-source-skill").check();
+  await page.getByTestId("portfolio-source-search").fill("literature");
+  await page.getByTestId("portfolio-source-skill").check();
+  await expect(page.getByTestId("portfolio-source-count")).toHaveText("2 / 8 sources selected");
+  await page.getByTestId("portfolio-generate").click();
+  await expect.poll(() => lastInvokeArgs(page, "plan_skill_portfolio")).toMatchObject({
+    request: { source_skill_ids: ["analysis-workflow", "literature-review"] },
+  });
+  const draft = page.getByTestId("portfolio-plan-card");
+  const nodes = draft.getByTestId("portfolio-review-node");
+  await expect(nodes).toHaveCount(3);
+  await expect(nodes.nth(1)).toContainText("Plan a reproducible analysis");
+  await expect(nodes.nth(1)).toContainText("code_run");
+  await expect(nodes.nth(2)).toContainText("After literature, analysis");
+  await expect(nodes.first()).toContainText("No structured output contract");
+  await expect(nodes.first()).not.toContainText("literature-review");
+  const contract = draft.getByTestId("portfolio-output-contract");
+  await contract.locator("summary").click();
+  await expect(contract.locator("pre")).toContainText('"required": [');
+  await expect(contract.locator("pre")).toContainText('"report"');
+  const sources = draft.getByTestId("portfolio-provenance");
+  await expect(sources.locator(".portfolio-tags code")).toHaveCount(2);
+  await sources.locator("summary").click();
+  await expect(sources).toContainText("fixture-conversion-source");
+  await expect.poll(() => invokeCount(page, "save_workflow_template")).toBe(0);
+  await page.getByTestId("portfolio-edit-studio").click();
+  await expect(page.getByTestId("workflow-conversion-notice")).toBeVisible();
+  await expect(page.getByTestId("workflow-name")).toHaveValue("Design an evidence-grounded oncology study");
+  await expect.poll(() => invokeCount(page, "save_workflow_template")).toBe(0);
+});
+
+test("Workflow conversion invalidates a draft when the request, model or source mode changes", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Original research question");
+  for (const change of [
+    () => page.getByTestId("portfolio-request").fill("Updated research question"),
+    () => page.getByTestId("portfolio-model").selectOption("opus"),
+    () => page.getByTestId("portfolio-source-manual").click(),
+  ]) {
+    await page.getByTestId("portfolio-generate").click();
+    await expect(page.getByTestId("portfolio-edit-studio")).toBeVisible();
+    await change();
+    await expect(page.getByTestId("portfolio-plan-card")).toHaveCount(0);
+    await expect(page.getByTestId("portfolio-edit-studio")).toHaveCount(0);
+  }
+  await page.getByTestId("portfolio-source-skill").first().check();
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await page.getByTestId("portfolio-source-skill").nth(1).check();
+  await expect(page.getByTestId("portfolio-edit-studio")).toHaveCount(0);
+});
+
+test("Workflow conversion keeps errors inside the dialog and supports retry", async ({ page }) => {
+  await enterApp(page);
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    let failed = false;
+    core.invoke = async (cmd: string, args: any) => {
+      if (cmd === "plan_skill_portfolio" && !failed) {
+        failed = true;
+        throw new Error("Source contains unsupported packaged scripts");
+      }
+      return original(cmd, args);
+    };
+  });
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Convert the method");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-error")).toContainText("unsupported packaged scripts");
+  await expect(page.getByTestId("workflow-studio-error")).toHaveCount(0);
+  await expect(page.getByTestId("portfolio-edit-studio")).toHaveCount(0);
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect(page.getByTestId("portfolio-error")).toHaveCount(0);
+});
+
+test("Workflow conversion keeps running after closing and reopening", async ({ page }) => {
+  await enterApp(page);
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    let delayed = false;
+    core.invoke = async (cmd: string, args: any) => {
+      const result = await original(cmd, args);
+      if (cmd === "plan_skill_portfolio" && !delayed) {
+        delayed = true;
+        return new Promise(resolve => { (window as any).__finishConversion = () => resolve(result); });
+      }
+      return result;
+    };
+  });
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Old research question");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-loading")).toBeVisible();
+  await expect(page.getByTestId("portfolio-request")).toBeDisabled();
+  await expect(page.getByTestId("portfolio-model")).toBeDisabled();
+  await expect(page.getByTestId("portfolio-generate")).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("workflow-studio")).toBeVisible();
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.evaluate(() => (window as any).__finishConversion());
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect(page.getByTestId("portfolio-request")).toHaveValue("Old research question");
+  await page.getByTestId("portfolio-request").fill("New research question");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+});
+
+async function holdWorkflowConversion(page: Page) {
+  await page.evaluate(() => {
+    const core = (window as any).__TAURI__.core;
+    const original = core.invoke;
+    core.invoke = async (cmd: string, args: any) => {
+      const result = await original(cmd, args);
+      if (cmd !== "plan_skill_portfolio") return result;
+      return new Promise((resolve, reject) => {
+        (window as any).__finishConversion = () => resolve(result);
+        (window as any).__failConversion = () => reject(new Error("Conversion timed out"));
+      });
+    };
+  });
+}
+
+test("Workflow conversion reports real progress and retains its draft after leaving settings", async ({ page }) => {
+  await enterApp(page);
+  await holdWorkflowConversion(page);
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Background research question");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("conversion-progress")).toContainText("Preparing conversion");
+  const { conversionId, expectedProjectId } = await lastInvokeArgs(page, "plan_skill_portfolio");
+  expect(expectedProjectId).toBe("default");
+  for (const [stage, text] of [
+    ["selecting_sources", "Matching source Skills"],
+    ["reading_sources", "Reading method documents"],
+    ["generating", "Generating node instructions"],
+    ["validating", "Checking dependencies"],
+    ["repairing", "Correcting nodes after validation"],
+  ]) {
+    await emitTauriEvent(page, "workflow-conversion-progress", { conversion_id: conversionId, stage });
+    await expect(page.getByTestId("conversion-progress")).toContainText(text);
+  }
+  await expect(page.getByTestId("conversion-progress").locator(".conversion-elapsed")).not.toHaveText("Elapsed 0:00");
+  await page.getByRole("dialog").screenshot({ path: test.info().outputPath("conversion-progress.png") });
+  await page.getByTestId("portfolio-background").click();
+  await expect(page.getByTestId("portfolio-planner-overlay")).toBeHidden();
+  await expect(page.getByTestId("workflow-studio")).toBeVisible();
+  await expect(page.getByTestId("conversion-notice")).toContainText("Correcting nodes");
+  await page.getByTestId("workflow-studio-back").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("workflow-studio")).toHaveCount(0);
+  await emitTauriEvent(page, "workflow-conversion-progress", { conversion_id: conversionId, stage: "saving" });
+  await expect(page.getByTestId("conversion-notice")).toContainText("Saving source provenance");
+  await page.evaluate(() => (window as any).__finishConversion());
+  await expect(page.getByTestId("conversion-notice")).toContainText("Workflow draft ready for review");
+  await page.screenshot({ path: test.info().outputPath("conversion-background-ready.png") });
+  await page.getByTestId("conversion-open").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect(page.getByTestId("portfolio-request")).toHaveValue("Background research question");
+  await expect.poll(() => invokeCount(page, "plan_skill_portfolio")).toBe(1);
+  await page.getByTestId("portfolio-edit-studio").click();
+  await expect(page.getByTestId("conversion-notice")).toHaveCount(0);
+  await page.getByTestId("workflow-save").click();
+  await expect.poll(() => lastInvokeArgs(page, "save_workflow_template")).toMatchObject({ conversionSourceSha256: "fixture-conversion-source" });
+});
+
+test("Workflow background failure can retry and ignores another request's progress", async ({ page }) => {
+  await enterApp(page);
+  await holdWorkflowConversion(page);
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Retry conversion");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-loading")).toBeVisible();
+  const oldId = (await lastInvokeArgs(page, "plan_skill_portfolio")).conversionId;
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("workflow-studio")).toBeVisible();
+  await page.evaluate(() => (window as any).__failConversion());
+  await expect(page.getByTestId("conversion-notice")).toContainText("Workflow conversion failed");
+  await page.getByTestId("conversion-open").click();
+  await expect(page.getByTestId("portfolio-error")).toContainText("Conversion timed out");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-loading")).toBeVisible();
+  const newId = (await lastInvokeArgs(page, "plan_skill_portfolio")).conversionId;
+  expect(newId).not.toBe(oldId);
+  await emitTauriEvent(page, "workflow-conversion-progress", { conversion_id: newId, stage: "reading_sources" });
+  await emitTauriEvent(page, "workflow-conversion-progress", { conversion_id: oldId, stage: "repairing" });
+  await expect(page.getByTestId("conversion-progress")).toContainText("Reading method documents");
+  await expect(page.getByTestId("portfolio-error")).toHaveCount(0);
+  await page.evaluate(() => (window as any).__finishConversion());
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+});
+
+test("Workflow background draft returns to its source project", async ({ page }) => {
+  await enterApp(page);
+  await holdWorkflowConversion(page);
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-request").fill("Original project conversion");
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-loading")).toBeVisible();
+  await page.getByTestId("portfolio-background").click();
+  await page.getByTestId("workflow-studio-back").click();
+  await page.keyboard.press("Escape");
+  await page.locator(".proj-switch").click();
+  await page.locator(".proj-menu").getByRole("button", { name: "Other project" }).click();
+  await expect(page.locator(".proj-name")).toHaveText("Other project");
+  await page.evaluate(() => (window as any).__finishConversion());
+  await expect(page.getByTestId("conversion-notice")).toContainText("Workflow draft ready");
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await expect(page.getByTestId("portfolio-planner-open")).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("conversion-open").click();
+  await expect(page.locator(".proj-name")).toHaveText("wisp-science");
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect(page.getByTestId("portfolio-request")).toHaveValue("Original project conversion");
+});
+
+for (const missing of ["Sources", "Models"]) {
+  test(`Workflow conversion explains missing ${missing.toLowerCase()} and disables generation`, async ({ page }) => {
+    await enterApp(page, `/?mockWorkflow${missing}=none`);
+    await openSettingsSection(page, "Workflows");
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("portfolio-planner-open").click();
+    await page.getByTestId("portfolio-request").fill("Convert a method");
+    await expect(page.getByTestId(`portfolio-no-${missing.toLowerCase()}`)).toBeVisible();
+    await expect(page.getByTestId("portfolio-generate")).toBeDisabled();
+  });
+}
+
+test("Workflow conversion limits manual selection to eight methods", async ({ page }) => {
+  await enterApp(page, "/?mockWorkflowSources=many");
+  await openSettingsSection(page, "Workflows");
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.getByTestId("portfolio-source-manual").click();
+  const sources = page.getByTestId("portfolio-source-skill");
+  for (let i = 0; i < 8; i++) await sources.nth(i).check();
+  await expect(sources.nth(8)).toBeDisabled();
+  await expect(sources.nth(9)).toBeDisabled();
+  await sources.first().uncheck();
+  await expect(sources.nth(8)).toBeEnabled();
+  await sources.nth(8).check();
+  await expect(page.getByTestId("portfolio-source-count")).toHaveText("8 / 8 sources selected");
+});
+
+test("Workflow conversion Escape closes the dialog before an underlying graph connection", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Workflows");
+  const studio = page.getByTestId("workflow-studio");
+  await studio.getByTestId("workflow-graph-connect").first().click();
+  await page.getByTestId("workflow-new").click();
+  await page.getByTestId("portfolio-planner-open").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("portfolio-planner-overlay")).toHaveCount(0);
+  await expect(studio.getByTestId("workflow-graph-connect-hint")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(studio.getByTestId("workflow-graph-connect-hint")).toHaveCount(0);
+  await expect(studio).toBeVisible();
+});
+
+for (const layout of [
+  { locale: "en", width: 1440, height: 900, theme: "light" },
+  { locale: "zh", width: 1100, height: 800, theme: "light" },
+  { locale: "zh", width: 640, height: 740, theme: "dark" },
+]) {
+  test(`Workflow conversion layout ${layout.locale} ${layout.width} ${layout.theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await page.goto(`/?mockLocale=${layout.locale}`);
+    await page.locator(".proj-card-main").first().click();
+    const zh = layout.locale === "zh";
+    await page.getByRole("button", { name: zh ? "设置" : "Settings", exact: true }).click();
+    await page.getByRole("button", { name: zh ? "工作流" : "Workflows", exact: true }).click();
+    await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), layout.theme);
+    await page.getByTestId("workflow-new").click();
+    await page.getByTestId("portfolio-planner-open").click();
+    await page.getByTestId("portfolio-request").fill(zh ? "核查开放获取论文是否获得更多引用，生成带引用的证据报告。" : "Check whether open access papers receive more citations and produce an evidence report.");
+    const modal = page.getByRole("dialog");
+    await expectInsideViewport(modal, layout.width, layout.height);
+    const model = page.getByTestId("portfolio-model");
+    const inputWidth = await model.evaluate(el => el.getBoundingClientRect().width);
+    expect(inputWidth).toBeGreaterThan(300);
+    await modal.screenshot({ path: test.info().outputPath("workflow-conversion-inputs.png") });
+    await page.getByTestId("portfolio-generate").click();
+    await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+    if (layout.width <= 720) {
+      await expect.poll(() => modal.locator(".portfolio-workspace").evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+      await expectInsideViewport(modal.locator(".portfolio-draft-head"), layout.width, layout.height);
+    }
+    await expectInsideViewport(page.getByTestId("portfolio-edit-studio"), layout.width, layout.height);
+    expect(await modal.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await modal.screenshot({ path: test.info().outputPath("workflow-conversion-review.png") });
+  });
+}
+
+test("legacy Skill-bound templates require explicit conversion and keep the parent Escape layer open", async ({ page }) => {
+  await enterApp(page,"/?mockLegacyWorkflow=1");
+  await openSettingsSection(page,"Workflows");
+  const studio=page.getByTestId("workflow-studio");
+  await studio.locator('[data-workflow-id="legacy-skill-workflow"]').click();
+  await expect(studio.getByTestId("workflow-legacy-warning")).toBeVisible();
+  await expect(studio.getByTestId("workflow-save")).toBeDisabled();
+  await expect(studio.getByTestId("dynamic-task-skills")).toHaveCount(0);
+  await studio.getByTestId("workflow-reconvert").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("portfolio-planner-overlay")).toBeHidden();
+  await expect(studio).toBeVisible();
+  await expect(studio.getByTestId("workflow-legacy-warning")).toBeVisible();
+  await studio.getByTestId("workflow-reconvert").click();
+  await page.getByTestId("portfolio-generate").click();
+  await expect(page.getByTestId("portfolio-plan-card")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page,"plan_skill_portfolio")).toMatchObject({request:{legacy_template_id:"legacy-skill-workflow"}});
+  await page.getByTestId("portfolio-edit-studio").click();
+  await expect(studio.getByTestId("workflow-legacy-warning")).toHaveCount(0);
+  await expect(studio.getByTestId("workflow-name")).toHaveValue("Legacy Skill workflow");
+  await studio.getByTestId("workflow-save").click();
+  await expect.poll(() => lastInvokeArgs(page,"save_workflow_template")).toMatchObject({template:{id:"legacy-skill-workflow",proposal:{approval_policy:"review_all"}}});
+});
+
+test("historical Skill-bound Workflow cannot be approved and offers source conversion", async ({ page }) => {
+  await enterApp(page,"/?mockAgentWorkflow=legacy");
+  await page.getByRole("button",{name:"Toggle panel"}).click();
+  await page.locator(".rightpane").getByRole("button",{name:"Agents",exact:true}).click();
+  const panel=page.getByTestId("agent-workflows");
+  await expect(panel.getByTestId("agent-legacy-warning")).toBeVisible();
+  await expect(panel.getByTestId("agent-approve")).toBeDisabled();
+  await panel.getByTestId("agent-reconvert").click();
+  await expect(page.getByTestId("portfolio-planner-overlay")).toBeVisible();
+  await page.getByTestId("portfolio-generate").click();
+  await expect.poll(() => lastInvokeArgs(page,"plan_skill_portfolio")).toMatchObject({request:{legacy_workflow_id:"workflow-1"}});
+});
+
+test("Workflow child confirmation cleanup cannot dismiss a newer owner request", async ({ page }) => {
+  await enterApp(page,"/?mockSessionModels=1");
+  await page.locator('[data-session-id="s-model-a"]').click();
+  const show=async(id:string,label:string) => emitTauriEvent(page,"confirm-request",{
+    frame_id:"s-model-a",approval_id:id,message:`Workflow node ${label} requests confirmation`,tool:"run_in_context",preview:`echo ${label}`,
+  });
+  await show("child-1","first");
+  await expect(page.getByRole("button",{name:"Deny",exact:true})).toBeVisible();
+  await show("child-2","second");
+  await emitTauriEvent(page,"confirm-resolved",{frame_id:"s-model-a",approval_id:"child-1",tool:"run_in_context",preview:"",message:""});
+  await expect(page.getByTestId("workflow-approval-node")).toHaveText("Workflow node: second");
+  await expect(page.getByLabel("Approval scope")).toHaveCount(0);
+  await emitTauriEvent(page,"confirm-resolved",{frame_id:"s-model-a",approval_id:"child-2",tool:"run_in_context",preview:"",message:""});
+  await expect(page.getByRole("button",{name:"Deny",exact:true})).toHaveCount(0);
+});
+
+test("project star pins above examples, survives reload, and can be removed", async ({ page }) => {
+  await page.goto("/");
+  const other = page.locator(".proj-card:not(.proj-example)", { hasText: "Other project" });
+  const star = other.getByTestId("project-card-star");
+  await expect(star).toHaveAttribute("aria-pressed", "false");
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".projects-col").first().locator(".proj-card").first()).toContainText("Other project");
+  await expect.poll(() => lastInvokeArgs(page, "open_project")).toBeNull();
+  await page.reload();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".projects-col").first().locator(".proj-card").first()).toContainText("Other project");
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".proj-card:not(.proj-example)").first()).not.toContainText("Other project");
+});
+
+test("project star save failure leaves ordering and state unchanged", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => { (window as any).__failProjectStar = true; });
+  const other = page.locator(".proj-card:not(.proj-example)", { hasText: "Other project" });
+  await other.getByTestId("project-card-star").click();
+  await expect(page.getByRole("alert")).toContainText("Could not save project star");
+  await expect(other.getByTestId("project-card-star")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".proj-card:not(.proj-example)").first()).not.toContainText("Other project");
 });

@@ -86,6 +86,8 @@ mod research_progress;
 mod resource_leases;
 mod resource_refs;
 mod review;
+mod workflow_approval;
+mod workflow_artifacts;
 pub(crate) use wisp_runs as run_context;
 mod network;
 mod runtime_commands;
@@ -187,6 +189,21 @@ enum AgentEvent {
         presentation_id: String,
         presentation_kind: String,
         payload: serde_json::Value,
+    },
+    /// A persisted, non-agent notice that an MCP App changed the live model
+    /// context. It is shown in the transcript but never published as model
+    /// input and never starts a new turn by itself.
+    AppContextUpdate {
+        frame_id: String,
+        context_id: String,
+        instance_id: String,
+        app_name: String,
+        #[serde(default)]
+        update_mode: String,
+        state: String,
+        summary: String,
+        #[serde(default)]
+        structured_preview: Option<String>,
     },
     Usage {
         frame_id: String,
@@ -291,6 +308,7 @@ impl AgentEvent {
             | Self::ToolCall { frame_id, .. }
             | Self::ToolResult { frame_id, .. }
             | Self::ToolPresentation { frame_id, .. }
+            | Self::AppContextUpdate { frame_id, .. }
             | Self::Usage { frame_id, .. }
             | Self::Compaction { frame_id, .. }
             | Self::CompactionStarted { frame_id, .. }
@@ -347,6 +365,16 @@ fn emit_confirm_request(app: &AppHandle, request: &ConfirmRequest, project_id: O
     channels::publish_approval_request(request);
 }
 
+fn emit_confirm_resolved(app: &AppHandle, request: &ConfirmRequest, project_id: &str) {
+    emit_to_session_surfaces(
+        app,
+        &request.frame_id,
+        Some(project_id),
+        "confirm-resolved",
+        request,
+    );
+}
+
 type ConfirmSender = tokio::sync::oneshot::Sender<wisp_tools::ConfirmDecision>;
 type ConfirmReceiver = tokio::sync::oneshot::Receiver<wisp_tools::ConfirmDecision>;
 
@@ -363,6 +391,7 @@ async fn request_image_resize_confirmation(
     project_id: &str,
     message: String,
 ) -> bool {
+    let _slot = workflow_approval::lock_frame(frame_id).await;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let request = ConfirmRequest::new(frame_id, message, "image_resize", String::new());
     state.confirms.lock().unwrap().insert(
@@ -382,6 +411,7 @@ async fn request_image_resize_confirmation(
     state.device_hub.mark_needs_user(frame_id, Some(project_id));
     emit_confirm_request(app, &request, Some(project_id));
     let approved = receive_confirm_decision(rx).await.approved();
+    emit_confirm_resolved(app, &request, project_id);
     state.confirms.lock().unwrap().remove(frame_id);
     state.awaiting_confirm.lock().unwrap().remove(frame_id);
     state.device_hub.resolve_needs_user(frame_id);
@@ -1009,6 +1039,7 @@ struct SessionTranscriptPage {
     branches: Vec<wisp_store::SessionBranchLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_state: Option<String>,
+    pending_approvals: Vec<wisp_dto::PendingToolApproval>,
 }
 
 #[derive(Serialize)]
@@ -1034,20 +1065,7 @@ struct FolderInfo {
     name: String,
 }
 
-#[derive(Serialize, Clone)]
-struct ProjectSummary {
-    id: String,
-    name: String,
-    description: String,
-    workspace_dir: String,
-    session_count: i64,
-    artifact_count: i64,
-    updated_at: i64,
-    running_count: i64,
-    needs_you_count: i64,
-    sync_configured: bool,
-    last_synced_at: Option<i64>,
-}
+use wisp_dto::ProjectSummary;
 
 async fn build_project_summary(state: &AppState, id: &str) -> ProjectSummary {
     let running = state.running_turns.lock().await.clone();
@@ -1060,6 +1078,7 @@ async fn build_project_summary(state: &AppState, id: &str) -> ProjectSummary {
         .and_then(|v| v.into_iter().find(|r| r.0 == id))
     else {
         return ProjectSummary {
+            starred: false,
             id: id.into(),
             name: String::new(),
             description: String::new(),
@@ -1080,6 +1099,12 @@ async fn build_project_summary(state: &AppState, id: &str) -> ProjectSummary {
         .as_ref()
         .is_some_and(|state| state.base_revision.is_some());
     ProjectSummary {
+        starred: state
+            .store
+            .starred_project_ids()
+            .await
+            .unwrap_or_default()
+            .contains(&id),
         id,
         name,
         description: desc,
@@ -1692,6 +1717,10 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                     }
                 }
             }
+            // App context is a pending composer attachment. It is persisted
+            // as a host event for diagnostics, but must never become a chat
+            // transcript row or be restored as an embedded message.
+            AgentEvent::AppContextUpdate { .. } => {}
             AgentEvent::FileChanged { path, .. } => items.push(UiItem {
                 role: "file_changed".into(),
                 text: path.clone(),
@@ -1851,6 +1880,25 @@ async fn append_ui_event(store: &Store, frame_id: &str, seq: &mut i64, event: Ag
     }
 }
 
+/// Persist and fan out an App context notice outside an Agent turn. App
+/// context updates are UI/model-context events, not user messages and not
+/// tool calls; keeping this path explicit prevents them from accidentally
+/// starting a turn or entering external channel output.
+async fn persist_and_emit_app_context_update(
+    state: &AppState,
+    app: &AppHandle,
+    frame_id: &str,
+    project_id: Option<&str>,
+    event: AgentEvent,
+) {
+    if should_persist_ui_event(&event) {
+        if let Ok(mut seq) = state.store.next_session_ui_event_seq(frame_id).await {
+            append_ui_event(&state.store, frame_id, &mut seq, event.clone()).await;
+        }
+    }
+    emit_agent_event_in(app, event, project_id);
+}
+
 /// Terminal turn events are emitted after the streaming/persistence workers
 /// have drained so they cannot overtake buffered text. Persist them on that
 /// same boundary before publishing them to the UI; otherwise a failed turn is
@@ -1889,11 +1937,16 @@ fn terminal_ui_events(events: &[String]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+pub(crate) enum SessionUiMessage {
+    Event(AgentEvent),
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
 async fn persist_ui_events(
     store: Store,
     frame_id: String,
     mut seq: i64,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<SessionUiMessage>,
     flush_interval: std::time::Duration,
 ) {
     let mut pending = None;
@@ -1904,12 +1957,18 @@ async fn persist_ui_events(
     loop {
         tokio::select! {
             event = rx.recv() => match event {
-                Some(event) => {
+                Some(SessionUiMessage::Event(event)) => {
                     if let Some(event) = limit_persisted_ui_event(event, &mut persisted_stdout_bytes) {
                         if let Some(event) = merge_pending_ui_event(&mut pending, event) {
                             append_ui_event(&store, &frame_id, &mut seq, event).await;
                         }
                     }
+                }
+                Some(SessionUiMessage::Flush(done)) => {
+                    if let Some(event) = pending.take() {
+                        append_ui_event(&store, &frame_id, &mut seq, event).await;
+                    }
+                    let _ = done.send(());
                 }
                 None => break,
             },
@@ -1942,7 +2001,7 @@ fn is_streaming_delta_event(event: &AgentEvent) -> bool {
 /// and is forwarded immediately, so arrival order is preserved and tool/done
 /// boundaries never lag behind their output.
 async fn coalesce_live_agent_events(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<SessionUiMessage>,
     flush_interval: std::time::Duration,
     mut emit: impl FnMut(AgentEvent),
 ) {
@@ -1953,16 +2012,20 @@ async fn coalesce_live_agent_events(
     loop {
         tokio::select! {
             event = rx.recv() => match event {
-                Some(event) if is_streaming_delta_event(&event) => {
+                Some(SessionUiMessage::Event(event)) if is_streaming_delta_event(&event) => {
                     if let Some(evicted) = merge_pending_ui_event(&mut pending, event) {
                         emit(evicted);
                     }
                 }
-                Some(event) => {
+                Some(SessionUiMessage::Event(event)) => {
                     if let Some(pending) = pending.take() {
                         emit(pending);
                     }
                     emit(event);
+                }
+                Some(SessionUiMessage::Flush(done)) => {
+                    if let Some(pending) = pending.take() { emit(pending); }
+                    let _ = done.send(());
                 }
                 None => break,
             },
@@ -2372,6 +2435,7 @@ pub(crate) fn emit_to_session_surfaces_filtered<T: Clone + Serialize>(
 
 #[tauri::command]
 async fn update_mcp_app_context(
+    app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
     app_name: String,
@@ -2381,30 +2445,75 @@ async fn update_mcp_app_context(
     let context = normalize_mcp_app_context(&app_name, context)?;
     if context.is_none() {
         if let Some(runtime) = state.sessions.lock().await.get(&frame_id).cloned() {
-            runtime.set_mcp_app_context(instance_id, None);
+            runtime.set_mcp_app_context(instance_id.clone(), None);
         }
+        persist_and_emit_app_context_update(
+            state.inner(),
+            &app,
+            &frame_id,
+            None,
+            AgentEvent::AppContextUpdate {
+                frame_id: frame_id.clone(),
+                context_id: instance_id.clone(),
+                instance_id,
+                app_name,
+                update_mode: "clear".into(),
+                state: "cleared".into(),
+                summary: String::new(),
+                structured_preview: None,
+            },
+        )
+        .await;
         return Ok(());
     }
-    if state
+    let project_id = state
         .store
         .frame_project_id(&frame_id)
         .await
-        .map_err(|error| error.to_string())?
-        .is_none()
-    {
+        .map_err(|error| error.to_string())?;
+    if project_id.is_none() {
         return Err("MCP App session no longer exists.".into());
     }
     let runtime = {
         let mut sessions = state.sessions.lock().await;
         sessions
-            .entry(frame_id)
+            .entry(frame_id.clone())
             .or_insert_with(|| Arc::new(SessionRuntime::new()))
             .clone()
     };
     if runtime.deleted.load(Ordering::SeqCst) {
         return Err("MCP App session was deleted.".into());
     }
-    runtime.set_mcp_app_context(instance_id, context);
+    let context = context.expect("non-empty MCP App context");
+    let summary = context
+        .summary
+        .chars()
+        .take(MAX_MCP_APP_NOTICE_TEXT_BYTES)
+        .collect::<String>();
+    let structured_preview = context.structured_preview.as_ref().map(|value| {
+        value
+            .chars()
+            .take(MAX_MCP_APP_NOTICE_STRUCTURED_BYTES)
+            .collect::<String>()
+    });
+    runtime.set_mcp_app_context(instance_id.clone(), Some(context));
+    persist_and_emit_app_context_update(
+        state.inner(),
+        &app,
+        &frame_id,
+        project_id.as_deref(),
+        AgentEvent::AppContextUpdate {
+            frame_id: frame_id.clone(),
+            context_id: instance_id.clone(),
+            instance_id,
+            app_name,
+            update_mode: "replace".into(),
+            state: "active".into(),
+            summary,
+            structured_preview,
+        },
+    )
+    .await;
     Ok(())
 }
 
@@ -2545,6 +2654,8 @@ const MAX_MCP_APP_RESULT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MCP_APP_TOOL_NAME_BYTES: usize = 256;
 /// No default execution limit. Explicit deadlines remain available to tests/embedders.
 const MCP_APP_TOOL_CALL_TIMEOUT: Option<std::time::Duration> = None;
+const MAX_MCP_APP_NOTICE_TEXT_BYTES: usize = 4 * 1024;
+const MAX_MCP_APP_NOTICE_STRUCTURED_BYTES: usize = 4 * 1024;
 const MCP_APP_STALE_INSTANCE_ERROR: &str =
     "stale-instance: the MCP App is no longer bound to a live MCP server";
 
@@ -2599,6 +2710,7 @@ async fn request_mcp_app_tool_confirmation(
     limiter: &McpAppCallLimiter,
     epoch: u64,
 ) -> wisp_tools::ConfirmDecision {
+    let _slot = workflow_approval::lock_frame(frame_id).await;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let request = ConfirmRequest::new(frame_id, message, tool, preview);
     state.confirms.lock().unwrap().insert(
@@ -2631,6 +2743,7 @@ async fn request_mcp_app_tool_confirmation(
         }
         owns
     };
+    emit_confirm_resolved(app, &request, project_id);
     if owns_confirmation {
         state.awaiting_confirm.lock().unwrap().remove(frame_id);
         state.device_hub.resolve_needs_user(frame_id);
@@ -2992,11 +3105,11 @@ struct TauriOutput {
     /// session" no longer discards the whole turn. `None` disables it.
     persist: Option<tokio::sync::mpsc::UnboundedSender<Message>>,
     /// Ordered UI events used to rebuild the same transcript layout after a restart.
-    ui_events: Option<tokio::sync::mpsc::UnboundedSender<AgentEvent>>,
+    ui_events: Option<tokio::sync::mpsc::UnboundedSender<SessionUiMessage>>,
     /// Live-surface sink: events pass through `coalesce_live_agent_events` so a
     /// token/stdout flood cannot saturate the WebView IPC channel. `None`
     /// emits directly (tests).
-    live_events: Option<tokio::sync::mpsc::UnboundedSender<AgentEvent>>,
+    live_events: Option<tokio::sync::mpsc::UnboundedSender<SessionUiMessage>>,
     message_seq: std::sync::atomic::AtomicI64,
     /// Provenance sink: each tool-execution record the turn produces is sent here
     /// and persisted as an `execution_log` row by a background drain task.
@@ -3026,17 +3139,16 @@ impl TauriOutput {
             .apply_agent_event(&event, Some(&self.project_id));
         if should_persist_ui_event(&event) {
             if let Some(tx) = &self.ui_events {
-                let _ = tx.send(event.clone());
+                let _ = tx.send(SessionUiMessage::Event(event.clone()));
             }
         }
         match &self.live_events {
             Some(tx) => {
-                if let Err(send_error) = tx.send(event) {
-                    emit_agent_event_to_surfaces_in(
-                        &self.app,
-                        send_error.0,
-                        Some(&self.project_id),
-                    );
+                if let Err(send_error) = tx.send(SessionUiMessage::Event(event)) {
+                    let SessionUiMessage::Event(event) = send_error.0 else {
+                        unreachable!()
+                    };
+                    emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id));
                 }
             }
             None => emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id)),
@@ -3048,6 +3160,7 @@ impl TauriOutput {
         message: &str,
         allow_full_permission: bool,
     ) -> wisp_tools::ConfirmDecision {
+        let _slot = workflow_approval::lock_frame(&self.frame_id).await;
         if allow_full_permission && self.full_permission() && !self.force_ask_mutations {
             return wisp_tools::ConfirmDecision::Approved;
         }
@@ -3085,6 +3198,7 @@ impl TauriOutput {
         // There is deliberately no timeout: lack of approval must never be
         // converted into a denial that lets the same agent turn continue.
         let decision = receive_confirm_decision(rx).await;
+        emit_confirm_resolved(&self.app, &request, &self.project_id);
         self.confirms.lock().unwrap().remove(&self.frame_id);
         self.awaiting_confirm.lock().unwrap().remove(&self.frame_id);
         self.device_hub.resolve_needs_user(&self.frame_id);
@@ -3130,7 +3244,10 @@ impl TauriOutput {
 }
 
 fn emit_agent_event_to_surfaces_in(app: &AppHandle, event: AgentEvent, project_id: Option<&str>) {
-    if !matches!(event, AgentEvent::ToolPresentation { .. }) {
+    if !matches!(
+        event,
+        AgentEvent::ToolPresentation { .. } | AgentEvent::AppContextUpdate { .. }
+    ) {
         channels::publish_agent_event(&event);
     }
     let frame_id = event.frame_id().to_string();
@@ -3155,6 +3272,7 @@ fn should_persist_ui_event(event: &AgentEvent) -> bool {
             | AgentEvent::ToolResult { .. }
             | AgentEvent::FileChanged { .. }
             | AgentEvent::ToolPresentation { .. }
+            | AgentEvent::AppContextUpdate { .. }
             | AgentEvent::Stdout { .. }
             | AgentEvent::Usage { .. }
             | AgentEvent::Compaction { .. }
@@ -4786,6 +4904,34 @@ fn record_window_focus(label: &str, focused: bool) {
 
 fn app_has_focus() -> bool {
     !focused_windows().lock().unwrap().is_empty()
+}
+
+/// Whether the user is looking at one of this app's windows.
+///
+/// On Windows the WebView2 child HWND owns keyboard focus, so the top-level
+/// window reports `Focused(false)` right after every `Focused(true)` and the
+/// recorded set is empty while the user is actively using the app. The
+/// foreground window is the reliable signal there: it names exactly one
+/// top-level window no matter which child holds focus.
+fn app_is_foreground(app: &AppHandle) -> bool {
+    if app_has_focus() {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let foreground = unsafe { GetForegroundWindow() }.0 as usize;
+        if foreground != 0 {
+            return app.workspace_surfaces().values().any(|window| {
+                window
+                    .hwnd()
+                    .is_ok_and(|hwnd| hwnd.0 as usize == foreground)
+            });
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+    false
 }
 
 /// The `open-session` payload a window's most recent desktop notification was
@@ -7306,6 +7452,7 @@ pub fn run() {
                 scratch: std::sync::RwLock::new(HashMap::new()),
             };
             app.manage(state);
+            workflow_approval::install(app.handle().clone());
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -7546,6 +7693,7 @@ pub fn run() {
             session_commands::list_recent_sessions,
             session_commands::latest_used_session,
             project_commands::list_projects,
+            project_commands::set_project_starred,
             project_commands::list_workspace_projects,
             app_commands::pick_directory,
             app_commands::pick_executable_file,
