@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "block_count": 175,
+  "source_count": 5590,
+  "target_count": 18531,
+  "valid_tests": 99062024,
+  "checks": ["all blocks and axes", "effective group thresholds", "forward BH sampled per block", "HMGCR reverse BH across all sources", "ARID1A full vs pilot"]
+}
