@@ -307,6 +307,14 @@ class DepMapApiTests(unittest.TestCase):
                 "/api/v1/query", headers=self.headers,
                 json={"mode": "synthetic_lethal", "source": "arid1a", "target": "arid1b", "limit": 5},
             ).json()
+            synthetic_forward = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "synthetic_lethal", "source": "arid1a", "limit": 5},
+            ).json()
+            synthetic_reverse = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "synthetic_lethal", "target": "arid1b", "limit": 5},
+            ).json()
             three_d = client.post(
                 "/api/v1/query", headers=self.headers,
                 json={"mode": "three_d", "family": "dependency_profiles", "cohort": "three_d_all", "gene": "kras", "limit": 5},
@@ -315,6 +323,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(true_love["rows"][0]["bootstrap_reciprocal_stability"], 0.94)
         self.assertEqual(synthetic["status"], "FOUND")
         self.assertEqual(synthetic["rows"][0]["target_gene"], "ARID1B")
+        self.assertEqual(synthetic_forward["status"], "FOUND")
+        self.assertEqual(synthetic_forward["rows"][0]["source_gene"], "ARID1A")
+        self.assertEqual(synthetic_reverse["status"], "FOUND")
+        self.assertEqual(synthetic_reverse["rows"][0]["target_gene"], "ARID1B")
         self.assertEqual(three_d["status"], "FOUND")
         self.assertEqual(three_d["rows"][0]["mean_gene_effect"], -0.62)
 

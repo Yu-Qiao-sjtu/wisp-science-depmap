@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "release": "26Q1",
+  "snapshot_date": "2026-09-09",
+  "purpose": "Immutable project-local reference snapshots for the 06-11 mutation script audit",
+  "execution_policy": "Reference only. Use the module's current scripts and statistical contract for new analyses.",
+  "files": [
+    {
+      "name": "06_mut_anchor_gene_selection_26Q1.R",
+      "bytes": 16939,
+      "sha256": "e87a8904464e74b091d4f97a9120bbd66ef6445f3070293225346501f0079b89"
+    },
+    {
+      "name": "07_mutant_dependency_26Q1.R",
+      "bytes": 38415,
+      "sha256": "a8d92723acae28ade2b6a24ef91a14f9c899c45d69bb8fb2c39689ca02a0e6f0"
+    },
+    {
+      "name": "08_mutData_updata_26Q1.R",
+      "bytes": 18501,
+      "sha256": "5a7a6214e8748e3f8a96f22e1a2fc6a574f097024bd308d5482cbd7fef002419"
+    },
+    {
+      "name": "09_batch_from_mut_to_target_26Q1.R",
+      "bytes": 11224,
+      "sha256": "e534478b5ba54999e2871bb8d0fb85ef79e2ee0cde51f7274cabde04baf78e94"
+    },
+    {
+      "name": "10_batch_from_mut_to_target_26Q1_add_celltype.R",
+      "bytes": 7875,
+      "sha256": "3c43cf34f96403858db900b9ab032f3c04083689c5b86627d864e558cd958980"
+    },
+    {
+      "name": "11_batch_from_gene_to_mut_26Q1_add_celltype.R",
+      "bytes": 14078,
+      "sha256": "a8d40be78e9d6ec06770c53df6e006305e0cc8ace2bf712544ea1123d7f2f0fa"
+    }
+  ]
+}
