@@ -6,19 +6,20 @@ from contextlib import closing
 from pathlib import Path
 
 from scripts.build_depmap_query_index import build, is_fresh
+from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 
 
 class QueryIndexTests(unittest.TestCase):
     def test_v3_catalog_relates_assets_and_detects_fresh_index(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            unit = root / "analysis-modules" / "fixture" / "results" / "matrix"
+            unit = root / "analysis-modules" / "CRISPR基因-基因共依赖分析" / "results" / "matrix"
             (unit / "blocks").mkdir(parents=True)
             (unit / "manifest.json").write_text(
                 json.dumps({"status": "complete", "release": "26Q1"}),
                 encoding="utf-8",
             )
-            (unit / "gene_order.csv").write_text("gene\nESR1\n", encoding="utf-8")
+            (unit / "gene_order.csv").write_text("gene_index,symbol\n1,ESR1\n", encoding="utf-8")
             (unit / "blocks" / "block_00001_00001.rds").write_bytes(b"fixture")
             (root / "public.csv").write_text("key,value\na,1\n", encoding="utf-8")
             output = root / "depmap-26q1-query-index.sqlite"
@@ -39,8 +40,21 @@ class QueryIndexTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     db.execute("SELECT block_path FROM matrix_block_index WHERE gene='ESR1'").fetchone()[0],
-                    "analysis-modules/fixture/results/matrix/blocks/block_00001_00001.rds",
+                    "analysis-modules/CRISPR基因-基因共依赖分析/results/matrix/blocks/block_00001_00001.rds",
                 )
+            resolution = CatalogReaderRegistry(root, "26Q1").resolve(
+                {"mode": "pair", "source": "ESR1", "target": "FOXA1"}
+            )
+            self.assertEqual(resolution.state, "RESOLVED")
+            self.assertEqual(resolution.reader_id, "pair_adapter")
+            self.assertIn(
+                "analysis-modules/CRISPR基因-基因共依赖分析/results/matrix/blocks/block_00001_00001.rds",
+                resolution.artifact_uris,
+            )
+            self.assertIn(
+                "analysis-modules/CRISPR基因-基因共依赖分析/results/matrix/blocks/block_00001_00001.rds",
+                resolution.matrix_blocks,
+            )
 
 
 if __name__ == "__main__":

@@ -225,7 +225,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ("lineage_catalog", "cancer_inventory", "depmap-26q1-full", 0),
         ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-full", 0),
         ("lineage_directions", "cancer_direction_discovery", "analysis-modules", 0),
-        ("pair", "gene_pair_evidence", "*相关性分析*", 0),
+        ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*", 0),
         ("enrichment", "pathway_enrichment", "*富集*", 0),
         ("mutation_anchor", "mutation_anchor_discovery", "*突变锚定基因选择*", 0),
         ("mutation_to_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
@@ -283,7 +283,15 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             continue
         genes = []
         for row in records(order):
-            value = row.get("gene") or row.get("Gene") or next(iter(row.values()), "")
+            value = (
+                row.get("gene")
+                or row.get("Gene")
+                or row.get("symbol")
+                or row.get("gene_symbol")
+                or row.get("target_gene")
+                or row.get("source_gene")
+                or next((item for key, item in row.items() if "index" not in key.lower()), "")
+            )
             genes.append(str(value).upper())
         block_files = sorted(path for path in blocks.iterdir() if path.is_file())
         for index, gene in enumerate(genes, 1):
