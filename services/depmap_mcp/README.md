@@ -80,7 +80,10 @@ reader family, permits only `COMPLETE` analysis units, returns stable
 When a production index is installed, a missing reader or matching completed
 analysis is a terminal coverage error; the MCP does not silently bypass the
 catalog with a fixed path. Matrix queries additionally resolve requested genes
-through `matrix_block_index`, so the adapter can open only the relevant shards.
+through `matrix_block_index`, restricted to the resolved analyses and 32 shards.
+The registry passes the resolved analysis, artifact, shard, and Reader binding
+into the adapter and validates every returned provenance path against a
+`COMPLETE` artifact entry before evidence leaves the server.
 
 If the optional TCGA bridge is absent, TCGA queries return
 `MODULE_UNAVAILABLE`; this is a coverage state, not a biological result. Install

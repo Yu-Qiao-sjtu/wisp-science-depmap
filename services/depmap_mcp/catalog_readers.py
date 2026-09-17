@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -23,7 +23,7 @@ MODE_ALIASES = {
     "lineage_network": "core",
     "lineage_cnv": "core",
     "lineage_drug": "drug",
-    "enrichment": "core",
+    "enrichment": "enrichment",
     "subtype": "subtype",
     "coamplification": "coamplification",
     "three_d": "three_d",
@@ -51,6 +51,7 @@ class CatalogResolution:
     analysis_ids: tuple[str, ...] = ()
     artifact_uris: tuple[str, ...] = ()
     matrix_blocks: tuple[str, ...] = ()
+    validated_provenance_count: int = 0
     reason: str | None = None
 
     def evidence(self, release: str) -> dict[str, Any]:
@@ -93,6 +94,11 @@ class CatalogReaderRegistry:
                     likes.append(like if "%" in like else f"%{like}%")
                 predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
                 parameters = tuple(value for like in likes for value in (like, like))
+                requested_module = str(query.get("module") or query.get("family") or "").strip()
+                base_predicates, base_parameters = predicates, parameters
+                if requested_module:
+                    predicates = f"({predicates}) AND analysis_unit LIKE ?"
+                    parameters = (*parameters, f"%{requested_module}%")
                 analyses = db.execute(
                     f"""
                     SELECT analysis_id FROM analysis_catalog
@@ -101,6 +107,13 @@ class CatalogReaderRegistry:
                     """,
                     parameters,
                 ).fetchall()
+                if not analyses and requested_module:
+                    analyses = db.execute(
+                        f"""SELECT analysis_id FROM analysis_catalog
+                        WHERE completion_state='COMPLETE' AND ({base_predicates})
+                        ORDER BY manifest_mtime_ns DESC LIMIT 32""",
+                        base_parameters,
+                    ).fetchall()
                 analysis_ids = tuple(row[0] for row in analyses)
                 artifacts: tuple[str, ...] = ()
                 if analysis_ids:
@@ -125,14 +138,18 @@ class CatalogReaderRegistry:
                 }
                 blocks: tuple[str, ...] = ()
                 if genes:
-                    placeholders = ",".join("?" for _ in genes)
+                    gene_placeholders = ",".join("?" for _ in genes)
+                    analysis_placeholders = ",".join("?" for _ in analysis_ids)
                     blocks = tuple(
                         row[0]
                         for row in db.execute(
-                            f"SELECT DISTINCT block_path FROM matrix_block_index WHERE gene IN ({placeholders}) ORDER BY block_path",
-                            tuple(sorted(genes)),
+                            f"""SELECT DISTINCT block_path FROM matrix_block_index
+                            WHERE gene IN ({gene_placeholders})
+                              AND analysis_id IN ({analysis_placeholders})
+                            ORDER BY block_path LIMIT 32""",
+                            (*sorted(genes), *analysis_ids),
                         )
-                    )
+                    ) if analysis_ids else ()
                 # Indexed-content readers legitimately query SQLite content tables
                 # and do not need a file candidate for each returned row.
                 indexed = reader_mode in {"true_love", "tf_dependency", "biomarker_target"}
@@ -156,4 +173,74 @@ class CatalogReaderRegistry:
                 "status": "MODULE_UNAVAILABLE",
                 "reason": f"catalog reader resolution failed: {resolution.state}",
             }
-        return resolution, await runner(settings, query)
+        bound_query = {
+            **query,
+            "_catalog_analysis_ids": list(resolution.analysis_ids),
+            "_catalog_artifacts": list(resolution.artifact_uris),
+            "_catalog_matrix_blocks": list(resolution.matrix_blocks),
+            "_catalog_reader_id": resolution.reader_id,
+        }
+        result = await runner(settings, bound_query if self.enabled else query)
+        if self.enabled:
+            resolution, error = self._bind_result_provenance(resolution, result)
+            if error:
+                return resolution, {"status": "MODULE_UNAVAILABLE", "reason": error}
+        return resolution, result
+
+    def _bind_result_provenance(
+        self, resolution: CatalogResolution, result: Any
+    ) -> tuple[CatalogResolution, str | None]:
+        """Bind the adapter's actual inputs back to COMPLETE indexed artifacts."""
+        values: list[str] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == "provenance" and isinstance(item, str):
+                        values.append(item)
+                    elif key == "provenance" and isinstance(item, list):
+                        values.extend(str(path) for path in item if isinstance(path, str))
+                    else:
+                        visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+
+        visit(result)
+        if not values:
+            return resolution, None
+        relative: list[str] = []
+        prefix = f"depmap://{self.release}/"
+        for value in values:
+            if value.startswith(prefix):
+                path = value[len(prefix):]
+            else:
+                candidate = Path(value)
+                try:
+                    path = candidate.resolve().relative_to(self.knowledge_root).as_posix()
+                except (OSError, ValueError):
+                    return resolution, "reader returned provenance outside the knowledge root"
+            if path == self.index.name:
+                continue
+            relative.append(path)
+        if not relative:
+            return replace(resolution, validated_provenance_count=len(values)), None
+        unique = tuple(dict.fromkeys(relative))
+        placeholders = ",".join("?" for _ in unique)
+        with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            rows = db.execute(
+                f"""SELECT f.artifact_path,f.analysis_id FROM artifact_catalog f
+                JOIN analysis_catalog a ON a.analysis_id=f.analysis_id
+                WHERE f.artifact_path IN ({placeholders}) AND a.completion_state='COMPLETE'""",
+                unique,
+            ).fetchall()
+        found = {row[0]: row[1] for row in rows}
+        missing = [path for path in unique if path not in found]
+        if missing:
+            return resolution, f"reader used {len(missing)} artifact(s) outside COMPLETE catalog entries"
+        return replace(
+            resolution,
+            analysis_ids=tuple(dict.fromkeys(found[path] for path in unique)),
+            artifact_uris=unique,
+            validated_provenance_count=len(unique),
+        ), None

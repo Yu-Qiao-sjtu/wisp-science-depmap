@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sqlite3
 import tempfile
 import unittest
@@ -55,6 +56,31 @@ class QueryIndexTests(unittest.TestCase):
                 "analysis-modules/CRISPR基因-基因共依赖分析/results/matrix/blocks/block_00001_00001.rds",
                 resolution.matrix_blocks,
             )
+            seen = {}
+
+            async def runner(_settings, query):
+                seen.update(query)
+                return {
+                    "status": "FOUND",
+                    "provenance": str(
+                        unit / "blocks" / "block_00001_00001.rds"
+                    ),
+                }
+
+            bound, result = asyncio.run(
+                CatalogReaderRegistry(root, "26Q1").read(
+                    object(),
+                    {"mode": "pair", "source": "ESR1", "target": "FOXA1"},
+                    runner,
+                )
+            )
+            self.assertEqual(result["status"], "FOUND")
+            self.assertEqual(bound.validated_provenance_count, 1)
+            self.assertEqual(bound.artifact_uris, (
+                "analysis-modules/CRISPR基因-基因共依赖分析/results/matrix/blocks/block_00001_00001.rds",
+            ))
+            self.assertEqual(seen["_catalog_reader_id"], "pair_adapter")
+            self.assertEqual(len(seen["_catalog_matrix_blocks"]), 1)
 
 
 if __name__ == "__main__":

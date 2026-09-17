@@ -91,6 +91,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     def test_every_bounded_query_mode_has_a_catalog_reader_family(self):
         modes = set(get_args(QueryRequest.model_fields["mode"].annotation))
         self.assertEqual(modes - set(MODE_ALIASES), set())
+        self.assertEqual(MODE_ALIASES["enrichment"], "enrichment")
 
     async def test_capability_catalog_is_lightweight_and_marks_direction_ambiguity(self):
         result = await self.service.capabilities()

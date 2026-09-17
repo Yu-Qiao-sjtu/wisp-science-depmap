@@ -183,6 +183,10 @@ flowchart LR
 5. 执行受限格式Reader，并把Reader、analysis ID、artifact URI和分块URI写入
    `catalog_resolution`。
 
+Reader执行时接收上述目录绑定；结果返回后，注册表再次校验实际provenance，
+只有属于`COMPLETE`分析单元的已索引文件才能进入evidence。矩阵分块同时限定在
+当前解析的分析单元内，最多返回32个稳定URI。
+
 生产服务器存在索引时，缺少Reader或没有匹配完成分析会返回明确覆盖错误，
 不会静默回退到代码内固定路径。`status`、癌种术语解析和能力目录属于控制面，
 不读取科学结果，因此不经过科学Reader。
