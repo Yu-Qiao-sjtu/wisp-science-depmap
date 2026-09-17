@@ -1,5 +1,8 @@
 # DepMap Agent
 
+中文远程数据、目录索引、MCP 和模型解释的完整链路见
+[DepMap Agent 远程数据桥接技术路线](depmap-remote-mcp-architecture.zh-CN.md)。
+
 > **Architecture note:** The normative Agent-first orchestration, execution
 > levels, Evidence Ledger, MCP boundary, and Workflow escalation policy are
 > defined in [depmap-agent-engineering-framework.md](depmap-agent-engineering-framework.md).
