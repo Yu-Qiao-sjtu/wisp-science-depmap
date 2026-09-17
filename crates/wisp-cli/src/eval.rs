@@ -30,6 +30,8 @@ const LIVE_MEMORY_SUITE: &str = include_str!("../eval-suites/live-memory-v1.yaml
 const MEMORY_SUITE: &str = include_str!("../eval-suites/memory-v1.yaml");
 #[cfg(test)]
 const DEPMAP_AGENT_SUITE: &str = include_str!("../eval-suites/depmap-agent-v1.yaml");
+#[cfg(test)]
+const DEPMAP_INTENT_SUITE: &str = include_str!("../eval-suites/depmap-intent-live-v1.yaml");
 const DEFAULT_MAX_CONTEXT: usize = 128_000;
 const DEFAULT_MAX_ROUNDS: usize = 12;
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
@@ -2445,6 +2447,49 @@ mod tests {
             "orchestration",
         ] {
             assert!(tags.contains(required), "missing DepMap tag {required}");
+        }
+    }
+
+    #[tokio::test]
+    async fn depmap_intent_suite_is_valid_and_passes_offline_contracts() {
+        let suite: EvalSuite = serde_yaml::from_str(DEPMAP_INTENT_SUITE).unwrap();
+        validate_suite(&suite, EvalMode::Offline).unwrap();
+        validate_suite(&suite, EvalMode::Live).unwrap();
+        assert_eq!(suite.cases.len(), 10);
+
+        let required_tags = [
+            "colloquial",
+            "typo",
+            "synonym",
+            "mixed-language",
+            "multi-intent",
+            "ambiguity",
+        ];
+        let tags: BTreeSet<_> = suite
+            .cases
+            .iter()
+            .flat_map(|case| case.tags.iter().map(String::as_str))
+            .collect();
+        for required in required_tags {
+            assert!(
+                tags.contains(required),
+                "missing intent-regression tag {required}"
+            );
+        }
+
+        for case in suite.cases {
+            assert!(case.fixture_tools.contains_key("depmap_agent_route"));
+            let result = run_case(
+                case,
+                1,
+                suite.defaults.clone(),
+                None,
+                None,
+                EvalOptions::default(),
+            )
+            .await
+            .unwrap();
+            assert!(result.passed, "{:?}", result.failures);
         }
     }
 

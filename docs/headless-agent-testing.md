@@ -173,6 +173,40 @@ a dedicated vision model instead of being sent to the chat model. Scripted
 steps are ignored in live mode; live suites should use tolerant semantic
 assertions rather than exact prose.
 
+### DepMap natural-language intent regression
+
+`crates/wisp-cli/eval-suites/depmap-intent-live-v1.yaml` exercises the
+user-language boundary before any scientific query. It covers colloquial
+Chinese, a common typo, mixed Chinese-English terminology, synonyms,
+mutation/dependency direction reversal, critical ambiguity, and a multi-intent
+request. The assertions inspect the structured arguments sent to
+`depmap_agent_route`; prose similarity alone cannot pass a case.
+
+Run the deterministic contract version without a provider key:
+
+```bash
+cargo run -p wisp-cli -- eval \
+  --suite crates/wisp-cli/eval-suites/depmap-intent-live-v1.yaml \
+  --artifacts target/depmap-intent-offline \
+  --save target/depmap-intent-offline/report.json
+```
+
+Run the same prompts through a configured real model:
+
+```bash
+cargo run -p wisp-cli -- eval \
+  --mode live \
+  --suite crates/wisp-cli/eval-suites/depmap-intent-live-v1.yaml \
+  --repeat 3 \
+  --parallel 1 \
+  --artifacts target/depmap-intent-live \
+  --save target/depmap-intent-live/report.json
+```
+
+The live run is model-specific. A passing model does not remove the runtime
+clarification boundary: `critical_direction` and `out_of_scope` must still
+stop scientific execution and ask the user to choose or supply missing context.
+
 ### Memory and compaction dataset
 
 `crates/wisp-cli/eval-suites/memory-v1.yaml` is a deterministic offline
