@@ -92,6 +92,10 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(intents),
             {
+                "provider_status",
+                "lineage_resolution",
+                "cancer_inventory",
+                "cancer_direction_discovery",
                 "analysis_inventory",
                 "mutation_anchor_discovery",
                 "mutation_to_dependency",
@@ -102,6 +106,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "expression_biomarker_model",
                 "true_love_gene_catalog",
                 "gene_evidence",
+                "tcga_expression_survival",
+                "drug_gene_evidence",
+                "subtype_evidence",
+                "coamplification_evidence",
+                "three_d_evidence",
             },
         )
         self.assertIn("mutation_to_dependency", intents)

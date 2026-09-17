@@ -393,6 +393,8 @@ fn depmap_route_schema() -> Value {
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
                     "tf_activity_to_dependency", "true_love_gene_catalog",
+                    "tcga_expression_survival", "subtype_evidence",
+                    "coamplification_evidence", "three_d_evidence",
                     "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
@@ -407,6 +409,13 @@ fn depmap_route_schema() -> Value {
             "event": {"type":"string","enum":["damaging","hotspot"]},
             "transcription_factor": {"type":"string"},
             "catalog": {"type":"string","enum":["stable_negative_rank1","negative_r_lt_minus_0_3","positive_reciprocal_top20"]},
+            "partner_gene": {"type":"string"},
+            "contrast_id": {"type":"string"},
+            "project": {"type":"string"},
+            "endpoint": {"type":"string","enum":["OS","DSS","DFI","PFI"]},
+            "family": {"type":"string"},
+            "cohort": {"type":"string"},
+            "layer": {"type":"string","enum":["exhaustive_high_confidence","lineage_adjusted"]},
             "alternative_intents": {
                 "type":"array",
                 "items":{"type":"string","enum":[
@@ -416,6 +425,8 @@ fn depmap_route_schema() -> Value {
                     "dependency_to_mutation",
                     "expression_biomarker_model",
                     "tf_activity_to_dependency", "true_love_gene_catalog",
+                    "tcga_expression_survival", "subtype_evidence",
+                    "coamplification_evidence", "three_d_evidence",
                     "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
@@ -454,6 +465,13 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let event = non_empty_arg(args, "event");
     let transcription_factor = non_empty_arg(args, "transcription_factor");
     let catalog = non_empty_arg(args, "catalog");
+    let partner_gene = non_empty_arg(args, "partner_gene");
+    let contrast_id = non_empty_arg(args, "contrast_id");
+    let project = non_empty_arg(args, "project");
+    let endpoint = non_empty_arg(args, "endpoint");
+    let family = non_empty_arg(args, "family");
+    let cohort = non_empty_arg(args, "cohort");
+    let layer = non_empty_arg(args, "layer");
     let alternative_intents = args
         .get("alternative_intents")
         .and_then(Value::as_array)
@@ -527,6 +545,21 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("catalog");
             }
         }
+        "tcga_expression_survival" => {
+            if gene.is_none() {
+                missing.push("gene");
+            }
+        }
+        "coamplification_evidence" => {
+            if source_gene.is_none() {
+                missing.push("source_gene");
+            }
+        }
+        "three_d_evidence" => {
+            if family.is_none() {
+                missing.push("family");
+            }
+        }
         "drug_gene_evidence" => {
             if drug.is_none() {
                 missing.push("drug");
@@ -537,6 +570,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         }
         "provider_status"
         | "analysis_inventory"
+        | "subtype_evidence"
         | "evidence_comparison"
         | "result_interpretation"
         | "topic_exploration"
@@ -636,6 +670,15 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "L1_DIRECT",
                 false,
                 "Use the matching bounded MCP evidence tool and return its structured scientific rows.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
+            ),
+            "tcga_expression_survival"
+            | "subtype_evidence"
+            | "coamplification_evidence"
+            | "three_d_evidence" => (
+                "L1_DIRECT",
+                false,
+                "Use the matching bounded MCP evidence tool and preserve its cohort, contrast, metric, and coverage semantics.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "evidence_comparison" | "topic_exploration" => (
@@ -795,6 +838,26 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "arguments": {"catalog": catalog, "gene": gene, "limit": 20},
             "single_call": true
         }),
+        ("tcga_expression_survival", _) if !requires_user_input => json!({
+            "tool": "tcga_gene_expression_survival",
+            "arguments": {"gene": gene, "project": project, "lineage": canonical_lineage, "endpoint": endpoint.as_deref().unwrap_or("OS"), "limit": 20},
+            "single_call": true
+        }),
+        ("subtype_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_subtype_evidence",
+            "arguments": {"gene": gene, "lineage": canonical_lineage, "contrast_id": contrast_id, "limit": 20},
+            "single_call": true
+        }),
+        ("coamplification_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_coamplification_evidence",
+            "arguments": {"source": source_gene, "partner": partner_gene, "target": target_gene, "layer": layer.as_deref().unwrap_or("lineage_adjusted"), "limit": 20},
+            "single_call": true
+        }),
+        ("three_d_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_3d_evidence",
+            "arguments": {"family": family, "gene": gene, "source": source_gene, "target": target_gene, "cohort": cohort, "limit": 20},
+            "single_call": true
+        }),
         _ => Value::Null,
     };
     Ok(json!({
@@ -820,7 +883,14 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "drug": drug,
             "event": event,
             "transcription_factor": transcription_factor,
-            "catalog": catalog
+            "catalog": catalog,
+            "partner_gene": partner_gene,
+            "contrast_id": contrast_id,
+            "project": project,
+            "endpoint": endpoint,
+            "family": family,
+            "cohort": cohort,
+            "layer": layer
         },
         "strategy": strategy,
         "recommended_query": recommended_query,
@@ -2953,6 +3023,10 @@ mod tests {
         assert!(intents.contains(&json!("analysis_inventory")));
         assert!(intents.contains(&json!("tf_activity_to_dependency")));
         assert!(intents.contains(&json!("true_love_gene_catalog")));
+        assert!(intents.contains(&json!("tcga_expression_survival")));
+        assert!(intents.contains(&json!("subtype_evidence")));
+        assert!(intents.contains(&json!("coamplification_evidence")));
+        assert!(intents.contains(&json!("three_d_evidence")));
     }
 
     #[test]
@@ -2980,6 +3054,45 @@ mod tests {
         .unwrap();
         assert_eq!(missing["state"], "needs_input");
         assert_eq!(missing["missing_fields"], json!(["target_gene"]));
+    }
+
+    #[test]
+    fn agent_route_covers_every_remote_evidence_family() {
+        let cases = [
+            (
+                json!({"intent":"tcga_expression_survival","gene":"ESR1","cancer":"乳腺癌","endpoint":"OS"}),
+                "tcga_gene_expression_survival",
+            ),
+            (
+                json!({"intent":"subtype_evidence","gene":"ESR1","cancer":"乳腺癌"}),
+                "depmap_subtype_evidence",
+            ),
+            (
+                json!({"intent":"coamplification_evidence","source_gene":"CTTN","partner_gene":"RNF121"}),
+                "depmap_coamplification_evidence",
+            ),
+            (
+                json!({"intent":"three_d_evidence","family":"dependency_profiles","gene":"KRAS"}),
+                "depmap_3d_evidence",
+            ),
+            (
+                json!({"intent":"tf_activity_to_dependency","transcription_factor":"STAT3","target_gene":"GPX4"}),
+                "depmap_tf_dependency_evidence",
+            ),
+            (
+                json!({"intent":"true_love_gene_catalog","catalog":"stable_negative_rank1","gene":"KRAS"}),
+                "depmap_true_love_evidence",
+            ),
+        ];
+        for (input, expected_tool) in cases {
+            let route = depmap_route(&input).unwrap();
+            assert_eq!(route["state"], "routed", "input={input}");
+            assert_eq!(
+                route["recommended_query"]["tool"], expected_tool,
+                "input={input}"
+            );
+            assert_eq!(route["recommended_query"]["single_call"], true);
+        }
     }
 
     #[test]

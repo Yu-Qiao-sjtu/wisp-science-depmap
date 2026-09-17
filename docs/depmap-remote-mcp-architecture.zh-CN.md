@@ -119,6 +119,34 @@ flowchart LR
 | 模型解释层 | 解释效应方向、显著性、生物学含义和限制 | 将相关性描述为因果关系 |
 | 用户回答层 | 展示结论和结果表，最后附来源 | 要求用户自行打开服务器文件获取已有结果 |
 
+## 当前意图目录
+
+当前远程能力目录覆盖19类用户意图。`depmap_capabilities`返回每类意图的必填实体、可选实体、中文示例、易混淆方向和唯一 MCP 工具。
+
+| 意图 | 目标工具 |
+|---|---|
+| `provider_status` | `depmap_status` |
+| `lineage_resolution` | `depmap_resolve_lineage` |
+| `cancer_inventory` | `depmap_lineage_catalog` |
+| `cancer_direction_discovery` | `depmap_lineage_direction_discovery` |
+| `analysis_inventory` | `depmap_analysis_catalog` |
+| `mutation_anchor_discovery` | `depmap_mutation_anchor_evidence` |
+| `mutation_to_dependency` | `depmap_synthetic_lethal_evidence` |
+| `dependency_to_mutation` | `depmap_synthetic_lethal_evidence` |
+| `gene_pair_evidence` | `depmap_pair_evidence` |
+| `cancer_dependency_ranking` | `depmap_lineage_dependencies` |
+| `tf_activity_to_dependency` | `depmap_tf_dependency_evidence` |
+| `expression_biomarker_model` | `depmap_biomarker_model_evidence` |
+| `true_love_gene_catalog` | `depmap_true_love_evidence` |
+| `gene_evidence` | `depmap_gene_evidence` |
+| `tcga_expression_survival` | `tcga_gene_expression_survival` |
+| `drug_gene_evidence` | `depmap_drug_evidence` |
+| `subtype_evidence` | `depmap_subtype_evidence` |
+| `coamplification_evidence` | `depmap_coamplification_evidence` |
+| `three_d_evidence` | `depmap_3d_evidence` |
+
+语言模型在封闭枚举中选择主意图，并可同时提交最多三个备选意图。若固定突变与固定依赖两个方向仍同时成立，或癌种术语不能唯一解析，路由器返回澄清卡片并停止科学查询。模型置信度不被当作校准概率；系统以实体完整性、方向冲突和工具参数验证作为执行边界。
+
 ## 索引与数据边界
 
 统一 SQLite 索引分为两类：
