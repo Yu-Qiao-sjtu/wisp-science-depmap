@@ -228,6 +228,45 @@ precomputed_query
                                       --> interpretation / knowledge update
 ```
 
+### Natural-language routing and ambiguity
+
+The configured chat model proposes a typed intent and extracts only entities
+present in the user's message. Model quality affects first-pass recall, but it
+does not authorize a scientific query: the host validates the closed schema,
+required entities, lineage vocabulary, and ambiguity state. The remote MCP
+publishes `depmap_capabilities`, a lightweight catalog of supported intents,
+representative Chinese wording, required fields, confusable directions, and
+the bounded tool for each capability. Reading it does not scan result matrices.
+
+When mutation-to-dependency and dependency-to-mutation (or another material
+scientific direction) both remain plausible, the router returns
+`decision=clarify`. The Agent asks one short question and does not query
+evidence until the direction is resolved. A model-generated confidence number
+is not treated as a calibrated probability. Missing optional display fields
+may use documented defaults; missing or ambiguous scientific direction may not.
+
+The route includes a native `ask_user` card payload for missing critical fields
+or direction ambiguity. A critical mutation/dependency direction shows two
+plain-language cards: fix the mutation and query dependency targets, or fix the
+dependency target and query associated mutations. An out-of-scope expression
+causes the Agent to read the lightweight MCP capability catalog and offer only
+the two to four nearest supported modules. Selecting a card becomes the next
+user message, so the normal typed route runs again with the clarified intent.
+The route result uses a batch-stopping control boundary: if the model emitted
+an evidence query beside an ambiguous route in the same tool-call batch, that
+query is skipped and the model must present the clarification card first.
+
+The current `depmap_synthetic_lethal_evidence` capability is pan-cancer. Its
+mutation-to-dependency and dependency-to-mutation cards therefore do not offer
+a lineage field. Cancer-specific mutation ranking remains a separate completed
+lineage query contract and must not be simulated by silently dropping a cancer
+term from a pan-cancer request.
+
+The product contract therefore does not depend on enumerating every synonym.
+Examples and aliases improve recall, while closed schemas, deterministic
+validation, clarification, and regression cases prevent silent execution of a
+misunderstood request.
+
 The native `depmap_validate_run` gate requires `RunStatus=succeeded`, exit code
 0, declared `run_manifest.json`/`result.json`/`qc.json` outputs, R language,
 release and target identity, coherent cohort counts, and passing QC. A file on

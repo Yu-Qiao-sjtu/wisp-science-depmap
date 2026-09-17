@@ -57,6 +57,71 @@ GLOBAL_GENE_MODULES = (
     "cnv_amplification_dependency",
 )
 
+# Small routing catalog loaded once per Agent session. It describes capabilities
+# and never scans the scientific result matrices.
+INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
+    {
+        "intent": "mutation_anchor_discovery",
+        "description": "Find eligible mutation anchor genes inside one cancer lineage.",
+        "required": ["lineage"],
+        "optional": ["event", "limit"],
+        "examples_zh": ["肺癌有哪些突变基因可以选", "在结肠癌里选突变锚点"],
+        "precise_prompt_template_zh": "在{lineage}中列出可作为后续依赖分析锚点的{event}突变基因，并说明样本数与筛选依据。",
+        "confusable_with": ["mutation_to_dependency"],
+        "mcp_tool": "depmap_lineage_direction_discovery",
+    },
+    {
+        "intent": "mutation_to_dependency",
+        "description": "Fix a mutated source gene and rank associated CRISPR dependency targets.",
+        "required": ["source_gene"],
+        "optional": ["event", "target_gene", "limit"],
+        "examples_zh": ["TP53突变后依赖哪些基因", "固定KRAS突变看脆弱性"],
+        "precise_prompt_template_zh": "在泛癌范围固定{source_gene}的{event}突变，查询相关的CRISPR dependency靶基因。",
+        "confusable_with": ["dependency_to_mutation"],
+        "mcp_tool": "depmap_synthetic_lethal_evidence",
+    },
+    {
+        "intent": "dependency_to_mutation",
+        "description": "Fix a CRISPR dependency target and find mutation events associated with it.",
+        "required": ["target_gene"],
+        "optional": ["event", "source_gene", "limit"],
+        "examples_zh": ["哪些突变会影响GPX4依赖", "固定TP53 dependency找突变"],
+        "precise_prompt_template_zh": "在泛癌范围固定{target_gene} dependency，查询哪些{event}突变与其依赖变化相关。",
+        "confusable_with": ["mutation_to_dependency"],
+        "mcp_tool": "depmap_synthetic_lethal_evidence",
+    },
+    {
+        "intent": "gene_pair_evidence",
+        "description": "Compare coexpression, CRISPR codependency, and expression-to-dependency evidence for two genes.",
+        "required": ["source_gene", "target_gene"],
+        "optional": ["lineage"],
+        "examples_zh": ["ESR1和FOXA1相关吗", "比较两个基因的表达相关和共依赖"],
+        "precise_prompt_template_zh": "比较{source_gene}与{target_gene}的共表达、CRISPR共依赖和表达—依赖关联，并分别标明数据模态。",
+        "confusable_with": [],
+        "mcp_tool": "depmap_pair_evidence",
+    },
+    {
+        "intent": "cancer_dependency_ranking",
+        "description": "Rank genes selectively required by one cancer lineage.",
+        "required": ["lineage"],
+        "optional": ["ranking", "limit"],
+        "examples_zh": ["肝癌最依赖哪些基因", "乳腺癌特异依赖靶点"],
+        "precise_prompt_template_zh": "查询{lineage}中选择性更强的CRISPR dependency基因，并返回Top {limit}。",
+        "confusable_with": ["mutation_anchor_discovery"],
+        "mcp_tool": "depmap_lineage_dependencies",
+    },
+    {
+        "intent": "gene_evidence",
+        "description": "Retrieve available precomputed pathway or regulator enrichment evidence.",
+        "required": ["gene"],
+        "optional": ["lineage", "collection", "limit"],
+        "examples_zh": ["这些候选富集到什么通路", "做Reactome富集"],
+        "precise_prompt_template_zh": "查询{gene}的预计算通路与调控因子富集证据，并说明集合与统计口径。",
+        "confusable_with": [],
+        "mcp_tool": "depmap_gene_evidence",
+    },
+)
+
 
 def _default_query_script() -> Path:
     return Path(__file__).resolve().parents[2] / "skills" / "depmap-knowledge-query" / "scripts" / "query_depmap_kb.R"
@@ -226,6 +291,26 @@ class DepMapEvidenceService:
         self.runner = runner
         self.semaphore = asyncio.Semaphore(settings.max_concurrency)
         self.qa = verify_installation(settings)
+
+    async def capabilities(self) -> dict[str, Any]:
+        """Return the routing contract without touching result data."""
+
+        return {
+            "schema_version": 1,
+            "release": self.settings.release,
+            "state": "CAPABILITY_CATALOG",
+            "capabilities": list(INTENT_CAPABILITIES),
+            "routing_policy": {
+                "unknown_or_out_of_scope": "return_no_match",
+                "missing_required_entity": "request_only_the_missing_field",
+                "critical_direction_pairs": [
+                    ["mutation_to_dependency", "dependency_to_mutation"]
+                ],
+                "critical_direction_ambiguity": "clarify_before_query",
+                "model_confidence_is_not_a_calibrated_probability": True,
+                "large_matrices_are_never_returned": True,
+            },
+        }
 
     def _portable(self, value: Any) -> Any:
         root = str(self.settings.knowledge_root)
@@ -862,6 +947,20 @@ def build_mcp_server(
         stateless_http=True,
         max_request_body_size=64 * 1024,
     )
+
+    @mcp.tool(
+        title="DepMap analysis capability catalog",
+        description=(
+            "List supported scientific intents, required entities, representative "
+            "Chinese utterances, confusable directions, and the matching bounded MCP "
+            "tool. Use this lightweight catalog when routing is uncertain. It never "
+            "scans or returns analysis matrices."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_capabilities() -> dict[str, Any]:
+        return await service.capabilities()
 
     @mcp.tool(
         title="DepMap knowledge status",

@@ -84,6 +84,39 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "tcga_expression_and_survival_association",
         )
 
+    async def test_capability_catalog_is_lightweight_and_marks_direction_ambiguity(self):
+        result = await self.service.capabilities()
+        self.assertEqual(result["state"], "CAPABILITY_CATALOG")
+        self.assertEqual(self.queries, [])
+        intents = {item["intent"]: item for item in result["capabilities"]}
+        self.assertEqual(
+            set(intents),
+            {
+                "mutation_anchor_discovery",
+                "mutation_to_dependency",
+                "dependency_to_mutation",
+                "gene_pair_evidence",
+                "cancer_dependency_ranking",
+                "gene_evidence",
+            },
+        )
+        self.assertIn("mutation_to_dependency", intents)
+        self.assertIn("dependency_to_mutation", intents)
+        self.assertIn(
+            "dependency_to_mutation",
+            intents["mutation_to_dependency"]["confusable_with"],
+        )
+        self.assertIn(
+            "{source_gene}",
+            intents["mutation_to_dependency"]["precise_prompt_template_zh"],
+        )
+        self.assertEqual(
+            result["routing_policy"]["critical_direction_ambiguity"],
+            "clarify_before_query",
+        )
+        self.assertNotIn("lineage", intents["mutation_to_dependency"]["optional"])
+        self.assertNotIn("lineage", intents["dependency_to_mutation"]["optional"])
+
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
         tcga = result["evidence"]["items"][-1]
@@ -333,6 +366,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     names,
                     {
+                        "depmap_capabilities",
                         "depmap_status",
                         "depmap_resolve_lineage",
                         "depmap_lineage_catalog",

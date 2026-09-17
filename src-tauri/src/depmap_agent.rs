@@ -389,7 +389,8 @@ fn depmap_route_schema() -> Value {
                 "enum":[
                     "provider_status", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking",
-                    "cancer_direction_discovery", "gene_evidence",
+                    "cancer_direction_discovery", "mutation_anchor_discovery",
+                    "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
@@ -401,6 +402,26 @@ fn depmap_route_schema() -> Value {
             "source_gene": {"type":"string"},
             "target_gene": {"type":"string"},
             "drug": {"type":"string"},
+            "alternative_intents": {
+                "type":"array",
+                "items":{"type":"string","enum":[
+                    "provider_status", "lineage_resolution", "cancer_inventory",
+                    "cancer_dependency_ranking", "cancer_direction_discovery",
+                    "mutation_anchor_discovery", "mutation_to_dependency",
+                    "dependency_to_mutation",
+                    "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
+                    "evidence_comparison", "study_support_mapping",
+                    "result_interpretation", "topic_exploration",
+                    "literature_validation", "new_analysis", "report_generation"
+                ]},
+                "maxItems":3,
+                "uniqueItems":true
+            },
+            "ambiguity": {
+                "type":"string",
+                "enum":["none", "missing_entity", "critical_direction", "out_of_scope"]
+            },
+            "ambiguity_reason": {"type":"string","maxLength":500},
             "explicit_workflow_request": {"type":"boolean"}
         },
         "required":["intent"],
@@ -423,17 +444,36 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let source_gene = non_empty_arg(args, "source_gene");
     let target_gene = non_empty_arg(args, "target_gene");
     let drug = non_empty_arg(args, "drug");
+    let alternative_intents = args
+        .get("alternative_intents")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .filter(|candidate| candidate != &intent)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let ambiguity = args
+        .get("ambiguity")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let ambiguity_reason = non_empty_arg(args, "ambiguity_reason");
     let explicit_workflow = args
         .get("explicit_workflow_request")
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
     let mut missing = Vec::new();
+    let mut unsupported = Vec::new();
     match intent.as_str() {
         "lineage_resolution"
         | "cancer_inventory"
         | "cancer_dependency_ranking"
         | "cancer_direction_discovery"
+        | "mutation_anchor_discovery"
         | "study_support_mapping" => {
             if cancer.is_none() {
                 missing.push("cancer");
@@ -448,6 +488,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             if source_gene.is_none() {
                 missing.push("source_gene");
             }
+            if target_gene.is_none() {
+                missing.push("target_gene");
+            }
+        }
+        "mutation_to_dependency" => {
+            if source_gene.is_none() {
+                missing.push("source_gene");
+            }
+        }
+        "dependency_to_mutation" => {
             if target_gene.is_none() {
                 missing.push("target_gene");
             }
@@ -468,6 +518,13 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         | "new_analysis"
         | "report_generation" => {}
         _ => return Err(format!("unsupported DepMap intent '{intent}'")),
+    }
+    if matches!(
+        intent.as_str(),
+        "mutation_to_dependency" | "dependency_to_mutation"
+    ) && cancer.is_some()
+    {
+        unsupported.push("cancer_lineage_for_pan_cancer_mutation_query");
     }
 
     let (mut execution_level, mut approval, mut strategy, mut tools): (
@@ -525,6 +582,18 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Read one bounded, precomputed lineage direction bundle. Preserve its separate family rankings and do not invent an anchor gene.",
                 vec![TOOL_NAME],
             ),
+            "mutation_anchor_discovery" => (
+                "L2_INVESTIGATE",
+                false,
+                "Read the bounded precomputed lineage direction bundle and retain only supported mutation-anchor candidates.",
+                vec![TOOL_NAME],
+            ),
+            "mutation_to_dependency" | "dependency_to_mutation" => (
+                "L1_DIRECT",
+                false,
+                "Use the bounded pan-cancer mutation/dependency MCP evidence tool. This capability does not support lineage filtering.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
+            ),
             "evidence_comparison" | "topic_exploration" => (
                 "L2_INVESTIGATE",
                 false,
@@ -552,7 +621,9 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             _ => unreachable!(),
         };
 
-    let requires_user_input = !missing.is_empty();
+    let requires_clarification =
+        matches!(ambiguity, "critical_direction" | "out_of_scope") || !unsupported.is_empty();
+    let requires_user_input = !missing.is_empty() || requires_clarification;
     if explicit_workflow && !requires_user_input {
         execution_level = "L4_DURABLE";
         approval = true;
@@ -561,6 +632,56 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     }
 
     let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
+    let clarification_gene = gene
+        .as_deref()
+        .or(target_gene.as_deref())
+        .or(source_gene.as_deref())
+        .unwrap_or("指定基因");
+    let clarification_card = if !unsupported.is_empty() {
+        json!({
+            "question": "当前突变—依赖工具只支持泛癌结果，不能保留你指定的癌种。请选择下一步。",
+            "options": [
+                {
+                    "label": format!("按泛癌范围继续分析 {clarification_gene}"),
+                    "description": "移除癌种限制，使用已经完成的泛癌突变—依赖结果。"
+                },
+                {
+                    "label": "改为该癌种的突变锚点筛选",
+                    "description": "保留癌种范围，查看该癌种中有哪些突变基因具备后续分析条件。"
+                }
+            ],
+            "allow_freeform": true
+        })
+    } else {
+        match ambiguity {
+            "critical_direction" => json!({
+                "question": "这个问题有两个不同的分析方向。你希望固定哪一端？",
+                "options": [
+                    {
+                        "label": format!("固定 {clarification_gene} 突变，查询依赖靶点"),
+                        "description": format!("把 {clarification_gene} 作为突变锚点，查询哪些 CRISPR dependency 靶基因发生变化。")
+                    },
+                    {
+                        "label": format!("固定 {clarification_gene} dependency，查询相关突变"),
+                        "description": format!("把 {clarification_gene} 作为依赖靶点，查询哪些基因突变会改变对它的依赖。")
+                    }
+                ],
+                "allow_freeform": true
+            }),
+            "out_of_scope" => json!({
+                "question": "当前表述还不能对应到一个确定的 DepMap 分析模块。请选择最接近的方向，或补充你的研究问题。",
+                "options": [],
+                "allow_freeform": true,
+                "next_action": "read_depmap_capabilities_then_offer_two_to_four_matching_options"
+            }),
+            _ if !missing.is_empty() => json!({
+                "question": format!("继续这个分析还需要：{}。", missing.join("、")),
+                "options": [],
+                "allow_freeform": true
+            }),
+            _ => Value::Null,
+        }
+    };
     let recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
         ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => json!({
             "tool": TOOL_NAME,
@@ -570,6 +691,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "limit": 20
             },
             "single_call": true
+        }),
+        ("mutation_anchor_discovery", Some(lineage)) if !requires_user_input => json!({
+            "tool": TOOL_NAME,
+            "arguments": {
+                "mode": "lineage_directions",
+                "lineage": lineage,
+                "limit": 20
+            },
+            "single_call": true,
+            "output_filter": "mutation_anchor_candidates_only"
         }),
         ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => json!({
             "tool": TOOL_NAME,
@@ -602,10 +733,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     };
     Ok(json!({
         "state": if requires_user_input { "needs_input" } else { "routed" },
+        "decision": if !unsupported.is_empty() { "clarify_unsupported_scope" } else if requires_clarification { "clarify" } else if !missing.is_empty() { "collect_missing_fields" } else { "execute" },
         "intent": intent,
+        "alternative_intents": alternative_intents,
+        "ambiguity": ambiguity,
+        "ambiguity_reason": ambiguity_reason,
+        "clarification_card": clarification_card,
         "execution_level": execution_level,
         "requires_user_input": requires_user_input,
         "missing_fields": missing,
+        "unsupported_fields": unsupported,
         "requires_approval": approval,
         "explicit_workflow_request": explicit_workflow,
         "entities": {
@@ -622,7 +759,9 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "guardrails": {
             "route_is_evidence": false,
             "workflow_semantic_match_alone_is_sufficient": false,
-            "do_not_invent_missing_entities": true
+            "do_not_invent_missing_entities": true,
+            "model_confidence_is_not_a_calibrated_probability": true,
+            "critical_direction_ambiguity_requires_clarification": true
         }
     }))
 }
@@ -655,7 +794,7 @@ impl Tool for DepMapAgentRouteTool {
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
         match depmap_route(args) {
             Ok(route) if route["state"] == "routed" => ToolResult::ok(pretty(route)),
-            Ok(route) => ToolResult::fail(pretty(route)),
+            Ok(route) => ToolResult::fail(pretty(route)).stop_batch(),
             Err(error) => ToolResult::fail(blocked("invalid_agent_route", error)),
         }
     }
@@ -2528,6 +2667,21 @@ fn compact_ledger_payload(value: &Value) -> Value {
 mod tests {
     use super::*;
 
+    struct RouteTestEnv;
+
+    #[async_trait::async_trait]
+    impl ToolEnv for RouteTestEnv {
+        fn project_root(&self) -> &Path {
+            Path::new(".")
+        }
+
+        async fn confirm(&self, _description: &str) -> bool {
+            true
+        }
+
+        async fn emit(&self, _event: wisp_tools::ToolEvent) {}
+    }
+
     #[test]
     fn agent_route_keeps_ordinary_requests_out_of_workflows() {
         let cancer_only = depmap_route(&json!({
@@ -2652,6 +2806,26 @@ mod tests {
         assert_eq!(explicit["execution_level"], "L4_DURABLE");
         assert_eq!(explicit["requires_approval"], true);
         assert_eq!(explicit["allowed_next_tools"], json!(["start_workflow"]));
+
+        let unsupported_lineage = depmap_route(&json!({
+            "intent":"mutation_to_dependency",
+            "source_gene":"TP53",
+            "cancer":"肺癌"
+        }))
+        .unwrap();
+        assert_eq!(unsupported_lineage["state"], "needs_input");
+        assert_eq!(unsupported_lineage["decision"], "clarify_unsupported_scope");
+        assert_eq!(
+            unsupported_lineage["unsupported_fields"],
+            json!(["cancer_lineage_for_pan_cancer_mutation_query"])
+        );
+        assert_eq!(
+            unsupported_lineage["clarification_card"]["options"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -2660,6 +2834,60 @@ mod tests {
         assert_eq!(schema["required"], json!(["intent"]));
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema.get("oneOf").is_none());
+        assert_eq!(schema["properties"]["alternative_intents"]["maxItems"], 3);
+        let intents = schema["properties"]["intent"]["enum"].as_array().unwrap();
+        assert!(intents.contains(&json!("mutation_to_dependency")));
+        assert!(intents.contains(&json!("dependency_to_mutation")));
+    }
+
+    #[test]
+    fn agent_route_blocks_critical_direction_ambiguity() {
+        let route = depmap_route(&json!({
+            "intent":"gene_pair_evidence",
+            "gene":"TP53",
+            "source_gene":"TP53",
+            "target_gene":"GPX4",
+            "alternative_intents":["gene_evidence"],
+            "ambiguity":"critical_direction",
+            "ambiguity_reason":"The request does not say whether mutation or dependency is fixed."
+        }))
+        .unwrap();
+        assert_eq!(route["state"], "needs_input");
+        assert_eq!(route["decision"], "clarify");
+        assert_eq!(route["requires_user_input"], true);
+        assert_eq!(
+            route["clarification_card"]["options"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            route["clarification_card"]["options"][0]["label"],
+            "固定 TP53 突变，查询依赖靶点"
+        );
+        assert_eq!(route["clarification_card"]["allow_freeform"], true);
+        assert_eq!(
+            route["guardrails"]["critical_direction_ambiguity_requires_clarification"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiguous_route_stops_sibling_evidence_calls_in_the_batch() {
+        let result = DepMapAgentRouteTool
+            .run(
+                &json!({
+                    "intent":"gene_evidence",
+                    "gene":"TP53",
+                    "alternative_intents":["mutation_to_dependency"],
+                    "ambiguity":"critical_direction"
+                }),
+                &RouteTestEnv,
+            )
+            .await;
+        assert!(!result.success);
+        assert_eq!(result.control, wisp_tools::ToolControl::StopBatch);
     }
 
     #[test]

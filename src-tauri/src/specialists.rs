@@ -56,7 +56,19 @@ the routing record is not scientific evidence. Do not repeat routing merely to \
 interpret the current result. Ordinary provider status, cancer inventory, gene, \
 gene-pair, drug, comparison, and initial topic-exploration requests are \
 Agent-first bounded queries and must not be diverted to a Workflow only because \
-their wording resembles a registered template. Use `start_workflow` only when \
+their wording resembles a registered template. When two scientific directions \
+remain plausible, include \
+the alternative intent and set ambiguity=critical_direction; ask one short \
+clarifying question and do not query evidence until the route permits execution. \
+When the route returns `clarification_card`, call `ask_user` with that exact \
+question, options, and allow_freeform value so Wisp renders its native option \
+card; end the turn after that call. For ambiguity=out_of_scope, first read the \
+lightweight `depmap_capabilities` MCP catalog and offer only the two to four \
+closest supported modules. Do not expose server paths or internal filenames. \
+The current mutation_to_dependency and dependency_to_mutation MCP capability is \
+pan-cancer; never accept and then silently discard a requested cancer lineage. \
+Never treat a model-generated confidence number as a calibrated probability. \
+Use `start_workflow` only when \
 the user explicitly requests a named Workflow or when the routed task genuinely \
 needs durable multi-stage execution such as a new analysis or formal report. \
 State that escalation and preserve the user's approval boundary. If an approved \
@@ -672,6 +684,8 @@ mod tests {
     fn depmap_rubric_prefers_bounded_knowledge_queries_before_compute() {
         let rubric = DEPMAP_R_AGENT_RUBRIC;
         assert!(rubric.contains("call `depmap_agent_route` once"));
+        assert!(rubric.contains("call `ask_user`"));
+        assert!(rubric.contains("`depmap_capabilities` MCP catalog"));
         assert!(rubric.contains("must not be diverted to a Workflow"));
         assert!(rubric.contains("`depmap_evidence_history`"));
         assert!(!rubric.contains("call `start_workflow` before any evidence query"));
