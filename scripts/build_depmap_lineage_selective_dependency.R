@@ -24,6 +24,26 @@ effect_path <- file.path(data_root, "CRISPRGeneEffect.csv")
 model_path <- file.path(data_root, "Model.csv")
 stopifnot(file.exists(effect_path), file.exists(model_path))
 
+common_essential_candidates <- c(
+  file.path(data_root, "CRISPRInferredCommonEssentials.csv"),
+  file.path(data_root, "AchillesCommonEssentialControls.csv"),
+  file.path(data_root, "CRISPRCommonEssential.csv"),
+  file.path(data_root, "CommonEssential.csv")
+)
+common_essential_path <- common_essential_candidates[file.exists(common_essential_candidates)][1]
+if (length(common_essential_path) && !is.na(common_essential_path)) {
+  common_dt <- fread(common_essential_path, check.names = FALSE)
+  common_col <- intersect(c("symbol", "gene", "Gene", "gene_symbol"), names(common_dt))[1]
+  if (is.na(common_col)) common_col <- names(common_dt)[1]
+  common_symbols <- unique(sub(" \\([^()]++\\)$", "", as.character(common_dt[[common_col]]), perl = TRUE))
+  common_symbols <- common_symbols[!is.na(common_symbols) & nzchar(common_symbols)]
+  dir.create(file.path(knowledge_root, "depmap-26q1-core"), recursive = TRUE, showWarnings = FALSE)
+  fwrite(
+    data.table(symbol = sort(common_symbols), source = "depmap_26q1"),
+    file.path(knowledge_root, "depmap-26q1-core", "common_essential_genes.csv")
+  )
+}
+
 message("Reading CRISPR Gene Effect")
 effect_dt <- fread(effect_path, check.names = FALSE)
 model_ids <- effect_dt[[1]]

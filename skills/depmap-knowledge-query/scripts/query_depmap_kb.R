@@ -213,6 +213,18 @@ if(a$mode%in%sparse_modes){
     if(!length(paths)){emit(evidence("NOT_COMPUTED",a$mode,"no completed lineage-vs-rest dependency table matches this lineage",lineage=a$lineage,ranking=ranking,manifest=manifest,provenance=manifest_path));quit(save="no")}
     compact_manifest<-if(is.null(manifest))NULL else list(schema_version=manifest$schema_version,release=manifest$release,method=manifest$method,effect_interpretation=manifest$effect_interpretation,lineage_count=manifest$lineage_count,gene_count=manifest$gene_count)
     p<-paths[[1L]];x<-as.data.table(arrow::read_parquet(p));tested<-x[test_status=="tested"&is.finite(effect_mean_lineage)]
+    exclude_common<-!is.null(a$exclude_common_essential)&&tolower(trimws(as.character(a$exclude_common_essential)))%in%c("true","1","yes")
+    common_source<-if(is.null(a$common_essential_source))"depmap_26q1" else trimws(a$common_essential_source)
+    common_path<-file.path(core,"common_essential_genes.csv")
+    common_available<-file.exists(common_path)
+    common_symbols<-character()
+    if(common_available){
+      common_dt<-fread(common_path)
+      symbol_column<-intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt))
+      if(length(symbol_column))common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]])) else common_available<-FALSE
+    }
+    tested[,is_common_essential:=if(common_available)clean(symbol)%in%common_symbols else NA]
+    tested[,common_essential_source:=if(common_available)common_source else NA_character_]
     if(ranking=="selective"){
       candidates<-tested[is.finite(fdr_lineage_more_dependent)&fdr_lineage_more_dependent<=0.05&is.finite(effect_mean_difference)&effect_mean_difference<0]
       setorder(candidates,rank_more_dependent,effect_mean_difference,na.last=TRUE)
@@ -221,9 +233,15 @@ if(a$mode%in%sparse_modes){
       candidates<-copy(tested);setorder(candidates,effect_mean_lineage,effect_mean_difference,na.last=TRUE)
       ranking_rule<-"tested genes ordered by ascending descriptive lineage mean Gene Effect; no lineage-vs-rest significance filter"
     }
-    rows<-candidates[seq_len(min(limit,.N)),.(symbol,lineage_n,rest_n,effect_mean_lineage,effect_mean_rest,effect_mean_difference,effect_median_lineage,effect_median_rest,effect_median_difference,welch_t,p_lineage_more_dependent,fdr_lineage_more_dependent,dependency_probability_mean_lineage,dependency_probability_mean_rest,dependency_probability_mean_difference,effect_direction,rank_more_dependent)]
+    before_common_filter<-nrow(candidates)
+    if(exclude_common&&common_available)candidates<-candidates[is_common_essential==FALSE]
+    after_common_filter<-nrow(candidates)
+    rows<-candidates[seq_len(min(limit,.N)),.(symbol,is_common_essential,common_essential_source,lineage_n,rest_n,effect_mean_lineage,effect_mean_rest,effect_mean_difference,effect_median_lineage,effect_median_rest,effect_median_difference,welch_t,p_lineage_more_dependent,fdr_lineage_more_dependent,dependency_probability_mean_lineage,dependency_probability_mean_rest,dependency_probability_mean_difference,effect_direction,rank_more_dependent)]
     status<-if(nrow(rows))"FOUND" else "NOT_RETAINED";reason<-if(nrow(rows))"bounded rows selected from the completed precomputed lineage dependency test" else "the completed table contains no rows satisfying the requested fixed ranking rule"
-    emit(evidence(status,a$mode,reason,lineage=a$lineage,ranking=ranking,ranking_rule=ranking_rule,housekeeping_filter_applied=FALSE,housekeeping_filter_note="the precomputed lineage test has no validated housekeeping/common-essential exclusion field; selective means statistically stronger dependency versus the rest, not non-housekeeping",rows=rows,summary=list(total_gene_rows=nrow(x),tested_gene_count=nrow(tested),eligible_ranked_gene_count=nrow(candidates),returned_count=nrow(rows),lineage_n_modal=if(nrow(tested))as.integer(names(sort(table(tested$lineage_n),decreasing=TRUE))[1L]) else NA_integer_),manifest=compact_manifest,provenance=c(manifest_path,p)));quit(save="no")
+    annotation_status<-if(common_available)"AVAILABLE" else "ANNOTATION_UNAVAILABLE"
+    filter_applied<-exclude_common&&common_available
+    filter_note<-if(filter_applied)"DepMap 26Q1 common-essential labels were excluded; housekeeping annotations are a separate concept" else if(exclude_common)"common-essential exclusion was requested but the indexed annotation asset is unavailable; rows were not silently filtered" else "common-essential labels are annotations only; no exclusion was requested"
+    emit(evidence(status,a$mode,reason,lineage=a$lineage,ranking=ranking,ranking_rule=ranking_rule,exclude_common_essential_requested=exclude_common,common_essential_filter_applied=filter_applied,common_essential_source=common_source,common_essential_annotation_status=annotation_status,common_essential_filter_note=filter_note,housekeeping_filter_applied=FALSE,housekeeping_filter_note="housekeeping annotations are distinct from DepMap common-essential labels and were not applied",rows=rows,summary=list(total_gene_rows=nrow(x),tested_gene_count=nrow(tested),eligible_before_common_essential_filter=before_common_filter,eligible_after_common_essential_filter=after_common_filter,common_essential_removed_count=before_common_filter-after_common_filter,returned_count=nrow(rows),lineage_n_modal=if(nrow(tested))as.integer(names(sort(table(tested$lineage_n),decreasing=TRUE))[1L]) else NA_integer_),manifest=compact_manifest,provenance=c(manifest_path,p,if(common_available)common_path else character())));quit(save="no")
   }
   source_index<-function(order,source){
     if(!file.exists(order))return(NA_integer_)

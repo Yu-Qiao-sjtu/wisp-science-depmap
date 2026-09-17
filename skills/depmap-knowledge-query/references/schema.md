@@ -55,8 +55,13 @@ Every response includes file provenance. FDR is adjusted within the family state
 For `lineage_dependency`, `effect_mean_difference` is the lineage mean Gene
 Effect minus the rest mean. It is not log fold-change and must not be labelled
 `logFC`.
-The current table has no validated housekeeping/common-essential exclusion
-field, so `selective` must not be paraphrased as `non-housekeeping`.
+The query may join the versioned `depmap_26q1` common-essential sidecar and
+return `is_common_essential` plus `common_essential_source` per row. Set
+`exclude_common_essential=true` to exclude only those labelled genes. When the
+sidecar is absent, `common_essential_annotation_status` is
+`ANNOTATION_UNAVAILABLE` and no row is silently removed. `selective` still must
+not be paraphrased as `non-housekeeping`: housekeeping and common-essential
+annotations are distinct.
 
 `tcga_expression_survival` aligns genes by exact gene symbol with an explicit
 Ensembl-ID fallback, uses primary cancer samples only, keeps one sample per
