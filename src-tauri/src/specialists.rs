@@ -805,6 +805,8 @@ mod tests {
             "02_gene_gene_correlation.R",
             "03_co_dependency.R",
             "04_predivtive_biomarkers.R",
+            "build_predictive_biomarker_model.R",
+            "validate_predictive_biomarker_model.R",
             "05_from_gene_to_dependency.R",
             "05.1_ml_pathway.R",
             "05.2_synthetic_lethal.R",
