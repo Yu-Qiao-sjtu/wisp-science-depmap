@@ -412,7 +412,7 @@ class QueryRequest(BaseModel):
     project: str | None = None
     endpoint: str | None = None
     catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
-    coverage: Literal["legacy", "quality"] | None = None
+    coverage: Literal["all", "legacy", "quality"] | None = None
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
@@ -858,7 +858,7 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
     if unavailable is not None:
         return unavailable
     catalog = query.get("catalog") or "stable_negative_rank1"
-    coverage = query.get("coverage") or "quality"
+    coverage = query.get("coverage") or "all"
     stable_root = root / "high_confidence_stability"
     stable_manifest = _load_manifest(stable_root)
     stable_path = stable_root / "final_high_confidence_true_love_genes.csv.gz"
@@ -878,7 +878,8 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
             ("positive_reciprocal_top20", "legacy"): "positive_reciprocal_top20_legacy.csv.gz",
             ("positive_reciprocal_top20", "quality"): "positive_reciprocal_top20_n500.csv.gz",
         }
-        path = derived_root / names[(catalog, coverage)]
+        storage_coverage = "legacy" if coverage == "all" else coverage
+        path = derived_root / names[(catalog, storage_coverage)]
         selected_manifest = derived_manifest
     if not path.is_file():
         return _evidence_response(

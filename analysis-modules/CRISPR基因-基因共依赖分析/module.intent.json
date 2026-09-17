@@ -43,10 +43,12 @@
         "positive_reciprocal_top20"
       ],
       "coverage": [
-        "quality",
-        "legacy"
+        "all",
+        "legacy",
+        "quality"
       ],
-      "default_coverage": "quality"
+      "default_coverage": "all",
+      "coverage_policy": "all returns every finite pair retained by the requested TM00 rule; quality is an optional pair_n>=500 view"
     }
   },
   "intent_terms_zh": [

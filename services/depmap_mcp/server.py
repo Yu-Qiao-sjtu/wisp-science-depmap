@@ -870,7 +870,7 @@ class DepMapEvidenceService:
         partner: str | None = None,
         limit: int = 20,
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
-        coverage: Literal["legacy", "quality"] | None = None,
+        coverage: Literal["all", "legacy", "quality"] | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -1242,8 +1242,9 @@ def build_mcp_server(
         description=(
             "Query one completed TLG catalog: bootstrap-stable mutual-rank-1 negative "
             "pairs, the TM00 r < -0.3 negative co-dependency candidates, or positive "
-            "reciprocal Top20 neighbors. Derived catalogs default to the pair_n >= 500 "
-            "quality layer. These are codependency hypotheses and do not prove "
+            "reciprocal Top20 neighbors. Derived catalogs default to all finite pairs; "
+            "pair_n and quality annotations are returned so users can filter. These "
+            "are codependency hypotheses and do not prove "
             "synthetic lethality or a causal mechanism."
         ),
         annotations=READ_ONLY,
@@ -1254,7 +1255,7 @@ def build_mcp_server(
         partner: str | None = None,
         limit: int = 20,
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
-        coverage: Literal["legacy", "quality"] | None = None,
+        coverage: Literal["all", "legacy", "quality"] | None = None,
     ) -> dict[str, Any]:
         return await service.true_love_evidence(gene, partner, limit, catalog, coverage)
 

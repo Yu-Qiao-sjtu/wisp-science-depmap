@@ -107,6 +107,8 @@ class DepMapApiTests(unittest.TestCase):
         )
         with gzip.open(derived_root / "negative_codependency_r_lt_minus_0.3_n500.csv.gz", "wt", encoding="utf-8") as handle:
             handle.write("gene_a,gene_b,correlation,pair_n,p_value\nKRAS,NRAS,-0.41,1208,1e-30\n")
+        with gzip.open(derived_root / "negative_codependency_r_lt_minus_0.3_legacy.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("gene_a,gene_b,correlation,pair_n,p_value,coverage_pass_n500\nKRAS,NRAS,-0.41,1208,1e-30,TRUE\nLOWA,LOWB,-0.99,4,0.01,FALSE\n")
         with gzip.open(derived_root / "positive_reciprocal_top20_n500.csv.gz", "wt", encoding="utf-8") as handle:
             handle.write("gene_a,gene_b,correlation_a_to_b,correlation_b_to_a,rank_a_to_b,rank_b_to_a,reciprocal_rank_sum\nKRAS,RAF1,0.66,0.66,2,3,5\n")
 
@@ -352,8 +354,14 @@ class DepMapApiTests(unittest.TestCase):
                 "/api/v1/query", headers=self.headers,
                 json={"mode": "true_love", "catalog": "positive_reciprocal_top20", "coverage": "quality", "gene": "KRAS", "limit": 5},
             ).json()
+            all_rows = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "catalog": "negative_r_lt_minus_0_3", "limit": 5},
+            ).json()
         self.assertEqual(negative["rows"][0]["correlation"], -0.41)
         self.assertEqual(positive["rows"][0]["gene_b"], "RAF1")
+        self.assertEqual(all_rows["coverage"], "all")
+        self.assertEqual(all_rows["summary"]["matched_pair_count"], 2)
         self.assertEqual(synthetic["status"], "FOUND")
         self.assertEqual(synthetic["rows"][0]["target_gene"], "ARID1B")
         self.assertEqual(synthetic_forward["status"], "FOUND")
