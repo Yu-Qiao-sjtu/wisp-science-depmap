@@ -55,6 +55,7 @@ MODE_REQUIRED_FIELDS = {
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
+    "pan_cancer_dependency": set(),
     "lineage_directions": {"lineage"},
     "core": {"gene"},
     "pair": {"module", "source", "target"},
@@ -80,6 +81,7 @@ MODE_OPTIONAL_FIELDS = {
     "mutation_anchor": {"event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
+    "pan_cancer_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
     "lineage_drug": {"drug", "target", "limit"},
@@ -119,6 +121,8 @@ QUERY_FIELD_ORDER = (
     "omic",
     "family",
     "ranking",
+    "exclude_common_essential",
+    "common_essential_source",
     "collection",
     "term",
     "contrast",
@@ -391,7 +395,7 @@ class QueryRequest(BaseModel):
     mode: Literal[
         "analysis_catalog",
         "mutation_anchor",
-        "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
+        "catalog", "lineage_catalog", "lineage_dependency", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
@@ -549,7 +553,7 @@ def _coverage_gap(stderr: str) -> bool:
     return _coverage_gap_reason(stderr) is not None
 
 
-async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+def _r_query_command(settings: Settings, query: dict[str, Any]) -> list[str]:
     command = [
         settings.rscript,
         str(settings.query_script),
@@ -559,6 +563,11 @@ async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, An
     for key in QUERY_FIELD_ORDER:
         if key in query:
             command.extend((f"--{key.replace('_', '-')}", str(query[key])))
+    return command
+
+
+async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    command = _r_query_command(settings, query)
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(settings.query_script.parent),

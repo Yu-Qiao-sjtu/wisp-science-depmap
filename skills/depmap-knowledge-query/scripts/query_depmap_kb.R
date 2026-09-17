@@ -159,7 +159,7 @@ if(a$mode=="tf_dependency"){
   emit(list(mode=a$mode,status="FOUND",reason="exact pair retrieved from the completed full matrix",source=tf,target=target,rows=row,manifest=compact,provenance=c(manifest_path,p)));quit(save="no")
 }
 
-sparse_modes<-c("lineage_catalog","lineage_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
+sparse_modes<-c("lineage_catalog","lineage_dependency","pan_cancer_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
 if(a$mode%in%sparse_modes){
   if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for sparse lineage queries")
   lineage_key<-function(x)gsub("^_+|_+$","",gsub("[^A-Za-z0-9]+","_",trimws(x)))
@@ -242,6 +242,35 @@ if(a$mode%in%sparse_modes){
     filter_applied<-exclude_common&&common_available
     filter_note<-if(filter_applied)"DepMap 26Q1 common-essential labels were excluded; housekeeping annotations are a separate concept" else if(exclude_common)"common-essential exclusion was requested but the indexed annotation asset is unavailable; rows were not silently filtered" else "common-essential labels are annotations only; no exclusion was requested"
     emit(evidence(status,a$mode,reason,lineage=a$lineage,ranking=ranking,ranking_rule=ranking_rule,exclude_common_essential_requested=exclude_common,common_essential_filter_applied=filter_applied,common_essential_source=common_source,common_essential_annotation_status=annotation_status,common_essential_filter_note=filter_note,housekeeping_filter_applied=FALSE,housekeeping_filter_note="housekeeping annotations are distinct from DepMap common-essential labels and were not applied",rows=rows,summary=list(total_gene_rows=nrow(x),tested_gene_count=nrow(tested),eligible_before_common_essential_filter=before_common_filter,eligible_after_common_essential_filter=after_common_filter,common_essential_removed_count=before_common_filter-after_common_filter,returned_count=nrow(rows),lineage_n_modal=if(nrow(tested))as.integer(names(sort(table(tested$lineage_n),decreasing=TRUE))[1L]) else NA_integer_),manifest=compact_manifest,provenance=c(manifest_path,p,if(common_available)common_path else character())));quit(save="no")
+  }
+  if(a$mode=="pan_cancer_dependency"){
+    root<-file.path(core,"lineage_dependency_tests");manifest_path<-file.path(root,"manifest.json");manifest<-manifest_at(root)
+    ranking<-tolower(if(is.null(a$ranking))"selective" else trimws(a$ranking));limit<-if(is.null(a$limit))5L else min(20L,as.integer(a$limit))
+    if(!ranking%in%c("selective","mean_dependency"))stop("ranking must be selective or mean_dependency")
+    if(!dir.exists(root)){emit(evidence("MODULE_UNAVAILABLE",a$mode,"the precomputed lineage dependency-test module is not installed",ranking=ranking,provenance=root));quit(save="no")}
+    paths<-sort(list.files(root,pattern="^[0-9]+_.*\\.parquet$",full.names=TRUE))
+    if(!length(paths)){emit(evidence("NOT_COMPUTED",a$mode,"no completed lineage-vs-rest dependency tables are indexed",ranking=ranking,provenance=manifest_path));quit(save="no")}
+    exclude_common<-!is.null(a$exclude_common_essential)&&tolower(trimws(as.character(a$exclude_common_essential)))%in%c("true","1","yes")
+    common_source<-if(is.null(a$common_essential_source))"depmap_26q1" else trimws(a$common_essential_source)
+    common_path<-file.path(core,"common_essential_genes.csv");common_available<-file.exists(common_path);common_symbols<-character()
+    if(common_available){common_dt<-fread(common_path);symbol_column<-intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt));if(length(symbol_column))common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]])) else common_available<-FALSE}
+    summaries<-vector("list",length(paths));retained_symbols<-vector("list",length(paths))
+    for(i in seq_along(paths)){
+      x<-as.data.table(arrow::read_parquet(paths[[i]]));tested<-x[test_status=="tested"&is.finite(effect_mean_lineage)]
+      lineage_label<-if("lineage"%in%names(x)&&nrow(x))as.character(x$lineage[[1L]]) else sub("^[0-9]+_|\\.parquet$","",basename(paths[[i]]))
+      tested[,is_common_essential:=if(common_available)clean(symbol)%in%common_symbols else NA]
+      tested[,common_essential_source:=if(common_available)common_source else NA_character_]
+      if(ranking=="selective"){candidates<-tested[is.finite(fdr_lineage_more_dependent)&fdr_lineage_more_dependent<=0.05&is.finite(effect_mean_difference)&effect_mean_difference<0];setorder(candidates,rank_more_dependent,effect_mean_difference,na.last=TRUE)}else{candidates<-copy(tested);setorder(candidates,effect_mean_lineage,effect_mean_difference,na.last=TRUE)}
+      before<-nrow(candidates);if(exclude_common&&common_available)candidates<-candidates[is_common_essential==FALSE];after<-nrow(candidates)
+      recurrence_candidates<-if(ranking=="selective")candidates else candidates[is.finite(effect_mean_lineage)&effect_mean_lineage<=-0.5]
+      retained_symbols[[i]]<-unique(as.character(recurrence_candidates$symbol))
+      top<-candidates[seq_len(min(limit,.N)),.(symbol,is_common_essential,common_essential_source,effect_mean_lineage,effect_mean_rest,effect_mean_difference,fdr_lineage_more_dependent,rank_more_dependent)]
+      summaries[[i]]<-list(lineage=lineage_label,lineage_n=if(nrow(tested))as.integer(names(sort(table(tested$lineage_n),decreasing=TRUE))[1L]) else NA_integer_,tested_count=nrow(tested),retained_before_common_essential_filter=before,retained_count=after,recurrence_eligible_count=nrow(recurrence_candidates),returned_count=nrow(top),rows=top)
+    }
+    all_symbols<-unlist(retained_symbols,use.names=FALSE);recurrence<-if(length(all_symbols)){z<-sort(table(all_symbols),decreasing=TRUE);data.table(symbol=names(z),lineage_count=as.integer(z))[seq_len(min(100L,.N))]}else data.table(symbol=character(),lineage_count=integer())
+    annotation_status<-if(common_available)"AVAILABLE" else "ANNOTATION_UNAVAILABLE";filter_applied<-exclude_common&&common_available
+    recurrence_scope<-if(ranking=="selective")"full_fdr_retained_sets_before_top_n_truncation" else "full_sets_with_lineage_mean_gene_effect_lte_minus_0_5_before_top_n_truncation"
+    emit(evidence("FOUND",a$mode,"bounded per-lineage rows and complete threshold-qualified recurrence were read from all completed lineage tables",ranking=ranking,per_lineage_limit=limit,lineage_count=length(summaries),exclude_common_essential_requested=exclude_common,common_essential_filter_applied=filter_applied,common_essential_source=common_source,common_essential_annotation_status=annotation_status,lineages=summaries,recurrence=list(scope=recurrence_scope,mean_dependency_retention_threshold=if(ranking=="mean_dependency")-0.5 else NULL,complete=TRUE,rows=recurrence),provenance=c(manifest_path,paths,if(common_available)common_path else character())));quit(save="no")
   }
   source_index<-function(order,source){
     if(!file.exists(order))return(NA_integer_)

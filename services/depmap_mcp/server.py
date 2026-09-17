@@ -208,7 +208,7 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "metric": "module_availability",
             "interpretation": "coverage and eligibility only; absence is not negative biological evidence",
         }
-    if mode == "lineage_dependency":
+    if mode in {"lineage_dependency", "pan_cancer_dependency"}:
         return {
             "metric": "gene_effect_lineage_vs_rest",
             "interpretation": (
@@ -613,6 +613,29 @@ class DepMapEvidenceService:
             tool="depmap_lineage_direction_discovery",
             request={"lineage": lineage, "limit": limit},
             evidence=item,
+        )
+
+    async def pan_cancer_dependencies(
+        self,
+        ranking: Literal["selective", "mean_dependency"] = "selective",
+        limit: int = 5,
+        exclude_common_essential: bool = False,
+        common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
+    ) -> dict[str, Any]:
+        if ranking not in {"selective", "mean_dependency"}:
+            raise ValueError("ranking must be selective or mean_dependency")
+        if not 1 <= limit <= 20:
+            raise ValueError("limit must be between 1 and 20 per lineage")
+        query = {
+            "mode": "pan_cancer_dependency",
+            "ranking": ranking,
+            "exclude_common_essential": exclude_common_essential,
+            "common_essential_source": common_essential_source,
+            "limit": limit,
+        }
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_pan_cancer_dependencies", request=query, evidence=item
         )
 
     async def gene_evidence(
@@ -1211,6 +1234,29 @@ def build_mcp_server(
     ) -> dict[str, Any]:
         return await service.lineage_dependencies(
             lineage,
+            ranking,
+            limit,
+            exclude_common_essential=exclude_common_essential,
+            common_essential_source=common_essential_source,
+        )
+
+    @mcp.tool(
+        title="DepMap pan-cancer dependency summary",
+        description=(
+            "Return one bounded summary across every completed lineage dependency "
+            "table. The limit applies per lineage; recurrence is calculated over the "
+            "full retained sets before Top-N truncation."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_pan_cancer_dependencies(
+        ranking: Literal["selective", "mean_dependency"] = "selective",
+        exclude_common_essential: bool = False,
+        common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        return await service.pan_cancer_dependencies(
             ranking,
             limit,
             exclude_common_essential=exclude_common_essential,

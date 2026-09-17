@@ -111,6 +111,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "dependency_to_mutation",
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
+                "pan_cancer_dependency_summary",
                 "tf_activity_to_dependency",
                 "expression_biomarker_model",
                 "true_love_gene_catalog",
@@ -278,6 +279,26 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         short_alias = await self.service.lineage_dependencies("乳癌", "selective", 10)
         self.assertEqual(result["evidence_id"], breast_cancer["evidence_id"])
         self.assertEqual(result["evidence_id"], short_alias["evidence_id"])
+
+    async def test_pan_cancer_dependency_summary_is_one_bounded_query(self):
+        result = await self.service.pan_cancer_dependencies(
+            "selective", 5, exclude_common_essential=True
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "pan_cancer_dependency",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
+                "limit": 5,
+            },
+        )
+        self.assertEqual(result["request"], self.queries[-1])
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["metric"],
+            "gene_effect_lineage_vs_rest",
+        )
 
     async def test_lineage_resolution_requires_confirmation_for_ambiguity(self):
         exact = await self.service.resolve_lineage("乳腺癌")
@@ -489,6 +510,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_resolve_lineage",
                         "depmap_lineage_catalog",
                         "depmap_lineage_dependencies",
+                        "depmap_pan_cancer_dependencies",
                         "depmap_lineage_direction_discovery",
                         "depmap_gene_evidence",
                         "tcga_gene_expression_survival",

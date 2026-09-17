@@ -32,6 +32,7 @@ MODE_ALIASES = {
     "pair": "pair",
     "lineage_catalog": "lineage_catalog",
     "lineage_dependency": "lineage_dependency",
+    "pan_cancer_dependency": "pan_cancer_dependency",
     "lineage_directions": "lineage_directions",
     "mutation_anchor": "mutation_anchor",
     "synthetic_lethal": "synthetic_lethal",
