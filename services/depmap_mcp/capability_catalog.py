@@ -54,6 +54,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "在{lineage}中列出可作为后续依赖分析锚点的{event}突变基因，并说明样本数与筛选依据。",
         "confusable_with": ["mutation_to_dependency"],
         "mcp_tool": "depmap_mutation_anchor_evidence",
+        "inventory_patterns": ["*癌种内突变锚定基因选择*"],
     },
     {
         "intent": "mutation_to_dependency",
@@ -94,6 +95,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "查询{lineage}中选择性更强的CRISPR dependency基因，并返回Top {limit}。",
         "confusable_with": ["mutation_anchor_discovery"],
         "mcp_tool": "depmap_lineage_dependencies",
+        "inventory_patterns": ["*lineage_dependency_tests*"],
     },
     {
         "intent": "tf_activity_to_dependency",
@@ -104,6 +106,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "查询{transcription_factor}推断活性与CRISPR Gene Effect的关联；若指定{target_gene}则返回精确配对，否则返回正负向候选。",
         "confusable_with": ["gene_pair_evidence"],
         "mcp_tool": "depmap_tf_dependency_evidence",
+        "inventory_patterns": ["*转录因子活性*"],
     },
     {
         "intent": "expression_biomarker_model",
@@ -114,6 +117,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "查询{target_gene}依赖靶点的表达biomarker建模资格与已有缓存；若尚未建模，说明按需执行入口。",
         "confusable_with": ["gene_pair_evidence", "tf_activity_to_dependency"],
         "mcp_tool": "depmap_biomarker_model_evidence",
+        "inventory_patterns": ["*表达基因-CRISPR基因依赖相关性分析*"],
     },
     {
         "intent": "true_love_gene_catalog",
@@ -124,6 +128,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "查询26Q1的{catalog}真爱基因目录，可选{coverage}覆盖层，并说明相关性不能证明合成致死。",
         "confusable_with": ["gene_pair_evidence"],
         "mcp_tool": "depmap_true_love_evidence",
+        "inventory_patterns": ["*CRISPR基因-基因共依赖分析*"],
     },
     {
         "intent": "gene_evidence",
@@ -158,6 +163,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "examples_zh": ["有哪些分子亚型分析", "乳腺癌亚型中ESR1依赖如何"],
         "precise_prompt_template_zh": "查询{lineage}的{contrast_id}亚型依赖证据。",
         "confusable_with": ["cancer_dependency_ranking"], "mcp_tool": "depmap_subtype_evidence",
+        "inventory_patterns": ["*subtype_dependency*"],
     },
     {
         "intent": "coamplification_evidence",
@@ -166,6 +172,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "examples_zh": ["CTTN和RNF121共扩增后依赖什么", "查询两个基因共扩增"],
         "precise_prompt_template_zh": "查询{source_gene}与{partner_gene}共扩增及{target_gene}依赖证据。",
         "confusable_with": ["gene_pair_evidence"], "mcp_tool": "depmap_coamplification_evidence",
+        "inventory_patterns": ["*coamplification_dependency*"],
     },
     {
         "intent": "three_d_evidence",
@@ -174,5 +181,6 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "examples_zh": ["查询3D培养中的依赖基因", "比较3D和2D的依赖差异"],
         "precise_prompt_template_zh": "查询3D模块{family}的预计算证据。",
         "confusable_with": ["gene_pair_evidence"], "mcp_tool": "depmap_3d_evidence",
+        "inventory_patterns": ["depmap-26q1-3d"],
     },
 )

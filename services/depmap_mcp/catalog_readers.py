@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 
-Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any]]]
+Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
 # API modes are more granular than the public intent catalog. Each one must
 # still enter through a registered reader family before opening retained data.
@@ -181,6 +181,18 @@ class CatalogReaderRegistry:
             "_catalog_reader_id": resolution.reader_id,
         }
         result = await runner(settings, bound_query if self.enabled else query)
+        if result is None:
+            return resolution, {
+                "status": "NOT_RETAINED",
+                "reason": "the catalog adapter returned no result for this bounded query",
+                "rows": [],
+                "returned_count": 0,
+            }
+        if not isinstance(result, dict):
+            return resolution, {
+                "status": "MODULE_UNAVAILABLE",
+                "reason": "the catalog adapter returned an invalid result type",
+            }
         if self.enabled:
             resolution, error = self._bind_result_provenance(resolution, result)
             if error:

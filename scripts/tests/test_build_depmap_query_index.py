@@ -8,6 +8,7 @@ from pathlib import Path
 
 from scripts.build_depmap_query_index import build, is_fresh
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
 class QueryIndexTests(unittest.TestCase):
@@ -23,6 +24,13 @@ class QueryIndexTests(unittest.TestCase):
             (unit / "gene_order.csv").write_text("gene_index,symbol\n1,ESR1\n", encoding="utf-8")
             (unit / "blocks" / "block_00001_00001.rds").write_bytes(b"fixture")
             (root / "public.csv").write_text("key,value\na,1\n", encoding="utf-8")
+            for family in ("subtype_dependency", "coamplification_dependency"):
+                family_root = root / "depmap-26q1-full" / family
+                family_root.mkdir(parents=True)
+                (family_root / "manifest.json").write_text(
+                    json.dumps({"status": "complete", "release": "26Q1"}),
+                    encoding="utf-8",
+                )
             output = root / "depmap-26q1-query-index.sqlite"
 
             counts = build(root, output)
@@ -81,6 +89,34 @@ class QueryIndexTests(unittest.TestCase):
             ))
             self.assertEqual(seen["_catalog_reader_id"], "pair_adapter")
             self.assertEqual(len(seen["_catalog_matrix_blocks"]), 1)
+
+            settings = Settings(
+                knowledge_root=root,
+                query_script=root / "query_depmap_kb.R",
+                api_token="test-token",
+            )
+            exact = _run_analysis_catalog_query(
+                settings,
+                {"mode": "analysis_catalog", "module": "CRISPR基因-基因共依赖分析"},
+            )
+            alias = _run_analysis_catalog_query(
+                settings,
+                {"mode": "analysis_catalog", "module": "true_love"},
+            )
+            unmatched = _run_analysis_catalog_query(
+                settings,
+                {"mode": "analysis_catalog", "module": "not-a-real-module"},
+            )
+            subtype = _run_analysis_catalog_query(
+                settings,
+                {"mode": "analysis_catalog", "module": "subtype"},
+            )
+            self.assertEqual(exact["status"], "FOUND")
+            self.assertEqual(alias["status"], "FOUND")
+            self.assertEqual(unmatched["status"], "NOT_RETAINED")
+            self.assertEqual(unmatched["rows"], [])
+            self.assertEqual(subtype["returned_count"], 1)
+            self.assertIn("subtype_dependency", subtype["rows"][0]["analysis_unit"])
 
 
 if __name__ == "__main__":

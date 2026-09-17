@@ -160,6 +160,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result["presentation_contract"]["do_not_answer_with_paths_only"])
 
+    async def test_analysis_catalog_normalizes_null_adapter_result(self):
+        async def null_runner(_settings, _query):
+            return None
+
+        service = DepMapEvidenceService(self.settings, null_runner)
+        result = await service.analysis_catalog("not-indexed", 10)
+
+        self.assertEqual(result["evidence"]["status"], "NOT_RETAINED")
+        self.assertEqual(result["evidence"]["result"]["rows"], [])
+        self.assertEqual(result["evidence"]["result"]["returned_count"], 0)
+
     async def test_mutation_anchor_intent_queries_dedicated_result(self):
         result = await self.service.mutation_anchor_evidence(
             "Lung", "damaging", "priority", False, 12
