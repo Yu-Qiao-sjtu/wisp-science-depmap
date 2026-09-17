@@ -17,8 +17,10 @@ python scripts/build_depmap_query_index.py --knowledge-root /path/to/depmap-26q1
 
 The database indexes TLG pairs on both genes, TF-dependency rows on TF and
 target, and predictive-biomarker eligibility on target gene. The API uses it
-for TLG lookups and falls back to the original CSV/GZIP files when the index
-is absent or unreadable. Result files and manifests remain authoritative.
+for TLG and `biomarker_target` lookups and falls back to the original CSV/GZIP
+files when the index is absent or unreadable. Result files and manifests remain
+authoritative. A biomarker lookup reports eligibility and validated cache state;
+it does not start model training.
 
 Required environment variables:
 

@@ -71,6 +71,7 @@ MODE_REQUIRED_FIELDS = {
     "three_d": {"family"},
     "tcga_expression_survival": {"gene"},
     "tf_dependency": {"source"},
+    "biomarker_target": {"target"},
 }
 MODE_OPTIONAL_FIELDS = {
     "lineage_network": {"target", "limit", "reciprocal"},
@@ -86,6 +87,7 @@ MODE_OPTIONAL_FIELDS = {
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"target", "limit"},
+    "biomarker_target": set(),
 }
 LINEAGE_NETWORK_FAMILIES = {
     "effect_correlation",
@@ -390,6 +392,7 @@ class QueryRequest(BaseModel):
         "true_love", "synthetic_lethal", "three_d",
         "tcga_expression_survival",
         "tf_dependency",
+        "biomarker_target",
     ]
     gene: str | None = None
     module: str | None = None
@@ -684,6 +687,44 @@ def _indexed_true_love_rows(
         if db is not None:
             db.close()
     return [{key: _coerce_csv_value(value) for key, value in json.loads(row[0]).items()} for row in rows]
+
+
+def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    target = query["target"].strip().upper()
+    index = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    row: dict[str, Any] | None = None
+    used_index = False
+    if index.is_file():
+        db: sqlite3.Connection | None = None
+        try:
+            db = sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)
+            hit = db.execute(
+                "SELECT row_json FROM biomarker_target WHERE target_gene = ?", (target,)
+            ).fetchone()
+            if hit:
+                row = {key: _coerce_csv_value(value) for key, value in json.loads(hit[0]).items()}
+            used_index = True
+        except (sqlite3.Error, OSError):
+            LOGGER.exception("Biomarker target index unavailable; falling back to CSV")
+        finally:
+            if db is not None:
+                db.close()
+    module = settings.knowledge_root / "analysis-modules" / "表达基因-CRISPR基因依赖相关性分析"
+    catalog = module / "results" / "predictive_biomarker" / "target_eligibility_26Q1" / "target_eligibility_catalog.csv"
+    if row is None and not used_index and catalog.is_file():
+        row = next((item for item in _read_csv_records(catalog) if item.get("target_gene") == target), None)
+    cache = module / "results" / "predictive_biomarker" / f"{target}_26Q1"
+    validation = cache / "validation.json"
+    cached = validation.is_file()
+    return _evidence_response(
+        "FOUND" if row else "NOT_COMPUTED", mode="biomarker_target",
+        reason=("target eligibility and cached-model state found" if row else "target is absent from the Gene Effect modeling catalog"),
+        target=target, eligibility=row, cached_model=cached,
+        cached_model_status=(json.loads(validation.read_text(encoding="utf-8-sig")).get("status") if cached else None),
+        execution_policy="nested LASSO/random forest is run on demand per target and cached; eligibility is prioritization, not exclusion",
+        entrypoint="analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/build_predictive_biomarker_model.R",
+        provenance=[str(catalog), *([str(index)] if used_index else []), *([str(validation)] if cached else [])],
+    )
 
 
 def _complete_module(
@@ -2126,6 +2167,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_coamplification_query, settings, query)
     if query["mode"] == "true_love":
         return await asyncio.to_thread(_run_true_love_query, settings, query)
+    if query["mode"] == "biomarker_target":
+        return await asyncio.to_thread(_run_biomarker_target_query, settings, query)
     if query["mode"] == "synthetic_lethal":
         return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
     if query["mode"] == "three_d":

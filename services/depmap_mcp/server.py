@@ -121,6 +121,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "mcp_tool": "depmap_tf_dependency_evidence",
     },
     {
+        "intent": "expression_biomarker_model",
+        "description": "Check whether a fixed CRISPR dependency target is eligible for expression-based LASSO/random-forest modeling and whether a validated cached model already exists.",
+        "required": ["target_gene"],
+        "optional": [],
+        "examples_zh": ["为GPX4建立表达biomarker模型", "ESR1依赖能不能用表达预测", "查询WRN的LASSO模型资格"],
+        "precise_prompt_template_zh": "查询{target_gene}依赖靶点的表达biomarker建模资格与已有缓存；若尚未建模，说明按需执行入口。",
+        "confusable_with": ["gene_pair_evidence", "tf_activity_to_dependency"],
+        "mcp_tool": "depmap_biomarker_model_evidence",
+    },
+    {
         "intent": "true_love_gene_catalog",
         "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
         "required": ["catalog"],
@@ -184,6 +194,16 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "scope": "global",
             "cohort_policy": "1140_matched_expression_and_gene_effect_models",
             "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
+        }
+    if mode == "biomarker_target":
+        return {
+            "metric": "modeling_eligibility_and_cached_validation_state",
+            "analysis_label": "expression_to_dependency_predictive_biomarker_model",
+            "data_modality": "baseline_expression_predicting_crispr_gene_effect",
+            "relation_type": "predictive_model_eligibility",
+            "scope": "pan_cancer",
+            "cohort_policy": "matched_default_expression_and_gene_effect_models",
+            "interpretation": "eligibility indicates sufficient coverage and Gene Effect variation; it is not evidence of predictive performance or clinical validity",
         }
     if module == "effect_correlation" and mode in {"pair", "top", "lineage_network"}:
         return {
@@ -458,6 +478,7 @@ class DepMapEvidenceService:
                 "three_d_dependency_evidence",
                 "tcga_gene_expression_survival",
                 "tf_activity_dependency_evidence",
+                "predictive_biomarker_model_eligibility",
             ],
             "data_sources": {
                 "depmap": {
@@ -504,6 +525,12 @@ class DepMapEvidenceService:
                         / "manifest.json"
                     ).is_file(),
                     "scope": "DoRothEA A-C/decoupleR ULM TF activity versus CRISPR Gene Effect",
+                },
+                "predictive_biomarker": {
+                    "installed": (
+                        self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+                    ).is_file(),
+                    "scope": "target eligibility plus validated on-demand expression-to-Gene-Effect model cache",
                 },
             },
             "integration_rule": (
@@ -798,6 +825,16 @@ class DepMapEvidenceService:
             tool="depmap_tf_dependency_evidence",
             request={"transcription_factor": tf, "target": query.get("target"), "limit": limit},
             evidence=item,
+        )
+
+    async def biomarker_model_evidence(self, target: str) -> dict[str, Any]:
+        symbol = target.strip().upper()
+        if not symbol:
+            raise ValueError("target must be non-empty")
+        item = await self._execute({"mode": "biomarker_target", "target": symbol})
+        return self._envelope(
+            tool="depmap_biomarker_model_evidence",
+            request={"target_gene": symbol}, evidence=item,
         )
 
     async def subtype_evidence(
@@ -1178,6 +1215,20 @@ def build_mcp_server(
         limit: int = 20,
     ) -> dict[str, Any]:
         return await service.tf_dependency_evidence(transcription_factor, target, limit)
+
+    @mcp.tool(
+        title="DepMap expression biomarker model eligibility",
+        description=(
+            "Check one CRISPR Gene Effect target's indexed coverage/variation eligibility "
+            "for expression-based nested LASSO and random-forest modeling, and report "
+            "whether a validated cached model already exists. This read-only tool does "
+            "not start a new model run or claim clinical validity."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_biomarker_model_evidence(target_gene: str) -> dict[str, Any]:
+        return await service.biomarker_model_evidence(target_gene)
 
     @mcp.tool(
         title="DepMap drug-gene evidence",

@@ -45,8 +45,16 @@ The exposed tools are intentionally small:
 - `depmap_subtype_evidence`
 - `depmap_coamplification_evidence`
 - `depmap_true_love_evidence`
+- `depmap_biomarker_model_evidence`
 - `depmap_synthetic_lethal_evidence`
 - `depmap_3d_evidence`
+
+The expression-biomarker route connects natural-language requests such as
+“为 GPX4 建立表达 biomarker 模型” to
+`depmap_biomarker_model_evidence`. The tool first queries the indexed target
+catalog and reports whether the target is eligible and whether a validated
+model is already cached. Training remains a separate explicit workflow, so an
+ambiguous request cannot accidentally launch a large computation.
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.

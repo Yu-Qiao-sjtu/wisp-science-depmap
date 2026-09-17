@@ -98,6 +98,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
                 "tf_activity_to_dependency",
+                "expression_biomarker_model",
                 "true_love_gene_catalog",
                 "gene_evidence",
             },
@@ -266,6 +267,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stronger dependency", semantics["interpretation"])
         self.assertFalse(result["new_analysis_started"])
 
+    async def test_biomarker_model_intent_bridges_target_to_indexed_query(self):
+        result = await self.service.biomarker_model_evidence("gpx4")
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "biomarker_target", "target": "GPX4"},
+        )
+        self.assertEqual(result["request"]["target_gene"], "GPX4")
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["analysis_label"], "expression_to_dependency_predictive_biomarker_model")
+        self.assertIn("not evidence", semantics["interpretation"])
+
     async def test_subtype_tool_is_one_bounded_query_with_canonical_lineage(self):
         result = await self.service.subtype_evidence(
             gene="wrn", lineage="结肠癌", contrast_id="FEATURE__BOWEL__MSI", limit=7
@@ -396,6 +408,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
                         "depmap_tf_dependency_evidence",
+                        "depmap_biomarker_model_evidence",
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",
                         "depmap_coamplification_evidence",

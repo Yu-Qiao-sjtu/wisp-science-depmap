@@ -33,6 +33,12 @@ class QueryContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             QueryRequest(mode="tf_dependency", target="GPX4")
 
+    def test_biomarker_target_requires_dependency_target(self):
+        request = QueryRequest(mode="biomarker_target", target="GPX4")
+        self.assertEqual(request.bounded_dict()["target"], "GPX4")
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="biomarker_target")
+
 
 class DepMapApiTests(unittest.TestCase):
     def setUp(self):
@@ -400,6 +406,27 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(result["status"], "FOUND")
         self.assertEqual(result["rows"][0]["bootstrap_reciprocal_stability"], 0.99)
         self.assertTrue(any(path.endswith("depmap-26q1-query-index.sqlite") for path in result["provenance"]))
+
+    def test_biomarker_intent_reads_indexed_target_and_cache_state(self):
+        index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
+        db = sqlite3.connect(index)
+        try:
+            db.execute("CREATE TABLE biomarker_target (target_gene TEXT PRIMARY KEY, eligible INTEGER, row_json TEXT)")
+            row = {"target_gene": "GPX4", "sample_n": "1208", "sd_gene_effect": "0.21", "eligible_for_nested_model": "TRUE"}
+            db.execute("INSERT INTO biomarker_target VALUES (?,?,?)", ("GPX4", 1, json.dumps(row)))
+            db.commit()
+        finally:
+            db.close()
+        client = TestClient(create_app(self.settings))
+        with client:
+            result = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "biomarker_target", "target": "gpx4"},
+            ).json()
+        self.assertEqual(result["status"], "FOUND")
+        self.assertEqual(result["eligibility"]["target_gene"], "GPX4")
+        self.assertEqual(result["eligibility"]["sample_n"], 1208)
+        self.assertFalse(result["cached_model"])
 
     def test_precomputed_tcga_query_returns_bounded_expression_survival_row(self):
         client = TestClient(create_app(self.settings))

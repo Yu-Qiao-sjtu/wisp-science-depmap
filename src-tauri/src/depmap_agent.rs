@@ -391,6 +391,7 @@ fn depmap_route_schema() -> Value {
                     "cancer_dependency_ranking",
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
+                    "expression_biomarker_model",
                     "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
@@ -409,6 +410,7 @@ fn depmap_route_schema() -> Value {
                     "cancer_dependency_ranking", "cancer_direction_discovery",
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
+                    "expression_biomarker_model",
                     "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
@@ -498,6 +500,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             }
         }
         "dependency_to_mutation" => {
+            if target_gene.is_none() {
+                missing.push("target_gene");
+            }
+        }
+        "expression_biomarker_model" => {
             if target_gene.is_none() {
                 missing.push("target_gene");
             }
@@ -592,6 +599,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "L1_DIRECT",
                 false,
                 "Use the bounded pan-cancer mutation/dependency MCP evidence tool. This capability does not support lineage filtering.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
+            ),
+            "expression_biomarker_model" => (
+                "L1_DIRECT",
+                false,
+                "Query the indexed target eligibility and validated model-cache state. Start computation only when the user explicitly requests training and the target is not already cached.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "evidence_comparison" | "topic_exploration" => (
@@ -728,6 +741,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 ],
                 "forbidden_shortcuts": ["shell", "run_in_context", "filesystem_inventory"]
             }
+        }),
+        ("expression_biomarker_model", _) if !requires_user_input => json!({
+            "tool": "depmap_biomarker_model_evidence",
+            "arguments": {"target_gene": target_gene},
+            "single_call": true,
+            "next_action": "reuse_cached_model_or_offer_approval_gated_on_demand_training"
         }),
         _ => Value::Null,
     };
@@ -2838,6 +2857,34 @@ mod tests {
         let intents = schema["properties"]["intent"]["enum"].as_array().unwrap();
         assert!(intents.contains(&json!("mutation_to_dependency")));
         assert!(intents.contains(&json!("dependency_to_mutation")));
+        assert!(intents.contains(&json!("expression_biomarker_model")));
+    }
+
+    #[test]
+    fn agent_route_bridges_expression_biomarker_intent_to_indexed_evidence() {
+        let route = depmap_route(&json!({
+            "intent":"expression_biomarker_model",
+            "target_gene":"GPX4"
+        }))
+        .unwrap();
+        assert_eq!(route["state"], "routed");
+        assert_eq!(route["execution_level"], "L1_DIRECT");
+        assert_eq!(route["requires_approval"], false);
+        assert_eq!(
+            route["recommended_query"]["tool"],
+            "depmap_biomarker_model_evidence"
+        );
+        assert_eq!(
+            route["recommended_query"]["arguments"]["target_gene"],
+            "GPX4"
+        );
+
+        let missing = depmap_route(&json!({
+            "intent":"expression_biomarker_model"
+        }))
+        .unwrap();
+        assert_eq!(missing["state"], "needs_input");
+        assert_eq!(missing["missing_fields"], json!(["target_gene"]));
     }
 
     #[test]
