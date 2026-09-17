@@ -56,7 +56,9 @@ flowchart TD
 
     CAT --> AC["analysis_catalog<br/>分析单元与完成状态"]
     CAT --> AR["artifact_catalog<br/>文件格式与相对位置"]
-    CAT --> CC["capability_catalog<br/>意图与查询能力"]
+    CAT --> CC["capability_catalog<br/>唯一运行时意图目录"]
+    CAT --> RR["reader_registry<br/>结果读取器"]
+    CAT --> MB["matrix_block_index<br/>基因到分块"]
     IDX --> TL["true_love"]
     IDX --> TF["tf_dependency"]
     IDX --> BM["biomarker_target"]
@@ -64,6 +66,8 @@ flowchart TD
     AC --> E["受限结果提取"]
     AR --> E
     CC --> E
+    RR --> E
+    MB --> E
     TL --> E
     TF --> E
     BM --> E
@@ -151,12 +155,21 @@ flowchart LR
 
 统一 SQLite 索引分为两类：
 
-- **目录索引**：`analysis_catalog`、`artifact_catalog` 和 `capability_catalog`，负责定位模块、分析单元、相对路径、状态及查询能力；
+- **目录索引**：`analysis_catalog`、`artifact_catalog`、`capability_catalog`、`reader_registry`、`matrix_block_index` 和 `analysis_relation`，负责定位模块、分析单元、相对路径、状态、读取器、基因分块及脚本—数据—结果关系；
 - **内容索引**：为高频稀疏结果提供直接检索，例如 `true_love`、`tf_dependency` 和 `biomarker_target`。
 
 大型相关矩阵继续保留为 RDS、Parquet 或压缩表格。查询根据目录索引定位所需结果或分块，不将完整矩阵复制到 SQLite，也不把整个知识库送入模型上下文。
 
-服务器 MCP 只监听服务器回环地址。Wisp Science 使用本机回环端口，通过 SSH 加密隧道访问服务器 MCP；远程端口不直接暴露到公网。返回的 `depmap://26Q1/...` 是知识库内的稳定溯源标识，不是要求用户自行访问的文件路径。
+服务器 MCP 只监听服务器回环地址。Wisp Science 使用本机回环端口，通过 SSH 加密隧道访问服务器 MCP；远程端口不直接暴露到公网。返回的 `depmap://26Q1/...` 是知识库内的稳定溯源标识，并可由 `depmap_read_resource` 经过 artifact 索引校验后有界读取；它不是服务器绝对路径。
+
+## 目录索引 v3 验收（2026-09-17）
+
+- 693 个原分析单元已分类为 577 个 `COMPLETE`、33 个 `ARCHIVED`、83 个 `INCOMPLETE`，另有一个知识库公共资产根记录；`UNVERIFIED` 为 0；
+- 45,322 个文件全部具有关联分析单元，原 197 个无归属文件归入 `_knowledge_root` 公共资产；
+- 19 个意图由 SQLite `capability_catalog` 提供，18 种查询模式登记了 Reader；
+- 146,684 条矩阵分块定位记录覆盖 19,215 个基因和 8 个分析单元；
+- 1,466 个脚本、清单和文档使用内容 SHA-256，43,856 个大型或结构化数据文件使用大小与修改时间指纹；
+- 服务器每小时运行新鲜度检查，源文件发生变化时通过临时库原子重建索引。
 
 ## 结果传输契约
 

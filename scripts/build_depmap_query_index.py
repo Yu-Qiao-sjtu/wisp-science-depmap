@@ -10,11 +10,18 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
+from datetime import datetime, timezone
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-CATALOG_SCHEMA_VERSION = "2"
+
+CATALOG_SCHEMA_VERSION = "3"
+FULL_HASH_MAX_BYTES = 8 * 1024 * 1024
+FULL_HASH_SUFFIXES = {".json", ".md", ".r", ".py", ".sh", ".ps1", ".toml", ".yaml", ".yml"}
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -29,6 +36,8 @@ def _module_name(relative: Path) -> str:
 
 
 def _completion(manifest: dict[str, Any], directory: Path) -> tuple[str, str]:
+    if "backup" in directory.as_posix().lower() or "archive" in directory.as_posix().lower():
+        return "ARCHIVED", "path.archive_or_backup"
     status = str(manifest.get("status") or "").lower()
     qa = str(manifest.get("qa_status") or "").lower()
     if status in {"complete", "completed", "pass", "success"}:
@@ -45,7 +54,21 @@ def _completion(manifest: dict[str, Any], directory: Path) -> tuple[str, str]:
         accepted = {"complete", "completed", "success", "pass", "skipped_existing"}
         if all(str(run.get("status") or "").lower() in accepted for run in runs if isinstance(run, dict)):
             return "COMPLETE", "manifest.runs"
-    return "UNVERIFIED", "no_terminal_status"
+    declared = manifest.get("outputs")
+    if isinstance(declared, dict) and declared:
+        present = 0
+        for value in declared.values():
+            if not isinstance(value, str):
+                continue
+            if "*" in value:
+                present += any(directory.glob(value))
+            else:
+                present += (directory / value).exists()
+        if present:
+            return "COMPLETE", "declared.outputs"
+    if any(path.is_file() and path.name != "manifest.json" for path in directory.iterdir()):
+        return "COMPLETE", "structural.sibling_artifact"
+    return "INCOMPLETE", "no_terminal_evidence"
 
 
 def _artifact_kind(path: Path) -> str:
@@ -65,6 +88,39 @@ def _artifact_kind(path: Path) -> str:
     return "file"
 
 
+def _integrity(path: Path, stat: os.stat_result) -> tuple[str, str]:
+    """Use content SHA-256 for small artifacts and a cheap identity for large data."""
+    if stat.st_size <= FULL_HASH_MAX_BYTES and path.suffix.lower() in FULL_HASH_SUFFIXES:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return "sha256", digest.hexdigest()
+    value = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()
+    return "size_mtime_sha256", value
+
+
+def _source_max_mtime_ns(root: Path, output: Path) -> int:
+    return max(
+        (path.stat().st_mtime_ns for path in root.rglob("*") if path.is_file() and path != output and not path.name.endswith(".tmp")),
+        default=root.stat().st_mtime_ns,
+    )
+
+
+def is_fresh(root: Path, output: Path) -> bool:
+    if not output.is_file():
+        return False
+    try:
+        with closing(sqlite3.connect(f"file:{output.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            metadata = dict(db.execute("SELECT key,value FROM metadata"))
+        return (
+            metadata.get("schema_version") == CATALOG_SCHEMA_VERSION
+            and int(metadata.get("source_max_mtime_ns", "0")) >= _source_max_mtime_ns(root, output)
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        return False
+
+
 def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) -> dict[str, int]:
     db.executescript(
         """
@@ -79,13 +135,32 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
           artifact_path TEXT PRIMARY KEY, analysis_id TEXT,
           artifact_kind TEXT NOT NULL, extension TEXT NOT NULL,
           size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+          integrity_method TEXT NOT NULL, integrity_value TEXT NOT NULL,
           FOREIGN KEY(analysis_id) REFERENCES analysis_catalog(analysis_id)
         );
         CREATE TABLE capability_catalog (
-          query_mode TEXT PRIMARY KEY, intent TEXT NOT NULL,
-          module_pattern TEXT NOT NULL, indexed_content INTEGER NOT NULL
+          query_mode TEXT NOT NULL, intent TEXT PRIMARY KEY,
+          module_pattern TEXT NOT NULL, indexed_content INTEGER NOT NULL,
+          mcp_tool TEXT NOT NULL, payload_json TEXT NOT NULL
+        );
+        CREATE TABLE reader_registry (
+          query_mode TEXT PRIMARY KEY, adapter TEXT NOT NULL,
+          module_pattern TEXT NOT NULL, supported_formats TEXT NOT NULL
+        );
+        CREATE TABLE matrix_block_index (
+          analysis_id TEXT NOT NULL, gene TEXT NOT NULL, gene_index INTEGER NOT NULL,
+          block_path TEXT NOT NULL, PRIMARY KEY(analysis_id,gene)
+        );
+        CREATE TABLE analysis_relation (
+          analysis_id TEXT NOT NULL, artifact_path TEXT NOT NULL,
+          role TEXT NOT NULL, PRIMARY KEY(analysis_id,artifact_path)
         );
         """
+    )
+    root_id = hashlib.sha256(b"_knowledge_root").hexdigest()[:24]
+    db.execute(
+        "INSERT INTO analysis_catalog VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (root_id, "_knowledge_root", ".", "COMPLETE", "catalog.root", None, "knowledge_root_assets", None, None, ".catalog", root.stat().st_mtime_ns),
     )
     manifests: list[tuple[Path, str, str]] = []
     complete = 0
@@ -134,13 +209,18 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
                 break
             directory = directory.parent
         stat = path.stat()
+        analysis_id = analysis_id or root_id
+        relative_path = _relative(path, root)
+        integrity_method, fingerprint = _integrity(path, stat)
         db.execute(
-            "INSERT INTO artifact_catalog VALUES (?,?,?,?,?,?)",
-            (_relative(path, root), analysis_id, _artifact_kind(path), path.suffix.lower(), stat.st_size, stat.st_mtime_ns),
+            "INSERT INTO artifact_catalog VALUES (?,?,?,?,?,?,?,?)",
+            (relative_path, analysis_id, _artifact_kind(path), path.suffix.lower(), stat.st_size, stat.st_mtime_ns, integrity_method, fingerprint),
         )
+        role = "script" if "/scripts/" in f"/{relative_path}" or path.suffix.lower() in {".r", ".py", ".sh", ".ps1"} else "manifest" if path.name == "manifest.json" else "result" if "/results/" in f"/{relative_path}" else "data" if "/data/" in f"/{relative_path}" else "asset"
+        db.execute("INSERT INTO analysis_relation VALUES (?,?,?)", (analysis_id, relative_path, role))
         artifact_count += 1
 
-    capabilities = [
+    reader_rows = [
         ("core", "gene_evidence", "depmap-26q1-core", 0),
         ("lineage_catalog", "cancer_inventory", "depmap-26q1-full", 0),
         ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-full", 0),
@@ -159,14 +239,70 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ("three_d", "three_d_evidence", "depmap-26q1-3d", 0),
         ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga", 0),
     ]
-    db.executemany("INSERT INTO capability_catalog VALUES (?,?,?,?)", capabilities)
+    try:
+        from services.depmap_mcp.capability_catalog import INTENT_CAPABILITIES
+    except ModuleNotFoundError:
+        import importlib.util
+        capability_path = Path(__file__).with_name("capability_catalog.py")
+        spec = importlib.util.spec_from_file_location("depmap_capability_catalog", capability_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load capability catalog: {capability_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        INTENT_CAPABILITIES = module.INTENT_CAPABILITIES
+    cap_by_mode = {row[0]: row for row in reader_rows}
+    capabilities = []
+    for capability in INTENT_CAPABILITIES:
+        intent = capability["intent"]
+        mode = {
+            "provider_status":"status", "lineage_resolution":"resolve_lineage",
+            "cancer_inventory":"lineage_catalog", "cancer_direction_discovery":"lineage_directions",
+            "analysis_inventory":"analysis_catalog", "mutation_anchor_discovery":"mutation_anchor",
+            "mutation_to_dependency":"synthetic_lethal", "dependency_to_mutation":"synthetic_lethal",
+            "gene_pair_evidence":"pair", "cancer_dependency_ranking":"lineage_dependency",
+            "tf_activity_to_dependency":"tf_dependency", "expression_biomarker_model":"biomarker_target",
+            "true_love_gene_catalog":"true_love", "gene_evidence":"core",
+            "tcga_expression_survival":"tcga_expression_survival", "drug_gene_evidence":"drug",
+            "subtype_evidence":"subtype", "coamplification_evidence":"coamplification",
+            "three_d_evidence":"three_d",
+        }[intent]
+        base = cap_by_mode.get(mode, (mode, intent, "analysis-modules", 0))
+        capabilities.append((mode, intent, base[2], base[3], capability["mcp_tool"], json.dumps(capability, ensure_ascii=False, separators=(",", ":"))))
+    db.executemany("INSERT INTO capability_catalog VALUES (?,?,?,?,?,?)", capabilities)
+    readers = []
+    for mode in sorted({row[0] for row in capabilities}):
+        base = cap_by_mode.get(mode, (mode, mode, "analysis-modules", 0))
+        readers.append((mode, f"{mode}_adapter", base[2], "csv,csv.gz,parquet,rds,json"))
+    db.executemany("INSERT INTO reader_registry VALUES (?,?,?,?)", readers)
+
+    # Map every ordered gene to its declared matrix block without opening RDS files.
+    for directory, analysis_id, state in manifests:
+        order = directory / "gene_order.csv"
+        blocks = directory / "blocks"
+        if state != "COMPLETE" or not order.is_file() or not blocks.is_dir():
+            continue
+        genes = []
+        for row in records(order):
+            value = row.get("gene") or row.get("Gene") or next(iter(row.values()), "")
+            genes.append(str(value).upper())
+        block_files = sorted(path for path in blocks.iterdir() if path.is_file())
+        for index, gene in enumerate(genes, 1):
+            match = next((path for path in block_files if f"_{index:05d}_" in path.name or path.name.startswith(f"block_{index:05d}_")), None)
+            if match is None:
+                match = next((path for path in block_files if path.name.startswith("block_") and int(path.stem.split("_")[1]) <= index <= int(path.stem.split("_")[2])), None)
+            if match:
+                db.execute("INSERT OR REPLACE INTO matrix_block_index VALUES (?,?,?,?)", (analysis_id, gene, index, _relative(match, root)))
     db.executescript(
         """
         CREATE INDEX idx_analysis_module_state ON analysis_catalog(module, completion_state);
         CREATE INDEX idx_analysis_unit ON analysis_catalog(analysis_unit);
         CREATE INDEX idx_artifact_analysis ON artifact_catalog(analysis_id, artifact_kind);
         CREATE INDEX idx_artifact_kind ON artifact_catalog(artifact_kind, extension);
+        CREATE INDEX idx_artifact_path ON artifact_catalog(artifact_path);
         CREATE INDEX idx_capability_intent ON capability_catalog(intent);
+        CREATE INDEX idx_capability_mode ON capability_catalog(query_mode);
+        CREATE INDEX idx_relation_role ON analysis_relation(analysis_id,role);
+        CREATE INDEX idx_matrix_gene ON matrix_block_index(gene);
         """
     )
     return {
@@ -174,6 +310,8 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         "completed_analysis_units": complete,
         "artifacts": artifact_count,
         "capabilities": len(capabilities),
+        "readers": len(readers),
+        "matrix_gene_blocks": db.execute("SELECT COUNT(*) FROM matrix_block_index").fetchone()[0],
     }
 
 
@@ -184,6 +322,7 @@ def records(path: Path):
 
 
 def build(root: Path, output: Path) -> dict:
+    source_max_mtime_ns = _source_max_mtime_ns(root, output)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.unlink(missing_ok=True)
     db = sqlite3.connect(temporary)
@@ -271,6 +410,8 @@ def build(root: Path, output: Path) -> dict:
     counts.update(catalog_counts)
     db.execute("INSERT INTO metadata VALUES (?,?)", ("schema_version", CATALOG_SCHEMA_VERSION))
     db.execute("INSERT INTO metadata VALUES (?,?)", ("counts", json.dumps(counts, sort_keys=True)))
+    db.execute("INSERT INTO metadata VALUES (?,?)", ("source_max_mtime_ns", str(source_max_mtime_ns)))
+    db.execute("INSERT INTO metadata VALUES (?,?)", ("built_at", datetime.now(timezone.utc).isoformat()))
     db.execute("ANALYZE")
     integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
     if integrity != "ok":
@@ -285,8 +426,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--knowledge-root", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--if-stale", action="store_true", help="skip an atomic rebuild when indexed sources have not changed")
     args = parser.parse_args()
     output = args.output or args.knowledge_root / "depmap-26q1-query-index.sqlite"
+    if args.if_stale and is_fresh(args.knowledge_root, output):
+        print(json.dumps({"status": "FRESH", "output": str(output)}, ensure_ascii=False))
+        return
     counts = build(args.knowledge_root, output)
     print(json.dumps({"status": "PASS", "output": str(output), "counts": counts}, ensure_ascii=False))
 

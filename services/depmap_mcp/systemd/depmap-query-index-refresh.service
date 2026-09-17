@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh the DepMap query index when retained results change
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/data/gz0548/depmap-kb-api
+ExecStart=/home/data/gz0548/depmap-agent/.venv/bin/python /home/data/gz0548/depmap-kb-api/build_depmap_query_index.py --knowledge-root /home/data/gz0548/depmap-26q1 --output /home/data/gz0548/depmap-26q1/depmap-26q1-query-index.sqlite --if-stale
+UMask=0077

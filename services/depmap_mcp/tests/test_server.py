@@ -447,6 +447,8 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                     names,
                     {
                         "depmap_analysis_catalog",
+                        "depmap_artifact_catalog",
+                        "depmap_read_resource",
                         "depmap_mutation_anchor_evidence",
                         "depmap_capabilities",
                         "depmap_status",

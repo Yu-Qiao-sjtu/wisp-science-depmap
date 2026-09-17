@@ -22,12 +22,25 @@ files when the index is absent or unreadable. Result files and manifests remain
 authoritative. A biomarker lookup reports eligibility and validated cache state;
 it does not start model training.
 
-Schema v2 also contains a unified directory catalog. `analysis_catalog` records
+Schema v3 also contains a unified directory catalog. `analysis_catalog` records
 every discovered manifest and its completion evidence, `artifact_catalog`
-records files using knowledge-root-relative paths, and `capability_catalog`
-maps query modes to Agent intents. Large matrices remain in their original
-RDS/Parquet/CSV shards; the catalog stores location and metadata only. Query
-completed units through the bounded `analysis_catalog` API mode.
+records files using knowledge-root-relative paths and integrity fingerprints,
+and `capability_catalog` is the runtime source for the 19 Agent intents.
+`reader_registry` records bounded adapters, `analysis_relation` connects scripts,
+data, manifests, and results, and `matrix_block_index` maps genes directly to
+matrix shards. Large matrices remain in their original RDS/Parquet/CSV shards.
+
+Use `--if-stale` for scheduled refreshes. The builder compares the newest
+retained source mtime with index metadata, rebuilds through a temporary database,
+checks SQLite integrity, and atomically replaces the live index only when needed:
+
+```bash
+python scripts/build_depmap_query_index.py \
+  --knowledge-root /path/to/depmap-26q1 --if-stale
+```
+
+The checked-in `services/depmap_mcp/systemd/depmap-query-index-refresh.*` units
+run that freshness check hourly in the private deployment.
 
 Required environment variables:
 

@@ -35,6 +35,10 @@ The exposed tools are intentionally small:
 
 - `depmap_analysis_catalog`: completed analysis units from the unified SQLite
   directory index, optionally restricted to one module;
+- `depmap_artifact_catalog`: query indexed scripts, data, manifests, results,
+  and matrix shards by module, kind, or relative-path fragment;
+- `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return
+  a bounded table/text preview or binary artifact metadata;
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
@@ -62,6 +66,12 @@ Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It
 never performs a sample-level join or creates a synthetic combined score.
+
+`depmap_capabilities` reads its 19 intent contracts from SQLite
+`capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
+build-time definition used to populate that table; code fallback is used only
+when the index is absent. Result adapters and gene-to-shard locations are
+registered in `reader_registry` and `matrix_block_index`.
 
 If the optional TCGA bridge is absent, TCGA queries return
 `MODULE_UNAVAILABLE`; this is a coverage state, not a biological result. Install

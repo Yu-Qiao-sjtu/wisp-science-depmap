@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import hashlib
 import json
 import os
+import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -59,180 +62,8 @@ GLOBAL_GENE_MODULES = (
 
 # Small routing catalog loaded once per Agent session. It describes capabilities
 # and never scans the scientific result matrices.
-INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
-    {
-        "intent": "provider_status",
-        "description": "Check the configured DepMap release, QA state, installed modules, and evidence boundary.",
-        "required": [], "optional": [],
-        "examples_zh": ["DepMap服务器正常吗", "当前是什么数据版本"],
-        "precise_prompt_template_zh": "检查当前DepMap远程知识服务的版本与状态。",
-        "confusable_with": ["analysis_inventory"], "mcp_tool": "depmap_status",
-    },
-    {
-        "intent": "lineage_resolution",
-        "description": "Resolve a user cancer term to a canonical DepMap lineage before querying lineage evidence.",
-        "required": ["cancer_term"], "optional": ["candidate_lineages"],
-        "examples_zh": ["结直肠癌在DepMap里对应哪个癌种", "白血病属于哪个lineage"],
-        "precise_prompt_template_zh": "把{cancer_term}解析成DepMap标准lineage；歧义时返回候选。",
-        "confusable_with": ["cancer_inventory"], "mcp_tool": "depmap_resolve_lineage",
-    },
-    {
-        "intent": "cancer_inventory",
-        "description": "List completed evidence families available for one resolved cancer lineage.",
-        "required": ["lineage"], "optional": [],
-        "examples_zh": ["肝癌有哪些现成分析", "肺癌目前有什么数据"],
-        "precise_prompt_template_zh": "列出{lineage}已有的预计算证据类型。",
-        "confusable_with": ["analysis_inventory", "cancer_direction_discovery"], "mcp_tool": "depmap_lineage_catalog",
-    },
-    {
-        "intent": "cancer_direction_discovery",
-        "description": "Discover bounded precomputed research-direction candidates for one cancer without inventing a gene.",
-        "required": ["lineage"], "optional": ["limit"],
-        "examples_zh": ["肝癌可以做哪些研究方向", "没有指定基因先给我肺癌候选方向"],
-        "precise_prompt_template_zh": "从{lineage}已完成结果发现研究方向，不自行指定锚点。",
-        "confusable_with": ["cancer_inventory", "mutation_anchor_discovery"], "mcp_tool": "depmap_lineage_direction_discovery",
-    },
-    {
-        "intent": "analysis_inventory",
-        "description": "List completed DepMap analysis units from the unified server directory index without scanning result directories.",
-        "required": [],
-        "optional": ["module", "limit"],
-        "examples_zh": ["服务器完成了哪些分析", "列出突变模块的完成项目", "查看DepMap分析目录"],
-        "precise_prompt_template_zh": "从统一目录索引列出已完成的DepMap分析，可选限定模块。",
-        "confusable_with": ["cancer_inventory"],
-        "mcp_tool": "depmap_analysis_catalog",
-    },
-    {
-        "intent": "mutation_anchor_discovery",
-        "description": "Find eligible mutation anchor genes inside one cancer lineage.",
-        "required": ["lineage"],
-        "optional": ["event", "limit"],
-        "examples_zh": ["肺癌有哪些突变基因可以选", "在结肠癌里选突变锚点"],
-        "precise_prompt_template_zh": "在{lineage}中列出可作为后续依赖分析锚点的{event}突变基因，并说明样本数与筛选依据。",
-        "confusable_with": ["mutation_to_dependency"],
-        "mcp_tool": "depmap_mutation_anchor_evidence",
-    },
-    {
-        "intent": "mutation_to_dependency",
-        "description": "Fix a mutated source gene and rank associated CRISPR dependency targets.",
-        "required": ["source_gene"],
-        "optional": ["event", "target_gene", "limit"],
-        "examples_zh": ["TP53突变后依赖哪些基因", "固定KRAS突变看脆弱性"],
-        "precise_prompt_template_zh": "在泛癌范围固定{source_gene}的{event}突变，查询相关的CRISPR dependency靶基因。",
-        "confusable_with": ["dependency_to_mutation"],
-        "mcp_tool": "depmap_synthetic_lethal_evidence",
-    },
-    {
-        "intent": "dependency_to_mutation",
-        "description": "Fix a CRISPR dependency target and find mutation events associated with it.",
-        "required": ["target_gene"],
-        "optional": ["event", "source_gene", "limit"],
-        "examples_zh": ["哪些突变会影响GPX4依赖", "固定TP53 dependency找突变"],
-        "precise_prompt_template_zh": "在泛癌范围固定{target_gene} dependency，查询哪些{event}突变与其依赖变化相关。",
-        "confusable_with": ["mutation_to_dependency"],
-        "mcp_tool": "depmap_synthetic_lethal_evidence",
-    },
-    {
-        "intent": "gene_pair_evidence",
-        "description": "Compare coexpression, CRISPR codependency, and expression-to-dependency evidence for two genes.",
-        "required": ["source_gene", "target_gene"],
-        "optional": ["lineage"],
-        "examples_zh": ["ESR1和FOXA1相关吗", "比较两个基因的表达相关和共依赖"],
-        "precise_prompt_template_zh": "比较{source_gene}与{target_gene}的共表达、CRISPR共依赖和表达—依赖关联，并分别标明数据模态。",
-        "confusable_with": [],
-        "mcp_tool": "depmap_pair_evidence",
-    },
-    {
-        "intent": "cancer_dependency_ranking",
-        "description": "Rank genes selectively required by one cancer lineage.",
-        "required": ["lineage"],
-        "optional": ["ranking", "limit"],
-        "examples_zh": ["肝癌最依赖哪些基因", "乳腺癌特异依赖靶点"],
-        "precise_prompt_template_zh": "查询{lineage}中选择性更强的CRISPR dependency基因，并返回Top {limit}。",
-        "confusable_with": ["mutation_anchor_discovery"],
-        "mcp_tool": "depmap_lineage_dependencies",
-    },
-    {
-        "intent": "tf_activity_to_dependency",
-        "description": "Fix an inferred transcription-factor activity and query associated CRISPR Gene Effect targets.",
-        "required": ["transcription_factor"],
-        "optional": ["target_gene", "limit"],
-        "examples_zh": ["STAT3活性和哪些基因依赖相关", "查ESR1 TF活性与GPX4依赖"],
-        "precise_prompt_template_zh": "查询{transcription_factor}推断活性与CRISPR Gene Effect的关联；若指定{target_gene}则返回精确配对，否则返回正负向候选。",
-        "confusable_with": ["gene_pair_evidence"],
-        "mcp_tool": "depmap_tf_dependency_evidence",
-    },
-    {
-        "intent": "expression_biomarker_model",
-        "description": "Check whether a fixed CRISPR dependency target is eligible for expression-based LASSO/random-forest modeling and whether a validated cached model already exists.",
-        "required": ["target_gene"],
-        "optional": [],
-        "examples_zh": ["为GPX4建立表达biomarker模型", "ESR1依赖能不能用表达预测", "查询WRN的LASSO模型资格"],
-        "precise_prompt_template_zh": "查询{target_gene}依赖靶点的表达biomarker建模资格与已有缓存；若尚未建模，说明按需执行入口。",
-        "confusable_with": ["gene_pair_evidence", "tf_activity_to_dependency"],
-        "mcp_tool": "depmap_biomarker_model_evidence",
-    },
-    {
-        "intent": "true_love_gene_catalog",
-        "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
-        "required": ["catalog"],
-        "optional": ["gene", "partner", "coverage", "limit"],
-        "examples_zh": ["查询真爱基因", "找r小于-0.3的负共依赖候选", "查询正相关互惠Top20"],
-        "precise_prompt_template_zh": "查询26Q1的{catalog}真爱基因目录，可选{coverage}覆盖层，并说明相关性不能证明合成致死。",
-        "confusable_with": ["gene_pair_evidence"],
-        "mcp_tool": "depmap_true_love_evidence",
-    },
-    {
-        "intent": "gene_evidence",
-        "description": "Retrieve available precomputed pathway or regulator enrichment evidence.",
-        "required": ["gene"],
-        "optional": ["lineage", "collection", "limit"],
-        "examples_zh": ["这些候选富集到什么通路", "做Reactome富集"],
-        "precise_prompt_template_zh": "查询{gene}的预计算通路与调控因子富集证据，并说明集合与统计口径。",
-        "confusable_with": [],
-        "mcp_tool": "depmap_gene_evidence",
-    },
-    {
-        "intent": "tcga_expression_survival",
-        "description": "Query TCGA tumor expression and OS/DSS/DFI/PFI association for one gene.",
-        "required": ["gene"], "optional": ["project", "lineage", "endpoint", "limit"],
-        "examples_zh": ["ESR1在TCGA乳腺癌中的表达和生存关系", "查询TP53的DSS"],
-        "precise_prompt_template_zh": "查询{gene}的TCGA {endpoint}表达生存证据。",
-        "confusable_with": ["gene_evidence"], "mcp_tool": "tcga_gene_expression_survival",
-    },
-    {
-        "intent": "drug_gene_evidence",
-        "description": "Query a precomputed PRISM drug-gene association globally or in one lineage.",
-        "required": ["drug", "gene"], "optional": ["lineage", "limit"],
-        "examples_zh": ["奥拉帕利和BRCA1有什么药物关联", "肺癌中这个药对EGFR的结果"],
-        "precise_prompt_template_zh": "查询{drug}与{gene}的PRISM证据。",
-        "confusable_with": ["gene_evidence"], "mcp_tool": "depmap_drug_evidence",
-    },
-    {
-        "intent": "subtype_evidence",
-        "description": "List eligible molecular-subtype contrasts or query subtype-specific dependency rows.",
-        "required": [], "optional": ["gene", "lineage", "contrast_id", "limit"],
-        "examples_zh": ["有哪些分子亚型分析", "乳腺癌亚型中ESR1依赖如何"],
-        "precise_prompt_template_zh": "查询{lineage}的{contrast_id}亚型依赖证据。",
-        "confusable_with": ["cancer_dependency_ranking"], "mcp_tool": "depmap_subtype_evidence",
-    },
-    {
-        "intent": "coamplification_evidence",
-        "description": "Query source-partner co-amplification and retained target-dependency evidence.",
-        "required": ["source_gene"], "optional": ["partner_gene", "target_gene", "layer", "limit"],
-        "examples_zh": ["CTTN和RNF121共扩增后依赖什么", "查询两个基因共扩增"],
-        "precise_prompt_template_zh": "查询{source_gene}与{partner_gene}共扩增及{target_gene}依赖证据。",
-        "confusable_with": ["gene_pair_evidence"], "mcp_tool": "depmap_coamplification_evidence",
-    },
-    {
-        "intent": "three_d_evidence",
-        "description": "Query one completed 3D-screen evidence family with its required cohort or gene entities.",
-        "required": ["family"], "optional": ["gene", "source_gene", "target_gene", "cohort", "contrast", "omic", "limit"],
-        "examples_zh": ["查询3D培养中的依赖基因", "比较3D和2D的依赖差异"],
-        "precise_prompt_template_zh": "查询3D模块{family}的预计算证据。",
-        "confusable_with": ["gene_pair_evidence"], "mcp_tool": "depmap_3d_evidence",
-    },
-)
+from services.depmap_mcp.capability_catalog import INTENT_CAPABILITIES
+
 
 
 def _default_query_script() -> Path:
@@ -438,12 +269,24 @@ class DepMapEvidenceService:
 
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
-
+        capabilities = list(INTENT_CAPABILITIES)
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        source = "code_fallback"
+        if index.is_file():
+            try:
+                with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                    rows = db.execute("SELECT payload_json FROM capability_catalog ORDER BY rowid").fetchall()
+                loaded = [json.loads(row[0]) for row in rows]
+                if loaded:
+                    capabilities, source = loaded, "sqlite_capability_catalog"
+            except (sqlite3.Error, json.JSONDecodeError, OSError):
+                pass
         return {
             "schema_version": 1,
             "release": self.settings.release,
             "state": "CAPABILITY_CATALOG",
-            "capabilities": list(INTENT_CAPABILITIES),
+            "capabilities": capabilities,
+            "catalog_source": source,
             "routing_policy": {
                 "unknown_or_out_of_scope": "return_no_match",
                 "missing_required_entity": "request_only_the_missing_field",
@@ -455,6 +298,54 @@ class DepMapEvidenceService:
                 "large_matrices_are_never_returned": True,
             },
         }
+
+    async def artifacts(
+        self, module: str | None = None, kind: str | None = None,
+        path_contains: str | None = None, limit: int = 50,
+    ) -> dict[str, Any]:
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        clauses, params = ["1=1"], []
+        if module:
+            clauses.append("a.module=?"); params.append(module)
+        if kind:
+            clauses.append("f.artifact_kind=?"); params.append(kind)
+        if path_contains:
+            clauses.append("f.artifact_path LIKE ?"); params.append(f"%{path_contains}%")
+        params.append(min(max(limit, 1), 100))
+        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute(
+                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,f.integrity_method,f.integrity_value,a.module,a.analysis_unit,a.completion_state FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
+            )]
+        return self._envelope(tool="depmap_artifact_catalog", request={"module":module,"kind":kind,"path_contains":path_contains,"limit":limit}, evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows})
+
+    async def read_resource(self, uri: str, max_rows: int = 20) -> dict[str, Any]:
+        prefix = f"depmap://{self.settings.release}/"
+        if not uri.startswith(prefix):
+            raise ValueError(f"uri must start with {prefix}")
+        relative = uri[len(prefix):]
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            hit = db.execute("SELECT artifact_kind,size_bytes FROM artifact_catalog WHERE artifact_path=?", (relative,)).fetchone()
+        if not hit:
+            raise ValueError("resource is absent from the indexed catalog")
+        path = (self.settings.knowledge_root / relative).resolve()
+        if self.settings.knowledge_root not in path.parents or not path.is_file():
+            raise ValueError("resource path is unavailable")
+        if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
+            return self._envelope(tool="depmap_read_resource", request={"uri":uri}, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"content":"binary artifact; use its registered scientific query adapter"})
+        if path.name.endswith(".csv.gz"):
+            import gzip
+            with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as handle:
+                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle))]
+            content: Any = rows
+        elif path.suffix.lower() in {".csv", ".tsv"}:
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle, delimiter="\t" if path.suffix.lower()==".tsv" else ","))]
+            content = rows
+        else:
+            content = path.read_text(encoding="utf-8-sig", errors="replace")[:65536]
+        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows}, evidence={"status":"FOUND","uri":uri,"content":content})
 
     def _portable(self, value: Any) -> Any:
         root = str(self.settings.knowledge_root)
@@ -1202,6 +1093,14 @@ def build_mcp_server(
     )
     async def depmap_analysis_catalog(module: str | None = None, limit: int = 100) -> dict[str, Any]:
         return await service.analysis_catalog(module, limit)
+
+    @mcp.tool(title="DepMap indexed artifact catalog", description="Query indexed result, data, script, manifest, and matrix-block artifacts by module, kind, or relative-path fragment.", annotations=READ_ONLY, structured_output=True)
+    async def depmap_artifact_catalog(module: str | None = None, kind: str | None = None, path_contains: str | None = None, limit: int = 50) -> dict[str, Any]:
+        return await service.artifacts(module, kind, path_contains, limit)
+
+    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI through the artifact index and return a bounded text/table preview or binary metadata. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
+    async def depmap_read_resource(uri: str, max_rows: int = 20) -> dict[str, Any]:
+        return await service.read_resource(uri, max_rows)
 
     @mcp.tool(
         title="DepMap lineage mutation-anchor candidates",
