@@ -20,12 +20,12 @@ members = [
 default-members = ["crates/wisp-cli"]
 
 [workspace.package]
-version = "1.13.0"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-only"
-authors = ["wisp-science contributors"]
-repository = "https://github.com/xuzhougeng/wisp-science"
+authors = ["Yu-Qiao-sjtu"]
+repository = "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

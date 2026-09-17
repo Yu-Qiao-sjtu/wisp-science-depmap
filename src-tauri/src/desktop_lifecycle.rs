@@ -84,14 +84,14 @@ struct TrayLabels {
 fn tray_labels(locale: TrayLocale) -> TrayLabels {
     match locale {
         TrayLocale::Zh => TrayLabels {
-            show: "打开 Wisp Science",
+            show: "打开 wisp-depmap",
             stop_agent: "停止最近窗口的当前 Agent",
             reload_window: "重载最近使用的窗口",
             restart: "重启",
             quit: "退出",
         },
         TrayLocale::En => TrayLabels {
-            show: "Open Wisp Science",
+            show: "Open wisp-depmap",
             stop_agent: "Stop agent in last active window",
             reload_window: "Reload last active window",
             restart: "Restart",
@@ -259,7 +259,7 @@ pub(crate) fn install_windows_shell(app: &mut App, locale_tag: &str) -> tauri::R
     let menu = build_tray_menu(app.handle(), TrayLocale::from_tag(locale_tag))?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip("Wisp Science")
+        .tooltip("wisp-depmap")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match tray_action(event.id().as_ref()) {
             Some(TrayAction::Show) => activate_workspace(app),
@@ -335,14 +335,14 @@ mod tests {
     #[test]
     fn windows_tray_labels_follow_saved_locale() {
         let zh = tray_labels(TrayLocale::from_tag("zh-CN"));
-        assert_eq!(zh.show, "打开 Wisp Science");
+        assert_eq!(zh.show, "打开 wisp-depmap");
         assert_eq!(zh.stop_agent, "停止最近窗口的当前 Agent");
         assert_eq!(zh.reload_window, "重载最近使用的窗口");
         assert_eq!(zh.restart, "重启");
         assert_eq!(zh.quit, "退出");
 
         let en = tray_labels(TrayLocale::from_tag("en"));
-        assert_eq!(en.show, "Open Wisp Science");
+        assert_eq!(en.show, "Open wisp-depmap");
         assert_eq!(en.stop_agent, "Stop agent in last active window");
         assert_eq!(en.reload_window, "Reload last active window");
         assert_eq!(en.restart, "Restart");

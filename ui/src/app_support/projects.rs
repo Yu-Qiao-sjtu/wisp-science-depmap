@@ -705,7 +705,7 @@ pub(crate) fn ProjectsScreen(
             <div class="projects-head" prop:inert=move ||calendar_open.get()>
                 <div class="projects-brand">
                     <h1 class="projects-title">
-                        <span class="projects-brand-mark brand-wordmark" role="img" aria-label="Wisp Science"></span>
+                        <span class="projects-brand-mark brand-wordmark" role="img" aria-label="wisp-depmap"></span>
                     </h1>
                     <p class="projects-tagline">
                         <span>{move || t(locale.get(), "projects.tagline_lead")}</span>

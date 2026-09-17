@@ -1,6 +1,6 @@
 [package]
 name = "wisp-tauri"
-description = "Tauri v2 desktop shell for wisp-science: commands + agent event stream."
+description = "Tauri v2 desktop shell for wisp-depmap: commands + agent event stream."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

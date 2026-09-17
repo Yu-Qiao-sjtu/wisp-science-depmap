@@ -2073,7 +2073,7 @@ pub(super) fn SettingsView(
                         </div>
                         </div>
                         <div class="row general-update-actions">
-                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
+                                <span class="settings-version">{concat!("wisp-depmap v", env!("CARGO_PKG_VERSION"))}</span>
                                 <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
                         </div>
                         </section>

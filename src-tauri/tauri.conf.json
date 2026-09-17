@@ -1,18 +1,26 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "wisp-science",
-  "version": "1.13.0",
-  "identifier": "science.wisp-science",
+  "productName": "wisp-depmap",
+  "version": "0.1.0",
+  "identifier": "science.wisp-depmap",
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:1421",
-    "beforeDevCommand": { "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File dev.ps1", "cwd": "../ui" },
-    "beforeBuildCommand": { "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File build.ps1", "cwd": "../ui" }
+    "beforeDevCommand": {
+      "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File dev.ps1",
+      "cwd": "../ui"
+    },
+    "beforeBuildCommand": {
+      "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File build.ps1",
+      "cwd": "../ui"
+    }
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
@@ -37,7 +45,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0NzgxMDkzMTcwOTUxNzIKUldSeVVRa1hreEI0dE10Uk5iVU81djVSWFpwdHBIckZtU0xpdDhtalNJRWlNRGkyekZ6RG5KVGQK",
       "endpoints": [
-        "https://github.com/xuzhougeng/wisp-science/releases/latest/download/latest.json"
+        "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases/latest/download/latest.json"
       ]
     }
   }
