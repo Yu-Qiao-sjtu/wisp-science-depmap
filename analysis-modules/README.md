@@ -15,6 +15,7 @@
 | [表达基因—表达基因共表达分析](./表达基因-表达基因共表达分析/README.md) | `log2(TPM + 1)` 表达量 | 共表达 | 全局矩阵与癌种内网络已完成 | 约 6.51 GiB |
 | [CRISPR 基因—基因共依赖分析](./CRISPR基因-基因共依赖分析/README.md) | CRISPR Gene Effect | 共依赖 | 全局矩阵与癌种内网络已完成 | 约 7.43 GiB |
 | [表达基因—CRISPR 基因依赖相关性分析](./表达基因-CRISPR基因依赖相关性分析/README.md) | `log2(TPM + 1)` × CRISPR Gene Effect | 表达—依赖关联 | 全局矩阵与癌种内网络已完成 | 约 6.27 GiB |
+| [转录因子活性—CRISPR基因依赖相关性分析](./转录因子活性-CRISPR基因依赖相关性分析/README.md) | DoRothEA/decoupleR TF活性 × CRISPR Gene Effect | TF活性—依赖关联 | 正在构建与验收 | 待正式运行填写 |
 
 ## 标准目录
 

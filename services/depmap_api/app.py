@@ -69,6 +69,7 @@ MODE_REQUIRED_FIELDS = {
     "synthetic_lethal": set(),
     "three_d": {"family"},
     "tcga_expression_survival": {"gene"},
+    "tf_dependency": {"source"},
 }
 MODE_OPTIONAL_FIELDS = {
     "lineage_network": {"target", "limit", "reciprocal"},
@@ -83,6 +84,7 @@ MODE_OPTIONAL_FIELDS = {
     "synthetic_lethal": {"source", "target", "event", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
+    "tf_dependency": {"target", "limit"},
 }
 LINEAGE_NETWORK_FAMILIES = {
     "effect_correlation",
@@ -384,6 +386,7 @@ class QueryRequest(BaseModel):
         "subtype", "coamplification",
         "true_love", "synthetic_lethal", "three_d",
         "tcga_expression_survival",
+        "tf_dependency",
     ]
     gene: str | None = None
     module: str | None = None
@@ -2102,7 +2105,7 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 6,
+            "query_contract_version": 7,
             "coverage_manifest_version": 4,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),

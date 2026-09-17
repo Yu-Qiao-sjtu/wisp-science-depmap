@@ -13,11 +13,24 @@ from services.depmap_api.app import (
     CANONICAL_LINEAGES,
     CHINESE_LINEAGE_ALIASES,
     Settings,
+    QueryRequest,
     _canonical_lineage_label,
     _coverage_gap_reason,
     create_app,
     resolve_lineage_term,
 )
+
+
+class QueryContractTests(unittest.TestCase):
+    def test_tf_dependency_accepts_exact_pair_or_bounded_top_query(self):
+        exact = QueryRequest(mode="tf_dependency", source="STAT3", target="GPX4", limit=20)
+        self.assertEqual(exact.bounded_dict()["target"], "GPX4")
+        top = QueryRequest(mode="tf_dependency", source="STAT3", limit=5)
+        self.assertNotIn("target", top.bounded_dict())
+
+    def test_tf_dependency_requires_tf_source(self):
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="tf_dependency", target="GPX4")
 
 
 class DepMapApiTests(unittest.TestCase):
@@ -209,7 +222,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 6)
+        self.assertEqual(response.json()["query_contract_version"], 7)
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
         self.assertIn("subtype", response.json()["query_modes"])

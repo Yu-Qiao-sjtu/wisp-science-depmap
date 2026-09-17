@@ -111,6 +111,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "mcp_tool": "depmap_lineage_dependencies",
     },
     {
+        "intent": "tf_activity_to_dependency",
+        "description": "Fix an inferred transcription-factor activity and query associated CRISPR Gene Effect targets.",
+        "required": ["transcription_factor"],
+        "optional": ["target_gene", "limit"],
+        "examples_zh": ["STAT3活性和哪些基因依赖相关", "查ESR1 TF活性与GPX4依赖"],
+        "precise_prompt_template_zh": "查询{transcription_factor}推断活性与CRISPR Gene Effect的关联；若指定{target_gene}则返回精确配对，否则返回正负向候选。",
+        "confusable_with": ["gene_pair_evidence"],
+        "mcp_tool": "depmap_tf_dependency_evidence",
+    },
+    {
         "intent": "gene_evidence",
         "description": "Retrieve available precomputed pathway or regulator enrichment evidence.",
         "required": ["gene"],
@@ -155,6 +165,16 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
     mode = query["mode"]
     module = query.get("module") or query.get("family")
     scope = "lineage" if mode == "lineage_network" else "global"
+    if mode == "tf_dependency":
+        return {
+            "metric": "pearson_correlation",
+            "analysis_label": "inferred_tf_activity_to_crispr_dependency",
+            "data_modality": "decoupler_ulm_tf_activity_vs_crispr_gene_effect",
+            "relation_type": "predictive_association",
+            "scope": "global",
+            "cohort_policy": "1140_matched_expression_and_gene_effect_models",
+            "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
+        }
     if module == "effect_correlation" and mode in {"pair", "top", "lineage_network"}:
         return {
             "metric": "correlation",
@@ -407,7 +427,7 @@ class DepMapEvidenceService:
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 6,
+            "query_contract_version": 7,
             "lineage_resolution_contract_version": 1,
             "coverage_manifest_version": 4,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
@@ -425,6 +445,7 @@ class DepMapEvidenceService:
                 "observational_synthetic_lethal_evidence",
                 "three_d_dependency_evidence",
                 "tcga_gene_expression_survival",
+                "tf_activity_dependency_evidence",
             ],
             "data_sources": {
                 "depmap": {
@@ -460,6 +481,17 @@ class DepMapEvidenceService:
                 "three_d": {
                     "installed": (self.settings.knowledge_root / "depmap-26q1-3d" / "catalog.csv").is_file(),
                     "scope": "3D dependency profiles, contrasts, networks, pathway and omics evidence",
+                },
+                "tf_activity_dependency": {
+                    "installed": (
+                        self.settings.knowledge_root
+                        / "analysis-modules"
+                        / "转录因子活性-CRISPR基因依赖相关性分析"
+                        / "results"
+                        / "tf_activity_dependency_26Q1_v2"
+                        / "manifest.json"
+                    ).is_file(),
+                    "scope": "DoRothEA A-C/decoupleR ULM TF activity versus CRISPR Gene Effect",
                 },
             },
             "integration_rule": (
@@ -734,6 +766,27 @@ class DepMapEvidenceService:
             "items": items,
         }
         return self._envelope(tool="depmap_pair_evidence", request=request, evidence=evidence)
+
+    async def tf_dependency_evidence(
+        self,
+        transcription_factor: str,
+        target: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        tf = transcription_factor.strip().upper()
+        if not tf:
+            raise ValueError("transcription_factor must be non-empty")
+        query: dict[str, Any] = {"mode": "tf_dependency", "source": tf, "limit": limit}
+        if target:
+            query["target"] = target.strip().upper()
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_tf_dependency_evidence",
+            request={"transcription_factor": tf, "target": query.get("target"), "limit": limit},
+            evidence=item,
+        )
 
     async def subtype_evidence(
         self,
@@ -1088,6 +1141,25 @@ def build_mcp_server(
         lineage: str | None = None,
     ) -> dict[str, Any]:
         return await service.pair_evidence(source, target, lineage)
+
+    @mcp.tool(
+        title="DepMap TF activity to CRISPR dependency evidence",
+        description=(
+            "Query a completed pan-cancer association matrix between DoRothEA A-C/"
+            "decoupleR ULM inferred TF activity and CRISPR Gene Effect. With target, "
+            "return the exact pair; without target, return bounded positive and "
+            "negative Top candidates. FDR is BH-adjusted within each TF among pairs "
+            "with at least 800 observations."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_tf_dependency_evidence(
+        transcription_factor: str,
+        target: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.tf_dependency_evidence(transcription_factor, target, limit)
 
     @mcp.tool(
         title="DepMap drug-gene evidence",

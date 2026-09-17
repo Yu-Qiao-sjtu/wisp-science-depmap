@@ -97,6 +97,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "dependency_to_mutation",
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
+                "tf_activity_to_dependency",
                 "gene_evidence",
             },
         )
@@ -252,6 +253,18 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "predictive_association",
         )
 
+    async def test_tf_activity_dependency_query_preserves_direction_and_fdr_scope(self):
+        result = await self.service.tf_dependency_evidence("stat3", "gpx4", 12)
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "tf_dependency", "source": "STAT3", "target": "GPX4", "limit": 12},
+        )
+        self.assertEqual(result["request"]["transcription_factor"], "STAT3")
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["analysis_label"], "inferred_tf_activity_to_crispr_dependency")
+        self.assertIn("stronger dependency", semantics["interpretation"])
+        self.assertFalse(result["new_analysis_started"])
+
     async def test_subtype_tool_is_one_bounded_query_with_canonical_lineage(self):
         result = await self.service.subtype_evidence(
             gene="wrn", lineage="结肠癌", contrast_id="FEATURE__BOWEL__MSI", limit=7
@@ -375,6 +388,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_gene_evidence",
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
+                        "depmap_tf_dependency_evidence",
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",
                         "depmap_coamplification_evidence",

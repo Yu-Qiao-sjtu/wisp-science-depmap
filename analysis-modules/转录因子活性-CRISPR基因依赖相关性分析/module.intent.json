@@ -1,0 +1,23 @@
+{
+  "module_id": "tf_activity_crispr_dependency",
+  "analysis_label": "转录因子活性与CRISPR基因依赖相关性",
+  "data_modality": ["DoRothEA TF activity", "CRISPR Gene Effect"],
+  "relation_type": "tf_activity_dependency_correlation",
+  "scope": ["pan_cancer"],
+  "metric": ["pearson_correlation", "p_value", "bh_fdr", "pair_n"],
+  "required_entities": ["transcription_factor"],
+  "optional_entities": ["dependency_target_gene"],
+  "trigger_examples": [
+    "STAT3活性和哪些基因依赖相关",
+    "STAT3转录因子活性升高时更依赖哪些基因",
+    "查询STAT3和GPX4依赖的关系",
+    "TF activity dependency"
+  ],
+  "ambiguity_rules": [
+    "用户只说基因表达时不得路由到TF活性；必须明确活性、转录因子或DoRothEA语义",
+    "负相关表示TF活性高伴随Gene Effect更负；不得直接解释为直接调控或合成致死",
+    "当前模块仅支持泛癌；癌种内TF活性分析需要单独计算"
+  ],
+  "entrypoint": "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/scripts/query_tf_dependency.R"
+}
+
