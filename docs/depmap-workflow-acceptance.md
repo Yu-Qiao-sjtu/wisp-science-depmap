@@ -55,7 +55,7 @@ scientific-review gates.
 
 ## Live acceptance after data access is available
 
-1. Connect the research server through Wisp Science when server access is needed.
+1. Connect the research server through wisp-depmap when server access is needed.
 2. Transfer validated outputs to the local knowledge root, or configure an
    already reachable HTTPS/loopback evidence endpoint. The DepMap Agent itself
    must not create an SSH tunnel.

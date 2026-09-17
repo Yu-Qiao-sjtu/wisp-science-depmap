@@ -32,7 +32,7 @@ For a server-hosted knowledge base, use the version 2 nested form:
 ```
 
 The DepMap Agent and local MCP do not create SSH connections or tunnels. Users
-connect research servers with Wisp Science's ordinary ExecutionContext support,
+connect research servers with wisp-depmap's ordinary ExecutionContext support,
 then either transfer validated precomputed outputs to the local knowledge root
 or expose an already reachable authenticated HTTPS endpoint. A project config
 containing `knowledge.tunnel` is rejected as `managed_tunnel_not_supported`.

@@ -1,8 +1,8 @@
-# Wisp Science Basics: MCP
+# wisp-depmap Basics: MCP
 
 Research often means switching between tools: PubMed for papers, GEO for datasets, and project notes for organizing results. To help with this work, an AI needs access to the relevant data sources and tools.
 
-MCP provides a common way to connect them. In Wisp Science, you can use built-in research connectors or add your own MCP services so that searching, reading, and organizing results happen in the same conversation.
+MCP provides a common way to connect them. In wisp-depmap, you can use built-in research connectors or add your own MCP services so that searching, reading, and organizing results happen in the same conversation.
 
 This tutorial introduces the concept, then uses two examples to configure and verify connections.
 
@@ -15,7 +15,7 @@ In Wisp, the responsibilities are:
 | Participant | Responsibility |
 | --- | --- |
 | Language model | Understand your request, select tools, and interpret results |
-| Wisp Science | Manage connections, organize calls, handle permissions, and display results |
+| wisp-depmap | Manage connections, organize calls, handle permissions, and display results |
 | MCP service | Provide capabilities such as webpage reading, note search, or database queries |
 
 For a literature request, Wisp can pass the model's chosen query to the appropriate tool, then let the model organize the returned records.

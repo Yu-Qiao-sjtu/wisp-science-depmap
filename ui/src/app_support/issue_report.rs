@@ -1,7 +1,7 @@
 use crate::dto::BootstrapStatus;
 use crate::i18n::{tf, Locale};
 
-pub(crate) const GITHUB_ISSUE_NEW: &str = "https://github.com/xuzhougeng/wisp-science/issues/new";
+pub(crate) const GITHUB_ISSUE_NEW: &str = "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/issues/new";
 
 /// Hidden context attached to the user's first feedback turn. Non-sensitive
 /// bootstrap metadata is embedded so the model never has to ask for version/OS
@@ -48,7 +48,7 @@ pub(crate) fn issue_report_chat_prompt(
             ("arch", &bootstrap.arch),
             ("model", model),
             ("startup", startup),
-            ("repo", "xuzhougeng/wisp-science"),
+            ("repo", "Yu-Qiao-sjtu/wisp-science-depmap"),
             ("issue_base", GITHUB_ISSUE_NEW),
         ],
     )
@@ -88,6 +88,6 @@ mod tests {
         assert!(prompt.contains("total=120ms store=90ms window_ready=600000ms"));
         assert!(prompt.contains("0.34.0"));
         assert!(!prompt.contains("/mock/root"));
-        assert!(prompt.contains("wisp-science"));
+        assert!(prompt.contains("wisp-depmap"));
     }
 }

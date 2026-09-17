@@ -620,7 +620,7 @@ pub(super) async fn set_credential(
     // standalone probe, so they're stored as-is.
     if id == "openalex_api_key" && !value.is_empty() {
         let resp = reqwest::Client::builder()
-            .user_agent("wisp-science")
+            .user_agent("wisp-depmap")
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| e.to_string())?

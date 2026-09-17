@@ -36,7 +36,7 @@ On macOS, **File → New Window** should create exactly one blank window and
 verification prompts from A must stay out of B, including after B reloads.
 
 Each window title includes the open workspace name
-(`wisp science — my-project`) so the taskbar, Alt-Tab, and macOS title bar can
+(`wisp-depmap — my-project`) so the taskbar, Alt-Tab, and macOS title bar can
 tell windows apart. The Projects home screen uses the app name alone.
 
 On the Projects home screen, each project card has a **Project settings**

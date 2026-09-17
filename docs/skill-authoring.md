@@ -1,4 +1,4 @@
-# Preparing Skills for Wisp Science
+# Preparing Skills for wisp-depmap
 
 This guide targets Wisp **1.11.0**. The examples are checked against the current
 [parser](../crates/wisp-skills/src/manifest.rs) and package validator in automated

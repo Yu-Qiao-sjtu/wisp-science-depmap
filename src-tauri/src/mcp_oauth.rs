@@ -242,8 +242,8 @@ pub async fn begin_authorization(
             .post(registration_endpoint)
             .header("accept", "application/json")
             .json(&json!({
-                "client_name": "Wisp Science",
-                "client_uri": "https://github.com/xuzhougeng/wisp-science",
+                "client_name": "wisp-depmap",
+                "client_uri": "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],

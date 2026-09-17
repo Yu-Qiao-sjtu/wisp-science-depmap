@@ -39,7 +39,7 @@ impl WorkspaceBrowser {
 pub fn app_data_root() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| std::env::temp_dir())
-        .join("science.wisp-science")
+        .join("science.wisp-depmap")
 }
 
 pub fn profile_dir() -> PathBuf {

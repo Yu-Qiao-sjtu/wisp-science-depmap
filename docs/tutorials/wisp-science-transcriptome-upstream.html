@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article" data-title-zh="完成转录组上游分析 · 教程 | Wisp Science" data-title-en="Complete an Upstream RNA-seq Analysis · Tutorials | Wisp Science" data-desc-zh="Wisp Science： 完成转录组上游分析" data-desc-en="Wisp Science: Complete an Upstream RNA-seq Analysis">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="完成转录组上游分析 · 教程 | wisp-depmap" data-title-en="Complete an Upstream RNA-seq Analysis · Tutorials | wisp-depmap" data-desc-zh="wisp-depmap： 完成转录组上游分析" data-desc-en="wisp-depmap: Complete an Upstream RNA-seq Analysis">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science： 完成转录组上游分析">
-  <title>完成转录组上游分析 · 教程 | Wisp Science</title>
+  <meta name="description" content="wisp-depmap： 完成转录组上游分析">
+  <title>完成转录组上游分析 · 教程 | wisp-depmap</title>
   <script>
     (function () {
       var lang = "zh";
@@ -32,7 +32,7 @@
     <div class="container">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="28" height="28">
-        <span class="brand-name">Wisp Science</span>
+        <span class="brand-name">wisp-depmap</span>
       </a>
       <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
         <a href="../index.html#features" data-i18n="nav.features">功能</a>
@@ -58,14 +58,14 @@
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-transcriptome-upstream" data-i18n="tutorials.back">返回教程目录</a></nav>
 <article class="tutorial-article" id="wisp-science-transcriptome-upstream" aria-labelledby="article-title">
-<header><h1 id="article-title" data-text-zh="Wisp Science： 完成转录组上游分析" data-text-en="Wisp Science: Complete an Upstream RNA-seq Analysis">Wisp Science： 完成转录组上游分析</h1>
+<header><h1 id="article-title" data-text-zh="wisp-depmap： 完成转录组上游分析" data-text-en="wisp-depmap: Complete an Upstream RNA-seq Analysis">wisp-depmap： 完成转录组上游分析</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-transcriptome-upstream.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-transcriptome-upstream.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-transcriptome-upstream.md" data-i18n="tutorials.source">查看原文</a></header>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>找到一套公开 RNA-seq 数据以后，怎样把原始测序文件变成可以用于差异表达分析的 Counts 矩阵？</p>
-<p>这篇教程使用 Wisp Science，完成一次从样本整理、FASTQ 准备、质量检查，到基因组比对和基因计数的转录组上游分析。我们以 <strong>GSE153250 中 MCF7 细胞的 ESR1 敲低实验</strong>为例，只保留 siESR1 和 siNT 两组，最后得到基因 Counts、样本分组表和计数汇总。</p>
+<p>这篇教程使用 wisp-depmap，完成一次从样本整理、FASTQ 准备、质量检查，到基因组比对和基因计数的转录组上游分析。我们以 <strong>GSE153250 中 MCF7 细胞的 ESR1 敲低实验</strong>为例，只保留 siESR1 和 siNT 两组，最后得到基因 Counts、样本分组表和计数汇总。</p>
 <p>下面保留实际使用的英文提示词，可以直接复制到 Wisp 的对话中。</p>
 <h2>1. 准备项目和计算服务器</h2>
-<p>在 Wisp Science 中新建一个项目，例如 <code>ESR1</code>，选择工作区，用于保存分析记录、脚本和取回的结果。模型配置可以参考 <a href="wisp-science-quick-start.html">快速开始</a>。</p>
+<p>在 wisp-depmap 中新建一个项目，例如 <code>ESR1</code>，选择工作区，用于保存分析记录、脚本和取回的结果。模型配置可以参考 <a href="wisp-science-quick-start.html">快速开始</a>。</p>
 <p>本次上游分析在远程 Linux 服务器上执行。先按照 <a href="wisp-science-servers-cli.html">服务器教程</a>，在设置中添加自己的 SSH 服务器，并确认连接可用。</p>
 <p>服务器需要有足够的磁盘空间，容纳下载数据、解压后的 FASTQ、参考基因组和 BAM 等中间文件；STAR 比对还需要与索引规模匹配的内存。本流程不要求 GPU，CPU、内存、磁盘和网络才是主要资源。</p>
 <p>Wisp 开始执行后，应先检查这些工具是否可用：</p>
@@ -281,10 +281,10 @@
 </div>
 <div class="tutorial-body lang-en" lang="en">
 <p>After finding a public RNA-seq dataset, how do you turn raw sequencing files into a count matrix suitable for differential expression analysis?</p>
-<p>This tutorial uses Wisp Science to organize samples, prepare FASTQ files, check quality, align reads, and count genes. We use <strong>ESR1 knockdown in MCF7 cells from GSE153250</strong>, retaining only siESR1 and siNT samples. The outputs are gene counts, a sample group table, and a counting summary.</p>
+<p>This tutorial uses wisp-depmap to organize samples, prepare FASTQ files, check quality, align reads, and count genes. We use <strong>ESR1 knockdown in MCF7 cells from GSE153250</strong>, retaining only siESR1 and siNT samples. The outputs are gene counts, a sample group table, and a counting summary.</p>
 <p>The English prompts below are the actual requests used for these tasks and can be copied directly into a Wisp conversation.</p>
 <h2>1. Prepare the project and compute server</h2>
-<p>Create a Wisp Science project, such as <code>ESR1</code>, and choose a workspace for analysis records, scripts, and retrieved outputs. See <a href="wisp-science-quick-start.html">Quick Start</a> for model configuration.</p>
+<p>Create a wisp-depmap project, such as <code>ESR1</code>, and choose a workspace for analysis records, scripts, and retrieved outputs. See <a href="wisp-science-quick-start.html">Quick Start</a> for model configuration.</p>
 <p>This upstream analysis runs on a remote Linux server. Follow the <a href="wisp-science-servers-cli.html">server tutorial</a> to register your own SSH server in Settings and verify connectivity.</p>
 <p>Allow enough disk space for downloads, uncompressed FASTQ files, references, and intermediate BAMs. STAR also needs memory appropriate to the index size. This workflow does not require a GPU; CPU, memory, storage, and networking are the main resources.</p>
 <p>Wisp should first check these tools:</p>
@@ -507,7 +507,7 @@
     <div class="container footer-inner">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="24" height="24">
-        Wisp Science
+        wisp-depmap
       </a>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
@@ -518,7 +518,7 @@
         <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
-      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 wisp-depmap · 开源科学计算 Agent</p>
     </div>
   </footer>
   <script src="../assets/i18n.js"></script>

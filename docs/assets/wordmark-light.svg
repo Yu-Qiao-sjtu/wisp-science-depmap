@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="120 52 520 344" role="img" aria-labelledby="title"><!-- Design by SpicyChicken6: https://github.com/xuzhougeng/wisp-science/discussions/1154
      Original paths and palette preserved; unused canvas trimmed for placement. -->
-<title id="title">Wisp Science — rounder wisp wordmark</title><g id="molecular-connections" color="#0D9488">
+<title id="title">wisp-depmap — rounder wisp wordmark</title><g id="molecular-connections" color="#0D9488">
   <path d="M218.07359 95.85909 L276.71635 123.20466 M491.62983 177.20398 L581.49601 114.27901 M462.89662 241.61684 L471.28346 337.47883" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="butt" stroke-linejoin="round"/>
   <circle id="i-upper-node" cx="200.1740111438313" cy="87.51237646948798" r="19.75" fill="none" stroke="currentColor" stroke-width="4.5"/><circle id="i-dot-node" cx="287" cy="128" r="11.346747752497686" fill="none" stroke="currentColor" stroke-width="4.5"/><circle id="p-right-node" cx="599.4763937881105" cy="101.68900343691253" r="21.95" fill="none" stroke="currentColor" stroke-width="4.5"/><circle id="p-lower-node" cx="473.1965239511372" cy="359.3453023872959" r="21.95" fill="none" stroke="currentColor" stroke-width="4.5"/>
   </g><g id="wisp-lettering" fill="#141413" transform="translate(130 242)">

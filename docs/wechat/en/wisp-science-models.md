@@ -1,8 +1,8 @@
-# Wisp Science Basics: Model Configuration
+# wisp-depmap Basics: Model Configuration
 
-When you first open Wisp Science, you may wonder why it asks for an API address and key when you already have an AI account. Which model name should you enter? After saving it, how do you know the conversation uses that model?
+When you first open wisp-depmap, you may wonder why it asks for an API address and key when you already have an AI account. Which model name should you enter? After saving it, how do you know the conversation uses that model?
 
-Wisp Science manages your research workspace separately from model access. Keep the same project files and analysis records while selecting among models you can access. This tutorial starts with a working first connection, then introduces image capabilities and switching models.
+wisp-depmap manages your research workspace separately from model access. Keep the same project files and analysis records while selecting among models you can access. This tutorial starts with a working first connection, then introduces image capabilities and switching models.
 
 > Screenshots come from the real frontend with demonstration settings and conversations, using the English interface. The model list is not a ranking or proof of access for an account. Follow the configuration supplied by your provider.
 
@@ -10,7 +10,7 @@ Wisp Science manages your research workspace separately from model access. Keep 
 
 | Component | Responsibility | What you need |
 | --- | --- | --- |
-| Wisp Science | Projects, conversations, tool calls, and work records | Install the app and open a project |
+| wisp-depmap | Projects, conversations, tool calls, and work records | Install the app and open a project |
 | Model service | Receive requests and generate replies or tool calls | A reachable address, supported protocol, and model ID |
 | API key | Identify the account or quota used for a request | A key from the provider's console |
 

@@ -163,7 +163,7 @@ if (is.list(config$knowledge) && !is.null(config$knowledge$tunnel)) {
   blocking <- c(blocking, "managed_tunnel_not_supported")
   warnings <- c(warnings, paste(
     "The DepMap Skill does not create SSH tunnels.",
-    "Connect the server through Wisp Science or configure an already reachable endpoint."
+    "Connect the server through wisp-depmap or configure an already reachable endpoint."
   ))
 }
 if (!write_boundary_pass) blocking <- c(blocking, "analysis_root_overlaps_read_only_source")

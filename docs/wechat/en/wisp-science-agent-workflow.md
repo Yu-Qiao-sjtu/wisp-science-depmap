@@ -1,4 +1,4 @@
-# Wisp Science Advanced: Agent Workflow
+# wisp-depmap Advanced: Agent Workflow
 
 A research question often involves several kinds of work: examining data, finding published evidence, considering alternative explanations, and deciding what to do next. An **Agent Workflow** saves that division of work as a task graph, including dependencies, capabilities, and expected outputs.
 

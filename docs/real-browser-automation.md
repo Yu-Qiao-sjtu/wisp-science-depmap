@@ -20,7 +20,7 @@ The user can ask Wisp to **configure the browser**. The Agent calls the
 read-only `browser_setup` tool and reports the current connection status, the
 exact extension directory on that installation, and the following steps.
 
-1. Start Wisp Science.
+1. Start wisp-depmap.
 2. Open `chrome://extensions` in the Chrome/Chromium profile Wisp should use.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked** and select the managed `browser-extension/`

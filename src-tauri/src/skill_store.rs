@@ -13,7 +13,7 @@ impl GithubClient {
     fn new() -> Result<Self, String> {
         Ok(Self(
             reqwest::Client::builder()
-                .user_agent("wisp-science-skill-store")
+                .user_agent("wisp-depmap-skill-store")
                 .timeout(std::time::Duration::from_secs(90))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()

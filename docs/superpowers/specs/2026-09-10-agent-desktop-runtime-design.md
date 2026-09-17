@@ -8,7 +8,7 @@
 
 ## 结论
 
-Wisp Science Desktop Runtime 采用 **Codex 的 PiP 交互方式 + BetterGI 的 ChildSession 隔离思想**：
+wisp-depmap Desktop Runtime 采用 **Codex 的 PiP 交互方式 + BetterGI 的 ChildSession 隔离思想**：
 
 - 用户看到的只有 **Agent Desktop**。默认缩成右下角 PiP：实时画面、Agent 状态、暂停、接管、展开。
 - 用户不需要理解 Session、RDP、VM、ChildSession、ScreenCaptureKit。
@@ -27,7 +27,7 @@ VS
 而要做成：
 
 ```text
-                Wisp Science
+                wisp-depmap
                      │
               Desktop Runtime
                      │

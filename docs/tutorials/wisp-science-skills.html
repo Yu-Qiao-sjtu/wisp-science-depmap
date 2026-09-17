@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article" data-title-zh="Skills · 教程 | Wisp Science" data-title-en="Skills · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：Skills" data-desc-en="Wisp Science Basics: Skills">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="Skills · 教程 | wisp-depmap" data-title-en="Skills · Tutorials | wisp-depmap" data-desc-zh="wisp-depmap基础入门：Skills" data-desc-en="wisp-depmap Basics: Skills">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science基础入门：Skills">
-  <title>Skills · 教程 | Wisp Science</title>
+  <meta name="description" content="wisp-depmap基础入门：Skills">
+  <title>Skills · 教程 | wisp-depmap</title>
   <script>
     (function () {
       var lang = "zh";
@@ -32,7 +32,7 @@
     <div class="container">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="28" height="28">
-        <span class="brand-name">Wisp Science</span>
+        <span class="brand-name">wisp-depmap</span>
       </a>
       <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
         <a href="../index.html#features" data-i18n="nav.features">功能</a>
@@ -58,11 +58,11 @@
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-skills" data-i18n="tutorials.back">返回教程目录</a></nav>
 <article class="tutorial-article" id="wisp-science-skills" aria-labelledby="article-title">
-<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：Skills" data-text-en="Wisp Science Basics: Skills">Wisp Science基础入门：Skills</h1>
+<header><h1 id="article-title" data-text-zh="wisp-depmap基础入门：Skills" data-text-en="wisp-depmap Basics: Skills">wisp-depmap基础入门：Skills</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-skills.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-skills.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-skills.md" data-i18n="tutorials.source">查看原文</a></header>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>使用 AI 做科研时，有些要求需要反复强调：查文献要核验来源，画图要保留原始数据，整理实验结果要记录参数，写阅读笔记要区分作者结论和自己的判断。</p>
-<p>如果每次都从头描述这些要求，很容易漏掉细节。我们可以把一套经过实践的工作方法整理成 Skill，让 Wisp Science 在遇到相应任务时读取并使用。</p>
+<p>如果每次都从头描述这些要求，很容易漏掉细节。我们可以把一套经过实践的工作方法整理成 Skill，让 wisp-depmap 在遇到相应任务时读取并使用。</p>
 <p>上一篇介绍了 <a href="wisp-science-mcp.html">MCP</a>，这一篇介绍 Skills：它是什么，如何在 Wisp 中使用，以及怎样把自己的科研习惯保存成可复用的技能。</p>
 <p><strong>先认识 Skill：把工作方法写成 AI 可以读取的操作指南。</strong></p>
 <p>Skill 可以理解为一个围绕具体任务组织的“工作方法包”。它以 <code>SKILL.md</code> 为核心，描述适用场景、执行步骤和交付要求，也可以附带脚本、参考资料与模板。这种将专业知识和工作流程打包的方式，采用了 Agent Skills 开放格式。<a href="https://agentskills.io/home">Agent Skills 官方介绍</a></p>
@@ -298,12 +298,12 @@ description: 按实验室模板整理已提供论文的阅读笔记。用于论�
 </table></div>
 <p>可以从实验室最常重复的一项小工作开始：一份阅读笔记、一张图的检查，或者一次数据整理。把已经明确的方法写进 Skill，再用新的材料验证和修订，你就会逐渐积累起一套符合自己研究习惯的工作流程。</p>
 <blockquote>
-<p>本文依据撰写时的 Wisp Science 项目文档与技能实现整理。不同版本的界面文字可能略有差异；示例用于说明配置和使用方法，不代表已经执行的科研任务。</p>
+<p>本文依据撰写时的 wisp-depmap 项目文档与技能实现整理。不同版本的界面文字可能略有差异；示例用于说明配置和使用方法，不代表已经执行的科研任务。</p>
 </blockquote>
 </div>
 <div class="tutorial-body lang-en" lang="en">
 <p>When using AI for research, some requirements come up repeatedly: verify literature sources, retain raw plotting data, record analysis parameters, and distinguish authors' conclusions from your own interpretation.</p>
-<p>Repeating all of these requirements from scratch makes omissions likely. A Skill lets you save a tested method so Wisp Science can read and apply it to relevant tasks.</p>
+<p>Repeating all of these requirements from scratch makes omissions likely. A Skill lets you save a tested method so wisp-depmap can read and apply it to relevant tasks.</p>
 <p>The preceding tutorial introduced <a href="wisp-science-mcp.html">MCP</a>. Here we explain Skills, how to use them in Wisp, and how to preserve your own research practices as reusable instructions.</p>
 <p><strong>A Skill is a method package the agent can read.</strong></p>
 <p>A Skill centers on <code>SKILL.md</code>, which describes when to use it, what steps to follow, and what to deliver. Scripts, references, and templates can accompany it. This uses the Agent Skills open format. See the <a href="https://agentskills.io/home">Agent Skills introduction</a>.</p>
@@ -549,7 +549,7 @@ material coverage, and questions that cannot be resolved from the input.
     <div class="container footer-inner">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="24" height="24">
-        Wisp Science
+        wisp-depmap
       </a>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
@@ -560,7 +560,7 @@ material coverage, and questions that cannot be resolved from the input.
         <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
-      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 wisp-depmap · 开源科学计算 Agent</p>
     </div>
   </footer>
   <script src="../assets/i18n.js"></script>

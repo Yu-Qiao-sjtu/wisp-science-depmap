@@ -1,5 +1,5 @@
 export const DOWNLOAD_ORIGIN = "https://wisp-science.sfl.bio";
-export const RELEASES = "https://github.com/xuzhougeng/wisp-science/releases";
+export const RELEASES = "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases";
 export const PACKAGES = [
   { id: "windows-x64-exe", os: "windows", arch: "x64", format: "exe", suffix: "x64-setup.exe" },
   { id: "windows-x64-msi", os: "windows", arch: "x64", format: "msi", suffix: "x64_en-US.msi" },
@@ -16,7 +16,7 @@ export function validTag(tag) {
 }
 
 export function assetName(tag, pkg) {
-  return `wisp-science_${tag.slice(1)}_${pkg.suffix}`;
+  return `wisp-depmap_${tag.slice(1)}_${pkg.suffix}`;
 }
 
 export function downloadKey(tag, name, sha256) {

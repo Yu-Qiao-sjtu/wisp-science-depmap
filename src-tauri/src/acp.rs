@@ -554,7 +554,7 @@ pub(crate) fn project_mcp_server(
 ) -> Result<McpServer, String> {
     let (command, args) = acp_bridge_launch(app_data, project, frame_id, allowed_tools)?;
     Ok(McpServer::Stdio(
-        McpServerStdio::new("wisp-science", PathBuf::from(command))
+        McpServerStdio::new("wisp-depmap", PathBuf::from(command))
             .args(args)
             .env(crate::mcp_broker::launch_env(
                 app_data,

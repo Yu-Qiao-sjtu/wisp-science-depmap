@@ -2,8 +2,8 @@
 <!-- Three-wisp mark by SpicyChicken6, Discussion #1154.
      Original arc paths, placement and colors preserved.
      The previous helix mark is kept as logo_v1.svg. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 128 128" role="img" aria-label="Wisp Science logo" color="#0D9488">
-  <title>Wisp Science</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 128 128" role="img" aria-label="wisp-depmap logo" color="#0D9488">
+  <title>wisp-depmap</title>
   <rect width="128" height="128" rx="26" fill="#FAF9F6"/>
   <g fill="currentColor" transform="translate(60.93466123858796 64) scale(1.04)">
     <path id="logo-wisp-1" d="M-38.105118 -22A44 44 0 1 1 -38.105118 22A39.40877 39.40877 0 1 0 -38.105118 -22Z"/>

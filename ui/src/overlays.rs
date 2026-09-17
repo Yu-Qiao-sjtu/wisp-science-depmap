@@ -324,7 +324,7 @@ pub(super) fn ShareOverlay(
                 })
                 .collect();
             let html =
-                share_html_document("wisp-science", &stamp, &footer, &rows, &live_share_theme());
+                share_html_document("wisp-depmap", &stamp, &footer, &rows, &live_share_theme());
             let args = to_value(&serde_json::json!({
                 "html": html,
                 "defaultName": format!("wisp-share-{stamp}.html"),
@@ -333,7 +333,7 @@ pub(super) fn ShareOverlay(
             (String::new(), Some(args))
         } else {
             let payload = share_png_payload(
-                "wisp-science",
+                "wisp-depmap",
                 &stamp,
                 &footer,
                 &share_png_rows(loc, &selected, &redact),

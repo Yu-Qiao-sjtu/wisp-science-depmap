@@ -1,27 +1,27 @@
 const WISP_PAGES_I18N = {
   zh: {
-    "meta.downloads.title": "下载安装包 | Wisp Science",
-    "meta.downloads.desc": "按系统与芯片选择 Wisp Science 安装包：Windows、macOS、Linux。提供 Cloudflare 下载与 GitHub 备用入口。",
+    "meta.downloads.title": "下载安装包 | wisp-depmap",
+    "meta.downloads.desc": "按系统与芯片选择 wisp-depmap 安装包：Windows、macOS、Linux。提供 Cloudflare 下载与 GitHub 备用入口。",
     "mcp.settingsPath": "设置 → 连接",
     "footer.releases": "版本记录",
     "footer.issues": "问题反馈",
     "nav.skills": "SKILLS",
-    "meta.skills.title": "科研技能 | Wisp Science",
-    "meta.skills.desc": "了解 Wisp Science 的 28 个内置技能：文献与证据、数据分析、图表与写作、计算环境和自动化。",
+    "meta.skills.title": "科研技能 | wisp-depmap",
+    "meta.skills.desc": "了解 wisp-depmap 的 28 个内置技能：文献与证据、数据分析、图表与写作、计算环境和自动化。",
     "skills.categories": "技能分类",
-    "meta.home.title": "Wisp Science | 开源科学计算 Agent",
+    "meta.home.title": "wisp-depmap | 开源科学计算 Agent",
     "meta.home.desc":
-      "Wisp Science 是开源、本地优先的科研工作台，支持 Windows、macOS 和 Linux。连接模型服务，运行 Python／R，使用科研数据库与 28 个内置技能，让分析过程有据可查。",
-    "meta.models.title": "模型配置 | Wisp Science",
-    "meta.models.desc": "Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
-    "meta.acp.title": "ACP Agent 配置 | Wisp Science",
+      "wisp-depmap 是开源、本地优先的科研工作台，支持 Windows、macOS 和 Linux。连接模型服务，运行 Python／R，使用科研数据库与 28 个内置技能，让分析过程有据可查。",
+    "meta.models.title": "模型配置 | wisp-depmap",
+    "meta.models.desc": "wisp-depmap 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。",
+    "meta.acp.title": "ACP Agent 配置 | wisp-depmap",
     "meta.acp.desc":
-      "Wisp Science ACP Agent 配置说明：在 Settings → Models → ACP Agents 下接入 Codex / Claude 等本地 ACP v1 agent。",
-    "meta.mcp.title": "科研 MCP | Wisp Science",
+      "wisp-depmap ACP Agent 配置说明：在 Settings → Models → ACP Agents 下接入 Codex / Claude 等本地 ACP v1 agent。",
+    "meta.mcp.title": "科研 MCP | wisp-depmap",
     "meta.mcp.desc":
-      "了解 Wisp Science 的科研连接器：23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。",
-    "meta.tutorials.title": "教程 | Wisp Science",
-    "meta.tutorials.desc": "Wisp Science 入门教程：模型配置、浏览器、服务器与命令行、导入导出、MCP、Skills 和轨迹。",
+      "了解 wisp-depmap 的科研连接器：23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据库。",
+    "meta.tutorials.title": "教程 | wisp-depmap",
+    "meta.tutorials.desc": "wisp-depmap 入门教程：模型配置、浏览器、服务器与命令行、导入导出、MCP、Skills 和轨迹。",
     "nav.tutorials": "教程",
     "tutorials.kicker": "从入门到实践",
     "tutorials.title": "教程",
@@ -48,7 +48,7 @@ const WISP_PAGES_I18N = {
     "nav.downloadShort": "下载",
     "lang.aria": "语言",
     "hero.eyebrow": "开源 · 本地优先 · Windows / macOS / Linux",
-    "hero.title": "严谨做科研，<br>Wisp Science 在身边。",
+    "hero.title": "严谨做科研，<br>wisp-depmap 在身边。",
     "hero.lead":
       "在一个项目中完成文献检索、数据分析与结果整理。让 Wisp 调用 Python、R 和科研工具，保留代码、文件与执行记录，把更多时间留给研究问题。",
     "hero.download": "下载桌面安装包",
@@ -57,8 +57,8 @@ const WISP_PAGES_I18N = {
     "hero.mockUser": "检索 PubMed 上 CRISPR 筛选的最新方法，并画一张流程图。",
     "hero.mockAssistant":
       "已检索 12 篇候选文献，并整理为带来源的报告。绘图代码与结果已保存到项目中。",
-    "trusted.heading": "Wisp Science 用户来自高校与科研团队",
-    "trusted.aria": "Wisp Science 用户所在团队",
+    "trusted.heading": "wisp-depmap 用户来自高校与科研团队",
+    "trusted.aria": "wisp-depmap 用户所在团队",
     "voices.kicker": "常见科研任务",
     "voices.heading": "从一个具体问题开始",
     "voices.lead": "下面这些任务描述，展示了如何把研究目标、检查要求和交付内容说清楚。",
@@ -181,9 +181,9 @@ const WISP_PAGES_I18N = {
     "stack.bioItem": "科研连接器<span>247 个工具 · 23 个连接器</span>",
     "stack.browse": "浏览科研连接器",
     "faq.heading": "常见问题",
-    "faq.q1": "Wisp Science 是新模型吗？",
+    "faq.q1": "wisp-depmap 是新模型吗？",
     "faq.a1":
-      "Wisp Science 是科研工作台，不是一个新模型。你可以配置兼容的模型 API，也可以接入本机 ACP Agent，用它们处理项目中的任务。",
+      "wisp-depmap 是科研工作台，不是一个新模型。你可以配置兼容的模型 API，也可以接入本机 ACP Agent，用它们处理项目中的任务。",
     "faq.q2": "与通用 AI 助手有何不同？",
     "faq.a2":
       "它围绕项目组织文件、会话、工具与执行记录，可以运行 Python／R、检索科研数据库，并保存分析产物。28 个内置技能提供可复用的方法与检查步骤。",
@@ -199,13 +199,13 @@ const WISP_PAGES_I18N = {
     "faq.q6": "需要提前安装哪些工具？",
     "faq.a6":
       "普通模型对话不需要先安装 Python 或 R。涉及代码运行、浏览器控制或第三方工具时，再按任务准备相应环境。首次引导会检测已有工具路径，缺少工具不会阻止你打开应用。源码构建所需环境另见开发文档。",
-    "faq.q7": "Wisp Science 是独立项目吗？",
+    "faq.q7": "wisp-depmap 是独立项目吗？",
     "faq.a7":
-      "是的。Wisp Science 使用 Rust／Tauri 独立开发，以 AGPL-3.0 协议开源。你可以查看源码、连接兼容的模型服务，并根据自己的科研需求使用和改进它。",
+      "是的。wisp-depmap 使用 Rust／Tauri 独立开发，以 AGPL-3.0 协议开源。你可以查看源码、连接兼容的模型服务，并根据自己的科研需求使用和改进它。",
     "faq.q8": "第一次使用，建议从哪里开始？",
     "faq.a8":
       "先按“快速开始”完成安装、模型配置和第一条对话，再用熟悉的小数据验证工作流程。项目持续迭代，具体变化以发布说明为准；科研结论和关键结果仍需结合原始材料核对。",
-    "footer.copy": "© 2026 Wisp Science · 开源科学计算 Agent",
+    "footer.copy": "© 2026 wisp-depmap · 开源科学计算 Agent",
     "mcp.title": "科研 MCP",
     "mcp.lead":
       "通过科研连接器，在同一段对话中检索文献、查询数据库和整理结果。Wisp 内置 23 个连接器、247 个工具，覆盖 PubMed、GEO、UniProt、ChEMBL 等约 80 个数据源，也支持添加自定义 MCP 服务。",
@@ -231,7 +231,7 @@ const WISP_PAGES_I18N = {
     "mcp.thTool": "工具",
     "mcp.thDoes": "功能说明",
     "models.lead":
-      "Wisp Science 的桌面版使用模型 profile 管理远程 API 后端。每个 profile 可以配置 provider、API URL、模型 ID、高级参数和独立 API key。",
+      "wisp-depmap 的桌面版使用模型 profile 管理远程 API 后端。每个 profile 可以配置 provider、API URL、模型 ID、高级参数和独立 API key。",
     "models.download": "下载最新版",
     "models.acpCta": "ACP Agent 配置",
     "models.md": "查看 Markdown 文档",
@@ -307,29 +307,29 @@ const WISP_PAGES_I18N = {
     "acp.pathChanged": "改过启动参数或项目路径后需新开会话",
   },
   en: {
-    "meta.downloads.title": "Download installers | Wisp Science",
-    "meta.downloads.desc": "Choose a Wisp Science installer for Windows, macOS or Linux by system and processor. Download via Cloudflare or GitHub.",
+    "meta.downloads.title": "Download installers | wisp-depmap",
+    "meta.downloads.desc": "Choose a wisp-depmap installer for Windows, macOS or Linux by system and processor. Download via Cloudflare or GitHub.",
     "mcp.settingsPath": "Settings → Connections",
     "footer.releases": "Releases",
     "footer.issues": "Issues",
     "nav.skills": "SKILLS",
-    "meta.skills.title": "Research Skills | Wisp Science",
-    "meta.skills.desc": "Explore Wisp Science’s 28 bundled Skills for literature, analysis, figures, writing, compute environments, and automation.",
+    "meta.skills.title": "Research Skills | wisp-depmap",
+    "meta.skills.desc": "Explore wisp-depmap’s 28 bundled Skills for literature, analysis, figures, writing, compute environments, and automation.",
     "skills.categories": "Skill categories",
-    "meta.home.title": "Wisp Science | Open-source scientific computing agent",
+    "meta.home.title": "wisp-depmap | Open-source scientific computing agent",
     "meta.home.desc":
-      "Wisp Science — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 28 bundled SKILLs.",
-    "meta.models.title": "Model configuration | Wisp Science",
+      "wisp-depmap — an open-source, local-first scientific agent workbench for Windows, macOS, and Linux. Bring your own LLM, run Python / R, and call 80+ scientific databases plus 28 bundled SKILLs.",
+    "meta.models.title": "Model configuration | wisp-depmap",
     "meta.models.desc":
-      "Wisp Science model setup: OpenAI-compatible, OpenAI Responses, and Anthropic APIs.",
-    "meta.acp.title": "ACP agent setup | Wisp Science",
+      "wisp-depmap model setup: OpenAI-compatible, OpenAI Responses, and Anthropic APIs.",
+    "meta.acp.title": "ACP agent setup | wisp-depmap",
     "meta.acp.desc":
       "Connect local ACP v1 agents such as Codex and Claude under Settings → Models → ACP Agents.",
-    "meta.mcp.title": "Scientific MCP | Wisp Science",
+    "meta.mcp.title": "Scientific MCP | wisp-depmap",
     "meta.mcp.desc":
-      "Wisp Science ships an in-process mcp_bio catalog: 23 connectors and 247 tools covering PubMed, GEO, UniProt, ChEMBL, and ~80 other databases.",
-    "meta.tutorials.title": "Tutorials | Wisp Science",
-    "meta.tutorials.desc": "Wisp Science tutorials: models, browser access, servers and CLI, imports and exports, MCP, Skills, and trajectories.",
+      "wisp-depmap ships an in-process mcp_bio catalog: 23 connectors and 247 tools covering PubMed, GEO, UniProt, ChEMBL, and ~80 other databases.",
+    "meta.tutorials.title": "Tutorials | wisp-depmap",
+    "meta.tutorials.desc": "wisp-depmap tutorials: models, browser access, servers and CLI, imports and exports, MCP, Skills, and trajectories.",
     "nav.tutorials": "Tutorials",
     "tutorials.kicker": "Learn by doing",
     "tutorials.title": "Tutorials",
@@ -356,9 +356,9 @@ const WISP_PAGES_I18N = {
     "nav.downloadShort": "Download",
     "lang.aria": "Language",
     "hero.eyebrow": "Open source · Local first · Windows / macOS / Linux",
-    "hero.title": "Let rigor be your guide,<br>with Wisp Science by your side.",
+    "hero.title": "Let rigor be your guide,<br>with wisp-depmap by your side.",
     "hero.lead":
-      "Wisp Science runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
+      "wisp-depmap runs analysis locally, queries scientific databases, and calls Python / R and MCP tools. From data wrangling to the report, the trail stays in one project—so you can spend the time on the science.",
     "hero.download": "Download the desktop app",
     "hero.source": "Build from source",
     "hero.quickStart": "Quick Start",
@@ -366,7 +366,7 @@ const WISP_PAGES_I18N = {
     "hero.mockAssistant":
       "Called mcp_pubmed on 12 papers and drafted a Markdown report plus Python plotting code. Tables and equations are already extracted as artifacts.",
     "trusted.heading": "Used by researchers from universities and research teams",
-    "trusted.aria": "Organizations using Wisp Science",
+    "trusted.aria": "Organizations using wisp-depmap",
     "voices.kicker": "Common research tasks",
     "voices.heading": "Start with a concrete question",
     "voices.lead":
@@ -436,7 +436,7 @@ const WISP_PAGES_I18N = {
     "local.remoteTitle": "Remote compute",
     "local.remoteBody":
       "SKILLs cover SSH, WSL, and GPU hosts. The agent can write and submit long Runs with live logs.",
-    "usecases.kicker": "How researchers use Wisp Science",
+    "usecases.kicker": "How researchers use wisp-depmap",
     "usecases.heading": "How researchers use it",
     "usecases.lead":
       "Bundled life-science workflows; interdisciplinary projects can chain literature, analysis, and figures in one session.",
@@ -498,7 +498,7 @@ const WISP_PAGES_I18N = {
     "stack.bioItem": "mcp_bio<span>247 tools · 23 connectors</span>",
     "stack.browse": "Browse the MCP catalog",
     "faq.heading": "Frequently asked questions",
-    "faq.q1": "Is Wisp Science a new model?",
+    "faq.q1": "Is wisp-depmap a new model?",
     "faq.a1":
       "No. It is an open-source desktop and CLI app that talks to any compatible LLM with the API key you supply. What is new is the agent loop, tools, MCP, and Python / R kernels around that model.",
     "faq.q2": "How is it different from a generic AI assistant?",
@@ -516,13 +516,13 @@ const WISP_PAGES_I18N = {
     "faq.q6": "What are the prerequisites?",
     "faq.a6":
       "Installer users: Windows needs WebView2 (usually present on Windows 10/11), macOS uses system WebKit, Linux uses WebKitGTK; all need your own API key. Optionally install R with jsonlite for the persistent r tool. Building from source needs Rust, Trunk, and Tauri CLI v2 (plus Xcode command-line tools on macOS). First-run setup detects executable paths in the background and saves them to Local. Missing tools do not block startup or trigger installs; use local-env-setup after launch when needed.",
-    "faq.q7": "Is Wisp Science an independent project?",
+    "faq.q7": "Is wisp-depmap an independent project?",
     "faq.a7":
-      "Yes. We originally looked at closed products such as Claude Science, but they were unfriendly to some regions and locked down. Wisp Science started from that gap: it learned from their Skills and MCP tool choices, then implemented a local-first research workbench in Rust/Tauri (AGPL-3.0). The agent architecture, multi-project workflow, Run manager, plugins, and ACP support are original; it can talk to any model provider, and anyone can use, study, and improve it.",
+      "Yes. We originally looked at closed products such as Claude Science, but they were unfriendly to some regions and locked down. wisp-depmap started from that gap: it learned from their Skills and MCP tool choices, then implemented a local-first research workbench in Rust/Tauri (AGPL-3.0). The agent architecture, multi-project workflow, Run manager, plugins, and ACP support are original; it can talk to any model provider, and anyone can use, study, and improve it.",
     "faq.q8": "Where should I begin?",
     "faq.a8":
       "Follow Quick Start to install the app, configure a model, and send your first message. Then validate a workflow with small, familiar data. Check release notes for changes and verify scientific conclusions against the original material.",
-    "footer.copy": "© 2026 Wisp Science · Open-source scientific computing agent",
+    "footer.copy": "© 2026 wisp-depmap · Open-source scientific computing agent",
     "mcp.title": "Scientific MCP",
     "mcp.lead":
       "Public biology and chemistry retrieval is an in-process native catalog (mcp_bio)—not a Python MCP subprocess, and there is no bundled ketcher server. Default: 23 connectors, 247 tools, ~80 upstream databases. The agent discovers tools with search_mcp_tools and calls them with use_mcp_tool.",

@@ -510,7 +510,7 @@ impl McpClient {
                     }
                 }
             },
-            "clientInfo": { "name": "wisp-science", "version": env!("CARGO_PKG_VERSION") }
+            "clientInfo": { "name": "wisp-depmap", "version": env!("CARGO_PKG_VERSION") }
         });
         if let Err(e) = client.request("initialize", Some(init_params)).await {
             // Give the stderr drain a moment to capture a crash traceback.
@@ -574,7 +574,7 @@ impl McpClient {
                     }
                 }
             },
-            "clientInfo": { "name": "wisp-science", "version": env!("CARGO_PKG_VERSION") }
+            "clientInfo": { "name": "wisp-depmap", "version": env!("CARGO_PKG_VERSION") }
         });
         let _ = client.request("initialize", Some(init_params)).await?;
         client

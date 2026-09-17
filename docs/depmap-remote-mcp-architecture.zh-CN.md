@@ -1,13 +1,13 @@
 # DepMap Agent 远程数据桥接技术路线
 
-本文描述 Wisp Science 如何把用户自然语言问题映射到服务器上的 DepMap 26Q1 预计算结果，并将结构化证据交给模型解释。目录索引用于路由和定位；科学问题的最终回答必须以实际结果为主，路径与模块状态只用于溯源。
+本文描述 wisp-depmap 如何把用户自然语言问题映射到服务器上的 DepMap 26Q1 预计算结果，并将结构化证据交给模型解释。目录索引用于路由和定位；科学问题的最终回答必须以实际结果为主，路径与模块状态只用于溯源。
 
 ## 完整链路
 
 ```mermaid
 flowchart TD
     U["用户自然语言问题<br/>例如：TP53突变后依赖哪些基因？"]
-    U --> A["Wisp Science<br/>DepMap Agent"]
+    U --> A["wisp-depmap<br/>DepMap Agent"]
     A --> B{"用户意图识别"}
 
     B -->|分析目录问题| I1["analysis_inventory"]
@@ -80,7 +80,7 @@ flowchart TD
     P --> P4["状态：FOUND / NOT_RETAINED等"]
     P --> P5["溯源：版本、manifest、depmap URI"]
 
-    P1 --> X["Wisp Science模型解释层"]
+    P1 --> X["wisp-depmap模型解释层"]
     P2 --> X
     P3 --> X
     P4 --> X
@@ -160,7 +160,7 @@ flowchart LR
 
 大型相关矩阵继续保留为 RDS、Parquet 或压缩表格。查询根据目录索引定位所需结果或分块，不将完整矩阵复制到 SQLite，也不把整个知识库送入模型上下文。
 
-服务器 MCP 只监听服务器回环地址。Wisp Science 使用本机回环端口，通过 SSH 加密隧道访问服务器 MCP；远程端口不直接暴露到公网。返回的 `depmap://26Q1/...` 是知识库内的稳定溯源标识，并可由 `depmap_read_resource` 经过 artifact 索引校验后有界读取；它不是服务器绝对路径。
+服务器 MCP 只监听服务器回环地址。wisp-depmap 使用本机回环端口，通过 SSH 加密隧道访问服务器 MCP；远程端口不直接暴露到公网。返回的 `depmap://26Q1/...` 是知识库内的稳定溯源标识，并可由 `depmap_read_resource` 经过 artifact 索引校验后有界读取；它不是服务器绝对路径。
 
 ## 目录索引 v3 验收（2026-09-17）
 

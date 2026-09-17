@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex as StdMutex;
 use tauri::{ipc::Channel, AppHandle, State};
 
-const RELEASES_URL: &str = "https://github.com/xuzhougeng/wisp-science/releases";
+const RELEASES_URL: &str = "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases";
 
 #[derive(Deserialize)]
 pub(super) struct GithubRelease {
@@ -159,14 +159,14 @@ pub(super) async fn check_for_updates(
     }
 
     const LATEST_RELEASE_API: &str =
-        "https://api.github.com/repos/xuzhougeng/wisp-science/releases/latest";
+        "https://api.github.com/repos/Yu-Qiao-sjtu/wisp-science-depmap/releases/latest";
 
     let release = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|error| format!("Failed to create update client: {error}"))?
         .get(LATEST_RELEASE_API)
-        .header(reqwest::header::USER_AGENT, "wisp-science-update-check")
+        .header(reqwest::header::USER_AGENT, "wisp-depmap-update-check")
         .send()
         .await
         .map_err(|error| format!("Failed to check GitHub Releases: {error}"))?

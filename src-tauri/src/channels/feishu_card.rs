@@ -91,7 +91,7 @@ impl ProgressState {
 
     pub fn render(&self) -> String {
         let mut sections = vec![if self.activity_seen {
-            "**Wisp Science 正在处理**".to_string()
+            "**wisp-depmap 正在处理**".to_string()
         } else {
             "**已收到消息，正在准备…**".to_string()
         }];

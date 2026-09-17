@@ -265,7 +265,7 @@ fn snapshot_from(state: &HubState) -> PetStateSnapshot {
     PetStateSnapshot {
         message_type: "pet_state",
         state: pet_state,
-        project: "Wisp Science",
+        project: "wisp-depmap",
         label: pet_state.label(),
         session_id,
         seq: state.seq,

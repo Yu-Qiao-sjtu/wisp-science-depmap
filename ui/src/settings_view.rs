@@ -115,7 +115,7 @@ fn model_advanced_options(
                     <input data-testid="model-user-agent"
                         disabled=move || !model_form.get().is_some_and(|form| form.send_user_agent)
                         aria-describedby="model-user-agent-hint"
-                        placeholder="wisp-science"
+                        placeholder="wisp-depmap"
                         prop:value=move || model_form.get().map(|f| f.user_agent).unwrap_or_default()
                         on:input=move |ev| model_form.update(|form| if let Some(form) = form {
                             form.user_agent = event_target_input(&ev).value();
@@ -130,7 +130,7 @@ fn model_advanced_options(
                         let form = model_form.get();
                         if let Some(form) = form.filter(|form| form.send_user_agent) {
                             let value = form.user_agent.trim();
-                            format!("User-Agent: {}", if value.is_empty() { "wisp-science" } else { value })
+                            format!("User-Agent: {}", if value.is_empty() { "wisp-depmap" } else { value })
                         } else {
                             t(locale.get(), "models.request_header_disabled").to_string()
                         }
@@ -1835,7 +1835,7 @@ pub(super) fn SettingsView(
             "project-sync.md"
         };
         crate::bindings::open_external_url(format!(
-            "https://github.com/xuzhougeng/wisp-science/blob/main/docs/{page}"
+            "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/blob/main/docs/{page}"
         ));
     };
     let join_project = move |_| {
@@ -2073,7 +2073,7 @@ pub(super) fn SettingsView(
                         </div>
                         </div>
                         <div class="row general-update-actions">
-                                <span class="settings-version">{concat!("wisp-science v", env!("CARGO_PKG_VERSION"))}</span>
+                                <span class="settings-version">{concat!("wisp-depmap v", env!("CARGO_PKG_VERSION"))}</span>
                                 <button type="button" disabled=move || settings_busy.get() on:click=move |ev| check_updates.call(ev)>{move || t(locale.get(), "settings.check_updates")}</button>
                         </div>
                         </section>

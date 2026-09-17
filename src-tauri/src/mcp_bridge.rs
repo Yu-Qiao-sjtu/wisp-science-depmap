@@ -1588,7 +1588,7 @@ fn parse_mcp_bridge_cli_args() -> BridgeConfig {
     let app_data = app_data.unwrap_or_else(|| {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from(".wisp"))
-            .join("wisp-science")
+            .join("wisp-depmap")
     });
     let project_root = project_root.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let resource_root = resource_root.or_else(|| {

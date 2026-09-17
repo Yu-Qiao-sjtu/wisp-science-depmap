@@ -1,14 +1,14 @@
-# Wisp Science： 完成转录组上游分析
+# wisp-depmap： 完成转录组上游分析
 
 找到一套公开 RNA-seq 数据以后，怎样把原始测序文件变成可以用于差异表达分析的 Counts 矩阵？
 
-这篇教程使用 Wisp Science，完成一次从样本整理、FASTQ 准备、质量检查，到基因组比对和基因计数的转录组上游分析。我们以 **GSE153250 中 MCF7 细胞的 ESR1 敲低实验**为例，只保留 siESR1 和 siNT 两组，最后得到基因 Counts、样本分组表和计数汇总。
+这篇教程使用 wisp-depmap，完成一次从样本整理、FASTQ 准备、质量检查，到基因组比对和基因计数的转录组上游分析。我们以 **GSE153250 中 MCF7 细胞的 ESR1 敲低实验**为例，只保留 siESR1 和 siNT 两组，最后得到基因 Counts、样本分组表和计数汇总。
 
 下面保留实际使用的英文提示词，可以直接复制到 Wisp 的对话中。
 
 ## 1. 准备项目和计算服务器
 
-在 Wisp Science 中新建一个项目，例如 `ESR1`，选择工作区，用于保存分析记录、脚本和取回的结果。模型配置可以参考 [快速开始](wisp-science-quick-start.md)。
+在 wisp-depmap 中新建一个项目，例如 `ESR1`，选择工作区，用于保存分析记录、脚本和取回的结果。模型配置可以参考 [快速开始](wisp-science-quick-start.md)。
 
 本次上游分析在远程 Linux 服务器上执行。先按照 [服务器教程](wisp-science-servers-cli.md)，在设置中添加自己的 SSH 服务器，并确认连接可用。
 

@@ -1,6 +1,6 @@
-# Wisp Science高级：ACP配置
+# wisp-depmap高级：ACP配置
 
-如果你已经在使用 Codex、Claude 等外部 Agent，希望在 Wisp Science 的项目界面里继续使用它们，可以通过 ACP 接入。Wisp 负责项目界面、消息和权限交互，外部 Agent 负责自己的会话、工具与认证。
+如果你已经在使用 Codex、Claude 等外部 Agent，希望在 wisp-depmap 的项目界面里继续使用它们，可以通过 ACP 接入。Wisp 负责项目界面、消息和权限交互，外部 Agent 负责自己的会话、工具与认证。
 
 这篇教程从准备本机适配器开始，介绍配置、测试和第一次对话。普通 API 模型的配置见[模型配置教程](wisp-science-models.md)。
 

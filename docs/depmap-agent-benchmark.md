@@ -2,7 +2,7 @@
 
 The exported trajectory is a useful exploratory smoke test, but it is not by
 itself evidence that the Agent is reliable or that a particular model-round
-limit is optimal. Wisp Science therefore treats quality, cost, and robustness
+limit is optimal. wisp-depmap therefore treats quality, cost, and robustness
 as separate measurements.
 
 ## Benchmark layers

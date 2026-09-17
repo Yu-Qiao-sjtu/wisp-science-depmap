@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Deliver a project-level DepMap Agent on Wisp Science. A user selects it once as
+Deliver a project-level DepMap Agent on wisp-depmap. A user selects it once as
 the project's default Agent; every new conversation inherits the identity,
 recovers persisted Runs, queries a local or server-hosted knowledge provider,
 and starts a new R analysis only through an explicit, validated Run lifecycle.

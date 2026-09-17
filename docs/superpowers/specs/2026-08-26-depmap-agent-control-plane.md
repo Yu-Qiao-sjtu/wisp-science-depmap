@@ -2,7 +2,7 @@
 
 ## Product objective
 
-Build a complete project-level DepMap Agent on Wisp Science. The Agent owns
+Build a complete project-level DepMap Agent on wisp-depmap. The Agent owns
 planning, evidence routing, R execution, Run monitoring, QA, stage-specific
 Skill use, provenance, and multi-session continuity. A precomputed knowledge
 base accelerates standard questions but never replaces the Agent.

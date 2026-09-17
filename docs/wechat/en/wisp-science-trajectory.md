@@ -1,8 +1,8 @@
-# Wisp Science Tips: Trajectories
+# wisp-depmap Tips: Trajectories
 
 When an AI finishes an analysis, “Done” is often not enough. Which file did it read? What code did it execute? Where did plotting fail? Can you return to the process a few days later?
 
-Wisp Science's **Trajectory** view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.
+wisp-depmap's **Trajectory** view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.
 
 The previous tutorials covered [MCP](wisp-science-mcp.md) and [Skills](wisp-science-skills.md). Here we explain how to open a trajectory, read its records, verify an analysis, and investigate failures.
 

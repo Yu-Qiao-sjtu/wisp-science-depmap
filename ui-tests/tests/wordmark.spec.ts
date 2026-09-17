@@ -22,7 +22,7 @@ for (const surface of ["projects", "chat"] as const) {
       await page.locator(".sidebar").getByRole("button", { name: "New session" }).click();
     }
     const wordmark = page.locator(surface === "projects" ? ".projects-brand-mark" : ".empty-logo");
-    await expect(wordmark).toHaveAccessibleName("Wisp Science");
+    await expect(wordmark).toHaveAccessibleName("wisp-depmap");
     await expect(wordmark).toBeVisible();
 
     const expectVariant = async (theme: "light" | "dark") => {
@@ -57,14 +57,14 @@ for (const width of [390, 800, 1000, 1600]) {
   test(`projects wordmark, tagline and actions fit a ${width}px window (${locale})`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(`/?mockLocale=${locale}`);
-    const wordmark = page.getByRole("heading", { name: "Wisp Science", exact: true });
+    const wordmark = page.getByRole("heading", { name: "wisp-depmap", exact: true });
     const brand = page.locator(".projects-brand");
     const tagline = page.locator(".projects-tagline");
     const actions = page.locator(".projects-actions");
     await expect(wordmark).toBeVisible();
     await expect(tagline).toHaveText(locale === "zh"
-      ? "严谨做科研， Wisp Science 在身边。"
-      : "Let rigor be your guide, with Wisp Science by your side.", { useInnerText: true });
+      ? "严谨做科研， wisp-depmap 在身边。"
+      : "Let rigor be your guide, with wisp-depmap by your side.", { useInnerText: true });
     await expect(tagline).toBeInViewport();
     expect(await tagline.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await expect(actions.getByRole("button", { name: locale === "zh" ? "新建项目" : "New project" })).toBeVisible();

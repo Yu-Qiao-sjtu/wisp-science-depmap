@@ -1,8 +1,8 @@
-# Wisp Science高级用法：Agent Workflow
+# wisp-depmap高级用法：Agent Workflow
 
 面对一个研究问题，我们经常需要同时做几件事：检查已有数据、寻找文献证据、提出不同解释，再把这些材料整理成下一步方案。如果每一步都在同一段对话里临时安排，任务之间的分工、先后顺序和交付要求就容易变得模糊。
 
-Wisp Science 的 **Agent Workflow（Agent 工作流）** 可以把这些安排保存为一张任务图：哪些任务独立开展，哪些任务需要等待上游结果，每一步允许使用什么能力，以及最后交付什么。
+wisp-depmap 的 **Agent Workflow（Agent 工作流）** 可以把这些安排保存为一张任务图：哪些任务独立开展，哪些任务需要等待上游结果，每一步允许使用什么能力，以及最后交付什么。
 
 这篇属于高级用法，适合已经完成模型配置、能够在项目中使用文件和工具的读者。可以先阅读 [Skills](wisp-science-skills.md)、[专家](wisp-science-specialists.md) 和 [快捷动作](wisp-science-quick-actions.md)，再从一个小工作流开始尝试。
 

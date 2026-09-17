@@ -5333,7 +5333,7 @@ fn App() -> impl IntoView {
                             modal.set(Some(UpdateCheckModal::Failed {
                                 message: text,
                                 release_url: Some(
-                                    "https://github.com/xuzhougeng/wisp-science/releases".into(),
+                                    "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases".into(),
                                 ),
                             }));
                         }
@@ -5347,7 +5347,7 @@ fn App() -> impl IntoView {
                         modal.set(Some(UpdateCheckModal::Failed {
                             message: text,
                             release_url: Some(
-                                "https://github.com/xuzhougeng/wisp-science/releases".into(),
+                                "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases".into(),
                             ),
                         }));
                     }
@@ -10311,10 +10311,10 @@ fn App() -> impl IntoView {
             "export-current-project" => export_current_project.call(()),
             "skills" => manage_skills.call(()),
             "check-updates" => run_update_check(),
-            "docs" => open_external_url("https://github.com/xuzhougeng/wisp-science#readme".into()),
-            "star-us" => open_external_url("https://github.com/xuzhougeng/wisp-science".into()),
+            "docs" => open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap#readme".into()),
+            "star-us" => open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into()),
             "issues" => {
-                open_external_url("https://github.com/xuzhougeng/wisp-science/issues".into())
+                open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/issues".into())
             }
             "toggle-sidebar" => show_sidebar.update(|show| *show = !*show),
             "artifacts" => {
@@ -10368,11 +10368,11 @@ fn App() -> impl IntoView {
             match action.as_str() {
                 "check-updates" => run_update_check(),
                 "docs" => {
-                    open_external_url("https://github.com/xuzhougeng/wisp-science#readme".into())
+                    open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap#readme".into())
                 }
-                "star-us" => open_external_url("https://github.com/xuzhougeng/wisp-science".into()),
+                "star-us" => open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into()),
                 "issues" => {
-                    open_external_url("https://github.com/xuzhougeng/wisp-science/issues".into())
+                    open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/issues".into())
                 }
                 other => {
                     if let Some(action) = match other {
@@ -12009,7 +12009,7 @@ fn App() -> impl IntoView {
                     })}
                     {move || (items.with(|l| l.is_empty()) && !(transcript_loading.get().is_some() && transcript_loading.get() == active_session.get()) && transcript_page_error.get().is_none_or(|(id, _)| active_session.get().as_deref() != Some(id.as_str()))).then(|| view! {
                         <div class="empty">
-                            <span class="empty-logo brand-wordmark" role="img" aria-label="Wisp Science"></span>
+                            <span class="empty-logo brand-wordmark" role="img" aria-label="wisp-depmap"></span>
                             <h1>{move || empty_title(locale.get(), empty_title_idx.get())}</h1>
                             <p>{move || empty_subtitle(locale.get(), empty_subtitle_idx.get())}</p>
                         </div>

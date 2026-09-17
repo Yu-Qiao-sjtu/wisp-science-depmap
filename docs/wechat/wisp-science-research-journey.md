@@ -1,12 +1,12 @@
-# Wisp Science使用技巧：研究历程，让每一天的探索都有迹可循
+# wisp-depmap使用技巧：研究历程，让每一天的探索都有迹可循
 
 上周那张图是怎么得到的？当时为什么选择方案 B？昨天的实验没有成功，今天应该从哪一步继续？
 
 研究往往同时发生在几段对话、几次运行和不同版本的文件里。到了组会或写论文的时候，我们需要把它们重新接起来：哪天做了什么，留下了哪份结果，依据是什么，还有哪些问题没有验证。
 
-Wisp Science v1.11.0 的主题是 **Research Journey · 研究历程**。这一篇从首页研究日历出发，带你回到项目中的一天，查看成果来源、补充研究记录，再把选中的证据放进论文工作区。
+wisp-depmap v1.11.0 的主题是 **Research Journey · 研究历程**。这一篇从首页研究日历出发，带你回到项目中的一天，查看成果来源、补充研究记录，再把选中的证据放进论文工作区。
 
-> 本文适用于 v1.11.0。截图来自 Wisp Science 实际前端，使用固定日期和模拟数据演示操作，无需连接模型或服务器。文件、实验与结论均为教学示例；论文页面使用另一组独立的演示证据，不表示前面的结果已自动转入论文。
+> 本文适用于 v1.11.0。截图来自 wisp-depmap 实际前端，使用固定日期和模拟数据演示操作，无需连接模型或服务器。文件、实验与结论均为教学示例；论文页面使用另一组独立的演示证据，不表示前面的结果已自动转入论文。
 
 ## 先分清三个入口
 
@@ -110,6 +110,6 @@ Wisp Science v1.11.0 的主题是 **Research Journey · 研究历程**。这一�
 
 **让每一天的探索，都有迹可循。**
 
-项目与下载：[Wisp Science](https://github.com/xuzhougeng/wisp-science) · [v1.11.0](https://github.com/xuzhougeng/wisp-science/releases/tag/v1.11.0)
+项目与下载：[wisp-depmap](https://github.com/xuzhougeng/wisp-science) · [v1.11.0](https://github.com/xuzhougeng/wisp-science/releases/tag/v1.11.0)
 
 继续阅读：[快速开始](wisp-science-quick-start.md) · [对话轨迹](wisp-science-trajectory.md) · [导入、导出与分享](wisp-science-transfer.md)

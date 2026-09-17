@@ -2620,7 +2620,7 @@ async fn resolve_workspace(project_root: &Path) -> Result<KnowledgeWorkspace, St
             let endpoint = validate_endpoint(&endpoint)?;
             if config.pointer("/knowledge/tunnel").is_some() {
                 return Err(
-                    "knowledge.tunnel is not supported by the DepMap agent; connect the server through Wisp Science or provide an already reachable HTTPS/loopback endpoint"
+                    "knowledge.tunnel is not supported by the DepMap agent; connect the server through wisp-depmap or provide an already reachable HTTPS/loopback endpoint"
                         .into(),
                 );
             }
@@ -3767,7 +3767,7 @@ mod tests {
         .unwrap();
         let error = resolve_workspace(&root).await.unwrap_err();
         assert!(error.contains("not supported by the DepMap agent"));
-        assert!(error.contains("connect the server through Wisp Science"));
+        assert!(error.contains("connect the server through wisp-depmap"));
         std::fs::remove_dir_all(root).ok();
     }
 

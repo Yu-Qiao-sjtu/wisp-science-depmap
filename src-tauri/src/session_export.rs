@@ -127,7 +127,7 @@ fn markdown_fence(lang: &str, body: &str) -> String {
 }
 
 fn render_export_transcript(messages: &[Message]) -> String {
-    let mut out = String::from("# wisp-science session export\n\n");
+    let mut out = String::from("# wisp-depmap session export\n\n");
     for (idx, msg) in messages.iter().enumerate() {
         match msg.role {
             wisp_llm::Role::System => {}

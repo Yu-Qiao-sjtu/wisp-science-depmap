@@ -456,7 +456,7 @@ impl BrowserBridge {
         let live_retrieval = status == "connected";
         let steps = extension_path.as_ref().map_or_else(Vec::new, |path| {
             vec![
-                "Start Wisp Science and keep it running.".to_string(),
+                "Start wisp-depmap and keep it running.".to_string(),
                 "Open chrome://extensions in the Chrome/Chromium profile Wisp should control."
                     .to_string(),
                 "Enable Developer mode.".to_string(),

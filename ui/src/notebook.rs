@@ -194,7 +194,7 @@ pub(super) fn NotebookView(
                             <span class="notebook-language">{language.clone()}</span>
                             <span class="spacer"></span>
                             <span class=format!("notebook-status {status}") title=status></span>
-                            <span class="notebook-runtime">{format!("{runtime} · wisp-science")}</span>
+                            <span class="notebook-runtime">{format!("{runtime} · wisp-depmap")}</span>
                             <button type="button" class="notebook-star" class:starred=move || starred.get()
                                 disabled=move || active_session.get().is_none()
                                 title=move || t(locale, if starred.get() { "library.remove" } else { "library.add" })

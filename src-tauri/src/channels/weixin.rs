@@ -166,7 +166,7 @@ impl IlinkClient {
         Ok(Self {
             // getupdates long-polls ~35s server-side; leave headroom.
             http: reqwest::Client::builder()
-                .user_agent("wisp-science")
+                .user_agent("wisp-depmap")
                 .timeout(Duration::from_secs(75))
                 .build()?,
             base_url: if base_url.is_empty() {
