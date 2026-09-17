@@ -16,7 +16,7 @@ import os
 import csv
 import re
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Literal
@@ -748,8 +748,31 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     module = query.get("module")
     state = query.get("completion_state") or "COMPLETE"
     if module:
-        clauses.append("module = ?")
-        params.append(module)
+        module_patterns: list[str] = []
+        try:
+            with closing(sqlite3.connect(
+                f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+            )) as catalog_db:
+                row = catalog_db.execute(
+                    "SELECT payload_json FROM capability_catalog "
+                    "WHERE query_mode = ? OR intent = ? LIMIT 1",
+                    (module, module),
+                ).fetchone()
+                if row:
+                    details = json.loads(str(row[0]))
+                    module_patterns = [
+                        str(part).strip().replace("*", "%")
+                        for part in details.get("inventory_patterns", [])
+                        if str(part).strip()
+                    ]
+        except (sqlite3.Error, json.JSONDecodeError, TypeError):
+            module_patterns = []
+        module_clauses = ["module = ?", "analysis_unit = ?"]
+        params.extend([module, module])
+        for pattern in module_patterns:
+            module_clauses.extend(["module LIKE ?", "analysis_unit LIKE ?"])
+            params.extend([pattern, pattern])
+        clauses.append("(" + " OR ".join(module_clauses) + ")")
     if state:
         clauses.append("completion_state = ?")
         params.append(state)
@@ -757,6 +780,34 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     sql = (
         "SELECT analysis_id,module,analysis_unit,completion_state,completion_basis,"
         "release,family,dataset,method,manifest_path FROM analysis_catalog"
+    )
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY module,analysis_unit LIMIT ?"
+    params.append(limit)
+    try:
+        with closing(sqlite3.connect(
+            f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+        )) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute(sql, params)]
+            totals = {
+                row[0]: row[1]
+                for row in db.execute(
+                    "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
+                )
+            }
+    except sqlite3.Error as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="analysis_catalog",
+            reason=f"the unified directory index could not be read: {exc}",
+        )
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
+        reason="completed analysis directory entries from the unified relative-path catalog",
+        rows=rows, returned_count=len(rows), state_totals=totals,
+        path_policy="knowledge-root-relative paths only",
+        provenance=[index.name],
     )
 
 
@@ -802,34 +853,6 @@ def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dic
         event_definitions=manifest.get("event_definitions"), manifest=manifest,
         provenance=[str(manifest_path), str(path)],
     )
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY module,analysis_unit LIMIT ?"
-    params.append(limit)
-    try:
-        with sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True) as db:
-            db.row_factory = sqlite3.Row
-            rows = [dict(row) for row in db.execute(sql, params)]
-            totals = {
-                row[0]: row[1]
-                for row in db.execute(
-                    "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
-                )
-            }
-    except sqlite3.Error as exc:
-        return _evidence_response(
-            "MODULE_UNAVAILABLE", mode="analysis_catalog",
-            reason=f"the unified directory index could not be read: {exc}",
-        )
-    return _evidence_response(
-        "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
-        reason="completed analysis directory entries from the unified relative-path catalog",
-        rows=rows, returned_count=len(rows), state_totals=totals,
-        path_policy="knowledge-root-relative paths only",
-        provenance=[index.name],
-    )
-
-
 def _complete_module(
     root: Path, *, mode: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:

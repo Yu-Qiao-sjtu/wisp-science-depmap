@@ -34,7 +34,10 @@ The exposed tools are intentionally small:
   discovery at the start of an Agent session;
 
 - `depmap_analysis_catalog`: completed analysis units from the unified SQLite
-  directory index, optionally restricted to one module;
+  directory index, optionally restricted to one module. The filter accepts an
+  exact module or analysis-unit name and registered capability aliases such as
+  `true_love`; an unmatched filter returns a bounded `NOT_RETAINED` result with
+  zero rows instead of raising an adapter exception;
 - `depmap_artifact_catalog`: query indexed scripts, data, manifests, results,
   and matrix shards by module, kind, or relative-path fragment;
 - `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return

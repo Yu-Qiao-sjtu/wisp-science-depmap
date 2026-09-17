@@ -424,6 +424,11 @@ class DepMapEvidenceService:
                 "status": "QUERY_ERROR",
                 "reason": f"{type(exc).__name__}: {exc}",
             }
+        if not isinstance(result, dict):
+            result = {
+                "status": "MODULE_UNAVAILABLE",
+                "reason": "the catalog reader returned an invalid result type",
+            }
         return {
             "query": validated,
             "catalog_resolution": resolution.evidence(self.settings.release),
