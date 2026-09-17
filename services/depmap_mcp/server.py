@@ -121,6 +121,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "mcp_tool": "depmap_tf_dependency_evidence",
     },
     {
+        "intent": "true_love_gene_catalog",
+        "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
+        "required": ["catalog"],
+        "optional": ["gene", "partner", "coverage", "limit"],
+        "examples_zh": ["查询真爱基因", "找r小于-0.3的负共依赖候选", "查询正相关互惠Top20"],
+        "precise_prompt_template_zh": "查询26Q1的{catalog}真爱基因目录，可选{coverage}覆盖层，并说明相关性不能证明合成致死。",
+        "confusable_with": ["gene_pair_evidence"],
+        "mcp_tool": "depmap_true_love_evidence",
+    },
+    {
         "intent": "gene_evidence",
         "description": "Retrieve available precomputed pathway or regulator enrichment evidence.",
         "required": ["gene"],
@@ -274,10 +284,12 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "interpretation": "negative effect means stronger dependency in coamplified source-positive models; lineage_adjusted controls for OncoTree lineage",
         }
     if mode == "true_love":
-        return {
-            "metric": "stable_mutual_rank1_negative_codependency",
-            "interpretation": "reciprocal rank-1 negative correlation with the frozen FDR/stability contract; association is not proof of mechanism",
-        }
+        catalog = query.get("catalog") or "stable_negative_rank1"
+        if catalog == "negative_r_lt_minus_0_3":
+            return {"metric": "negative_gene_effect_correlation_below_minus_0_3", "interpretation": "negative co-dependency candidate derived from the exhaustive matrix; correlation alone is not proof of synthetic lethality"}
+        if catalog == "positive_reciprocal_top20":
+            return {"metric": "mutual_positive_top20_codependency", "interpretation": "both genes rank each other within their positive Gene Effect correlation Top20; this supports similar dependency profiles, not direct interaction"}
+        return {"metric": "stable_mutual_rank1_negative_codependency", "interpretation": "reciprocal rank-1 negative correlation with the frozen FDR/stability contract; association is not proof of mechanism"}
     if mode == "synthetic_lethal":
         return {
             "metric": "observational_event_dependency_difference",
@@ -427,9 +439,9 @@ class DepMapEvidenceService:
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 7,
+            "query_contract_version": 8,
             "lineage_resolution_contract_version": 1,
-            "coverage_manifest_version": 4,
+            "coverage_manifest_version": 5,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
             "tool_boundary": [
                 "status_and_coverage",
@@ -857,20 +869,26 @@ class DepMapEvidenceService:
         gene: str | None = None,
         partner: str | None = None,
         limit: int = 20,
+        catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
+        coverage: Literal["legacy", "quality"] | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        query: dict[str, Any] = {"mode": "true_love", "limit": limit}
+        query: dict[str, Any] = {"mode": "true_love", "limit": limit, "catalog": catalog}
         if gene:
             query["gene"] = gene.strip().upper()
         if partner:
             query["partner"] = partner.strip().upper()
+        if coverage:
+            query["coverage"] = coverage
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {
             "gene": validated.get("gene"),
             "partner": validated.get("partner"),
             "limit": limit,
+            "catalog": catalog,
+            "coverage": coverage,
         }
         return self._envelope(tool="depmap_true_love_evidence", request=request, evidence=item)
 
@@ -1220,11 +1238,13 @@ def build_mcp_server(
         )
 
     @mcp.tool(
-        title="DepMap True Love reciprocal dependency evidence",
+        title="DepMap True Love Gene (TLG) evidence",
         description=(
-            "Query the completed strict mutual-rank-1 negative dependency screen, "
-            "preferring its bootstrap-stable high-confidence layer. This is a "
-            "codependency hypothesis and does not establish a causal mechanism."
+            "Query one completed TLG catalog: bootstrap-stable mutual-rank-1 negative "
+            "pairs, the TM00 r < -0.3 negative co-dependency candidates, or positive "
+            "reciprocal Top20 neighbors. Derived catalogs default to the pair_n >= 500 "
+            "quality layer. These are codependency hypotheses and do not prove "
+            "synthetic lethality or a causal mechanism."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -1233,8 +1253,10 @@ def build_mcp_server(
         gene: str | None = None,
         partner: str | None = None,
         limit: int = 20,
+        catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
+        coverage: Literal["legacy", "quality"] | None = None,
     ) -> dict[str, Any]:
-        return await service.true_love_evidence(gene, partner, limit)
+        return await service.true_love_evidence(gene, partner, limit, catalog, coverage)
 
     @mcp.tool(
         title="DepMap observational synthetic-lethal evidence",

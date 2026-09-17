@@ -1,0 +1,10 @@
+#!/usr/bin/env Rscript
+suppressPackageStartupMessages({library(data.table);library(jsonlite)})
+a<-commandArgs(trailingOnly=TRUE);if(length(a)!=1L)stop('usage: validate_tlg_catalogs.R <result-root>')
+root<-normalizePath(a[[1L]],winslash='/',mustWork=TRUE);m<-read_json(file.path(root,'manifest.json'),simplifyVector=TRUE);stopifnot(identical(m$status,'complete'))
+neg_l<-fread(file.path(root,'negative_codependency_r_lt_minus_0.3_legacy.csv.gz'));neg_q<-fread(file.path(root,'negative_codependency_r_lt_minus_0.3_n500.csv.gz'));pos_l<-fread(file.path(root,'positive_reciprocal_top20_legacy.csv.gz'));pos_q<-fread(file.path(root,'positive_reciprocal_top20_n500.csv.gz'))
+stopifnot(nrow(neg_l)==m$negative_legacy_pair_count,nrow(neg_q)==m$negative_quality_pair_count,nrow(pos_l)==m$positive_legacy_reciprocal_pair_count,nrow(pos_q)==m$positive_quality_reciprocal_pair_count)
+stopifnot(all(neg_l$correlation < m$correlation_threshold),all(neg_q$correlation < m$correlation_threshold),all(neg_q$pair_n>=m$quality_min_pair_n),!anyDuplicated(paste(neg_l$gene_a,neg_l$gene_b)))
+stopifnot(all(pos_l$rank_a_to_b<=m$top_k),all(pos_l$rank_b_to_a<=m$top_k),all(pos_q$rank_a_to_b<=m$top_k),all(pos_q$rank_b_to_a<=m$top_k),all(pos_q$pair_n_a_to_b>=m$quality_min_pair_n),all(pos_q$pair_n_b_to_a>=m$quality_min_pair_n),!anyDuplicated(paste(pos_q$gene_a,pos_q$gene_b)))
+report<-list(status='PASS',negative_legacy_pairs=nrow(neg_l),negative_legacy_below_n500=sum(neg_l$pair_n<m$quality_min_pair_n,na.rm=TRUE),negative_quality_pairs=nrow(neg_q),positive_legacy_reciprocal_pairs=nrow(pos_l),positive_quality_reciprocal_pairs=nrow(pos_q),quality_min_pair_n=m$quality_min_pair_n)
+write_json(report,file.path(root,'validation.json'),auto_unbox=TRUE,pretty=TRUE);cat(toJSON(report,auto_unbox=TRUE,pretty=TRUE),'\n')

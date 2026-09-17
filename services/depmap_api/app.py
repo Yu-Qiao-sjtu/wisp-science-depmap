@@ -80,7 +80,7 @@ MODE_OPTIONAL_FIELDS = {
     "enrichment": {"collection", "term", "limit"},
     "subtype": {"gene", "lineage", "contrast", "limit"},
     "coamplification": {"partner", "target", "layer", "limit"},
-    "true_love": {"gene", "partner", "limit"},
+    "true_love": {"gene", "partner", "catalog", "coverage", "limit"},
     "synthetic_lethal": {"source", "target", "event", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
@@ -121,6 +121,8 @@ QUERY_FIELD_ORDER = (
     "reciprocal",
     "project",
     "endpoint",
+    "catalog",
+    "coverage",
 )
 TCGA_SURVIVAL_ENDPOINTS = {"OS", "DSS", "DFI", "PFI"}
 CANONICAL_LINEAGES = (
@@ -409,6 +411,8 @@ class QueryRequest(BaseModel):
     reciprocal: bool | None = None
     project: str | None = None
     endpoint: str | None = None
+    catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
+    coverage: Literal["legacy", "quality"] | None = None
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
@@ -418,6 +422,7 @@ class QueryRequest(BaseModel):
             "gene", "module", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
+            "catalog", "coverage",
         }
         supplied = {
             name
@@ -456,6 +461,8 @@ class QueryRequest(BaseModel):
             self.layer = "lineage_adjusted"
         if self.mode == "true_love" and self.gene is None and self.partner is not None:
             raise ValueError("true_love partner requires gene")
+        if self.mode == "true_love" and self.catalog in {None, "stable_negative_rank1"} and self.coverage is not None:
+            raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
         for name in (supplied - {"limit", "reciprocal"}):
@@ -850,11 +857,29 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
     manifest, unavailable = _complete_module(root, mode="true_love")
     if unavailable is not None:
         return unavailable
+    catalog = query.get("catalog") or "stable_negative_rank1"
+    coverage = query.get("coverage") or "quality"
     stable_root = root / "high_confidence_stability"
     stable_manifest = _load_manifest(stable_root)
     stable_path = stable_root / "final_high_confidence_true_love_genes.csv.gz"
     strict_path = root / "strict_mutual_rank1_pairs.csv.gz"
-    path = stable_path if stable_manifest and stable_manifest.get("status") == "complete" and stable_path.is_file() else strict_path
+    selected_manifest = manifest
+    if catalog == "stable_negative_rank1":
+        path = stable_path if stable_manifest and stable_manifest.get("status") == "complete" and stable_path.is_file() else strict_path
+        selected_manifest = stable_manifest if path == stable_path else manifest
+    else:
+        derived_root = root / "tm00_derived_catalogs_26Q1"
+        derived_manifest = _load_manifest(derived_root)
+        if not derived_manifest or derived_manifest.get("status") != "complete":
+            return _evidence_response("NOT_COMPUTED", mode="true_love", reason="the requested TM00-derived TLG catalog is not complete", catalog=catalog, coverage=coverage, manifest=derived_manifest, provenance=[str(derived_root / "manifest.json")])
+        names = {
+            ("negative_r_lt_minus_0_3", "legacy"): "negative_codependency_r_lt_minus_0.3_legacy.csv.gz",
+            ("negative_r_lt_minus_0_3", "quality"): "negative_codependency_r_lt_minus_0.3_n500.csv.gz",
+            ("positive_reciprocal_top20", "legacy"): "positive_reciprocal_top20_legacy.csv.gz",
+            ("positive_reciprocal_top20", "quality"): "positive_reciprocal_top20_n500.csv.gz",
+        }
+        path = derived_root / names[(catalog, coverage)]
+        selected_manifest = derived_manifest
     if not path.is_file():
         return _evidence_response(
             "NOT_COMPUTED", mode="true_love",
@@ -864,16 +889,21 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
     gene = query.get("gene")
     partner = query.get("partner")
     rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
-    rows.sort(key=lambda row: (-float(row.get("bootstrap_reciprocal_stability") or 0), float(row.get("worst_direction_fdr") or 1), -abs(float(row.get("strongest_absolute_correlation") or 0))))
+    if catalog == "stable_negative_rank1":
+        rows.sort(key=lambda row: (-float(row.get("bootstrap_reciprocal_stability") or 0), float(row.get("worst_direction_fdr") or 1), -abs(float(row.get("strongest_absolute_correlation") or 0))))
+    elif catalog == "negative_r_lt_minus_0_3":
+        rows.sort(key=lambda row: (float(row.get("correlation") or 0), str(row.get("gene_a")), str(row.get("gene_b"))))
+    else:
+        rows.sort(key=lambda row: (float(row.get("reciprocal_rank_sum") or 999), -float(row.get("correlation_a_to_b") or 0), str(row.get("gene_a")), str(row.get("gene_b"))))
     limit = int(query.get("limit", 20))
     return _evidence_response(
         "FOUND" if rows else "NOT_RETAINED", mode="true_love",
-        reason=("stable reciprocal rank-1 dependency pairs found" if rows else "the completed strict/stability screen retained no matching pair"),
+        reason=("bounded rows found in the requested completed TLG catalog" if rows else "the completed requested TLG catalog retained no matching pair"),
         gene=gene.strip().upper() if gene else None,
         partner=partner.strip().upper() if partner else None,
-        rows=rows[:limit],
+        catalog=catalog, coverage=(None if catalog == "stable_negative_rank1" else coverage), rows=rows[:limit],
         summary={"matched_pair_count": len(rows), "returned_count": min(limit, len(rows)), "stability_layer": path == stable_path},
-        manifest=stable_manifest if path == stable_path else manifest,
+        manifest=selected_manifest,
         provenance=[str(root / "manifest.json"), str(path)],
     )
 
@@ -2105,8 +2135,8 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 7,
-            "coverage_manifest_version": 4,
+            "query_contract_version": 8,
+            "coverage_manifest_version": 5,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),
             "query_modes": sorted(MODE_REQUIRED_FIELDS),

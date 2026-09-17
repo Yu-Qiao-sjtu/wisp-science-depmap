@@ -5,9 +5,16 @@
   "display_name_zh": "CRISPR 基因—基因共依赖分析",
   "data_modality": "crispr_gene_effect",
   "relation_type": "codependency",
-  "entity_roles": {"source": "gene_effect_gene", "target": "gene_effect_gene", "symmetric": true},
+  "entity_roles": {
+    "source": "gene_effect_gene",
+    "target": "gene_effect_gene",
+    "symmetric": true
+  },
   "metric": "pearson_correlation",
-  "scopes": ["global", "lineage"],
+  "scopes": [
+    "global",
+    "lineage"
+  ],
   "cohort_policy": {
     "global_primary": "all_available_gene_effect_models",
     "global_primary_sample_n": 1208,
@@ -16,12 +23,54 @@
     "lineage_min_n": 10
   },
   "query_contract": {
-    "global_pair": {"mode": "pair", "module": "effect_correlation"},
-    "global_top": {"mode": "top", "module": "effect_correlation"},
-    "lineage": {"mode": "lineage_network", "family": "effect_correlation"}
+    "global_pair": {
+      "mode": "pair",
+      "module": "effect_correlation"
+    },
+    "global_top": {
+      "mode": "top",
+      "module": "effect_correlation"
+    },
+    "lineage": {
+      "mode": "lineage_network",
+      "family": "effect_correlation"
+    },
+    "tlg_catalog": {
+      "mode": "true_love",
+      "catalog": [
+        "stable_negative_rank1",
+        "negative_r_lt_minus_0_3",
+        "positive_reciprocal_top20"
+      ],
+      "coverage": [
+        "quality",
+        "legacy"
+      ],
+      "default_coverage": "quality"
+    }
   },
-  "intent_terms_zh": ["共依赖", "依赖相关", "基因效应相关", "敲除相关", "CRISPR相关", "两基因依赖性"],
-  "intent_terms_en": ["co-dependency", "codependency", "gene effect correlation", "CRISPR dependency correlation"],
-  "confusable_modules": ["expression_correlation", "expression_dependency"],
-  "interpretation": "两个基因在细胞系间的 CRISPR Gene Effect 依赖谱是否相似；不等于共表达，也不证明合成致死。"
+  "intent_terms_zh": [
+    "共依赖",
+    "依赖相关",
+    "基因效应相关",
+    "敲除相关",
+    "CRISPR相关",
+    "两基因依赖性",
+    "真爱基因",
+    "TLG",
+    "负共依赖候选",
+    "正相关互惠Top20",
+    "合成致死候选"
+  ],
+  "intent_terms_en": [
+    "co-dependency",
+    "codependency",
+    "gene effect correlation",
+    "CRISPR dependency correlation"
+  ],
+  "confusable_modules": [
+    "expression_correlation",
+    "expression_dependency"
+  ],
+  "interpretation": "两个基因在细胞系间的 CRISPR Gene Effect 依赖谱是否相似；不等于共表达，也不证明合成致死。 TLG是真爱基因项目家族名；负相关阈值表仅为负共依赖候选，正相关互惠Top20表示相似依赖谱。"
 }

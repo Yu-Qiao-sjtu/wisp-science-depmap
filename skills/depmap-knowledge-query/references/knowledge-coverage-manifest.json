@@ -108,6 +108,15 @@
         "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/results/tf_activity_dependency_26Q1_v2/blocks",
         "analysis-modules/转录因子活性-CRISPR基因依赖相关性分析/results/tf_activity_dependency_26Q1_v2/top_hits.csv.gz"
       ]
+    },
+    {
+      "id": "true_love_tm00_derived_catalogs",
+      "mode": "true_love",
+      "required_paths": [
+        "depmap-26q1-full/true_love_gene/tm00_derived_catalogs_26Q1/manifest.json",
+        "depmap-26q1-full/true_love_gene/tm00_derived_catalogs_26Q1/negative_codependency_r_lt_minus_0.3_n500.csv.gz",
+        "depmap-26q1-full/true_love_gene/tm00_derived_catalogs_26Q1/positive_reciprocal_top20_n500.csv.gz"
+      ]
     }
   ],
   "known_non_coverage": [
