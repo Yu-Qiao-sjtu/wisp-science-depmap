@@ -142,3 +142,9 @@ Add an MCP connection with:
 Keep this endpoint loopback-only. It intentionally has no bearer secret because
 it is not exposed to the LAN or public internet. A future remote deployment must
 add TLS and authentication rather than reusing this local configuration.
+
+For the private server deployment, the MCP process binds only to server
+`127.0.0.1:8877`. `scripts/depmap_mcp_tunnel.ps1` forwards it to local
+`127.0.0.1:18877`; configure Wisp Science with the remote-URL transport at
+`http://127.0.0.1:18877/mcp` and no additional authentication. SSH supplies the
+transport authentication and the MCP endpoint is never exposed to the LAN.
