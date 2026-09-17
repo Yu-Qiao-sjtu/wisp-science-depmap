@@ -26,6 +26,7 @@ TM00-03：示例基因对、ESR1 × 全部基因、全基因矩阵
 | `scripts/18_verify_lineage_sparse_networks.R` | 癌种内结果数值抽查脚本 |
 | `scripts/20_build_tlg_tm00_derived_catalogs.R` | 从26Q1全局矩阵派生TLG负相关阈值表和正相关互惠Top20 |
 | `scripts/21_validate_tlg_tm00_derived_catalogs.R` | 验证阈值、互惠排名、覆盖门槛、唯一性和行数 |
+| `scripts/22_validate_tlg_known_pairs.R` | 用原始Gene Effect、相关矩阵和派生目录三路复核已知正负配对 |
 | `scripts/22_finalize_lineage_networks_server.R` | 服务器端覆盖率和结构验收脚本 |
 | `scripts/脚本来源.md` | 原始位置和快照哈希 |
 | `data/输入数据清单.md` | 输入数据结构及筛选规则 |
