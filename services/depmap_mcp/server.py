@@ -573,6 +573,8 @@ class DepMapEvidenceService:
         lineage: str,
         ranking: Literal["selective", "mean_dependency"] = "selective",
         limit: int = 10,
+        exclude_common_essential: bool = False,
+        common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
@@ -583,6 +585,8 @@ class DepMapEvidenceService:
                 "mode": "lineage_dependency",
                 "lineage": lineage,
                 "ranking": ranking,
+                "exclude_common_essential": exclude_common_essential,
+                "common_essential_source": common_essential_source,
                 "limit": limit,
             }
         )
@@ -592,6 +596,8 @@ class DepMapEvidenceService:
             request={
                 "lineage": canonical_lineage,
                 "ranking": ranking,
+                "exclude_common_essential": exclude_common_essential,
+                "common_essential_source": common_essential_source,
                 "limit": limit,
             },
             evidence=item,
@@ -1199,9 +1205,17 @@ def build_mcp_server(
     async def depmap_lineage_dependencies(
         lineage: str,
         ranking: Literal["selective", "mean_dependency"] = "selective",
+        exclude_common_essential: bool = False,
+        common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         limit: int = 10,
     ) -> dict[str, Any]:
-        return await service.lineage_dependencies(lineage, ranking, limit)
+        return await service.lineage_dependencies(
+            lineage,
+            ranking,
+            limit,
+            exclude_common_essential=exclude_common_essential,
+            common_essential_source=common_essential_source,
+        )
 
     @mcp.tool(
         title="DepMap cancer-level direction discovery",

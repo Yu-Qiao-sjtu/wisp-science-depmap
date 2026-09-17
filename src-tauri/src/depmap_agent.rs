@@ -421,6 +421,10 @@ fn depmap_route_schema() -> Value {
                 "enum":["auto","native","remote_mcp"],
                 "description":"Use remote_mcp when the user explicitly requests the configured remote DepMap MCP; otherwise use auto."
             },
+            "exclude_common_essential": {
+                "type":"boolean",
+                "description":"Set true when the user asks to remove genes required by most or all cells. This is distinct from housekeeping-gene filtering."
+            },
             "alternative_intents": {
                 "type":"array",
                 "items":{"type":"string","enum":[
@@ -479,6 +483,10 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let layer = non_empty_arg(args, "layer");
     let evidence_provider =
         non_empty_arg(args, "evidence_provider").unwrap_or_else(|| "auto".to_string());
+    let exclude_common_essential = args
+        .get("exclude_common_essential")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let alternative_intents = args
         .get("alternative_intents")
         .and_then(Value::as_array)
@@ -817,6 +825,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                     "arguments": {
                         "lineage": lineage,
                         "ranking": "selective",
+                        "exclude_common_essential": exclude_common_essential,
+                        "common_essential_source": "depmap_26q1",
                         "limit": 20
                     },
                     "single_call": true
@@ -829,6 +839,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                         "mode": "lineage_dependency",
                         "lineage": lineage,
                         "ranking": "selective",
+                        "exclude_common_essential": exclude_common_essential,
+                        "common_essential_source": "depmap_26q1",
                         "limit": 20
                     },
                     "single_call": true
@@ -2342,6 +2354,8 @@ fn depmap_query_schema() -> Value {
             "omic": {"type":"string","enum":DRUG_OMICS},
             "family": {"type":"string","enum":LINEAGE_NETWORK_FAMILIES},
             "ranking": {"type":"string","enum":LINEAGE_DEPENDENCY_RANKINGS,"description":"For lineage_dependency: selective (default; one-sided FDR-significant lineage-vs-rest effects ordered by precomputed rank) or mean_dependency (descriptive lowest lineage mean Gene Effect)."},
+            "exclude_common_essential": {"type":"boolean","description":"For lineage_dependency: exclude genes labelled common-essential by the selected versioned source."},
+            "common_essential_source": {"type":"string","enum":["depmap_26q1"]},
             "collection": {"type":"string"},
             "term": {"type":"string"},
             "reciprocal": {"type":"boolean"},
@@ -2404,6 +2418,26 @@ fn validated_query(args: &Value) -> Result<Value, String> {
             return Err(format!("unsupported ranking '{ranking}'"));
         }
         query.insert("ranking".into(), Value::String(ranking.to_string()));
+        let exclude_common = args
+            .get("exclude_common_essential")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        query.insert(
+            "exclude_common_essential".into(),
+            Value::Bool(exclude_common),
+        );
+        let source = args
+            .get("common_essential_source")
+            .and_then(Value::as_str)
+            .unwrap_or("depmap_26q1")
+            .trim();
+        if source != "depmap_26q1" {
+            return Err("common_essential_source must be depmap_26q1".into());
+        }
+        query.insert(
+            "common_essential_source".into(),
+            Value::String(source.to_string()),
+        );
     }
     if mode == "lineage_drug" {
         require_allowed(&query, "omic", DRUG_OMICS)?;
@@ -2927,8 +2961,32 @@ mod tests {
         );
         assert_eq!(
             remote_dependency_ranking["recommended_query"]["arguments"],
-            json!({"lineage":"Liver","ranking":"selective","limit":20})
+            json!({"lineage":"Liver","ranking":"selective","exclude_common_essential":false,"common_essential_source":"depmap_26q1","limit":20})
         );
+        let filtered_dependency_ranking = depmap_route(&json!({
+            "intent":"cancer_dependency_ranking",
+            "cancer":"肝癌",
+            "evidence_provider":"remote_mcp",
+            "exclude_common_essential":true
+        }))
+        .unwrap();
+        assert_eq!(
+            filtered_dependency_ranking["recommended_query"]["arguments"]
+                ["exclude_common_essential"],
+            true
+        );
+        let native_filtered_route = depmap_route(&json!({
+            "intent":"cancer_dependency_ranking",
+            "cancer":"肝癌",
+            "exclude_common_essential":true
+        }))
+        .unwrap();
+        let native_filtered =
+            validated_query(&native_filtered_route["recommended_query"]["arguments"]).unwrap();
+        assert_eq!(native_filtered["mode"], "lineage_dependency");
+        assert_eq!(native_filtered["lineage"], "Liver");
+        assert_eq!(native_filtered["exclude_common_essential"], true);
+        assert_eq!(native_filtered["common_essential_source"], "depmap_26q1");
         assert_eq!(
             remote_dependency_ranking["allowed_next_tools"],
             json!(["search_mcp_tools", "use_mcp_tool"])

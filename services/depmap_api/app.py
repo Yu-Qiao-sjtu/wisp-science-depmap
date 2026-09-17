@@ -79,7 +79,7 @@ MODE_OPTIONAL_FIELDS = {
     "analysis_catalog": {"module", "completion_state", "limit"},
     "mutation_anchor": {"event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
-    "lineage_dependency": {"ranking", "limit"},
+    "lineage_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
     "lineage_drug": {"drug", "target", "limit"},
@@ -405,6 +405,8 @@ class QueryRequest(BaseModel):
     completion_state: Literal["COMPLETE", "UNVERIFIED"] | None = None
     anchor_tier: Literal["priority", "strict", "standard"] | None = None
     include_common_essential: bool | None = None
+    exclude_common_essential: bool | None = None
+    common_essential_source: Literal["depmap_26q1"] | None = None
     source: str | None = None
     target: str | None = None
     limit: int | None = Field(default=None, ge=1, le=100)
@@ -432,7 +434,7 @@ class QueryRequest(BaseModel):
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "source", "target", "limit", "event", "lineage",
+            "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage",
@@ -478,7 +480,7 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
-        for name in (supplied - {"limit", "reciprocal", "include_common_essential"}):
+        for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")

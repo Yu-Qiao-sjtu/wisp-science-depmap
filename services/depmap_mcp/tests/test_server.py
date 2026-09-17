@@ -244,12 +244,20 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "mode": "lineage_dependency",
                 "lineage": "Breast",
                 "ranking": "selective",
+                "exclude_common_essential": False,
+                "common_essential_source": "depmap_26q1",
                 "limit": 10,
             },
         )
         self.assertEqual(
             result["request"],
-            {"lineage": "Breast", "ranking": "selective", "limit": 10},
+            {
+                "lineage": "Breast",
+                "ranking": "selective",
+                "exclude_common_essential": False,
+                "common_essential_source": "depmap_26q1",
+                "limit": 10,
+            },
         )
         self.assertEqual(
             result["evidence"]["metric_semantics"]["metric"],
@@ -257,6 +265,12 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("not logFC", result["evidence"]["metric_semantics"]["interpretation"])
         self.assertFalse(result["new_analysis_started"])
+
+        filtered = await self.service.lineage_dependencies(
+            "乳腺癌", "selective", 10, exclude_common_essential=True
+        )
+        self.assertTrue(self.queries[-1]["exclude_common_essential"])
+        self.assertEqual(self.queries[-1]["common_essential_source"], "depmap_26q1")
 
         breast_cancer = await self.service.lineage_dependencies(
             "Breast Cancer", "selective", 10

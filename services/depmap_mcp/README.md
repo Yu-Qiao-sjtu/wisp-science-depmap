@@ -65,6 +65,13 @@ catalog and reports whether the target is eligible and whether a validated
 model is already cached. Training remains a separate explicit workflow, so an
 ambiguous request cannot accidentally launch a large computation.
 
+`depmap_lineage_dependencies` accepts `exclude_common_essential=true` for
+plain-language requests such as “把所有细胞都需要的基因去掉”. It annotates each
+row from the versioned DepMap 26Q1 common-essential asset, reports counts before
+and after filtering, and returns `ANNOTATION_UNAVAILABLE` without silently
+dropping rows when that asset is missing. Housekeeping-gene annotations remain
+a separate concept and are never inferred from gene names or model memory.
+
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It

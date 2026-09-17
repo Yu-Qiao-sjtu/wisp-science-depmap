@@ -525,6 +525,8 @@ class DepMapApiTests(unittest.TestCase):
                 "mode": "lineage_dependency",
                 "lineage": "乳腺癌",
                 "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
                 "limit": 10,
             },
         )
@@ -535,6 +537,8 @@ class DepMapApiTests(unittest.TestCase):
                 "mode": "lineage_dependency",
                 "lineage": "Breast",
                 "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
                 "limit": 10,
             },
         )
