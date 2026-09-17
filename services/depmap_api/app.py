@@ -50,6 +50,7 @@ THREE_D_FAMILIES = {
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 MODE_REQUIRED_FIELDS = {
+    "analysis_catalog": set(),
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
@@ -74,6 +75,7 @@ MODE_REQUIRED_FIELDS = {
     "biomarker_target": {"target"},
 }
 MODE_OPTIONAL_FIELDS = {
+    "analysis_catalog": {"module", "completion_state", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "limit"},
     "lineage_directions": {"limit"},
@@ -385,6 +387,7 @@ class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal[
+        "analysis_catalog",
         "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
@@ -396,6 +399,7 @@ class QueryRequest(BaseModel):
     ]
     gene: str | None = None
     module: str | None = None
+    completion_state: Literal["COMPLETE", "UNVERIFIED"] | None = None
     source: str | None = None
     target: str | None = None
     limit: int | None = Field(default=None, ge=1, le=100)
@@ -423,7 +427,7 @@ class QueryRequest(BaseModel):
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "module", "source", "target", "limit", "event", "lineage",
+            "gene", "module", "completion_state", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage",
@@ -441,7 +445,7 @@ class QueryRequest(BaseModel):
             raise ValueError(
                 f"unexpected fields for {self.mode}: {', '.join(sorted(unexpected))}"
             )
-        if self.module is not None and self.module not in MATRIX_MODULES:
+        if self.module is not None and self.mode != "analysis_catalog" and self.module not in MATRIX_MODULES:
             raise ValueError("unsupported module")
         if self.event is not None and self.mode != "synthetic_lethal" and self.event not in LINEAGE_EVENTS:
             raise ValueError("unsupported lineage event")
@@ -724,6 +728,56 @@ def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> di
         execution_policy="nested LASSO/random forest is run on demand per target and cached; eligibility is prioritization, not exclusion",
         entrypoint="analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/build_predictive_biomarker_model.R",
         provenance=[str(catalog), *([str(index)] if used_index else []), *([str(validation)] if cached else [])],
+    )
+
+
+def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    index = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    if not index.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="analysis_catalog",
+            reason="the unified directory index is not installed",
+        )
+    clauses: list[str] = []
+    params: list[Any] = []
+    module = query.get("module")
+    state = query.get("completion_state") or "COMPLETE"
+    if module:
+        clauses.append("module = ?")
+        params.append(module)
+    if state:
+        clauses.append("completion_state = ?")
+        params.append(state)
+    limit = min(int(query.get("limit") or 100), 500)
+    sql = (
+        "SELECT analysis_id,module,analysis_unit,completion_state,completion_basis,"
+        "release,family,dataset,method,manifest_path FROM analysis_catalog"
+    )
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY module,analysis_unit LIMIT ?"
+    params.append(limit)
+    try:
+        with sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute(sql, params)]
+            totals = {
+                row[0]: row[1]
+                for row in db.execute(
+                    "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
+                )
+            }
+    except sqlite3.Error as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="analysis_catalog",
+            reason=f"the unified directory index could not be read: {exc}",
+        )
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
+        reason="completed analysis directory entries from the unified relative-path catalog",
+        rows=rows, returned_count=len(rows), state_totals=totals,
+        path_policy="knowledge-root-relative paths only",
+        provenance=[index.name],
     )
 
 
@@ -2135,6 +2189,8 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
 
 
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    if query["mode"] == "analysis_catalog":
+        return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
     if query["mode"] == "lineage_catalog":
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":

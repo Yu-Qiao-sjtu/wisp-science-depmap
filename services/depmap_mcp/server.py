@@ -61,6 +61,16 @@ GLOBAL_GENE_MODULES = (
 # and never scans the scientific result matrices.
 INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
     {
+        "intent": "analysis_inventory",
+        "description": "List completed DepMap analysis units from the unified server directory index without scanning result directories.",
+        "required": [],
+        "optional": ["module", "limit"],
+        "examples_zh": ["服务器完成了哪些分析", "列出突变模块的完成项目", "查看DepMap分析目录"],
+        "precise_prompt_template_zh": "从统一目录索引列出已完成的DepMap分析，可选限定模块。",
+        "confusable_with": ["cancer_inventory"],
+        "mcp_tool": "depmap_analysis_catalog",
+    },
+    {
         "intent": "mutation_anchor_discovery",
         "description": "Find eligible mutation anchor genes inside one cancer lineage.",
         "required": ["lineage"],
@@ -837,6 +847,15 @@ class DepMapEvidenceService:
             request={"target_gene": symbol}, evidence=item,
         )
 
+    async def analysis_catalog(self, module: str | None = None, limit: int = 100) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "analysis_catalog", "completion_state": "COMPLETE", "limit": limit,
+        }
+        if module:
+            query["module"] = module.strip()
+        item = await self._execute(query)
+        return self._envelope(tool="depmap_analysis_catalog", request=query, evidence=item)
+
     async def subtype_evidence(
         self,
         gene: str | None = None,
@@ -1055,6 +1074,18 @@ def build_mcp_server(
         stateless_http=True,
         max_request_body_size=64 * 1024,
     )
+
+    @mcp.tool(
+        title="DepMap completed analysis catalog",
+        description=(
+            "List completed analysis units from the unified SQLite directory index. "
+            "Returns knowledge-root-relative locations and metadata only; it does not scan matrices."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_analysis_catalog(module: str | None = None, limit: int = 100) -> dict[str, Any]:
+        return await service.analysis_catalog(module, limit)
 
     @mcp.tool(
         title="DepMap analysis capability catalog",

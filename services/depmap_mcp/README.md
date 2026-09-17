@@ -33,6 +33,8 @@ The exposed tools are intentionally small:
   tool-routing catalog. It reads no matrix rows and is suitable for one-time
   discovery at the start of an Agent session;
 
+- `depmap_analysis_catalog`: completed analysis units from the unified SQLite
+  directory index, optionally restricted to one module;
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

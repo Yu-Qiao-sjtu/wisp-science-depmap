@@ -22,6 +22,13 @@ files when the index is absent or unreadable. Result files and manifests remain
 authoritative. A biomarker lookup reports eligibility and validated cache state;
 it does not start model training.
 
+Schema v2 also contains a unified directory catalog. `analysis_catalog` records
+every discovered manifest and its completion evidence, `artifact_catalog`
+records files using knowledge-root-relative paths, and `capability_catalog`
+maps query modes to Agent intents. Large matrices remain in their original
+RDS/Parquet/CSV shards; the catalog stores location and metadata only. Query
+completed units through the bounded `analysis_catalog` API mode.
+
 Required environment variables:
 
 - `DEPMAP_KNOWLEDGE_ROOT`

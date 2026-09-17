@@ -92,6 +92,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(intents),
             {
+                "analysis_inventory",
                 "mutation_anchor_discovery",
                 "mutation_to_dependency",
                 "dependency_to_mutation",
@@ -119,6 +120,19 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("lineage", intents["mutation_to_dependency"]["optional"])
         self.assertNotIn("lineage", intents["dependency_to_mutation"]["optional"])
+
+    async def test_analysis_catalog_uses_completed_directory_index(self):
+        result = await self.service.analysis_catalog("癌种内突变锚定基因选择", 25)
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "analysis_catalog",
+                "completion_state": "COMPLETE",
+                "module": "癌种内突变锚定基因选择",
+                "limit": 25,
+            },
+        )
+        self.assertEqual(result["request"]["mode"], "analysis_catalog")
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
@@ -398,6 +412,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     names,
                     {
+                        "depmap_analysis_catalog",
                         "depmap_capabilities",
                         "depmap_status",
                         "depmap_resolve_lineage",
