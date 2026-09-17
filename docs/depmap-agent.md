@@ -228,6 +228,28 @@ precomputed_query
                                       --> interpretation / knowledge update
 ```
 
+### Natural-language routing and ambiguity
+
+The configured chat model proposes a typed intent and extracts only entities
+present in the user's message. Model quality affects first-pass recall, but it
+does not authorize a scientific query: the host validates the closed schema,
+required entities, lineage vocabulary, and ambiguity state. The remote MCP
+publishes `depmap_capabilities`, a lightweight catalog of supported intents,
+representative Chinese wording, required fields, confusable directions, and
+the bounded tool for each capability. Reading it does not scan result matrices.
+
+When mutation-to-dependency and dependency-to-mutation (or another material
+scientific direction) both remain plausible, the router returns
+`decision=clarify`. The Agent asks one short question and does not query
+evidence until the direction is resolved. A model-generated confidence number
+is not treated as a calibrated probability. Missing optional display fields
+may use documented defaults; missing or ambiguous scientific direction may not.
+
+The product contract therefore does not depend on enumerating every synonym.
+Examples and aliases improve recall, while closed schemas, deterministic
+validation, clarification, and regression cases prevent silent execution of a
+misunderstood request.
+
 The native `depmap_validate_run` gate requires `RunStatus=succeeded`, exit code
 0, declared `run_manifest.json`/`result.json`/`qc.json` outputs, R language,
 release and target identity, coherent cohort counts, and passing QC. A file on

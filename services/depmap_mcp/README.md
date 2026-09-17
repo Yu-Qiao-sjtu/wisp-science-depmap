@@ -29,6 +29,10 @@ powershell -ExecutionPolicy Bypass -File scripts/start_depmap_mcp_local.ps1 -Tra
 
 The exposed tools are intentionally small:
 
+- `depmap_capabilities`: lightweight intent, required-entity, ambiguity, and
+  tool-routing catalog. It reads no matrix rows and is suitable for one-time
+  discovery at the start of an Agent session;
+
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

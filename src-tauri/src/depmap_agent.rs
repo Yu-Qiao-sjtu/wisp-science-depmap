@@ -401,6 +401,24 @@ fn depmap_route_schema() -> Value {
             "source_gene": {"type":"string"},
             "target_gene": {"type":"string"},
             "drug": {"type":"string"},
+            "alternative_intents": {
+                "type":"array",
+                "items":{"type":"string","enum":[
+                    "provider_status", "lineage_resolution", "cancer_inventory",
+                    "cancer_dependency_ranking", "cancer_direction_discovery",
+                    "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
+                    "evidence_comparison", "study_support_mapping",
+                    "result_interpretation", "topic_exploration",
+                    "literature_validation", "new_analysis", "report_generation"
+                ]},
+                "maxItems":3,
+                "uniqueItems":true
+            },
+            "ambiguity": {
+                "type":"string",
+                "enum":["none", "missing_entity", "critical_direction", "out_of_scope"]
+            },
+            "ambiguity_reason": {"type":"string","maxLength":500},
             "explicit_workflow_request": {"type":"boolean"}
         },
         "required":["intent"],
@@ -423,6 +441,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let source_gene = non_empty_arg(args, "source_gene");
     let target_gene = non_empty_arg(args, "target_gene");
     let drug = non_empty_arg(args, "drug");
+    let alternative_intents = args
+        .get("alternative_intents")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .filter(|candidate| candidate != &intent)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let ambiguity = args
+        .get("ambiguity")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let ambiguity_reason = non_empty_arg(args, "ambiguity_reason");
     let explicit_workflow = args
         .get("explicit_workflow_request")
         .and_then(Value::as_bool)
@@ -552,7 +587,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             _ => unreachable!(),
         };
 
-    let requires_user_input = !missing.is_empty();
+    let requires_clarification = matches!(ambiguity, "critical_direction" | "out_of_scope");
+    let requires_user_input = !missing.is_empty() || requires_clarification;
     if explicit_workflow && !requires_user_input {
         execution_level = "L4_DURABLE";
         approval = true;
@@ -602,7 +638,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     };
     Ok(json!({
         "state": if requires_user_input { "needs_input" } else { "routed" },
+        "decision": if requires_clarification { "clarify" } else if !missing.is_empty() { "collect_missing_fields" } else { "execute" },
         "intent": intent,
+        "alternative_intents": alternative_intents,
+        "ambiguity": ambiguity,
+        "ambiguity_reason": ambiguity_reason,
         "execution_level": execution_level,
         "requires_user_input": requires_user_input,
         "missing_fields": missing,
@@ -622,7 +662,9 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "guardrails": {
             "route_is_evidence": false,
             "workflow_semantic_match_alone_is_sufficient": false,
-            "do_not_invent_missing_entities": true
+            "do_not_invent_missing_entities": true,
+            "model_confidence_is_not_a_calibrated_probability": true,
+            "critical_direction_ambiguity_requires_clarification": true
         }
     }))
 }
@@ -2660,6 +2702,27 @@ mod tests {
         assert_eq!(schema["required"], json!(["intent"]));
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema.get("oneOf").is_none());
+        assert_eq!(schema["properties"]["alternative_intents"]["maxItems"], 3);
+    }
+
+    #[test]
+    fn agent_route_blocks_critical_direction_ambiguity() {
+        let route = depmap_route(&json!({
+            "intent":"gene_pair_evidence",
+            "source_gene":"TP53",
+            "target_gene":"GPX4",
+            "alternative_intents":["gene_evidence"],
+            "ambiguity":"critical_direction",
+            "ambiguity_reason":"The request does not say whether mutation or dependency is fixed."
+        }))
+        .unwrap();
+        assert_eq!(route["state"], "needs_input");
+        assert_eq!(route["decision"], "clarify");
+        assert_eq!(route["requires_user_input"], true);
+        assert_eq!(
+            route["guardrails"]["critical_direction_ambiguity_requires_clarification"],
+            true
+        );
     }
 
     #[test]

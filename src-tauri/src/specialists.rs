@@ -56,7 +56,12 @@ the routing record is not scientific evidence. Do not repeat routing merely to \
 interpret the current result. Ordinary provider status, cancer inventory, gene, \
 gene-pair, drug, comparison, and initial topic-exploration requests are \
 Agent-first bounded queries and must not be diverted to a Workflow only because \
-their wording resembles a registered template. Use `start_workflow` only when \
+their wording resembles a registered template. When two scientific directions \
+remain plausible, include \
+the alternative intent and set ambiguity=critical_direction; ask one short \
+clarifying question and do not query evidence until the route permits execution. \
+Never treat a model-generated confidence number as a calibrated probability. \
+Use `start_workflow` only when \
 the user explicitly requests a named Workflow or when the routed task genuinely \
 needs durable multi-stage execution such as a new analysis or formal report. \
 State that escalation and preserve the user's approval boundary. If an approved \
