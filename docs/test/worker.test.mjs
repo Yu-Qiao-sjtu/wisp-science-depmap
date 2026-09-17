@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { byteRange } from "../src/worker.mjs";
 
-const key = `releases/v1.12.0/${"a".repeat(64)}/wisp-science_1.12.0_x64.dmg`;
+const key = `releases/v1.12.0/${"a".repeat(64)}/wisp-depmap_1.12.0_x64.dmg`;
 function fixture() {
   const calls = [];
   const metadata = { size: 10, etag: "etag", httpEtag: '"etag"' };
@@ -34,7 +34,7 @@ test("streams installer with original filename and immutable cache; HEAD skips b
   const { env, calls } = fixture();
   const response = await worker.fetch(request(`/downloads/${key}`), env);
   assert.equal(await response.text(), "0123456789");
-  assert.match(response.headers.get("content-disposition"), /wisp-science_1.12.0_x64.dmg/);
+  assert.match(response.headers.get("content-disposition"), /wisp-depmap_1.12.0_x64.dmg/);
   assert.match(response.headers.get("cache-control"), /immutable/);
   assert.equal(response.headers.get("content-length"), "10");
   calls.length = 0;

@@ -9,7 +9,7 @@ const suffixes = {
 const manifest = {
   schema: 1, tag: "v1.12.0",
   packages: Object.entries(suffixes).map(([id, suffix]) => {
-    const name = `wisp-science_1.12.0_${suffix}`;
+    const name = `wisp-depmap_1.12.0_${suffix}`;
     return { id, name, sha256: "a".repeat(64), size: 24000000, key: `releases/v1.12.0/${"a".repeat(64)}/${name}` };
   }),
 };
@@ -39,7 +39,7 @@ test("all eight packages resolve exact versioned mirror and GitHub links", async
     await page.locator("#download-arch").selectOption(arch);
     await page.locator("#download-format").selectOption(format);
     await expect(page.locator("#download-primary")).toHaveAttribute("href", `https://wisp-science.sfl.bio/downloads/${asset.key}`);
-    await expect(page.locator("#download-github")).toHaveAttribute("href", `https://github.com/xuzhougeng/wisp-science/releases/download/v1.12.0/${asset.name}`);
+    await expect(page.locator("#download-github")).toHaveAttribute("href", `https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases/download/v1.12.0/${asset.name}`);
     await expect(page.locator("#package-name")).toHaveText(asset.name);
   }
 });
@@ -56,7 +56,7 @@ test("Mac never guesses architecture, and switching languages preserves selectio
   await page.locator("#download-arch").selectOption("arm64");
   await page.getByRole("button", { name: "EN", exact: true }).click();
   await expect(page.locator("#download-title")).toHaveText("Choose the version for your computer");
-  await expect(page).toHaveTitle(/Wisp Science/);
+  await expect(page).toHaveTitle(/wisp-depmap/);
   await expect(page.locator("#release-status")).toHaveText("Available release v1.12.0");
   await expect(page.locator("#download-arch")).toHaveValue("arm64");
   await expect(page.locator("#download-primary")).toHaveText("Download from Cloudflare");
@@ -73,7 +73,7 @@ for (const failure of ["network", "invalid"]) {
     await expect(page.locator("#release-status")).toContainText("temporarily unavailable");
     await page.locator("#download-os").selectOption("windows");
     await expect(page.locator("#download-primary")).not.toHaveAttribute("href");
-    await expect(page.locator("#download-github")).toHaveAttribute("href", "https://github.com/xuzhougeng/wisp-science/releases/latest");
+    await expect(page.locator("#download-github")).toHaveAttribute("href", "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases/latest");
   });
 }
 

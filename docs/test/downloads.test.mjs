@@ -11,7 +11,7 @@ const release = () => ({ tagName: "v1.12.0", isDraft: false, isPrerelease: false
 
 test("selects eight exact installer names and excludes updater/source archives", () => {
   const data = release();
-  data.assets.push({ name: "latest.json", size: 123 }, { name: "wisp-science_1.12.0_x64.app.tar.gz", size: 123 });
+  data.assets.push({ name: "latest.json", size: 123 }, { name: "wisp-depmap_1.12.0_x64.app.tar.gz", size: 123 });
   assert.equal(selectAssets(data).length, 8);
   data.assets.pop();
   data.assets.shift();
@@ -31,7 +31,7 @@ test("Mac detection chooses only OS, mobile and unknown platforms are not guesse
 });
 
 test("download paths reject traversal, unknown files and updater manifests", () => {
-  const key = `releases/v1.12.0/${"a".repeat(64)}/wisp-science_1.12.0_x64.dmg`;
+  const key = `releases/v1.12.0/${"a".repeat(64)}/wisp-depmap_1.12.0_x64.dmg`;
   assert.ok(validDownloadKey(key));
   for (const value of ["latest.json", "../secret", key + "/extra", key.replace("1.12.0_x64", "1.11.0_x64"), key.replace("x64.dmg", "x64.app.tar.gz")]) {
     assert.equal(validDownloadKey(value), false);
