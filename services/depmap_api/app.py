@@ -15,6 +15,7 @@ import logging
 import os
 import csv
 import re
+import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,8 @@ THREE_D_FAMILIES = {
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 MODE_REQUIRED_FIELDS = {
+    "analysis_catalog": set(),
+    "mutation_anchor": {"lineage"},
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
@@ -70,8 +73,11 @@ MODE_REQUIRED_FIELDS = {
     "three_d": {"family"},
     "tcga_expression_survival": {"gene"},
     "tf_dependency": {"source"},
+    "biomarker_target": {"target"},
 }
 MODE_OPTIONAL_FIELDS = {
+    "analysis_catalog": {"module", "completion_state", "limit"},
+    "mutation_anchor": {"event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "limit"},
     "lineage_directions": {"limit"},
@@ -85,6 +91,7 @@ MODE_OPTIONAL_FIELDS = {
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"target", "limit"},
+    "biomarker_target": set(),
 }
 LINEAGE_NETWORK_FAMILIES = {
     "effect_correlation",
@@ -382,6 +389,8 @@ class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal[
+        "analysis_catalog",
+        "mutation_anchor",
         "catalog", "lineage_catalog", "lineage_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
@@ -389,9 +398,13 @@ class QueryRequest(BaseModel):
         "true_love", "synthetic_lethal", "three_d",
         "tcga_expression_survival",
         "tf_dependency",
+        "biomarker_target",
     ]
     gene: str | None = None
     module: str | None = None
+    completion_state: Literal["COMPLETE", "UNVERIFIED"] | None = None
+    anchor_tier: Literal["priority", "strict", "standard"] | None = None
+    include_common_essential: bool | None = None
     source: str | None = None
     target: str | None = None
     limit: int | None = Field(default=None, ge=1, le=100)
@@ -419,7 +432,7 @@ class QueryRequest(BaseModel):
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "module", "source", "target", "limit", "event", "lineage",
+            "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage",
@@ -437,7 +450,7 @@ class QueryRequest(BaseModel):
             raise ValueError(
                 f"unexpected fields for {self.mode}: {', '.join(sorted(unexpected))}"
             )
-        if self.module is not None and self.module not in MATRIX_MODULES:
+        if self.module is not None and self.mode != "analysis_catalog" and self.module not in MATRIX_MODULES:
             raise ValueError("unsupported module")
         if self.event is not None and self.mode != "synthetic_lethal" and self.event not in LINEAGE_EVENTS:
             raise ValueError("unsupported lineage event")
@@ -465,7 +478,7 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
-        for name in (supplied - {"limit", "reciprocal"}):
+        for name in (supplied - {"limit", "reciprocal", "include_common_essential"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
@@ -647,6 +660,174 @@ def _read_csv_records(path: Path) -> list[dict[str, Any]]:
             {key: _coerce_csv_value(value) for key, value in row.items()}
             for row in csv.DictReader(handle)
         ]
+
+
+def _indexed_true_love_rows(
+    settings: Settings, *, catalog: str, coverage: str,
+    gene: str | None, partner: str | None, limit: int,
+) -> list[dict[str, Any]] | None:
+    """Return bounded indexed rows, or None when the optional index is unavailable."""
+    path = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    if not path.is_file():
+        return None
+    symbol = gene.strip().upper() if gene else None
+    mate = partner.strip().upper() if partner else None
+    clauses = ["catalog = ?", "coverage = ?"]
+    params: list[Any] = [catalog, coverage]
+    if symbol:
+        clauses.append("(gene_a = ? OR gene_b = ?)")
+        params.extend((symbol, symbol))
+    if mate:
+        clauses.append("(gene_a = ? OR gene_b = ?)")
+        params.extend((mate, mate))
+    params.append(limit)
+    uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
+    db: sqlite3.Connection | None = None
+    try:
+        db = sqlite3.connect(uri, uri=True)
+        rows = db.execute(
+                f"SELECT row_json FROM true_love WHERE {' AND '.join(clauses)} "
+                "ORDER BY sort_1, sort_2 LIMIT ?", params,
+        ).fetchall()
+    except (sqlite3.Error, OSError):
+        LOGGER.exception("DepMap query index unavailable; falling back to source files")
+        return None
+    finally:
+        if db is not None:
+            db.close()
+    return [{key: _coerce_csv_value(value) for key, value in json.loads(row[0]).items()} for row in rows]
+
+
+def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    target = query["target"].strip().upper()
+    index = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    row: dict[str, Any] | None = None
+    used_index = False
+    if index.is_file():
+        db: sqlite3.Connection | None = None
+        try:
+            db = sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)
+            hit = db.execute(
+                "SELECT row_json FROM biomarker_target WHERE target_gene = ?", (target,)
+            ).fetchone()
+            if hit:
+                row = {key: _coerce_csv_value(value) for key, value in json.loads(hit[0]).items()}
+            used_index = True
+        except (sqlite3.Error, OSError):
+            LOGGER.exception("Biomarker target index unavailable; falling back to CSV")
+        finally:
+            if db is not None:
+                db.close()
+    module = settings.knowledge_root / "analysis-modules" / "表达基因-CRISPR基因依赖相关性分析"
+    catalog = module / "results" / "predictive_biomarker" / "target_eligibility_26Q1" / "target_eligibility_catalog.csv"
+    if row is None and not used_index and catalog.is_file():
+        row = next((item for item in _read_csv_records(catalog) if item.get("target_gene") == target), None)
+    cache = module / "results" / "predictive_biomarker" / f"{target}_26Q1"
+    validation = cache / "validation.json"
+    cached = validation.is_file()
+    return _evidence_response(
+        "FOUND" if row else "NOT_COMPUTED", mode="biomarker_target",
+        reason=("target eligibility and cached-model state found" if row else "target is absent from the Gene Effect modeling catalog"),
+        target=target, eligibility=row, cached_model=cached,
+        cached_model_status=(json.loads(validation.read_text(encoding="utf-8-sig")).get("status") if cached else None),
+        execution_policy="nested LASSO/random forest is run on demand per target and cached; eligibility is prioritization, not exclusion",
+        entrypoint="analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/build_predictive_biomarker_model.R",
+        provenance=[str(catalog), *([str(index)] if used_index else []), *([str(validation)] if cached else [])],
+    )
+
+
+def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    index = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    if not index.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="analysis_catalog",
+            reason="the unified directory index is not installed",
+        )
+    clauses: list[str] = []
+    params: list[Any] = []
+    module = query.get("module")
+    state = query.get("completion_state") or "COMPLETE"
+    if module:
+        clauses.append("module = ?")
+        params.append(module)
+    if state:
+        clauses.append("completion_state = ?")
+        params.append(state)
+    limit = min(int(query.get("limit") or 100), 500)
+    sql = (
+        "SELECT analysis_id,module,analysis_unit,completion_state,completion_basis,"
+        "release,family,dataset,method,manifest_path FROM analysis_catalog"
+    )
+
+
+def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    lineage = _canonical_lineage_label(query["lineage"])
+    lineage_dir = lineage.replace(" ", "_").replace("/", "_")
+    root = (
+        settings.knowledge_root / "analysis-modules" / "癌种内突变锚定基因选择"
+        / "cancer_anchor_catalog_v2" / "by_cancer" / lineage_dir
+    )
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="mutation_anchor", lineage=lineage,
+            reason="the requested lineage has no completed mutation-anchor catalog",
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    if str(manifest.get("status", "")).lower() != "complete":
+        return _evidence_response(
+            "NOT_COMPUTED", mode="mutation_anchor", lineage=lineage,
+            reason="the mutation-anchor catalog is not marked complete", manifest=manifest,
+        )
+    tier = query.get("anchor_tier") or "priority"
+    relative = {
+        "priority": "results/priority_role_matched_candidates.csv",
+        "strict": "results/strict_functional_candidates.csv",
+        "standard": "results/functional_candidates.csv",
+    }[tier]
+    path = root / relative
+    rows = _read_csv_records(path) if path.is_file() else []
+    event = query.get("event")
+    if event:
+        rows = [row for row in rows if str(row.get("matrix", "")).lower() == event.lower()]
+    if not query.get("include_common_essential", False):
+        rows = [row for row in rows if str(row.get("is_common_essential", "")).upper() != "TRUE"]
+    limit = min(int(query.get("limit") or 20), 100)
+    rows = rows[:limit]
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="mutation_anchor", lineage=lineage,
+        reason="eligible mutation anchors with analyzable Mut/WT support; candidate status is not a dependency association",
+        anchor_tier=tier, event=event, rows=rows, returned_count=len(rows),
+        cohort_n=manifest.get("cohort_n"), thresholds=manifest.get("thresholds"),
+        event_definitions=manifest.get("event_definitions"), manifest=manifest,
+        provenance=[str(manifest_path), str(path)],
+    )
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY module,analysis_unit LIMIT ?"
+    params.append(limit)
+    try:
+        with sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute(sql, params)]
+            totals = {
+                row[0]: row[1]
+                for row in db.execute(
+                    "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
+                )
+            }
+    except sqlite3.Error as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="analysis_catalog",
+            reason=f"the unified directory index could not be read: {exc}",
+        )
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
+        reason="completed analysis directory entries from the unified relative-path catalog",
+        rows=rows, returned_count=len(rows), state_totals=totals,
+        path_policy="knowledge-root-relative paths only",
+        provenance=[index.name],
+    )
 
 
 def _complete_module(
@@ -889,7 +1070,14 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         )
     gene = query.get("gene")
     partner = query.get("partner")
-    rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
+    index_coverage = "all" if catalog == "stable_negative_rank1" else coverage
+    rows = _indexed_true_love_rows(
+        settings, catalog=catalog, coverage=index_coverage,
+        gene=gene, partner=partner, limit=int(query.get("limit", 20)),
+    )
+    used_index = rows is not None
+    if rows is None:
+        rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
     if catalog == "stable_negative_rank1":
         rows.sort(key=lambda row: (-float(row.get("bootstrap_reciprocal_stability") or 0), float(row.get("worst_direction_fdr") or 1), -abs(float(row.get("strongest_absolute_correlation") or 0))))
     elif catalog == "negative_r_lt_minus_0_3":
@@ -905,7 +1093,7 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         catalog=catalog, coverage=(None if catalog == "stable_negative_rank1" else coverage), rows=rows[:limit],
         summary={"matched_pair_count": len(rows), "returned_count": min(limit, len(rows)), "stability_layer": path == stable_path},
         manifest=selected_manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[str(root / "manifest.json"), str(path), *([str(settings.knowledge_root / "depmap-26q1-query-index.sqlite")] if used_index else [])],
     )
 
 
@@ -2050,6 +2238,10 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
 
 
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    if query["mode"] == "analysis_catalog":
+        return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
+    if query["mode"] == "mutation_anchor":
+        return await asyncio.to_thread(_run_mutation_anchor_query, settings, query)
     if query["mode"] == "lineage_catalog":
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":
@@ -2082,6 +2274,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_coamplification_query, settings, query)
     if query["mode"] == "true_love":
         return await asyncio.to_thread(_run_true_love_query, settings, query)
+    if query["mode"] == "biomarker_target":
+        return await asyncio.to_thread(_run_biomarker_target_query, settings, query)
     if query["mode"] == "synthetic_lethal":
         return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
     if query["mode"] == "three_d":

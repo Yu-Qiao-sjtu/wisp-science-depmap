@@ -57,6 +57,8 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
             "query_precomputed_correlations", "route_drug_analysis",
             "separate_ora_method", "requested_gene_sets_required",
             "complete_lineage_ranking_required",
+            "train_predictive_biomarker_model",
+            "clarify_dependency_target_gene",
         }
         examples = routing["examples"]
         self.assertEqual({x["expected"] for x in examples}, allowed)
@@ -71,6 +73,21 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
         for aliases in routing["synonyms"].values():
             self.assertEqual(len(aliases), len(set(aliases)))
             self.assertTrue(all(alias.strip() for alias in aliases))
+
+    def test_predictive_biomarker_operation_requires_target_and_nested_validation(self):
+        manifest_path = self.repo_root / "skills" / "depmap-coding-agent" / "references" / "capability-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capability = next(item for item in manifest["capabilities"] if item["id"] == "predictive_biomarkers")
+        operation = next(item for item in capability["operations"] if item["id"] == "train_expression_dependency_model")
+        self.assertEqual(operation["execution_mode"], "on_demand_cached")
+        self.assertEqual(operation["required_entities"], ["dependency_target_gene"])
+        self.assertEqual(operation["validation"], ["nested_cross_validation", "leave_one_lineage_out"])
+
+        intent_path = self.repo_root / "analysis-modules" / "表达基因-CRISPR基因依赖相关性分析" / "module.intent.json"
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        query = intent["query_contract"]["predictive_biomarker_model"]
+        self.assertEqual(query["operation_id"], "train_expression_dependency_model")
+        self.assertEqual(query["required_entities"], ["dependency_target_gene"])
 
     def test_on_demand_gsea_capability_has_reviewed_entrypoint_and_defaults(self):
         manifest_path = (

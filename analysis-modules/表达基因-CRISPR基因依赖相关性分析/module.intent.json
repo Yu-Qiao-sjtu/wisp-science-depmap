@@ -35,6 +35,21 @@
         "min_pair_fraction": 0.8
       }
     },
+    "predictive_biomarker_model": {
+      "capability_id": "predictive_biomarkers",
+      "operation_id": "train_expression_dependency_model",
+      "execution_mode": "on_demand_cached",
+      "entrypoint": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/build_predictive_biomarker_model.R",
+      "required_entities": ["dependency_target_gene"],
+      "default_parameters": {
+        "outer_folds": 5,
+        "inner_folds": 5,
+        "top_features": 50,
+        "lineage_stratified": true,
+        "leave_one_lineage_out": true,
+        "feature_set": "all_expression_genes"
+      }
+    },
     "lineage_pathway_context": {
       "mode": "enrichment",
       "module": "lineage_gene_enrichment",
@@ -42,8 +57,8 @@
       "gsea_equivalent": false
     }
   },
-  "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖", "高表达时依赖哪些通路", "表达依赖富集", "表达依赖GSEA", "依赖通路富集"],
-  "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency", "expression dependency enrichment", "dependency pathway GSEA", "pathways associated with high gene expression"],
+  "intent_terms_zh": ["表达与依赖相关", "表达预测依赖", "高表达依赖", "表达基因和敲除敏感性", "基因表达量与基因依赖", "表达生物标志物模型", "预测基因依赖", "LASSO标志物", "随机森林标志物", "跨癌种验证", "高表达时依赖哪些通路", "表达依赖富集", "表达依赖GSEA", "依赖通路富集"],
+  "intent_terms_en": ["expression dependency", "expression-to-dependency", "expression biomarker for dependency", "predict dependency from expression", "LASSO biomarker panel", "random forest biomarker", "leave-one-lineage-out validation", "expression dependency enrichment", "dependency pathway GSEA", "pathways associated with high gene expression"],
   "semantic_routing": {
     "matching_policy": "semantic_with_context_not_keyword_execution",
     "synonyms": {
@@ -81,6 +96,9 @@
       {"text": "什么是GSEA？", "expected": "explain_only"},
       {"text": "你能做富集分析吗？", "expected": "explain_only"},
       {"text": "ESR1表达与哪些基因依赖相关？", "expected": "query_precomputed_correlations"},
+      {"text": "用表达建立ESR1依赖的LASSO和随机森林biomarker模型", "expected": "train_predictive_biomarker_model", "target_gene": "ESR1"},
+      {"text": "验证表达特征能不能跨癌种预测GPX4依赖", "expected": "train_predictive_biomarker_model", "target_gene": "GPX4", "validation": "leave_one_lineage_out"},
+      {"text": "建立表达biomarker模型", "expected": "clarify_dependency_target_gene"},
       {"text": "ESR1和FOXA1是否相关？", "expected": "clarify"},
       {"text": "ESR1高表达与哪些药物敏感性相关？", "expected": "route_drug_analysis"},
       {"text": "对ESR1表达依赖结果做ORA", "expected": "separate_ora_method"},
@@ -100,6 +118,14 @@
       "capability_id": "gene_to_dependency",
       "operation_id": "pathway_enrichment",
       "cache_policy": "reuse_exact_release_gene_scope_collection_database_rank_and_pair_threshold_match"
+    },
+    "predictive_biomarker_model": {
+      "intent": "train and independently validate an expression model for a fixed CRISPR dependency target",
+      "trigger_requires": ["dependency_target_gene", "model_training_or_validation_language"],
+      "action": "execute_predictive_biomarker_model",
+      "capability_id": "predictive_biomarkers",
+      "operation_id": "train_expression_dependency_model",
+      "cache_policy": "reuse_exact_release_target_feature_policy_folds_seed_match"
     }
   },
   "sign_interpretation": {

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import hashlib
 import json
 import os
+import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -59,88 +62,8 @@ GLOBAL_GENE_MODULES = (
 
 # Small routing catalog loaded once per Agent session. It describes capabilities
 # and never scans the scientific result matrices.
-INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
-    {
-        "intent": "mutation_anchor_discovery",
-        "description": "Find eligible mutation anchor genes inside one cancer lineage.",
-        "required": ["lineage"],
-        "optional": ["event", "limit"],
-        "examples_zh": ["肺癌有哪些突变基因可以选", "在结肠癌里选突变锚点"],
-        "precise_prompt_template_zh": "在{lineage}中列出可作为后续依赖分析锚点的{event}突变基因，并说明样本数与筛选依据。",
-        "confusable_with": ["mutation_to_dependency"],
-        "mcp_tool": "depmap_lineage_direction_discovery",
-    },
-    {
-        "intent": "mutation_to_dependency",
-        "description": "Fix a mutated source gene and rank associated CRISPR dependency targets.",
-        "required": ["source_gene"],
-        "optional": ["event", "target_gene", "limit"],
-        "examples_zh": ["TP53突变后依赖哪些基因", "固定KRAS突变看脆弱性"],
-        "precise_prompt_template_zh": "在泛癌范围固定{source_gene}的{event}突变，查询相关的CRISPR dependency靶基因。",
-        "confusable_with": ["dependency_to_mutation"],
-        "mcp_tool": "depmap_synthetic_lethal_evidence",
-    },
-    {
-        "intent": "dependency_to_mutation",
-        "description": "Fix a CRISPR dependency target and find mutation events associated with it.",
-        "required": ["target_gene"],
-        "optional": ["event", "source_gene", "limit"],
-        "examples_zh": ["哪些突变会影响GPX4依赖", "固定TP53 dependency找突变"],
-        "precise_prompt_template_zh": "在泛癌范围固定{target_gene} dependency，查询哪些{event}突变与其依赖变化相关。",
-        "confusable_with": ["mutation_to_dependency"],
-        "mcp_tool": "depmap_synthetic_lethal_evidence",
-    },
-    {
-        "intent": "gene_pair_evidence",
-        "description": "Compare coexpression, CRISPR codependency, and expression-to-dependency evidence for two genes.",
-        "required": ["source_gene", "target_gene"],
-        "optional": ["lineage"],
-        "examples_zh": ["ESR1和FOXA1相关吗", "比较两个基因的表达相关和共依赖"],
-        "precise_prompt_template_zh": "比较{source_gene}与{target_gene}的共表达、CRISPR共依赖和表达—依赖关联，并分别标明数据模态。",
-        "confusable_with": [],
-        "mcp_tool": "depmap_pair_evidence",
-    },
-    {
-        "intent": "cancer_dependency_ranking",
-        "description": "Rank genes selectively required by one cancer lineage.",
-        "required": ["lineage"],
-        "optional": ["ranking", "limit"],
-        "examples_zh": ["肝癌最依赖哪些基因", "乳腺癌特异依赖靶点"],
-        "precise_prompt_template_zh": "查询{lineage}中选择性更强的CRISPR dependency基因，并返回Top {limit}。",
-        "confusable_with": ["mutation_anchor_discovery"],
-        "mcp_tool": "depmap_lineage_dependencies",
-    },
-    {
-        "intent": "tf_activity_to_dependency",
-        "description": "Fix an inferred transcription-factor activity and query associated CRISPR Gene Effect targets.",
-        "required": ["transcription_factor"],
-        "optional": ["target_gene", "limit"],
-        "examples_zh": ["STAT3活性和哪些基因依赖相关", "查ESR1 TF活性与GPX4依赖"],
-        "precise_prompt_template_zh": "查询{transcription_factor}推断活性与CRISPR Gene Effect的关联；若指定{target_gene}则返回精确配对，否则返回正负向候选。",
-        "confusable_with": ["gene_pair_evidence"],
-        "mcp_tool": "depmap_tf_dependency_evidence",
-    },
-    {
-        "intent": "true_love_gene_catalog",
-        "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
-        "required": ["catalog"],
-        "optional": ["gene", "partner", "coverage", "limit"],
-        "examples_zh": ["查询真爱基因", "找r小于-0.3的负共依赖候选", "查询正相关互惠Top20"],
-        "precise_prompt_template_zh": "查询26Q1的{catalog}真爱基因目录，可选{coverage}覆盖层，并说明相关性不能证明合成致死。",
-        "confusable_with": ["gene_pair_evidence"],
-        "mcp_tool": "depmap_true_love_evidence",
-    },
-    {
-        "intent": "gene_evidence",
-        "description": "Retrieve available precomputed pathway or regulator enrichment evidence.",
-        "required": ["gene"],
-        "optional": ["lineage", "collection", "limit"],
-        "examples_zh": ["这些候选富集到什么通路", "做Reactome富集"],
-        "precise_prompt_template_zh": "查询{gene}的预计算通路与调控因子富集证据，并说明集合与统计口径。",
-        "confusable_with": [],
-        "mcp_tool": "depmap_gene_evidence",
-    },
-)
+from services.depmap_mcp.capability_catalog import INTENT_CAPABILITIES
+
 
 
 def _default_query_script() -> Path:
@@ -184,6 +107,26 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "scope": "global",
             "cohort_policy": "1140_matched_expression_and_gene_effect_models",
             "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
+        }
+    if mode == "mutation_anchor":
+        return {
+            "metric": "mutation_event_prevalence_and_analyzable_group_support",
+            "analysis_label": "lineage_mutation_anchor_selection",
+            "data_modality": "damaging_or_hotspot_mutation",
+            "relation_type": "candidate_eligibility",
+            "scope": "one_depmap_lineage",
+            "cohort_policy": "Mut/WT thresholds recorded in the returned manifest",
+            "interpretation": "candidate status means sufficient group support for downstream dependency testing; it is not a significant dependency association",
+        }
+    if mode == "biomarker_target":
+        return {
+            "metric": "modeling_eligibility_and_cached_validation_state",
+            "analysis_label": "expression_to_dependency_predictive_biomarker_model",
+            "data_modality": "baseline_expression_predicting_crispr_gene_effect",
+            "relation_type": "predictive_model_eligibility",
+            "scope": "pan_cancer",
+            "cohort_policy": "matched_default_expression_and_gene_effect_models",
+            "interpretation": "eligibility indicates sufficient coverage and Gene Effect variation; it is not evidence of predictive performance or clinical validity",
         }
     if module == "effect_correlation" and mode in {"pair", "top", "lineage_network"}:
         return {
@@ -326,12 +269,24 @@ class DepMapEvidenceService:
 
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
-
+        capabilities = list(INTENT_CAPABILITIES)
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        source = "code_fallback"
+        if index.is_file():
+            try:
+                with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                    rows = db.execute("SELECT payload_json FROM capability_catalog ORDER BY rowid").fetchall()
+                loaded = [json.loads(row[0]) for row in rows]
+                if loaded:
+                    capabilities, source = loaded, "sqlite_capability_catalog"
+            except (sqlite3.Error, json.JSONDecodeError, OSError):
+                pass
         return {
             "schema_version": 1,
             "release": self.settings.release,
             "state": "CAPABILITY_CATALOG",
-            "capabilities": list(INTENT_CAPABILITIES),
+            "capabilities": capabilities,
+            "catalog_source": source,
             "routing_policy": {
                 "unknown_or_out_of_scope": "return_no_match",
                 "missing_required_entity": "request_only_the_missing_field",
@@ -343,6 +298,54 @@ class DepMapEvidenceService:
                 "large_matrices_are_never_returned": True,
             },
         }
+
+    async def artifacts(
+        self, module: str | None = None, kind: str | None = None,
+        path_contains: str | None = None, limit: int = 50,
+    ) -> dict[str, Any]:
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        clauses, params = ["1=1"], []
+        if module:
+            clauses.append("a.module=?"); params.append(module)
+        if kind:
+            clauses.append("f.artifact_kind=?"); params.append(kind)
+        if path_contains:
+            clauses.append("f.artifact_path LIKE ?"); params.append(f"%{path_contains}%")
+        params.append(min(max(limit, 1), 100))
+        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute(
+                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,f.integrity_method,f.integrity_value,a.module,a.analysis_unit,a.completion_state FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
+            )]
+        return self._envelope(tool="depmap_artifact_catalog", request={"module":module,"kind":kind,"path_contains":path_contains,"limit":limit}, evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows})
+
+    async def read_resource(self, uri: str, max_rows: int = 20) -> dict[str, Any]:
+        prefix = f"depmap://{self.settings.release}/"
+        if not uri.startswith(prefix):
+            raise ValueError(f"uri must start with {prefix}")
+        relative = uri[len(prefix):]
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            hit = db.execute("SELECT artifact_kind,size_bytes FROM artifact_catalog WHERE artifact_path=?", (relative,)).fetchone()
+        if not hit:
+            raise ValueError("resource is absent from the indexed catalog")
+        path = (self.settings.knowledge_root / relative).resolve()
+        if self.settings.knowledge_root not in path.parents or not path.is_file():
+            raise ValueError("resource path is unavailable")
+        if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
+            return self._envelope(tool="depmap_read_resource", request={"uri":uri}, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"content":"binary artifact; use its registered scientific query adapter"})
+        if path.name.endswith(".csv.gz"):
+            import gzip
+            with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as handle:
+                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle))]
+            content: Any = rows
+        elif path.suffix.lower() in {".csv", ".tsv"}:
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle, delimiter="\t" if path.suffix.lower()==".tsv" else ","))]
+            content = rows
+        else:
+            content = path.read_text(encoding="utf-8-sig", errors="replace")[:65536]
+        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows}, evidence={"status":"FOUND","uri":uri,"content":content})
 
     def _portable(self, value: Any) -> Any:
         root = str(self.settings.knowledge_root)
@@ -371,6 +374,7 @@ class DepMapEvidenceService:
             "evidence": portable,
         }
         digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+        inventory_only = tool == "depmap_analysis_catalog"
         return {
             "schema_version": 1,
             "evidence_id": f"depmap-{self.settings.release.lower()}-{digest[:24]}",
@@ -380,6 +384,18 @@ class DepMapEvidenceService:
             "new_analysis_started": False,
             "request": request,
             "evidence": portable,
+            "presentation_contract": {
+                "answer_type": "analysis_inventory" if inventory_only else "scientific_result",
+                "primary_content": (
+                    "completed modules, analysis units, and coverage state"
+                    if inventory_only
+                    else "returned biological entities, estimates, sample counts, uncertainty, adjusted significance, and direction"
+                ),
+                "model_must_interpret": True,
+                "provenance_is_supporting_metadata": True,
+                "do_not_answer_with_paths_only": True,
+                "do_not_promote_catalog_status_to_biological_result": True,
+            },
         }
 
     async def _execute(self, query: dict[str, Any]) -> dict[str, Any]:
@@ -458,6 +474,7 @@ class DepMapEvidenceService:
                 "three_d_dependency_evidence",
                 "tcga_gene_expression_survival",
                 "tf_activity_dependency_evidence",
+                "predictive_biomarker_model_eligibility",
             ],
             "data_sources": {
                 "depmap": {
@@ -504,6 +521,12 @@ class DepMapEvidenceService:
                         / "manifest.json"
                     ).is_file(),
                     "scope": "DoRothEA A-C/decoupleR ULM TF activity versus CRISPR Gene Effect",
+                },
+                "predictive_biomarker": {
+                    "installed": (
+                        self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+                    ).is_file(),
+                    "scope": "target eligibility plus validated on-demand expression-to-Gene-Effect model cache",
                 },
             },
             "integration_rule": (
@@ -800,6 +823,46 @@ class DepMapEvidenceService:
             evidence=item,
         )
 
+    async def biomarker_model_evidence(self, target: str) -> dict[str, Any]:
+        symbol = target.strip().upper()
+        if not symbol:
+            raise ValueError("target must be non-empty")
+        item = await self._execute({"mode": "biomarker_target", "target": symbol})
+        return self._envelope(
+            tool="depmap_biomarker_model_evidence",
+            request={"target_gene": symbol}, evidence=item,
+        )
+
+    async def analysis_catalog(self, module: str | None = None, limit: int = 100) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "analysis_catalog", "completion_state": "COMPLETE", "limit": limit,
+        }
+        if module:
+            query["module"] = module.strip()
+        item = await self._execute(query)
+        return self._envelope(tool="depmap_analysis_catalog", request=query, evidence=item)
+
+    async def mutation_anchor_evidence(
+        self,
+        lineage: str,
+        event: Literal["damaging", "hotspot"] | None = None,
+        anchor_tier: Literal["priority", "strict", "standard"] = "priority",
+        include_common_essential: bool = False,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "mutation_anchor", "lineage": lineage,
+            "anchor_tier": anchor_tier,
+            "include_common_essential": include_common_essential, "limit": limit,
+        }
+        if event:
+            query["event"] = event
+        item = await self._execute(query)
+        canonical = item.get("query", {}).get("lineage", lineage)
+        request = dict(query)
+        request["lineage"] = canonical
+        return self._envelope(tool="depmap_mutation_anchor_evidence", request=request, evidence=item)
+
     async def subtype_evidence(
         self,
         gene: str | None = None,
@@ -1020,6 +1083,48 @@ def build_mcp_server(
     )
 
     @mcp.tool(
+        title="DepMap completed analysis catalog",
+        description=(
+            "List completed analysis units from the unified SQLite directory index. "
+            "Returns knowledge-root-relative locations and metadata only; it does not scan matrices."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_analysis_catalog(module: str | None = None, limit: int = 100) -> dict[str, Any]:
+        return await service.analysis_catalog(module, limit)
+
+    @mcp.tool(title="DepMap indexed artifact catalog", description="Query indexed result, data, script, manifest, and matrix-block artifacts by module, kind, or relative-path fragment.", annotations=READ_ONLY, structured_output=True)
+    async def depmap_artifact_catalog(module: str | None = None, kind: str | None = None, path_contains: str | None = None, limit: int = 50) -> dict[str, Any]:
+        return await service.artifacts(module, kind, path_contains, limit)
+
+    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI through the artifact index and return a bounded text/table preview or binary metadata. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
+    async def depmap_read_resource(uri: str, max_rows: int = 20) -> dict[str, Any]:
+        return await service.read_resource(uri, max_rows)
+
+    @mcp.tool(
+        title="DepMap lineage mutation-anchor candidates",
+        description=(
+            "Return actual selectable mutation-anchor rows for one DepMap lineage, "
+            "including event type, Mut/WT counts, prevalence, selection tier, gene role, "
+            "common-essential flag, and interpretation. Candidate status indicates "
+            "analyzable group support, not a dependency association."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_mutation_anchor_evidence(
+        lineage: str,
+        event: Literal["damaging", "hotspot"] | None = None,
+        anchor_tier: Literal["priority", "strict", "standard"] = "priority",
+        include_common_essential: bool = False,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.mutation_anchor_evidence(
+            lineage, event, anchor_tier, include_common_essential, limit
+        )
+
+    @mcp.tool(
         title="DepMap analysis capability catalog",
         description=(
             "List supported scientific intents, required entities, representative "
@@ -1178,6 +1283,20 @@ def build_mcp_server(
         limit: int = 20,
     ) -> dict[str, Any]:
         return await service.tf_dependency_evidence(transcription_factor, target, limit)
+
+    @mcp.tool(
+        title="DepMap expression biomarker model eligibility",
+        description=(
+            "Check one CRISPR Gene Effect target's indexed coverage/variation eligibility "
+            "for expression-based nested LASSO and random-forest modeling, and report "
+            "whether a validated cached model already exists. This read-only tool does "
+            "not start a new model run or claim clinical validity."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_biomarker_model_evidence(target_gene: str) -> dict[str, Any]:
+        return await service.biomarker_model_evidence(target_gene)
 
     @mcp.tool(
         title="DepMap drug-gene evidence",

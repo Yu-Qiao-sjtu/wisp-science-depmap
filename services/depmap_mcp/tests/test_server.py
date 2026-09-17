@@ -92,14 +92,25 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(intents),
             {
+                "provider_status",
+                "lineage_resolution",
+                "cancer_inventory",
+                "cancer_direction_discovery",
+                "analysis_inventory",
                 "mutation_anchor_discovery",
                 "mutation_to_dependency",
                 "dependency_to_mutation",
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
                 "tf_activity_to_dependency",
+                "expression_biomarker_model",
                 "true_love_gene_catalog",
                 "gene_evidence",
+                "tcga_expression_survival",
+                "drug_gene_evidence",
+                "subtype_evidence",
+                "coamplification_evidence",
+                "three_d_evidence",
             },
         )
         self.assertIn("mutation_to_dependency", intents)
@@ -118,6 +129,44 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("lineage", intents["mutation_to_dependency"]["optional"])
         self.assertNotIn("lineage", intents["dependency_to_mutation"]["optional"])
+        self.assertEqual(
+            intents["mutation_anchor_discovery"]["mcp_tool"],
+            "depmap_mutation_anchor_evidence",
+        )
+
+    async def test_analysis_catalog_uses_completed_directory_index(self):
+        result = await self.service.analysis_catalog("癌种内突变锚定基因选择", 25)
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "analysis_catalog",
+                "completion_state": "COMPLETE",
+                "module": "癌种内突变锚定基因选择",
+                "limit": 25,
+            },
+        )
+        self.assertEqual(result["request"]["mode"], "analysis_catalog")
+        self.assertEqual(
+            result["presentation_contract"]["answer_type"], "analysis_inventory"
+        )
+        self.assertTrue(result["presentation_contract"]["do_not_answer_with_paths_only"])
+
+    async def test_mutation_anchor_intent_queries_dedicated_result(self):
+        result = await self.service.mutation_anchor_evidence(
+            "Lung", "damaging", "priority", False, 12
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Lung",
+                "event": "damaging",
+                "anchor_tier": "priority",
+                "include_common_essential": False,
+                "limit": 12,
+            },
+        )
+        self.assertEqual(result["request"]["lineage"], "Lung")
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
@@ -266,6 +315,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stronger dependency", semantics["interpretation"])
         self.assertFalse(result["new_analysis_started"])
 
+    async def test_biomarker_model_intent_bridges_target_to_indexed_query(self):
+        result = await self.service.biomarker_model_evidence("gpx4")
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "biomarker_target", "target": "GPX4"},
+        )
+        self.assertEqual(result["request"]["target_gene"], "GPX4")
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["analysis_label"], "expression_to_dependency_predictive_biomarker_model")
+        self.assertIn("not evidence", semantics["interpretation"])
+
     async def test_subtype_tool_is_one_bounded_query_with_canonical_lineage(self):
         result = await self.service.subtype_evidence(
             gene="wrn", lineage="结肠癌", contrast_id="FEATURE__BOWEL__MSI", limit=7
@@ -386,6 +446,10 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     names,
                     {
+                        "depmap_analysis_catalog",
+                        "depmap_artifact_catalog",
+                        "depmap_read_resource",
+                        "depmap_mutation_anchor_evidence",
                         "depmap_capabilities",
                         "depmap_status",
                         "depmap_resolve_lineage",
@@ -396,6 +460,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
                         "depmap_tf_dependency_evidence",
+                        "depmap_biomarker_model_evidence",
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",
                         "depmap_coamplification_evidence",

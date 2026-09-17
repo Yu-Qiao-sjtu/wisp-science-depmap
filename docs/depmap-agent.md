@@ -1,5 +1,8 @@
 # DepMap Agent
 
+中文远程数据、目录索引、MCP 和模型解释的完整链路见
+[DepMap Agent 远程数据桥接技术路线](depmap-remote-mcp-architecture.zh-CN.md)。
+
 > **Architecture note:** The normative Agent-first orchestration, execution
 > levels, Evidence Ledger, MCP boundary, and Workflow escalation policy are
 > defined in [depmap-agent-engineering-framework.md](depmap-agent-engineering-framework.md).
@@ -86,6 +89,20 @@ point needed:
 7. successful query and evidence calls persist a stable `evidence_ref` in the
    project SQLite ledger. `depmap_evidence_history` can recover the exact
    evidence in the current conversation without treating model memory as data.
+
+The user-facing path has a separate interpretation layer:
+
+```text
+user intent → directory index → bounded remote data query → structured result
+→ model interpretation → result-first user answer
+```
+
+The directory index chooses the validated result source; it is not normally the
+answer. Except for explicit inventory questions, the Agent must lead with the
+returned genes, cohorts, estimates, sample counts, direction, and adjusted
+significance, explain their biological meaning and limits, and place release and
+provenance last. A `depmap://` location is supporting traceability metadata and
+must never replace an available scientific result.
 
 This provides multi-session inheritance of identity and work state without
 copying old chat transcripts into the model context.

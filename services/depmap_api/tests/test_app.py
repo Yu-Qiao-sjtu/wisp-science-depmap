@@ -1,6 +1,7 @@
 import json
 import gzip
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,15 @@ from services.depmap_api.app import (
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_mutation_anchor_has_explicit_lineage_event_and_tier_contract(self):
+        request = QueryRequest(
+            mode="mutation_anchor", lineage="Lung", event="damaging",
+            anchor_tier="priority", include_common_essential=False, limit=20,
+        )
+        self.assertEqual(request.bounded_dict()["lineage"], "Lung")
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="mutation_anchor", event="damaging")
+
     def test_tf_dependency_accepts_exact_pair_or_bounded_top_query(self):
         exact = QueryRequest(mode="tf_dependency", source="STAT3", target="GPX4", limit=20)
         self.assertEqual(exact.bounded_dict()["target"], "GPX4")
@@ -31,6 +41,12 @@ class QueryContractTests(unittest.TestCase):
     def test_tf_dependency_requires_tf_source(self):
         with self.assertRaises(ValueError):
             QueryRequest(mode="tf_dependency", target="GPX4")
+
+    def test_biomarker_target_requires_dependency_target(self):
+        request = QueryRequest(mode="biomarker_target", target="GPX4")
+        self.assertEqual(request.bounded_dict()["target"], "GPX4")
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="biomarker_target")
 
 
 class DepMapApiTests(unittest.TestCase):
@@ -370,6 +386,56 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(synthetic_reverse["rows"][0]["target_gene"], "ARID1B")
         self.assertEqual(three_d["status"], "FOUND")
         self.assertEqual(three_d["rows"][0]["mean_gene_effect"], -0.62)
+
+    def test_true_love_prefers_bounded_sqlite_index(self):
+        index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
+        db = sqlite3.connect(index)
+        try:
+            db.execute(
+                "CREATE TABLE true_love (catalog TEXT, coverage TEXT, gene_a TEXT, gene_b TEXT, sort_1 REAL, sort_2 REAL, row_json TEXT)"
+            )
+            indexed = {
+                "gene_a": "KRAS", "gene_b": "NRAS",
+                "bootstrap_reciprocal_stability": "0.99",
+                "worst_direction_fdr": "0.0001",
+            }
+            db.execute(
+                "INSERT INTO true_love VALUES (?,?,?,?,?,?,?)",
+                ("stable_negative_rank1", "all", "KRAS", "NRAS", -0.99, 0.0001, json.dumps(indexed)),
+            )
+            db.commit()
+        finally:
+            db.close()
+        client = TestClient(create_app(self.settings))
+        with client:
+            result = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 5},
+            ).json()
+        self.assertEqual(result["status"], "FOUND")
+        self.assertEqual(result["rows"][0]["bootstrap_reciprocal_stability"], 0.99)
+        self.assertTrue(any(path.endswith("depmap-26q1-query-index.sqlite") for path in result["provenance"]))
+
+    def test_biomarker_intent_reads_indexed_target_and_cache_state(self):
+        index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
+        db = sqlite3.connect(index)
+        try:
+            db.execute("CREATE TABLE biomarker_target (target_gene TEXT PRIMARY KEY, eligible INTEGER, row_json TEXT)")
+            row = {"target_gene": "GPX4", "sample_n": "1208", "sd_gene_effect": "0.21", "eligible_for_nested_model": "TRUE"}
+            db.execute("INSERT INTO biomarker_target VALUES (?,?,?)", ("GPX4", 1, json.dumps(row)))
+            db.commit()
+        finally:
+            db.close()
+        client = TestClient(create_app(self.settings))
+        with client:
+            result = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "biomarker_target", "target": "gpx4"},
+            ).json()
+        self.assertEqual(result["status"], "FOUND")
+        self.assertEqual(result["eligibility"]["target_gene"], "GPX4")
+        self.assertEqual(result["eligibility"]["sample_n"], 1208)
+        self.assertFalse(result["cached_model"])
 
     def test_precomputed_tcga_query_returns_bounded_expression_survival_row(self):
         client = TestClient(create_app(self.settings))

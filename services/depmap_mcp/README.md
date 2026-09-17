@@ -33,6 +33,12 @@ The exposed tools are intentionally small:
   tool-routing catalog. It reads no matrix rows and is suitable for one-time
   discovery at the start of an Agent session;
 
+- `depmap_analysis_catalog`: completed analysis units from the unified SQLite
+  directory index, optionally restricted to one module;
+- `depmap_artifact_catalog`: query indexed scripts, data, manifests, results,
+  and matrix shards by module, kind, or relative-path fragment;
+- `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return
+  a bounded table/text preview or binary artifact metadata;
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
@@ -45,13 +51,27 @@ The exposed tools are intentionally small:
 - `depmap_subtype_evidence`
 - `depmap_coamplification_evidence`
 - `depmap_true_love_evidence`
+- `depmap_biomarker_model_evidence`
 - `depmap_synthetic_lethal_evidence`
 - `depmap_3d_evidence`
+
+The expression-biomarker route connects natural-language requests such as
+“为 GPX4 建立表达 biomarker 模型” to
+`depmap_biomarker_model_evidence`. The tool first queries the indexed target
+catalog and reports whether the target is eligible and whether a validated
+model is already cached. Training remains a separate explicit workflow, so an
+ambiguous request cannot accidentally launch a large computation.
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It
 never performs a sample-level join or creates a synthetic combined score.
+
+`depmap_capabilities` reads its 19 intent contracts from SQLite
+`capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
+build-time definition used to populate that table; code fallback is used only
+when the index is absent. Result adapters and gene-to-shard locations are
+registered in `reader_registry` and `matrix_block_index`.
 
 If the optional TCGA bridge is absent, TCGA queries return
 `MODULE_UNAVAILABLE`; this is a coverage state, not a biological result. Install
@@ -132,3 +152,9 @@ Add an MCP connection with:
 Keep this endpoint loopback-only. It intentionally has no bearer secret because
 it is not exposed to the LAN or public internet. A future remote deployment must
 add TLS and authentication rather than reusing this local configuration.
+
+For the private server deployment, the MCP process binds only to server
+`127.0.0.1:8877`. `scripts/depmap_mcp_tunnel.ps1` forwards it to local
+`127.0.0.1:18877`; configure Wisp Science with the remote-URL transport at
+`http://127.0.0.1:18877/mcp` and no additional authentication. SSH supplies the
+transport authentication and the MCP endpoint is never exposed to the LAN.
