@@ -252,6 +252,15 @@ dependency target and query associated mutations. An out-of-scope expression
 causes the Agent to read the lightweight MCP capability catalog and offer only
 the two to four nearest supported modules. Selecting a card becomes the next
 user message, so the normal typed route runs again with the clarified intent.
+The route result uses a batch-stopping control boundary: if the model emitted
+an evidence query beside an ambiguous route in the same tool-call batch, that
+query is skipped and the model must present the clarification card first.
+
+The current `depmap_synthetic_lethal_evidence` capability is pan-cancer. Its
+mutation-to-dependency and dependency-to-mutation cards therefore do not offer
+a lineage field. Cancer-specific mutation ranking remains a separate completed
+lineage query contract and must not be simulated by silently dropping a cancer
+term from a pan-cancer request.
 
 The product contract therefore does not depend on enumerating every synonym.
 Examples and aliases improve recall, while closed schemas, deterministic
