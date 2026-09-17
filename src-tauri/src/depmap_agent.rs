@@ -416,6 +416,11 @@ fn depmap_route_schema() -> Value {
             "family": {"type":"string"},
             "cohort": {"type":"string"},
             "layer": {"type":"string","enum":["exhaustive_high_confidence","lineage_adjusted"]},
+            "evidence_provider": {
+                "type":"string",
+                "enum":["auto","native","remote_mcp"],
+                "description":"Use remote_mcp when the user explicitly requests the configured remote DepMap MCP; otherwise use auto."
+            },
             "alternative_intents": {
                 "type":"array",
                 "items":{"type":"string","enum":[
@@ -472,6 +477,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let family = non_empty_arg(args, "family");
     let cohort = non_empty_arg(args, "cohort");
     let layer = non_empty_arg(args, "layer");
+    let evidence_provider =
+        non_empty_arg(args, "evidence_provider").unwrap_or_else(|| "auto".to_string());
     let alternative_intents = args
         .get("alternative_intents")
         .and_then(Value::as_array)
@@ -717,6 +724,13 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         strategy = "The user explicitly requested a registered Workflow; create only its approval-gated draft.";
         tools = vec!["start_workflow"];
     }
+    if evidence_provider == "remote_mcp"
+        && intent == "cancer_dependency_ranking"
+        && !requires_user_input
+    {
+        strategy = "Use the explicitly requested remote DepMap MCP lineage dependency tool; do not call the native local provider.";
+        tools = vec!["search_mcp_tools", "use_mcp_tool"];
+    }
 
     let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
     let clarification_gene = gene
@@ -795,16 +809,32 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "arguments": {"limit": 100},
             "single_call": true
         }),
-        ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => json!({
-            "tool": TOOL_NAME,
-            "arguments": {
-                "mode": "lineage_dependency",
-                "lineage": lineage,
-                "ranking": "selective",
-                "limit": 20
-            },
-            "single_call": true
-        }),
+        ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => {
+            if evidence_provider == "remote_mcp" {
+                json!({
+                    "tool": "depmap_lineage_dependencies",
+                    "transport": "remote_mcp",
+                    "arguments": {
+                        "lineage": lineage,
+                        "ranking": "selective",
+                        "limit": 20
+                    },
+                    "single_call": true
+                })
+            } else {
+                json!({
+                    "tool": TOOL_NAME,
+                    "transport": "native",
+                    "arguments": {
+                        "mode": "lineage_dependency",
+                        "lineage": lineage,
+                        "ranking": "selective",
+                        "limit": 20
+                    },
+                    "single_call": true
+                })
+            }
+        }
         ("study_support_mapping", Some(lineage)) if !requires_user_input => json!({
             "tool": TOOL_NAME,
             "arguments": {
@@ -891,6 +921,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "family": family,
             "cohort": cohort,
             "layer": layer
+            ,"evidence_provider": evidence_provider
         },
         "strategy": strategy,
         "recommended_query": recommended_query,
@@ -924,7 +955,7 @@ impl Tool for DepMapAgentRouteTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             ROUTE_TOOL_NAME,
-            "Classify one new DepMap request into a host-validated execution level before querying evidence. Use cancer_dependency_ranking when the user asks for a cancer's top, strongest, selective, essential, or dependency genes without naming a gene. Use once per new request, not for a follow-up that only interprets the current tool result. This routing record is not scientific evidence. Ordinary status, cancer inventory, dependency ranking, gene, pair, drug, and initial topic exploration requests do not require a Workflow.",
+            "Classify one new DepMap request into a host-validated execution level before querying evidence. Set evidence_provider=remote_mcp when the user explicitly requests the configured remote DepMap MCP. Use cancer_dependency_ranking when the user asks for a cancer's top, strongest, selective, essential, or dependency genes without naming a gene. Use once per new request, not for a follow-up that only interprets the current tool result. This routing record is not scientific evidence. Ordinary status, cancer inventory, dependency ranking, gene, pair, drug, and initial topic exploration requests do not require a Workflow.",
             depmap_route_schema(),
         )
     }
@@ -2878,6 +2909,33 @@ mod tests {
         assert_eq!(
             dependency_ranking["recommended_query"]["arguments"]["mode"],
             "lineage_dependency"
+        );
+
+        let remote_dependency_ranking = depmap_route(&json!({
+            "intent":"cancer_dependency_ranking",
+            "cancer":"肝癌",
+            "evidence_provider":"remote_mcp"
+        }))
+        .unwrap();
+        assert_eq!(
+            remote_dependency_ranking["recommended_query"]["tool"],
+            "depmap_lineage_dependencies"
+        );
+        assert_eq!(
+            remote_dependency_ranking["recommended_query"]["transport"],
+            "remote_mcp"
+        );
+        assert_eq!(
+            remote_dependency_ranking["recommended_query"]["arguments"],
+            json!({"lineage":"Liver","ranking":"selective","limit":20})
+        );
+        assert_eq!(
+            remote_dependency_ranking["allowed_next_tools"],
+            json!(["search_mcp_tools", "use_mcp_tool"])
+        );
+        assert_eq!(
+            remote_dependency_ranking["entities"]["evidence_provider"],
+            "remote_mcp"
         );
 
         let directions = depmap_route(&json!({
