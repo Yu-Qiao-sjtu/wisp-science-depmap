@@ -1921,6 +1921,86 @@ async fn branched_from_survives_listing() {
 }
 
 #[tokio::test]
+async fn conversation_branches_inherit_source_folder_at_creation() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_branch_folder_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    store.create_folder("d1", "p", "Research").await.unwrap();
+    for (source, folder) in [("grouped", Some("d1")), ("ungrouped", None)] {
+        store
+            .create_frame(source, "p", "OPERON", "m")
+            .await
+            .unwrap();
+        store.rename_session(source, "p", source).await.unwrap();
+        store
+            .move_session_to_folder(source, "p", folder)
+            .await
+            .unwrap();
+        for kind in ["before_user", "after_response"] {
+            let branch = format!("{source}-{kind}");
+            store
+                .create_frame(&branch, "p", "OPERON", "m")
+                .await
+                .unwrap();
+            // A branch before the first user message is listed by its title.
+            store.rename_session(&branch, "p", &branch).await.unwrap();
+            store
+                .set_session_branch_point(&branch, source, 0, kind)
+                .await
+                .unwrap();
+        }
+    }
+
+    store.pool.close().await;
+    let store = Store::open(&tmp).await.unwrap();
+    let listed = store.list_sessions("p").await.unwrap();
+    assert_eq!(listed.len(), 6);
+    for (source, folder) in [("grouped", Some("d1")), ("ungrouped", None)] {
+        for kind in ["before_user", "after_response"] {
+            let branch = format!("{source}-{kind}");
+            let row = listed.iter().find(|row| row.0 == branch).unwrap();
+            assert_eq!(row.3.as_deref(), folder, "folder for {branch}");
+            assert_eq!(row.4.as_deref(), Some(source));
+        }
+    }
+
+    store
+        .set_session_pinned("grouped-after_response", "p", true)
+        .await
+        .unwrap();
+    let pinned = store.list_pinned_sessions("p").await.unwrap();
+    assert_eq!(pinned[0].3.as_deref(), Some("d1"));
+    assert_eq!(pinned[0].4.as_deref(), Some("grouped"));
+
+    // Inheritance happens at creation; users can still move a branch separately.
+    store
+        .move_session_to_folder("grouped-before_user", "p", None)
+        .await
+        .unwrap();
+    let listed = store.list_sessions("p").await.unwrap();
+    assert!(listed
+        .iter()
+        .find(|row| row.0 == "grouped-before_user")
+        .unwrap()
+        .3
+        .is_none());
+    assert_eq!(
+        listed
+            .iter()
+            .find(|row| row.0 == "grouped")
+            .unwrap()
+            .3
+            .as_deref(),
+        Some("d1")
+    );
+    store.pool.close().await;
+    let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
 async fn main_session_cannot_be_deleted_until_its_conversation_branches_are_deleted() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_branch_delete_guard_{}.sqlite",
@@ -4589,8 +4669,13 @@ async fn store_open_records_migrations_and_seeds_local_context() {
         .await
         .unwrap()
         .is_some());
+    // The public list is chronological. When opening crosses a timestamp
+    // boundary, application order can differ from version order; this check
+    // verifies the recorded versions, independently of wall-clock timing.
+    let mut recorded_versions = store.schema_migrations().await.unwrap();
+    recorded_versions.sort();
     assert_eq!(
-        store.schema_migrations().await.unwrap(),
+        recorded_versions,
         vec![
             INITIAL_SCHEMA_MIGRATION.to_string(),
             CONTROL_PLANE_MIGRATION.to_string(),
@@ -4650,6 +4735,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             EXPLORATION_HISTORY_MIGRATION.to_string(),
             MCP_APP_SNAPSHOTS_MIGRATION.to_string(),
             SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION.to_string(),
+            PROJECT_STARS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();
@@ -9611,4 +9697,59 @@ async fn research_journey_notes_follow_exploration_baseline_and_export() {
     for file in [path, archive, target_path] {
         let _ = std::fs::remove_file(file);
     }
+}
+
+#[tokio::test]
+async fn project_star_persists_and_preserves_recency() {
+    let tmp = std::env::temp_dir().join(format!("wisp_star_{}.sqlite", uuid::Uuid::new_v4()));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("old", "Old", "").await.unwrap();
+    store.create_project("new", "New", "").await.unwrap();
+    sqlx::query("UPDATE projects SET updated_at=CASE id WHEN 'old' THEN 10 ELSE 20 END")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    assert!(store.starred_project_ids().await.unwrap().is_empty());
+    store.set_project_starred("old", true).await.unwrap();
+    store.set_project_starred("old", true).await.unwrap();
+    let rows = store.list_projects().await.unwrap();
+    assert_eq!(rows[0].0, "old");
+    assert_eq!(rows[0].4, 10);
+    store.set_project_starred("new", true).await.unwrap();
+    assert_eq!(store.list_projects().await.unwrap()[0].0, "new");
+    store.set_project_starred("new", false).await.unwrap();
+    store.pool.close().await;
+    let store = Store::open(&tmp).await.unwrap();
+    assert!(store.starred_project_ids().await.unwrap().contains("old"));
+    assert_eq!(store.list_projects().await.unwrap()[0].0, "old");
+    store.set_project_starred("old", false).await.unwrap();
+    assert_eq!(store.list_projects().await.unwrap()[0].0, "new");
+    assert!(store.set_project_starred("missing", true).await.is_err());
+    store
+        .create_project("scratch:test", "Scratch", "")
+        .await
+        .unwrap();
+    assert!(store
+        .set_project_starred("scratch:test", true)
+        .await
+        .is_err());
+    // Simulate an older database and rerun the idempotent migration.
+    sqlx::query("ALTER TABLE projects DROP COLUMN starred")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM wisp_schema_migrations WHERE version=?")
+        .bind(PROJECT_STARS_MIGRATION)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    store.pool.close().await;
+    let store = Store::open(&tmp).await.unwrap();
+    Store::migrate(&store.pool).await.unwrap();
+    assert!(store.starred_project_ids().await.unwrap().is_empty());
+    store.set_project_starred("old", true).await.unwrap();
+    store.delete_project("old").await.unwrap();
+    assert!(store.starred_project_ids().await.unwrap().is_empty());
+    store.pool.close().await;
+    let _ = std::fs::remove_file(tmp);
 }

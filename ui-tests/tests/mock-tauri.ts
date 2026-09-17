@@ -18,7 +18,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   const pptxBase64 = fixtures?.pptxBase64 ?? "";
   const listeners: Record<string, ((e: { payload: unknown }) => void) | undefined> = {};
   const windowListeners: Record<string, ((e: { payload: unknown }) => void) | undefined> = {};
+  const hydrationApprovals = new Map<string, any>();
   const emit = (event: string, payload: unknown) => {
+    const request = payload as any;
+    if (event === "confirm-request") {
+      hydrationApprovals.set(request.frame_id, { ...request, approval_id: request.approval_id ?? `mock-${request.frame_id}` });
+    } else if (event === "confirm-resolved" || (event === "agent" && request.kind === "Done")) {
+      hydrationApprovals.delete(request.frame_id);
+    }
+
     try {
       listeners[event]?.({ payload });
       windowListeners[event]?.({ payload });
@@ -564,9 +572,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       context: "Supply project-local source, evaluator, data, metric, and guardrail details.",
       approval_policy: "review_all",
       tasks: [
-        { id: "literature_methods", instruction: "Review relevant methods", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["literature_search"], skill_ids: ["literature-review"], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
-        { id: "data_audit", instruction: "Audit validation data", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["project_read", "reasoning"], skill_ids: ["analysis-workflow"], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
-        { id: "baseline_analysis", instruction: "Inspect the baseline", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["project_read", "reasoning"], skill_ids: ["analysis-workflow"], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
+        { id: "literature_methods", instruction: "Review relevant methods", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["literature_search"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
+        { id: "data_audit", instruction: "Audit validation data", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["project_read", "reasoning"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
+        { id: "baseline_analysis", instruction: "Inspect the baseline", depends_on: [], task_kind: "agent", run_activity: null, capabilities: ["project_read", "reasoning"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: { max_tokens: 16000, max_tool_calls: 16, max_cost_microunits: null } },
         {
           id: "prepare_contract",
           instruction: "Freeze and audit the evaluator contract",
@@ -574,7 +582,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           task_kind: "agent",
           run_activity: null,
           capabilities: ["code_run"],
-          skill_ids: ["analysis-workflow"],
+          skill_ids: [],
           specialist_id: null,
           output_schema: {
             type: "object",
@@ -737,6 +745,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     },
   }];
   mockWorkflowTemplates.push(mockMethodSearchWorkflowTemplate);
+  if (query.has("mockLegacyWorkflow")) {
+    const legacy = structuredClone(mockWorkflowTemplates[0]);
+    legacy.id = "legacy-skill-workflow"; legacy.name = "Legacy Skill workflow"; legacy.builtin = false;
+    legacy.proposal.tasks[0].skill_ids = ["literature-review"];
+    mockWorkflowTemplates.push(legacy);
+  }
   const quickActionSessions: Record<string, string> = {};
   let mockModels = [
     {
@@ -1101,6 +1115,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     } else if (kind === "succeeded") {
       snapshot.workflow.status = "succeeded";
       for (const task of snapshot.dynamic.tasks) task.result = dynamicResult(task, "succeeded");
+    }
+    if (kind === "legacy") {
+      snapshot.dynamic.tasks[0].skill_bindings = [{ id: "analysis-workflow", name: "analysis-workflow", scope: "bundled", path: "/old/skills/analysis-workflow", skill_md_sha256: "old-hash", declared_version: null, package_id: null, package_version: null, package_source: null }];
+      snapshot.dynamic.editable_proposal.tasks[0].skill_ids = ["analysis-workflow"];
     }
     mockAgentWorkflows = [snapshot, ...mockAgentWorkflows];
     return snapshot.workflow.id;
@@ -2614,12 +2632,18 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               ...row, workspace_dir: String(arg("workspaceDir")), updated_at: 1,
             }));
           }
+          case "set_project_starred":
+            if ((window as any).__failProjectStar) throw new Error("Could not save project star");
+            localStorage.setItem("mock-project-star:" + arg("id"), String(arg("starred")));
+            return null;
           case "list_projects":
             return [
               ...(new URL(location.href).searchParams.get("mockCalendar") === "dense" ? Array.from({length:32}, (_, index) => ({id:`calendar-project-${index}`,name:["跨物种单细胞图谱", "水稻基因组", "转录组分析", "长期研究项目与文献证据整理"][index % 4] + ` ${index + 1}`,workspace_dir:`/mock/calendar-${index}`,session_count:0,updated_at:0,running_count:0,needs_you_count:0,sync_configured:false,last_synced_at:null})) : []),
               { id: "default", name: projectNames.default ?? project.name, workspace_dir: project.root, session_count: 0, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("default"), last_synced_at: syncedProjects.has("default") ? Math.floor(Date.now() / 1000) : null },
               { id: "other", name: projectNames.other ?? "Other project", workspace_dir: "/mock/other", session_count: 1, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("other"), last_synced_at: syncedProjects.has("other") ? Math.floor(Date.now() / 1000) : null },
-            ];
+            ].map(p => ({ ...p, starred: localStorage.getItem("mock-project-star:" + p.id) === "true" }))
+              .sort((a, b) => Number(b.starred) - Number(a.starred));
+
           case "list_recent_sessions":
             return [
               {
@@ -3014,16 +3038,27 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "list_acp_agents":
             return mockAcpAgents;
           case "get_dynamic_agent_options":
-            return mockDynamicAgentOptions;
-          case "plan_skill_portfolio":
+            return {
+              ...mockDynamicAgentOptions,
+              skills: query.get("mockWorkflowSources") === "none" ? []
+                : query.get("mockWorkflowSources") === "many"
+                  ? Array.from({ length: 10 }, (_, index) => ({ id: `method-${index}`, name: `Method ${index}`, scope: "bundled" }))
+                  : mockDynamicAgentOptions.skills,
+              models: query.get("mockWorkflowModels") === "none" ? [] : mockDynamicAgentOptions.models,
+            };
+          case "plan_skill_portfolio": {
+            const request = plain(arg("request") ?? {});
+            const sources = request.source_skill_ids?.length
+              ? request.source_skill_ids : ["literature-review", "analysis-workflow"];
             return {
               plan: {
+                source_sha256: "fixture-conversion-source",
                 planner_model_id: String(plain(arg("request") ?? {}).model_id ?? "default"),
                 planner_model_label: String(plain(arg("request") ?? {}).model_id) === "opus" ? "opus-4.8" : "deepseek-v4-pro",
                 rationale: "Literature and analysis should run before evidence-grounded synthesis.",
                 tasks: [
-                  { id: "literature", rationale: "Find and verify published evidence.", skill_ids: ["literature-review"], depends_on: [] },
-                  { id: "analysis", rationale: "Analyze the research question using the reproducible workflow.", skill_ids: ["analysis-workflow"], depends_on: [] },
+                  { id: "literature", rationale: "Find and verify published evidence.", skill_ids: sources, depends_on: [] },
+                  { id: "analysis", rationale: "Analyze the research question using the reproducible workflow.", skill_ids: sources, depends_on: [] },
                   { id: "synthesis", rationale: "Identify gaps only after both evidence streams finish.", skill_ids: [], depends_on: ["literature", "analysis"] },
                 ],
               },
@@ -3032,12 +3067,13 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                 context: "Design an oncology omics study",
                 approval_policy: "review_all",
                 tasks: [
-                  { id: "literature", instruction: "Review the published evidence", depends_on: [], capabilities: ["literature_search"], skill_ids: ["literature-review"], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: null },
-                  { id: "analysis", instruction: "Plan a reproducible analysis", depends_on: [], capabilities: ["code_run"], skill_ids: ["analysis-workflow"], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: null },
-                  { id: "synthesis", instruction: "Synthesize the evidence and identify gaps", depends_on: ["literature", "analysis"], capabilities: ["reasoning"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: null },
+                  { id: "literature", instruction: "Review the published evidence", depends_on: [], capabilities: ["literature_search"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: null },
+                  { id: "analysis", instruction: "Plan a reproducible analysis", depends_on: [], capabilities: ["code_run"], skill_ids: [], specialist_id: null, output_schema: null, isolated: false, model_id: null, executor: null, budget: null },
+                  { id: "synthesis", instruction: "Synthesize the evidence and identify gaps", depends_on: ["literature", "analysis"], capabilities: ["reasoning"], skill_ids: [], specialist_id: null, output_schema: { type: "object", required: ["report"], properties: { report: { type: "string" } } }, isolated: false, model_id: null, executor: null, budget: null },
                 ],
               },
             };
+          }
           case "list_quick_actions":
             return mockQuickActions;
           case "list_workflow_templates":
@@ -6170,6 +6206,22 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       }),
     },
   };
+  // Native approvals live in the backend independently of their one-shot event.
+  const baseInvoke = (window as any).__TAURI__.core.invoke;
+  (window as any).__TAURI__.core.invoke = async (cmd: string, args: any) => {
+    const arg = (key: string) => args instanceof Map ? args.get(key) : args?.[key];
+    const result = await baseInvoke(cmd, args);
+    if (cmd === "load_session" && result && !arg("beforeSeq") && !arg("before_seq")) {
+      const request = hydrationApprovals.get(String(arg("id")));
+      return { ...result, pending_approvals: request ? [request] : [] };
+    }
+    if (cmd === "confirm_response") {
+      const request = hydrationApprovals.get(String(arg("sessionId") ?? arg("session_id")));
+      if (request) emit("confirm-resolved", request);
+    }
+    return result;
+  };
+
 }
 
 // Expected assistant reply text for a message sent under `parallelMock`.

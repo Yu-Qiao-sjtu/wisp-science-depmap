@@ -31,6 +31,11 @@ pub(crate) struct SessionRuntime {
     pub(crate) deleted: AtomicBool,
     /// Last persisted message seq (`COALESCE(MAX(seq),0)`), not a message count.
     pub(crate) last_seq: StdMutex<i64>,
+    /// Weak so navigation cannot keep a completed turn's writer alive.
+    pub(crate) ui_event_writer:
+        StdMutex<Option<tokio::sync::mpsc::WeakUnboundedSender<SessionUiMessage>>>,
+    pub(crate) live_event_writer:
+        StdMutex<Option<tokio::sync::mpsc::WeakUnboundedSender<SessionUiMessage>>>,
     /// Guide (#410): mid-turn messages the running loop drains into user
     /// messages at its next iteration; ids let queued senders detect that.
     pub(crate) pending_guidance: wisp_core::GuidanceQueue,
@@ -46,6 +51,9 @@ pub(crate) struct SessionRuntime {
     /// FIFO into fresh turns. ponytail: in-memory only — lost on app restart,
     /// same as the optimistic bubbles, which are never persisted either.
     pub(crate) queued: StdMutex<Vec<QueuedItem>>,
+    /// Cut-ins offered to the current loop, with their original payload kept
+    /// until the queue driver observes consumption or starts them first.
+    pub(crate) queued_cutins: StdMutex<Vec<(u64, QueuedItem)>>,
     /// True while a driver task owns draining `queued`. Flipped only under the
     /// `queued` lock so an enqueue can never strand behind a driver that is
     /// about to exit on an empty queue.
@@ -74,11 +82,14 @@ impl SessionRuntime {
             cancel: Arc::new(AtomicBool::new(false)),
             deleted: AtomicBool::new(false),
             last_seq: StdMutex::new(0),
+            ui_event_writer: StdMutex::new(None),
+            live_event_writer: StdMutex::new(None),
             pending_guidance: wisp_core::GuidanceQueue::default(),
             guidance_seq: std::sync::atomic::AtomicU64::new(0),
             interrupted_turn_start: StdMutex::new(None),
             mcp_app_contexts: StdMutex::new(HashMap::new()),
             queued: StdMutex::new(Vec::new()),
+            queued_cutins: StdMutex::new(Vec::new()),
             draining: AtomicBool::new(false),
         }
     }
@@ -158,6 +169,10 @@ impl SessionRuntime {
 pub(crate) struct McpAppContext {
     pub(crate) app_name: String,
     pub(crate) body: String,
+    /// Text-only projection used by the transcript notice. The full body is
+    /// still retained separately for the next Agent turn.
+    pub(crate) summary: String,
+    pub(crate) structured_preview: Option<String>,
 }
 
 pub(crate) fn mcp_app_identity(instance_id: &str) -> Result<(&str, &str), String> {
@@ -216,7 +231,7 @@ pub(crate) fn normalize_mcp_app_context(
     let object = context
         .as_object()
         .ok_or_else(|| "MCP App model context must be an object.".to_string())?;
-    let mut parts = Vec::new();
+    let mut text_parts = Vec::new();
     if let Some(content) = object.get("content").filter(|value| !value.is_null()) {
         let blocks = content
             .as_array()
@@ -234,26 +249,29 @@ pub(crate) fn normalize_mcp_app_context(
                 .ok_or_else(|| "MCP App text context is missing its text value.".to_string())?
                 .trim();
             if !text.is_empty() {
-                parts.push(text.to_string());
+                text_parts.push(text.to_string());
             }
         }
     }
-    if let Some(structured) = object
+    let structured_for_model = if let Some(structured) = object
         .get("structuredContent")
         .filter(|value| !value.is_null())
     {
         let structured = structured
             .as_object()
             .ok_or_else(|| "MCP App structuredContent must be an object.".to_string())?;
-        if !structured.is_empty() {
-            parts.push(format!(
-                "Structured state: {}",
+        if structured.is_empty() {
+            None
+        } else {
+            Some(
                 serde_json::to_string(structured)
-                    .map_err(|error| format!("Invalid MCP App structured state: {error}"))?
-            ));
+                    .map_err(|error| format!("Invalid MCP App structured state: {error}"))?,
+            )
         }
-    }
-    if parts.is_empty() {
+    } else {
+        None
+    };
+    if text_parts.is_empty() && structured_for_model.is_none() {
         return Ok(None);
     }
     let app_name = app_name.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -262,10 +280,56 @@ pub(crate) fn normalize_mcp_app_context(
     } else {
         app_name.chars().take(MAX_MCP_APP_NAME_CHARS).collect()
     };
+    let mut parts = text_parts.clone();
+    if let Some(structured) = &structured_for_model {
+        parts.push(format!("Structured state: {structured}"));
+    }
+    let structured_preview = object
+        .get("structuredContent")
+        .filter(|value| !value.is_null())
+        .map(redact_mcp_app_structured_preview)
+        .transpose()?
+        .filter(|value| !value.is_empty());
     Ok(Some(McpAppContext {
         app_name,
         body: parts.join("\n\n"),
+        summary: text_parts.join("\n\n"),
+        structured_preview,
     }))
+}
+
+fn redact_mcp_app_structured_preview(value: &serde_json::Value) -> Result<String, String> {
+    fn redact(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, _| {
+                    let key = key.to_ascii_lowercase();
+                    ![
+                        "token",
+                        "secret",
+                        "password",
+                        "api_key",
+                        "apikey",
+                        "authorization",
+                        "credential",
+                        "environment",
+                        "env",
+                        "_meta",
+                    ]
+                    .iter()
+                    .any(|needle| key == *needle || key.contains(needle))
+                });
+                for child in map.values_mut() {
+                    redact(child);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(redact),
+            _ => {}
+        }
+    }
+    let mut safe = value.clone();
+    redact(&mut safe);
+    serde_json::to_string(&safe).map_err(|error| format!("Invalid MCP App preview: {error}"))
 }
 
 #[derive(Clone)]
