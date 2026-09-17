@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article" data-title-zh="MCP · 教程 | Wisp Science" data-title-en="MCP · Tutorials | Wisp Science" data-desc-zh="Wisp Science基础入门：MCP" data-desc-en="Wisp Science Basics: MCP">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="MCP · 教程 | wisp-depmap" data-title-en="MCP · Tutorials | wisp-depmap" data-desc-zh="wisp-depmap基础入门：MCP" data-desc-en="wisp-depmap Basics: MCP">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science基础入门：MCP">
-  <title>MCP · 教程 | Wisp Science</title>
+  <meta name="description" content="wisp-depmap基础入门：MCP">
+  <title>MCP · 教程 | wisp-depmap</title>
   <script>
     (function () {
       var lang = "zh";
@@ -32,7 +32,7 @@
     <div class="container">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="28" height="28">
-        <span class="brand-name">Wisp Science</span>
+        <span class="brand-name">wisp-depmap</span>
       </a>
       <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
         <a href="../index.html#features" data-i18n="nav.features">功能</a>
@@ -58,15 +58,15 @@
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-mcp" data-i18n="tutorials.back">返回教程目录</a></nav>
 <article class="tutorial-article" id="wisp-science-mcp" aria-labelledby="article-title">
-<header><h1 id="article-title" data-text-zh="Wisp Science基础入门：MCP" data-text-en="Wisp Science Basics: MCP">Wisp Science基础入门：MCP</h1>
+<header><h1 id="article-title" data-text-zh="wisp-depmap基础入门：MCP" data-text-en="wisp-depmap Basics: MCP">wisp-depmap基础入门：MCP</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-mcp.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-mcp.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-mcp.md" data-i18n="tutorials.source">查看原文</a></header>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>做科研时，我们经常需要在不同工具之间来回切换：去 PubMed 查论文，到 GEO 找数据，再把结果整理进项目笔记。如果希望 AI 参与这些工作，就需要让它能够访问相应的数据源和工具。</p>
-<p>MCP 提供了一套统一的连接方式。在 Wisp Science 中，你可以使用已有的科研连接器，也可以添加自己的 MCP 服务，让检索、读取和整理结果在同一段对话里完成。</p>
+<p>MCP 提供了一套统一的连接方式。在 wisp-depmap 中，你可以使用已有的科研连接器，也可以添加自己的 MCP 服务，让检索、读取和整理结果在同一段对话里完成。</p>
 <p>这篇文章从概念讲起，再用两个例子介绍如何配置和验证连接。</p>
 <p><strong>先认识 MCP：让 AI 应用连接外部工具的通用协议。</strong></p>
 <p>MCP 的全称是 <strong>Model Context Protocol，模型上下文协议</strong>。它是一项开放标准，用来连接 AI 应用与外部系统，包括数据源、工具和工作流。MCP 官方用 USB-C 接口作比喻：设备通过统一接口连接，AI 应用也可以通过统一协议接入不同服务。<a href="https://modelcontextprotocol.io/docs/getting-started/intro">MCP 官方介绍</a></p>
-<p>放到 Wisp Science 里，可以这样理解各自的分工：</p>
+<p>放到 wisp-depmap 里，可以这样理解各自的分工：</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="教程表格"><table class="doc-table doc-table-compact">
 <thead>
 <tr>
@@ -80,7 +80,7 @@
 <td>理解你的需求，选择工具，解读返回结果</td>
 </tr>
 <tr>
-<td>Wisp Science</td>
+<td>wisp-depmap</td>
 <td>管理连接、组织工具调用、处理权限，并展示结果</td>
 </tr>
 <tr>
@@ -93,7 +93,7 @@
 <p>MCP 规范中的服务端能力包括 <strong>Tools（工具）</strong>、<strong>Resources（资源）</strong> 和 <strong>Prompts（提示模板）</strong>。具体服务和客户端支持哪些能力，需要看各自实现；本文关注 Wisp 中最直接的用法：连接服务并调用工具。<a href="https://modelcontextprotocol.io/specification/2025-06-18/server/index">MCP 服务端能力说明</a></p>
 <p>对科研用户来说，这意味着可以要求回答附上实际查到的 PMID、数据集编号和来源链接，方便后续核验。工具结果仍然需要结合原始记录和论文内容判断。</p>
 <p><strong>第一次使用，可以先试试 Wisp 内置的科研连接器。</strong></p>
-<p>Wisp Science 已有面向 PubMed、GEO、UniProt 等数据源的内置科研连接器。打开项目，进入 <strong>设置 → 连接</strong>，即可查看可用连接器，并按需要启用。</p>
+<p>wisp-depmap 已有面向 PubMed、GEO、UniProt 等数据源的内置科研连接器。打开项目，进入 <strong>设置 → 连接</strong>，即可查看可用连接器，并按需要启用。</p>
 <p>点击连接器名称，可以查看简介、数据来源和工具列表。展开某个工具，还能看到参数说明、必填项和默认值。具体覆盖范围可参阅项目的<a href="https://xuzhougeng.github.io/wisp-science/mcp.html">科研连接器清单</a>。</p>
 <p>先确认已配置好可用模型，再试着发送这样一条消息：</p>
 <blockquote>
@@ -257,12 +257,12 @@
 <p>涉及代理时，可进入 <strong>设置 → 常规 → 网络</strong>，检查 MCP 服务对应的网络设置。已有连接需要重新连接后使用新值，本地 MCP 是否遵循代理环境变量还取决于服务自身实现。</p>
 <p>第一次尝试，可以选一个熟悉的小任务：检索 5 篇论文、读取一个公开网页，或者搜索一篇自己的研究笔记。观察 Wisp 调用了什么工具、拿到了什么结果，再沿着这些结果继续提问，就能逐步把 MCP 用到自己的科研流程中。</p>
 <blockquote>
-<p>本文依据撰写时的 Wisp Science 项目文档与界面实现整理；不同版本的界面文字可能略有差异。文中的任务提示词用于演示使用方式，不代表已经执行的检索结果。</p>
+<p>本文依据撰写时的 wisp-depmap 项目文档与界面实现整理；不同版本的界面文字可能略有差异。文中的任务提示词用于演示使用方式，不代表已经执行的检索结果。</p>
 </blockquote>
 </div>
 <div class="tutorial-body lang-en" lang="en">
 <p>Research often means switching between tools: PubMed for papers, GEO for datasets, and project notes for organizing results. To help with this work, an AI needs access to the relevant data sources and tools.</p>
-<p>MCP provides a common way to connect them. In Wisp Science, you can use built-in research connectors or add your own MCP services so that searching, reading, and organizing results happen in the same conversation.</p>
+<p>MCP provides a common way to connect them. In wisp-depmap, you can use built-in research connectors or add your own MCP services so that searching, reading, and organizing results happen in the same conversation.</p>
 <p>This tutorial introduces the concept, then uses two examples to configure and verify connections.</p>
 <p><strong>MCP connects AI applications to external tools.</strong></p>
 <p>MCP stands for <strong>Model Context Protocol</strong>, an open standard connecting AI applications to external systems such as data sources, tools, and workflows. Its official introduction compares it to USB-C: a common interface lets different systems connect. See the <a href="https://modelcontextprotocol.io/docs/getting-started/intro">MCP introduction</a>.</p>
@@ -280,7 +280,7 @@
 <td>Understand your request, select tools, and interpret results</td>
 </tr>
 <tr>
-<td>Wisp Science</td>
+<td>wisp-depmap</td>
 <td>Manage connections, organize calls, handle permissions, and display results</td>
 </tr>
 <tr>
@@ -468,7 +468,7 @@
     <div class="container footer-inner">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="24" height="24">
-        Wisp Science
+        wisp-depmap
       </a>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
@@ -479,7 +479,7 @@
         <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
-      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 wisp-depmap · 开源科学计算 Agent</p>
     </div>
   </footer>
   <script src="../assets/i18n.js"></script>

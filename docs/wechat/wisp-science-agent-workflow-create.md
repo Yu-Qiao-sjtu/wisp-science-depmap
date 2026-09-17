@@ -1,4 +1,4 @@
-# Wisp Science高级用法：创建 Agent Workflow
+# wisp-depmap高级用法：创建 Agent Workflow
 
 上一篇 [Agent Workflow](wisp-science-agent-workflow.md) 介绍了四个内置工作流。当你反复用同一套分工检查研究方案、整理证据或准备组会时，可以把这套安排保存成自己的工作流。
 

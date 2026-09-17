@@ -57,7 +57,7 @@ class TutorialBuildTests(unittest.TestCase):
         self.assertIn('class="tutorial-next" href="wisp-science-models.html"', first)
         self.assertNotIn('class="tutorial-next"', last)
         self.assertIn('class="tutorial-previous" href="wisp-science-cli.html"', last)
-        self.assertIn('<title>快速开始 · 教程 | Wisp Science</title>', first)
+        self.assertIn('<title>快速开始 · 教程 | wisp-depmap</title>', first)
         self.assertIn('src="../assets/i18n.js"', first)
 
     def test_cli_is_a_separate_tutorial_from_server_setup(self):
@@ -98,8 +98,8 @@ class TutorialBuildTests(unittest.TestCase):
         actions = pages["tutorials/wisp-science-quick-actions.html"]
         self.assertIn('class="tutorial-next" href="wisp-science-quick-actions.html"', specialists)
         self.assertIn('class="tutorial-previous" href="wisp-science-specialists.html"', actions)
-        self.assertIn('data-text-en="Wisp Science Tips: Specialists"', specialists)
-        self.assertIn('data-text-en="Wisp Science Tips: Quick Actions"', actions)
+        self.assertIn('data-text-en="wisp-depmap Tips: Specialists"', specialists)
+        self.assertIn('data-text-en="wisp-depmap Tips: Quick Actions"', actions)
         self.assertIn('src="../assets/specialists/01-overview.png"', specialists)
         self.assertIn('src="../assets/tutorials/en/specialists/01-overview.png"', specialists)
         self.assertIn('width="1612" height="710"', specialists)

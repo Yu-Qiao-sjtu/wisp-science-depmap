@@ -1,6 +1,6 @@
-# Wisp Science Tips: Specialists
+# wisp-depmap Tips: Specialists
 
-Reading papers, checking an analysis, and preparing figures call for different working habits. Wisp Science **Specialists** let you save those recurring requirements, then supply fresh materials and a concrete task each time.
+Reading papers, checking an analysis, and preparing figures call for different working habits. wisp-depmap **Specialists** let you save those recurring requirements, then supply fresh materials and a concrete task each time.
 
 Following the tutorials on [Skills](wisp-science-skills.md) and [Trajectory](wisp-science-trajectory.md), this article covers the three built-in Specialists, both creation paths, and how to use a saved Specialist in a conversation.
 
@@ -142,4 +142,4 @@ Try a familiar abstract and check the requested structure, evidence locations, a
 
 Start with one role you use every week. Save stable requirements in the Specialist, keep changing materials and goals in each message, and refine the instructions from actual results.
 
-> This tutorial reflects the Wisp Science implementation at writing time. Prompts and file paths are teaching examples, not completed research tasks. Interface labels may differ between versions.
+> This tutorial reflects the wisp-depmap implementation at writing time. Prompts and file paths are teaching examples, not completed research tasks. Interface labels may differ between versions.

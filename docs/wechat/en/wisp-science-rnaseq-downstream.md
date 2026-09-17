@@ -1,8 +1,8 @@
-# Wisp Science Hands-on: Complete a Downstream RNA-seq Analysis
+# wisp-depmap Hands-on: Complete a Downstream RNA-seq Analysis
 
 How can we investigate the changes in gene expression and transcriptional programs after ESR1 knockdown in breast cancer cells?
 
-In this tutorial, we use Wisp Science to analyze **ESR1 knockdown in MCF7 cells**. We find public data, inspect samples and groups, obtain counts from raw sequencing data, run differential expression, ORA, and GSEA, and turn the findings into testable research questions.
+In this tutorial, we use wisp-depmap to analyze **ESR1 knockdown in MCF7 cells**. We find public data, inspect samples and groups, obtain counts from raw sequencing data, run differential expression, ORA, and GSEA, and turn the findings into testable research questions.
 
 The workflow follows one dataset, **GSE153250**. The prompts below are the exact English requests used for these tasks and can be copied directly into a conversation.
 

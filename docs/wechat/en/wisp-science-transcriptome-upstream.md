@@ -1,14 +1,14 @@
-# Wisp Science: Complete an Upstream RNA-seq Analysis
+# wisp-depmap: Complete an Upstream RNA-seq Analysis
 
 After finding a public RNA-seq dataset, how do you turn raw sequencing files into a count matrix suitable for differential expression analysis?
 
-This tutorial uses Wisp Science to organize samples, prepare FASTQ files, check quality, align reads, and count genes. We use **ESR1 knockdown in MCF7 cells from GSE153250**, retaining only siESR1 and siNT samples. The outputs are gene counts, a sample group table, and a counting summary.
+This tutorial uses wisp-depmap to organize samples, prepare FASTQ files, check quality, align reads, and count genes. We use **ESR1 knockdown in MCF7 cells from GSE153250**, retaining only siESR1 and siNT samples. The outputs are gene counts, a sample group table, and a counting summary.
 
 The English prompts below are the actual requests used for these tasks and can be copied directly into a Wisp conversation.
 
 ## 1. Prepare the project and compute server
 
-Create a Wisp Science project, such as `ESR1`, and choose a workspace for analysis records, scripts, and retrieved outputs. See [Quick Start](wisp-science-quick-start.md) for model configuration.
+Create a wisp-depmap project, such as `ESR1`, and choose a workspace for analysis records, scripts, and retrieved outputs. See [Quick Start](wisp-science-quick-start.md) for model configuration.
 
 This upstream analysis runs on a remote Linux server. Follow the [server tutorial](wisp-science-servers-cli.md) to register your own SSH server in Settings and verify connectivity.
 

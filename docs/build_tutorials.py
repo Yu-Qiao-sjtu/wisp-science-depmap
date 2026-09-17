@@ -77,7 +77,7 @@ def render_article(source, articles, language):
     title = tokens[1].content
     prefix, separator, short = title.partition("：" if language == "zh" else ":")
     short = short.strip() if separator else title
-    category = (prefix.replace("Wisp Science", "").strip() if separator
+    category = (prefix.replace("wisp-depmap", "").strip() if separator
                 else ("教程" if language == "zh" else "Tutorial"))
     tokens = tokens[3:]
     # Rewrite parsed links/images only; keep code examples intact.
@@ -153,8 +153,8 @@ def render_tutorials(directory=None):
              + "\n".join(sections) + "\n" + END + after}
     head, footer = article_shell(directory)
     for index, (anchor, zh, en) in enumerate(entries):
-        zh_title = zh["short"] + " · 教程 | Wisp Science"
-        en_title = en["short"] + " · Tutorials | Wisp Science"
+        zh_title = zh["short"] + " · 教程 | wisp-depmap"
+        en_title = en["short"] + " · Tutorials | wisp-depmap"
         article_head = re.sub(r"<title>.*?</title>", lambda _: f"<title>{escape(zh_title)}</title>", head)
         article_head = re.sub(r'<meta name="description" content="[^"]*">',
                               lambda _: f'<meta name="description" content="{escape(zh["title"])}">', article_head)

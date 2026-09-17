@@ -167,7 +167,7 @@ Add a top-level `screen` signal: `Projects` vs `Chat`. The app boots to
 `Projects`.
 
 - **Projects screen** — mirrors the Claude Science reference: header
-  "Wisp Science / Beta" + "New project"; a Projects column (cards: name, session
+  "wisp-depmap / Beta" + "New project"; a Projects column (cards: name, session
   count, last-active relative time) and a Recent sessions column (cross-project).
   Clicking a card → `open_project(id)` → set `screen = Chat`, refresh
   project_info/sessions.

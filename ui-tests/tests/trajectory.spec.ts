@@ -40,7 +40,7 @@ async function runOneTurn(page: Page) {
   await enterApp(page);
   await page.locator("#composer-input").fill("analyze ESR1");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
 }
 
 // A 20-turn session: tall enough that the list has to scroll.
@@ -93,7 +93,7 @@ test("trajectory modal renders turns, inspector tabs, usage lines, and stats", a
   await enterApp(page);
   await page.locator("#composer-input").fill("analyze ESR1");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("thread-tabs")).toHaveCount(0);
 
   const view = await openTrajectory(page);
@@ -164,20 +164,20 @@ test("trajectory modal renders turns, inspector tabs, usage lines, and stats", a
   // Closing the modal restores the chat thread.
   await page.getByTestId("trajectory-close").click();
   await expect(page.getByTestId("trajectory-overlay")).toHaveCount(0);
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible();
 });
 
 test("Escape immediately after opening the trajectory modal closes only that layer", async ({ page }) => {
   await enterApp(page);
   await page.locator("#composer-input").fill("analyze ESR1");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
 
   await page.getByTestId("trajectory-topbar").click();
   await expect(page.getByTestId("trajectory-overlay")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("trajectory-overlay")).toHaveCount(0);
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible();
 });
 
 test("/trajectory slash command opens the inspector", async ({ page }) => {

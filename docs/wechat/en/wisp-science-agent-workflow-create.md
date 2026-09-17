@@ -1,4 +1,4 @@
-# Wisp Science Advanced: Creating an Agent Workflow
+# wisp-depmap Advanced: Creating an Agent Workflow
 
 The previous [Agent Workflow tutorial](wisp-science-agent-workflow.md) introduced four built-ins. When the same division of work repeatedly helps you review research plans, examine evidence, or prepare meetings, save it as your own workflow.
 

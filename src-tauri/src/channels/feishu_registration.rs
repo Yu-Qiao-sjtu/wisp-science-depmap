@@ -92,7 +92,7 @@ fn accounts_base(international: bool) -> &'static str {
 
 fn registration_client() -> Result<Client> {
     Client::builder()
-        .user_agent("wisp-science")
+        .user_agent("wisp-depmap")
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to create Feishu registration HTTP client")

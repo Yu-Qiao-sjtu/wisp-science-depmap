@@ -1,8 +1,8 @@
-# Wisp Science Basics: Skills
+# wisp-depmap Basics: Skills
 
 When using AI for research, some requirements come up repeatedly: verify literature sources, retain raw plotting data, record analysis parameters, and distinguish authors' conclusions from your own interpretation.
 
-Repeating all of these requirements from scratch makes omissions likely. A Skill lets you save a tested method so Wisp Science can read and apply it to relevant tasks.
+Repeating all of these requirements from scratch makes omissions likely. A Skill lets you save a tested method so wisp-depmap can read and apply it to relevant tasks.
 
 The preceding tutorial introduced [MCP](wisp-science-mcp.md). Here we explain Skills, how to use them in Wisp, and how to preserve your own research practices as reusable instructions.
 

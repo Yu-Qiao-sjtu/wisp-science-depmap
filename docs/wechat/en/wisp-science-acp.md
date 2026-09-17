@@ -1,6 +1,6 @@
-# Wisp Science Advanced: ACP Configuration
+# wisp-depmap Advanced: ACP Configuration
 
-If you already use an external agent such as Codex or Claude and want to work with it inside Wisp Science's project interface, connect it through ACP. Wisp provides the project UI, messaging, and permission interactions; the external agent owns its session, tools, and authentication.
+If you already use an external agent such as Codex or Claude and want to work with it inside wisp-depmap's project interface, connect it through ACP. Wisp provides the project UI, messaging, and permission interactions; the external agent owns its session, tools, and authentication.
 
 This tutorial covers preparing a local adapter, configuring it, testing the connection, and starting a conversation. For ordinary model APIs, see [Model Configuration](wisp-science-models.md).
 

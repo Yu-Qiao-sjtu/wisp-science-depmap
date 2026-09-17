@@ -46,7 +46,7 @@ async function start(page: Page) {
   await expect.poll(() => page.evaluate(() => (window as any).__skillInvokeLog?.some((c: any) => c.cmd === "send_message"))).toBe(true);
   // The mock completes the opening turn asynchronously. In an optimized build
   // its later Done event could otherwise clear the App approval injected below.
-  await expect(page.getByText("Hello from mock wisp-science.", { exact:true })).toBeVisible();
+  await expect(page.getByText("Hello from mock wisp-depmap.", { exact:true })).toBeVisible();
   return page.evaluate(() => {
     const args = (window as any).__skillInvokeLog.filter((c: any) => c.cmd === "send_message").at(-1).args;
     return String(args instanceof Map ? args.get("sessionId") : args.sessionId);
@@ -166,7 +166,7 @@ test("child shell preserves sandbox/CSP and directly forwards guest protocol", a
       if(command==="mcp_app_child_bootstrap") return {handle:{},instanceId:"mcp-app:fake:ui://test",version:"test",hostContext:{theme:"light"},payload:{tool:{name:"test"},resource:{text:`<!doctype html><body><div id="result">waiting</div><script>
       addEventListener('message',e=>{if(e.data.id===1)parent.postMessage({jsonrpc:'2.0',method:'tools/call',id:2,params:{name:'paginate',arguments:{page:2}}},'*');if(e.data.id===2)document.querySelector('#result').textContent=e.data.result.structuredContent.page;});
       parent.postMessage({jsonrpc:'2.0',method:'ui/initialize',id:1,params:{}},'*');<\/script>`},result:{content:[]}}};
-      if(command==="mcp_app_child_request") return {jsonrpc:"2.0",id:args.request.id,result:args.request.method==="tools/call"?{structuredContent:{page:2}}:{hostInfo:{name:"wisp-science"}}};
+      if(command==="mcp_app_child_request") return {jsonrpc:"2.0",id:args.request.id,result:args.request.method==="tools/call"?{structuredContent:{page:2}}:{hostInfo:{name:"wisp-depmap"}}};
       return {};
     }};
   });

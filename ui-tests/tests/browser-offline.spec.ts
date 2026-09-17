@@ -42,7 +42,7 @@ async function invokeCount(page: Page, cmd: string) {
 async function startLiveRetrievalTurn(page: Page) {
   await page.locator("#composer-input").fill("latest rustc version");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible();
   await expect.poll(() => lastInvokeArgs(page, "send_message")).not.toBeNull();
   const sessionId = String((await lastInvokeArgs(page, "send_message")).sessionId ?? "");
   expect(sessionId).not.toBe("");

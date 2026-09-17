@@ -1,7 +1,7 @@
 # StickS3 Device Bridge
 
 StickS3 Device Bridge is an experimental, opt-in Remote Access integration for
-using a StickS3 as a physical Wisp Science status pet. Open **Settings → Remote
+using a StickS3 as a physical wisp-depmap status pet. Open **Settings → Remote
 Access → StickS3 Device Bridge** to configure it.
 
 The transport is designed as two explicit modes from the start:
@@ -73,13 +73,13 @@ installation. It never binds `0.0.0.0`; a specific IPv4 address is mandatory.
 Its default port is `18766`. The separate Browser Bridge remains loopback-only
 on `127.0.0.1:18765`.
 
-If binding fails, Settings reports an error while the rest of Wisp Science
+If binding fails, Settings reports an error while the rest of wisp-depmap
 continues to work. Common causes are an address that is no longer assigned to
 the computer or a port already used by another process.
 
 ## Firewall
 
-The operating-system firewall may ask whether Wisp Science may accept incoming
+The operating-system firewall may ask whether wisp-depmap may accept incoming
 connections. Permit TCP traffic only for the selected Device Bridge port and
 the intended private network profile or source subnet. Do not create a broad
 all-networks rule, and do not open Browser Bridge port `18765` to the LAN.
@@ -114,7 +114,7 @@ Requires `X-Wisp-Device-Token` and returns the backend-owned physical-pet state:
 {
   "type": "pet_state",
   "state": "working",
-  "project": "Wisp Science",
+  "project": "wisp-depmap",
   "label": "Agent is working",
   "sessionId": "frame-id-or-null",
   "seq": 42,
@@ -180,7 +180,7 @@ includes the configured Pet directory or another local path:
 
 Requires `X-Wisp-Device-Token`. A successful response is an immutable,
 transparent `image/png` frame with exact dimensions `120×130` and an accurate
-`Content-Length`. Wisp Science crops one `192×208` atlas cell and scales it at
+`Content-Length`. wisp-depmap crops one `192×208` atlas cell and scales it at
 the same aspect ratio. PNG and WebP v2 source atlases are supported.
 
 The accepted states form a closed list:
@@ -218,7 +218,7 @@ Requires `X-Wisp-Device-Token`. Only three actions are accepted:
 
 - `ping` records a bounded debug event and returns an acknowledgement.
 - `focus_session` validates that the session and its project still exist,
-  restores Wisp Science, and opens only that session's window.
+  restores wisp-depmap, and opens only that session's window.
 - `acknowledge` clears a completed or failed physical-pet notification. It does
   not affect the Agent.
 
@@ -234,7 +234,7 @@ bounded memory and is not a conversation transcript.
 ## Token handling
 
 The first enable generates a random 256-bit pre-shared token when none exists.
-Wisp Science stores it through the existing secret-storage path (the operating
+wisp-depmap stores it through the existing secret-storage path (the operating
 system keyring in release builds), never in SQLite or normal logs. Authenticated
 routes compare a token-derived fixed-size MAC rather than directly comparing
 the supplied secret.

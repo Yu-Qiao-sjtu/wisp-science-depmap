@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
-  <img src="docs/assets/wordmark-light.svg" alt="Wisp Science" width="360" />
+  <img src="docs/assets/wordmark-light.svg" alt="wisp-depmap" width="360" />
 </picture>
 
 # wisp-depmap

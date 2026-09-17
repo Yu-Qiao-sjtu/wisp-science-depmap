@@ -2645,7 +2645,7 @@ function createMcpAppInstance(instanceId, payloadJson) {
     locale: document.documentElement.lang || navigator.language || "en",
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     platform: "desktop",
-    userAgent: `wisp-science/${wispAppVersion}`,
+    userAgent: `wisp-depmap/${wispAppVersion}`,
     toolInfo: { tool: instance.payload.tool || {} },
   });
   const sendHostContext = () => {
@@ -2730,7 +2730,7 @@ function createMcpAppInstance(instanceId, payloadJson) {
             result: {
               protocolVersion: message.params?.protocolVersion || "2026-01-26",
               hostCapabilities,
-              hostInfo: { name: "wisp-science", version: wispAppVersion },
+              hostInfo: { name: "wisp-depmap", version: wispAppVersion },
               hostContext: hostContext(),
             },
           });
@@ -2741,7 +2741,7 @@ function createMcpAppInstance(instanceId, payloadJson) {
           result: {
             protocolVersion: message.params?.protocolVersion || "2026-01-26",
             hostCapabilities,
-            hostInfo: { name: "wisp-science", version: wispAppVersion },
+            hostInfo: { name: "wisp-depmap", version: wispAppVersion },
             hostContext: hostContext(),
           },
         }),

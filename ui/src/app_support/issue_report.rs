@@ -88,6 +88,6 @@ mod tests {
         assert!(prompt.contains("total=120ms store=90ms window_ready=600000ms"));
         assert!(prompt.contains("0.34.0"));
         assert!(!prompt.contains("/mock/root"));
-        assert!(prompt.contains("wisp-science"));
+        assert!(prompt.contains("wisp-depmap"));
     }
 }

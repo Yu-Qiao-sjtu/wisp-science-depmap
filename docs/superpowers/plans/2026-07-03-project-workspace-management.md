@@ -721,7 +721,7 @@ fn ProjectsScreen(locale: RwSignal<String>, on_open: Callback<String>) -> impl I
     view! {
         <div class="projects-screen">
             <div class="projects-head">
-                <div class="projects-title">"Wisp Science"<span class="beta">"Beta"</span></div>
+                <div class="projects-title">"wisp-depmap"<span class="beta">"Beta"</span></div>
                 <button class="btn-primary" on:click=move |_| creating.set(true)>
                     {move || t(locale.get(), "projects.new")}
                 </button>

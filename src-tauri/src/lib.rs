@@ -3864,7 +3864,7 @@ fn wire_macos_menu_events(window: &crate::workspace_surface::WorkspaceSurface) {
 fn install_macos_app_menu(app: &AppHandle, locale_tag: &str) -> Result<(), String> {
     let labels = mac_menu_labels(AppMenuLocale::from_tag(locale_tag));
     let about = AboutMetadata {
-        name: Some("wisp-science".into()),
+        name: Some("wisp-depmap".into()),
         version: Some(env!("CARGO_PKG_VERSION").into()),
         ..Default::default()
     };
@@ -7052,7 +7052,7 @@ impl SharedLogFile {
     fn create() -> Option<Self> {
         let dir = dirs::data_dir()?
             .join("science.wisp-science")
-            .join("wisp-science")
+            .join("wisp-depmap")
             .join("logs");
         std::fs::create_dir_all(&dir).ok()?;
         let path = dir.join("wisp.log");
@@ -7294,7 +7294,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from(".wisp"))
-                .join("wisp-science");
+                .join("wisp-depmap");
             std::fs::create_dir_all(&app_data).expect("create app data dir");
             let db_path = app_data.join("wisp.sqlite");
             let store = startup.record("store", || {
@@ -7345,7 +7345,7 @@ pub fn run() {
                 let default_workspace = app
                     .path()
                     .document_dir()
-                    .map(|d| d.join("wisp-science"))
+                    .map(|d| d.join("wisp-depmap"))
                     .unwrap_or_else(|_| app_data.join("workspace"));
                 let legacy_ws = store
                     .get_setting("workspace_dir")
@@ -7372,7 +7372,7 @@ pub fn run() {
             let default_workspace = app
                 .path()
                 .document_dir()
-                .map(|d| d.join("wisp-science"))
+                .map(|d| d.join("wisp-depmap"))
                 .unwrap_or_else(|_| app_data.join("workspace"));
             let root = resolve_workspace(
                 std::env::var("WISP_WORKSPACE").ok(),

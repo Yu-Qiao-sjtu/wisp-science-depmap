@@ -157,7 +157,7 @@ fn bundled_connector_infos(
                 description_zh: metadata
                     .map(|m| m.description_zh.clone())
                     .unwrap_or_default(),
-                maintainer: "Wisp Science".into(),
+                maintainer: "wisp-depmap".into(),
                 links: metadata
                     .map(|m| {
                         m.links
@@ -451,7 +451,7 @@ mod tests {
         assert!(!biomart.enabled);
         assert!(!biomart.description.is_empty());
         assert!(!biomart.description_zh.is_empty());
-        assert_eq!(biomart.maintainer, "Wisp Science");
+        assert_eq!(biomart.maintainer, "wisp-depmap");
         assert!(biomart
             .links
             .iter()

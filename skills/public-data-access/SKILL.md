@@ -124,7 +124,7 @@ checksums or immutable object identifiers are recorded elsewhere.
 - If an adapter or connector cannot perform the requested transfer, stop after
   producing the validated plan and report the missing capability explicitly.
 
-## Wisp Science integration
+## wisp-depmap integration
 
 - Discover the live connector/tool catalog instead of assuming exact MCP tool
   names; installations can expose different provider adapters.

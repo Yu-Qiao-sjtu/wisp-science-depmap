@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, sync::Mutex};
 
-const GIT_AUTHOR_NAME: &str = "Wisp Science Agent";
+const GIT_AUTHOR_NAME: &str = "wisp-depmap Agent";
 const GIT_AUTHOR_EMAIL: &str = "wisp-agent@localhost";
 
 #[derive(Debug, Clone)]

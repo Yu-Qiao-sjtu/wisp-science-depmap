@@ -1,14 +1,14 @@
-# Wisp Science Basics: Quick Start
+# wisp-depmap Basics: Quick Start
 
-You do not need to configure servers, browser access, and every research tool before using Wisp Science. Install the app, complete the welcome guide, create a practice project, and send a small question whose answer you can check. This establishes that the basic workflow works.
+You do not need to configure servers, browser access, and every research tool before using wisp-depmap. Install the app, complete the welcome guide, create a practice project, and send a small question whose answer you can check. This establishes that the basic workflow works.
 
 This tutorial takes you from downloading the app to your first conversation. You need a computer and access to a working model API. Without an API key, you can still install the app, explore its interface, and read the bundled demonstration.
 
-> Screenshots show the real Wisp Science frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.
+> Screenshots show the real wisp-depmap frontend with simulated settings and a teaching reply. Paths, projects, and answers illustrate the workflow; they do not demonstrate a verified live API account. The screenshots use the English interface. Labels may vary between versions.
 
 **Step 1: Choose an installer for your computer.**
 
-Open the [Wisp Science download page](https://wispscience.com/?lang=en#download), choose your operating system, processor and package format, then select **Download from Cloudflare**. The page shows the version, file size and installation steps. On a Mac, check **About This Mac** to choose Apple Silicon or Intel. Use the GitHub fallback if the download is unavailable.
+Open the [wisp-depmap download page](https://wispscience.com/?lang=en#download), choose your operating system, processor and package format, then select **Download from Cloudflare**. The page shows the version, file size and installation steps. On a Mac, check **About This Mac** to choose Apple Silicon or Intel. Use the GitHub fallback if the download is unavailable.
 
 The version number in the filename changes. Look for the architecture and file extension:
 
@@ -24,7 +24,7 @@ On a Mac, **About This Mac** in the Apple menu identifies the chip. On other sys
 
 For a first installation, you do not need `Source code (zip)`, `Source code (tar.gz)`, `.sig`, `latest.json`, or `.app.tar.gz`. These are source, signature, or update-related files. Choose a desktop installer from the table.
 
-Once installed, open **Wisp Science**. This tutorial's text-only conversation does not require installing Rust, Python, or R first.
+Once installed, open **wisp-depmap**. This tutorial's text-only conversation does not require installing Rust, Python, or R first.
 
 **Step 2: Follow the four onboarding pages.**
 
@@ -36,7 +36,7 @@ The first launch displays a welcome guide. Use the button at the bottom to conti
 
 The second page introduces project conversations, analysis, research tools, and file previews. You only need to know that these capabilities exist; you do not need to configure all of them now.
 
-![The onboarding page introducing Wisp Science features](../../assets/tutorials/en/quick-start/02-features.png)
+![The onboarding page introducing wisp-depmap features](../../assets/tutorials/en/quick-start/02-features.png)
 
 *Figure 2: The feature introduction outlines the workbench. Start with an ordinary conversation, then explore analysis and retrieval.*
 

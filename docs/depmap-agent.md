@@ -10,7 +10,7 @@
 > ordinary DepMap query or initial topic exploration should be handled by the
 > conversational Agent first.
 
-Wisp Science includes a selectable **DepMap Agent** Specialist. It owns the
+wisp-depmap includes a selectable **DepMap Agent** Specialist. It owns the
 project-level scientific workflow: understand the question, route to validated
 precomputed evidence or a new R analysis, monitor the Run, enforce QA, load
 stage-specific Skills, and preserve provenance. The knowledge base is an
@@ -39,7 +39,7 @@ project-local `data/`, `tm00-script/`, and `knowledge/` layout remains
 recognizable but is not the product contract.
 
 The DepMap Agent and local DepMap/TCGA MCP do not create SSH sessions or
-tunnels. Users connect research servers through Wisp Science's ordinary
+tunnels. Users connect research servers through wisp-depmap's ordinary
 ExecutionContext UI. The knowledge query layer accepts local files or an
 already reachable HTTPS/loopback endpoint only; a project containing
 `knowledge.tunnel` is rejected with an explicit configuration error. This keeps

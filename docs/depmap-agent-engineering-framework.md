@@ -1,12 +1,12 @@
 # DepMap Agent 工程编排框架
 
 状态：目标架构（Agent-first），Phase 1 与 Evidence Ledger 最小闭环已实现  
-适用基座：Wisp Science v1.10.x + DepMap 26Q1
+适用基座：wisp-depmap v1.10.x + DepMap 26Q1
 最后更新：2026-08-30
 
 ## 1. 文档目的
 
-本文定义 Wisp Science 中 DepMap Agent 的工程边界、调用链、状态模型和实施顺序。
+本文定义 wisp-depmap 中 DepMap Agent 的工程边界、调用链、状态模型和实施顺序。
 它回答的核心问题不是“怎样再增加一个固定 Workflow”，而是：
 
 > 如何让用户通过自然语言与一个可信、可追溯、可扩展的科学 Agent 交互，
@@ -139,7 +139,7 @@ http://127.0.0.1:8877/mcp
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
-│ Wisp Science 交互层                                        │
+│ wisp-depmap 交互层                                        │
 │ 对话 · 追问 · 证据引用 · 数据卡片 · 进度 · 审批 · Artifact │
 └───────────────────────────┬────────────────────────────────┘
                             │ user request / activity events

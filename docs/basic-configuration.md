@@ -1,8 +1,8 @@
-# Wisp Science 基础配置教程
+# wisp-depmap 基础配置教程
 
-本教程面向第一次使用 Wisp Science 的用户，覆盖模型、服务器、浏览器、Skill、MCP、ACP、凭据、插件、飞书/微信、项目迁移、记忆、外观和命令行。界面截图来自 macOS 版；Windows 版菜单位置基本一致，快捷键中的 `Cmd` 请换成 `Ctrl`。
+本教程面向第一次使用 wisp-depmap 的用户，覆盖模型、服务器、浏览器、Skill、MCP、ACP、凭据、插件、飞书/微信、项目迁移、记忆、外观和命令行。界面截图来自 macOS 版；Windows 版菜单位置基本一致，快捷键中的 `Cmd` 请换成 `Ctrl`。
 
-项目首页 Logo 旁显示“严谨做科研，Wisp Science 在身边。”；切换为英文界面时显示“Let rigor be your guide, with Wisp Science by your side.”。窄窗口下标语会自动换行排列。
+项目首页 Logo 旁显示“严谨做科研，wisp-depmap 在身边。”；切换为英文界面时显示“Let rigor be your guide, with wisp-depmap by your side.”。窄窗口下标语会自动换行排列。
 
 > 建议顺序：先配置模型，再按需要配置服务器、浏览器、Skill/MCP、ACP 和远程接入。API Key、App Secret、OAuth Token 等敏感信息应只填写在 Wisp 的凭据字段中，不要写进提示词、项目文件或截图。
 

@@ -1,8 +1,8 @@
-# Wisp Science Basics: Using the Browser
+# wisp-depmap Basics: Using the Browser
 
 Database records are often only the beginning of literature research. You may need to open a journal page, locate supplementary materials, confirm a data download link, or read a site without a dedicated search tool.
 
-Wisp Science reads and operates webpages through a browser bridge extension. It can continue work in your browser, show what it actually opened, and organize useful information in the project. This tutorial starts with a public page, then covers tabs, human verification, and downloads.
+wisp-depmap reads and operates webpages through a browser bridge extension. It can continue work in your browser, show what it actually opened, and organize useful information in the project. This tutorial starts with a public page, then covers tabs, human verification, and downloads.
 
 > Wisp screenshots use the real frontend with a teaching conversation and simulated browser events. They show the English interface. The extension screenshot illustrates Chrome's installation controls. Page titles and task states are examples, not evidence of completed live retrieval.
 

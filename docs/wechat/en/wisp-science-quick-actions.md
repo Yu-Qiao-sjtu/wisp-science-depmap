@@ -1,8 +1,8 @@
-# Wisp Science Tips: Quick Actions
+# wisp-depmap Tips: Quick Actions
 
 While reading an analysis, you may want to find literature supporting a claim. While organizing notes, you may want to discuss one paragraph from several perspectives. Copying text and rewriting the same instructions each time adds friction.
 
-Wisp Science **Quick Actions** put reusable actions beside selected text. Select the material, choose an action, and carry it into the next task.
+wisp-depmap **Quick Actions** put reusable actions beside selected text. Select the material, choose an action, and carry it into the next task.
 
 Following [Specialists](wisp-science-specialists.md), this tutorial covers selection entry points, the built-in **Research literature** action, and binding an existing Workflow to your own action.
 
@@ -113,4 +113,4 @@ For Research literature, add this context in the composer before sending. For cu
 
 Start with selecting text, preparing a literature request, refining its scope, and sending. When a procedure becomes repetitive, turn it into a Workflow and bind your own Quick Action.
 
-> This tutorial reflects the Wisp Science implementation and project documentation at writing time. Screenshots use the actual frontend with mocked data. Example claims, tasks, and prompts illustrate operation and do not represent verified research conclusions.
+> This tutorial reflects the wisp-depmap implementation and project documentation at writing time. Screenshots use the actual frontend with mocked data. Example claims, tasks, and prompts illustrate operation and do not represent verified research conclusions.

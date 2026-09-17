@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="tutorial-article" data-title-zh="轨迹 · 教程 | Wisp Science" data-title-en="Trajectories · Tutorials | Wisp Science" data-desc-zh="Wisp Science使用技巧：轨迹" data-desc-en="Wisp Science Tips: Trajectories">
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="轨迹 · 教程 | wisp-depmap" data-title-en="Trajectories · Tutorials | wisp-depmap" data-desc-zh="wisp-depmap使用技巧：轨迹" data-desc-en="wisp-depmap Tips: Trajectories">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Wisp Science使用技巧：轨迹">
-  <title>轨迹 · 教程 | Wisp Science</title>
+  <meta name="description" content="wisp-depmap使用技巧：轨迹">
+  <title>轨迹 · 教程 | wisp-depmap</title>
   <script>
     (function () {
       var lang = "zh";
@@ -32,7 +32,7 @@
     <div class="container">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="28" height="28">
-        <span class="brand-name">Wisp Science</span>
+        <span class="brand-name">wisp-depmap</span>
       </a>
       <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
         <a href="../index.html#features" data-i18n="nav.features">功能</a>
@@ -58,14 +58,14 @@
   <main class="tutorial-reader container">
 <nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-trajectory" data-i18n="tutorials.back">返回教程目录</a></nav>
 <article class="tutorial-article" id="wisp-science-trajectory" aria-labelledby="article-title">
-<header><h1 id="article-title" data-text-zh="Wisp Science使用技巧：轨迹" data-text-en="Wisp Science Tips: Trajectories">Wisp Science使用技巧：轨迹</h1>
+<header><h1 id="article-title" data-text-zh="wisp-depmap使用技巧：轨迹" data-text-en="wisp-depmap Tips: Trajectories">wisp-depmap使用技巧：轨迹</h1>
 <a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-trajectory.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-trajectory.md" data-i18n="tutorials.source">查看原文</a></header>
 <div class="tutorial-body lang-zh" lang="zh-CN">
 <p>让 AI 帮忙分析一份数据，最后收到一句“分析完成”，往往还不够。我们还想知道：它读的是哪个文件？执行了什么代码？绘图失败时，报错来自哪里？过几天再回头看，能不能找回当时的操作过程？</p>
-<p>Wisp Science 的 <strong>轨迹</strong> 功能，就是用来查看这些过程的。它把一段对话中的用户输入、助手回复、工具调用和模型用量按顺序组织起来，让你可以从结果往前追，找到具体做过的那一步。</p>
+<p>wisp-depmap 的 <strong>轨迹</strong> 功能，就是用来查看这些过程的。它把一段对话中的用户输入、助手回复、工具调用和模型用量按顺序组织起来，让你可以从结果往前追，找到具体做过的那一步。</p>
 <p>前两篇介绍了 <a href="wisp-science-mcp.html">MCP</a> 和 <a href="wisp-science-skills.html">Skills</a>。这一篇介绍如何打开轨迹、读懂记录，以及怎样用它核对分析和排查问题。</p>
 <blockquote>
-<p>本文配图来自 Wisp Science 实际前端界面，使用演示数据展示一段“检查差异分析结果表，再尝试绘图”的会话。文件名、代码、报错与用量均为教学示例，不代表已完成的科研分析。</p>
+<p>本文配图来自 wisp-depmap 实际前端界面，使用演示数据展示一段“检查差异分析结果表，再尝试绘图”的会话。文件名、代码、报错与用量均为教学示例，不代表已完成的科研分析。</p>
 </blockquote>
 <p><strong>先认识轨迹：把一次任务的执行过程展开来看。</strong></p>
 <p>假设你让 Wisp 检查一份差异分析结果表，再根据它绘制火山图。这个任务中可能发生多次工具调用：读取表格、检查列名、处理缺失值、执行绘图代码。如果中间报错，还会有检查和重试。</p>
@@ -195,7 +195,7 @@
 </div>
 <div class="tutorial-body lang-en" lang="en">
 <p>When an AI finishes an analysis, “Done” is often not enough. Which file did it read? What code did it execute? Where did plotting fail? Can you return to the process a few days later?</p>
-<p>Wisp Science's <strong>Trajectory</strong> view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.</p>
+<p>wisp-depmap's <strong>Trajectory</strong> view shows that process. It organizes user inputs, assistant replies, tool calls, and model usage so you can work backward from a result to the steps that produced it.</p>
 <p>The previous tutorials covered <a href="wisp-science-mcp.html">MCP</a> and <a href="wisp-science-skills.html">Skills</a>. Here we explain how to open a trajectory, read its records, verify an analysis, and investigate failures.</p>
 <blockquote>
 <p>Screenshots show the real frontend in English with a demonstration conversation that checks a differential-expression table and attempts a plot. Filenames, code, errors, and usage are teaching examples, not completed scientific analysis.</p>
@@ -333,7 +333,7 @@
     <div class="container footer-inner">
       <a class="brand" href="../index.html#top">
         <img src="../assets/logo.svg" alt="" width="24" height="24">
-        Wisp Science
+        wisp-depmap
       </a>
       <nav class="footer-links">
         <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
@@ -344,7 +344,7 @@
         <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
         <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
       </nav>
-      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 wisp-depmap · 开源科学计算 Agent</p>
     </div>
   </footer>
   <script src="../assets/i18n.js"></script>

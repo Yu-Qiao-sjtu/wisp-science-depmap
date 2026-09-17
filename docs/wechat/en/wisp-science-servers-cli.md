@@ -1,8 +1,8 @@
-# Wisp Science Basics: Server Environment Setup
+# wisp-depmap Basics: Server Environment Setup
 
 Research files and computation often live on different machines: a laptop for reading papers, a lab server for data, and a remote Python, R, or GPU environment for analysis. It is easy to lose track of which machine you are using and which filesystem a path belongs to.
 
-Wisp Science registers servers, attaches execution environments to conversations, and opens interactive terminals for commands you run yourself. This tutorial starts with an SSH host, then covers selecting a conversation's environment and using the terminal inside the app.
+wisp-depmap registers servers, attaches execution environments to conversations, and opens interactive terminals for commands you run yourself. This tutorial starts with an SSH host, then covers selecting a conversation's environment and using the terminal inside the app.
 
 > Screenshots show the real frontend in English with simulated server, GPU, and terminal information. `gpu.example.org` is a placeholder, not a server to connect to. The images do not demonstrate a real SSH connection.
 

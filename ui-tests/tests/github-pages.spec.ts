@@ -141,7 +141,7 @@ test("tutorial directory stays compact and links to independent articles", async
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("https://tutorials.test/wisp-science/index.html");
   await page.locator('.nav-links a[href^="tutorials.html"]').click();
-  await expect(page).toHaveTitle("教程 | Wisp Science");
+  await expect(page).toHaveTitle("教程 | wisp-depmap");
   const sources = readdirSync(resolve(repositoryRoot, "docs/wechat")).filter((name) => name.endsWith(".md"));
   await expect(page.locator(".tutorial-card")).toHaveCount(sources.length);
   await expect(page.locator(".tutorial-article")).toHaveCount(0);
@@ -155,7 +155,7 @@ test("tutorial directory stays compact and links to independent articles", async
     await page.setViewportSize({ width, height: 900 });
     for (const lang of ["en", "zh"]) {
       await page.locator(`button[data-lang="${lang}"]`).click();
-      await expect(page).toHaveTitle(lang === "en" ? "Tutorials | Wisp Science" : "教程 | Wisp Science");
+      await expect(page).toHaveTitle(lang === "en" ? "Tutorials | wisp-depmap" : "教程 | wisp-depmap");
       await expect(page.locator(".tutorial-group-title")).toHaveText(
         lang === "en" ? ["Basics", "Tips", "Advanced"] : ["基础入门", "使用技巧", "进阶"],
       );
@@ -242,17 +242,17 @@ test("article links, previous and next navigation, and browser back stay within 
   await expect(page.locator("h1")).toContainText("模型配置");
   await page.goto("https://tutorials.test/wisp-science/tutorials/wisp-science-acp.html");
   await expect(page.locator(".tutorial-next")).toHaveCount(0);
-  await expect(page.locator("h1")).toHaveText("Wisp Science高级：ACP配置");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap高级：ACP配置");
   await page.locator(".tutorial-previous").click();
   await expect(page.locator("h1")).toHaveText("Wisp 命令行");
   await page.locator(".tutorial-previous").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science高级用法：创建 Agent Workflow");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap高级用法：创建 Agent Workflow");
   await page.locator(".tutorial-previous").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science高级用法：Agent Workflow");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap高级用法：Agent Workflow");
   await page.locator(".tutorial-previous").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science实战：完成转录组下游分析");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap实战：完成转录组下游分析");
   await page.locator(".tutorial-previous").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science： 完成转录组上游分析");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap： 完成转录组上游分析");
   await page.locator(".tutorial-previous").click();
   await expect(page.locator("h1")).toContainText("快捷动作");
   await page.locator(".tutorial-previous").click();
@@ -293,16 +293,16 @@ test("English links preserve language without storage and old configuration page
   await expect(quickStart).toHaveText("Quick Start");
   await quickStart.click();
   await expect(page).toHaveURL(/wisp-science-quick-start\.html\?lang=en$/);
-  await expect(page.locator("h1")).toHaveText("Wisp Science Basics: Quick Start");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap Basics: Quick Start");
   await page.locator(".tutorial-next").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science Basics: Model Configuration");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap Basics: Model Configuration");
   await page.locator(".tutorial-breadcrumb a").click();
   await expect(page.locator(".tutorial-card#wisp-science-models h3")).toHaveText("Model Configuration");
   await page.locator(".tutorial-card#wisp-science-acp").click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science Advanced: ACP Configuration");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap Advanced: ACP Configuration");
   await page.screenshot({ path: test.info().outputPath("acp-english.png") });
   await page.locator('.lang-switch [data-lang="zh"]').click();
-  await expect(page.locator("h1")).toHaveText("Wisp Science高级：ACP配置");
+  await expect(page.locator("h1")).toHaveText("wisp-depmap高级：ACP配置");
   await expect(page.locator('.tutorial-body[lang="en"]')).toBeHidden();
   await page.locator(".tutorial-breadcrumb a").click();
   await expect(page.locator(".tutorial-card#wisp-science-acp h3")).toHaveText("ACP配置");
@@ -326,7 +326,7 @@ for (const readme of ["README.md", "README_zh.md"]) {
     const picture = readRepositoryFile(readme).match(/<picture>[\s\S]*?<\/picture>/)?.[0];
     expect(picture).toBeTruthy();
     await page.setContent(`<base href="https://wordmark.test/">${picture}`);
-    const logo = page.getByRole("img", { name: "Wisp Science", exact: true });
+    const logo = page.getByRole("img", { name: "wisp-depmap", exact: true });
     for (const mode of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: mode });
       await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.currentSrc))
@@ -347,7 +347,7 @@ test("website hero wordmark and bilingual title fit desktop and mobile", async (
   await page.goto("https://wordmark.test/");
   const logo = page.locator(".hero-wordmark");
   await expect(logo).toHaveAttribute("src", "assets/wordmark-light.svg");
-  await expect(logo).toHaveAccessibleName("Wisp Science");
+  await expect(logo).toHaveAccessibleName("wisp-depmap");
   await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -357,8 +357,8 @@ test("website hero wordmark and bilingual title fit desktop and mobile", async (
     expect(box.x + box.width).toBeLessThanOrEqual(width);
     expect(box.width / box.height).toBeCloseTo(520 / 344, 2);
     for (const [lang, title] of [
-      ["zh", "严谨做科研， Wisp Science 在身边。"],
-      ["en", "Let rigor be your guide, with Wisp Science by your side."],
+      ["zh", "严谨做科研， wisp-depmap 在身边。"],
+      ["en", "Let rigor be your guide, with wisp-depmap by your side."],
     ]) {
       await page.locator(`button[data-lang="${lang}"]`).click();
       const heading = page.locator(".hero h1");

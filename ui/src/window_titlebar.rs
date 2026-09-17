@@ -80,7 +80,7 @@ const HELP_ITEMS: &[MenuItem] = &[
 
 /// Brand string used when no project is open. Keep in sync with
 /// `src-tauri` `project_commands::APP_WINDOW_TITLE`.
-pub(crate) const APP_WINDOW_TITLE: &str = "wisp science";
+pub(crate) const APP_WINDOW_TITLE: &str = "wisp-depmap";
 
 /// Window title shown in the custom Windows titlebar, taskbar, and Alt-Tab.
 pub(crate) fn app_window_title(project_name: Option<&str>) -> String {
@@ -107,11 +107,11 @@ pub(super) fn WindowTitlebar(
             match action {
                 "quit" => spawn_local(async { window_control("close").await }),
                 "docs" => {
-                    open_external_url("https://github.com/xuzhougeng/wisp-science#readme".into())
+                    open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap#readme".into())
                 }
-                "star-us" => open_external_url("https://github.com/xuzhougeng/wisp-science".into()),
+                "star-us" => open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into()),
                 "issues" => {
-                    open_external_url("https://github.com/xuzhougeng/wisp-science/issues".into())
+                    open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/issues".into())
                 }
                 other => on_action.call(other),
             }
@@ -298,11 +298,11 @@ mod caption_gesture_tests {
         assert_eq!(app_window_title(Some("   ")), APP_WINDOW_TITLE);
         assert_eq!(
             app_window_title(Some("fkbp1a-aortic-ring-assay")),
-            "wisp science \u{2014} fkbp1a-aortic-ring-assay"
+            "wisp-depmap \u{2014} fkbp1a-aortic-ring-assay"
         );
         assert_eq!(
             app_window_title(Some("  fkbp1a  ")),
-            "wisp science \u{2014} fkbp1a"
+            "wisp-depmap \u{2014} fkbp1a"
         );
     }
 }

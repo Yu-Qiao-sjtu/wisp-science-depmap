@@ -1,8 +1,8 @@
-# Wisp Science Basics: Import, Export, and Sharing
+# wisp-depmap Basics: Import, Export, and Sharing
 
 After an analysis, you may want to continue the whole project on another computer, hand one conversation to a colleague, or share a few results with your lab group.
 
-Wisp Science provides separate entry points for these needs. Choosing the right scope makes importing and reading easier. This tutorial goes from the whole project to one conversation and then selected messages, explaining what each option carries.
+wisp-depmap provides separate entry points for these needs. Choosing the right scope makes importing and reading easier. This tutorial goes from the whole project to one conversation and then selected messages, explaining what each option carries.
 
 > Screenshots use the real frontend in English with demonstration projects and conversations. Numbers, paths, and contact names are examples, not real experimental results or evidence of completed migration.
 

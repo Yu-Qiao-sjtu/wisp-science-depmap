@@ -49,7 +49,7 @@ function render() {
   setText("package-checksum", asset?.sha256 || "");
   if (asset) primary.href = `${DOWNLOAD_ORIGIN}/downloads/${asset.key}`;
   setText("install-help", !pkg ? "" : pkg.os === "macos"
-    ? text("打开 DMG，将 Wisp Science 拖入 Applications。", "Open the DMG and drag Wisp Science into Applications.")
+    ? text("打开 DMG，将 wisp-depmap 拖入 Applications。", "Open the DMG and drag wisp-depmap into Applications.")
     : pkg.os === "windows" ? text("运行安装包并按提示完成安装。", "Run the installer and follow the setup steps.")
     : pkg.format === "deb" ? text("使用软件安装器打开 DEB，或运行 sudo apt install ./文件名.deb。", "Open the DEB with your software installer, or run sudo apt install ./filename.deb.")
     : text("为 AppImage 添加执行权限后运行：chmod +x 文件名.AppImage。", "Make the AppImage executable with chmod +x filename.AppImage, then run it."));

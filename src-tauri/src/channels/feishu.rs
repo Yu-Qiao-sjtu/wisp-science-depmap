@@ -59,7 +59,7 @@ impl FeishuRest {
     pub fn new(app_id: &str, app_secret: &str, international: bool) -> Result<Self> {
         Ok(Self {
             http: reqwest::Client::builder()
-                .user_agent("wisp-science")
+                .user_agent("wisp-depmap")
                 .timeout(Duration::from_secs(30))
                 .build()?,
             app_id: app_id.to_string(),

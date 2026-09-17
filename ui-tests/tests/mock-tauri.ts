@@ -141,7 +141,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
 
   const project = {
     id: "default",
-    name: "wisp-science",
+    name: "wisp-depmap",
     root: "/mock/root",
     skill_count: 12,
     mcp_server_count: 8,
@@ -1567,11 +1567,11 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   let monitorRunFrameId: string | null = null;
   let resolveMonitorRun: ((frameId: string) => void) | null = null;
   const artifacts = [
-    { id: "art-tree", name: "nif3.treefile", kind: "text/treefile", path: "nif3.treefile", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-science", session_id: "s-current", session_title: "Current analysis", origin: "output" },
-    { id: "art-profile", name: "plddt_profile.png", kind: "image/png", path: "plddt_profile.png", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-science", session_id: "s-old", session_title: "Older structure run", origin: "output" },
+    { id: "art-tree", name: "nif3.treefile", kind: "text/treefile", path: "nif3.treefile", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-depmap", session_id: "s-current", session_title: "Current analysis", origin: "output" },
+    { id: "art-profile", name: "plddt_profile.png", kind: "image/png", path: "plddt_profile.png", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-depmap", session_id: "s-old", session_title: "Older structure run", origin: "output" },
     { id: "art-counts", name: "counts.csv", kind: "text/csv", path: "counts.csv", ts: Math.floor(Date.now() / 1000), project_id: "other", project_name: "Other project", session_id: "s-other", session_title: "Cross-project counts", origin: "upload" },
-    { id: "art-html", name: "dashboard.html", kind: "text/html", path: "dashboard.html", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-science", session_id: "s-current", session_title: "Current analysis", origin: "output" },
-    { id: "art-markdown", name: "analysis-report.md", kind: "text/markdown", path: "analysis-report.md", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-science", session_id: "s-current", session_title: "Current analysis", origin: "output" },
+    { id: "art-html", name: "dashboard.html", kind: "text/html", path: "dashboard.html", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-depmap", session_id: "s-current", session_title: "Current analysis", origin: "output" },
+    { id: "art-markdown", name: "analysis-report.md", kind: "text/markdown", path: "analysis-report.md", ts: Math.floor(Date.now() / 1000), project_id: "default", project_name: "wisp-depmap", session_id: "s-current", session_title: "Current analysis", origin: "output" },
   ];
   let libraryItems: any[] = [];
   const librarySummary = ({ base64: _base64, code, ...item }: any) => ({
@@ -2278,7 +2278,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                       text: `<!doctype html><html><body><div id="state">waiting</div><script>
                         addEventListener("message", (event) => {
                           const message = event.data || {};
-                          if (message.id === 1 && message.result?.hostInfo?.name === "wisp-science") {
+                          if (message.id === 1 && message.result?.hostInfo?.name === "wisp-depmap") {
                             document.getElementById("state").textContent =
                               message.result?.hostCapabilities?.serverTools ? "restored-with-tools" : "restored";
                             parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }, "*");
@@ -2894,7 +2894,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "get_context_usage_details":
             return {
-              system_prompt: "You are wisp-science.\n\n## Environment\nWindows x86_64",
+              system_prompt: "You are wisp-depmap.\n\n## Environment\nWindows x86_64",
               tool_definitions: [
                 { name: "read", description: "Read a file from disk." },
                 { name: "write", description: "Write a file to disk." },
@@ -4050,7 +4050,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               mcp_counts: { bundled: 2, project: 1 },
             };
           case "list_community_skills":
-            return { entries: [{"name": "research-handoff", "description": "Prepare a source-linked research handoff from materials supplied by the user.", "author": "Wisp Science contributors", "license": "AGPL-3.0-only", "tags": ["research", "writing", "handoff"], "repository": "example/science-skills", "git_ref": "release/v1", "package_path": "skills/research-handoff", "responsibilities": "Organize supplied observations, decisions, source paths, and unresolved questions into a handoff another researcher can check.", "when_to_use": "When the user asks to hand over an existing research project or summarize its current state.", "inputs": "Required: the user's handoff request and supplied notes or project files. Optional: intended audience and output filename.", "outputs": "A handoff in chat, or a user-requested Markdown file under the active project with verified source paths.", "out_of_scope": "Does not search for new literature, run analyses, invent evidence, or publish to external services.", "required_dependencies": ["A text-capable model", "Wisp read tool when local files are supplied"], "optional_dependencies": ["Wisp write tool for a requested Markdown artifact"], "operation_boundary": "Reads only supplied material. Ask for missing required inputs. Write a file only within the user's request and host approvals. No network, runtime installation, or MCP authorization during installation.", "supported_wisp": "Author declaration: Wisp 1.11.0; uses legacy SKILL.md frontmatter.", "verified_wisp": null, "known_limits": "Parser and package-resource tests only; model execution and scientific validity have not been verified. No vision, Python, R, or remote-host support is required.", "feedback_url": "https://github.com/xuzhougeng/wisp-science/issues"}], notice: arg("refresh") && query.get("mockSkillStore") === "offline" ? "GitHub unavailable. Showing the directory shipped with this app." : null };
+            return { entries: [{"name": "research-handoff", "description": "Prepare a source-linked research handoff from materials supplied by the user.", "author": "wisp-depmap contributors", "license": "AGPL-3.0-only", "tags": ["research", "writing", "handoff"], "repository": "example/science-skills", "git_ref": "release/v1", "package_path": "skills/research-handoff", "responsibilities": "Organize supplied observations, decisions, source paths, and unresolved questions into a handoff another researcher can check.", "when_to_use": "When the user asks to hand over an existing research project or summarize its current state.", "inputs": "Required: the user's handoff request and supplied notes or project files. Optional: intended audience and output filename.", "outputs": "A handoff in chat, or a user-requested Markdown file under the active project with verified source paths.", "out_of_scope": "Does not search for new literature, run analyses, invent evidence, or publish to external services.", "required_dependencies": ["A text-capable model", "Wisp read tool when local files are supplied"], "optional_dependencies": ["Wisp write tool for a requested Markdown artifact"], "operation_boundary": "Reads only supplied material. Ask for missing required inputs. Write a file only within the user's request and host approvals. No network, runtime installation, or MCP authorization during installation.", "supported_wisp": "Author declaration: Wisp 1.11.0; uses legacy SKILL.md frontmatter.", "verified_wisp": null, "known_limits": "Parser and package-resource tests only; model execution and scientific validity have not been verified. No vision, Python, R, or remote-host support is required.", "feedback_url": "https://github.com/xuzhougeng/wisp-science/issues"}], notice: arg("refresh") && query.get("mockSkillStore") === "offline" ? "GitHub unavailable. Showing the directory shipped with this app." : null };
           case "preview_github_skills": {
             const mode = query.get("mockSkillStore");
             if (mode === "network") throw new Error("GitHub request failed (HTTP 404)");
@@ -4195,7 +4195,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                   skip_approvals: mockBioMartSkip,
                   description: "Query Ensembl BioMart for genomic annotations, identifier translation and cross-references.",
                   description_zh: "通过 Ensembl BioMart 查询基因组注释、转换标识符并查找交叉引用。",
-                  maintainer: "Wisp Science",
+                  maintainer: "wisp-depmap",
                   links: [
                     { label: "Ensembl BioMart", url: "https://www.ensembl.org/info/data/biomart/index.html" },
                     { label: "Ensembl usage terms", url: "https://www.ensembl.org/info/about/legal/disclaimer.html" },
@@ -4444,10 +4444,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                   status: session.running ? "running" : "complete",
                 }))
               : [
-                  { id: "s-current", project_id: "default", project_name: "wisp-science", title: "Current analysis", body: "The counts table is discussed in this transcript.", ts: 1, activity_at: 3, status: "complete" },
-                  { id: "s-old", project_id: "default", project_name: "wisp-science", title: "Older structure run", body: "", ts: 1, activity_at: 2, status: "complete" },
+                  { id: "s-current", project_id: "default", project_name: "wisp-depmap", title: "Current analysis", body: "The counts table is discussed in this transcript.", ts: 1, activity_at: 3, status: "complete" },
+                  { id: "s-old", project_id: "default", project_name: "wisp-depmap", title: "Older structure run", body: "", ts: 1, activity_at: 2, status: "complete" },
                   { id: "s-other", project_id: "other", project_name: "Other project", title: "Cross-project counts", body: "", ts: 1, activity_at: 1, status: "needs_you" },
-                  { id: "s-complete", project_id: "default", project_name: "wisp-science", title: "Enumerate MCP bio-tools databases", body: "", ts: 1, activity_at: 1, status: "complete" },
+                  { id: "s-complete", project_id: "default", project_name: "wisp-depmap", title: "Enumerate MCP bio-tools databases", body: "", ts: 1, activity_at: 1, status: "complete" },
                 ];
             return rows
               .filter((session) => !q
@@ -4607,7 +4607,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               return {
                 path: "artifact-version:resource-version-bib",
                 mime: "text/x-bibtex",
-                text: "@article{wisp,\n  title = {Wisp Science}\n}",
+                text: "@article{wisp,\n  title = {wisp-depmap}\n}",
                 base64: null,
               };
             }
@@ -6060,7 +6060,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               emit("agent", { kind: "ToolCall", frame_id: fid, name: "read", preview: "mock context" });
               emit("agent", { kind: "ToolResult", frame_id: fid, name: "read", ok: true, content: "ok" });
               emit("agent", { kind: "Text", frame_id: fid, delta: "Hello " });
-              emit("agent", { kind: "Text", frame_id: fid, delta: "from mock wisp-science." });
+              emit("agent", { kind: "Text", frame_id: fid, delta: "from mock wisp-depmap." });
               emit("agent", { kind: "Done", frame_id: fid });
             }, 50 + Number((window as any).__userEventDelayMs ?? 0));
             return fid;
@@ -6259,7 +6259,7 @@ export function parallelMock(): void {
   const folders: { id: string; name: string }[] = [];
   const queues: Record<string, Promise<void>> = {};
 
-  const project = { id: "default", name: "wisp-science", root: "/mock/root", skill_count: 12, mcp_server_count: 8, memory_file_count: 2, has_api_key: true };
+  const project = { id: "default", name: "wisp-depmap", root: "/mock/root", skill_count: 12, mcp_server_count: 8, memory_file_count: 2, has_api_key: true };
 
   (window as any).__TAURI__ = {
     core: {

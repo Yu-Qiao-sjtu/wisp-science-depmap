@@ -1554,7 +1554,7 @@ pub(crate) fn ProjectsScreen(
             <div class="projects-footer" prop:inert=move ||calendar_open.get()>
                 <span>{move || t(locale.get(), "projects.star_hint")}</span>
                 <button type="button" class="projects-star-link"
-                    on:click=move |_| open_external_url("https://github.com/xuzhougeng/wisp-science".into())>
+                    on:click=move |_| open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into())>
                     {move || t(locale.get(), "projects.star_link")}
                 </button>
             </div>
