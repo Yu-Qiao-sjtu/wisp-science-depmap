@@ -252,6 +252,18 @@ pub enum AgentEvent {
         presentation_kind: String,
         payload: serde_json::Value,
     },
+    AppContextUpdate {
+        frame_id: String,
+        context_id: String,
+        instance_id: String,
+        app_name: String,
+        #[serde(default)]
+        update_mode: String,
+        state: String,
+        summary: String,
+        #[serde(default)]
+        structured_preview: Option<String>,
+    },
     Usage {
         frame_id: String,
         input: u64,
@@ -445,8 +457,22 @@ pub enum ChatItem {
         model: Option<String>,
     },
     Review(ReviewReport),
+    /// A non-agent, persisted notice that an MCP App updated the live model
+    /// context. This is deliberately separate from user/assistant messages:
+    /// updating App context never starts a turn.
+    AppContextNotice(AppContextNotice),
     Plan(PlanCard),
     Question(QuestionCard),
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppContextNotice {
+    pub context_id: String,
+    pub app_name: String,
+    pub state: String,
+    pub summary: String,
+    pub structured_preview: Option<String>,
 }
 
 #[derive(Deserialize, Clone, PartialEq, Eq)]
@@ -644,6 +670,15 @@ impl ChatItem {
             Self::Review(report) => (5u8, report).hash(&mut h),
             Self::Plan(plan) => (7u8, plan).hash(&mut h),
             Self::Question(question) => (12u8, question).hash(&mut h),
+            Self::AppContextNotice(notice) => (
+                16u8,
+                &notice.context_id,
+                &notice.app_name,
+                &notice.state,
+                &notice.summary,
+                &notice.structured_preview,
+            )
+                .hash(&mut h),
         }
         h.finish()
     }
@@ -2441,6 +2476,16 @@ pub struct LoadedItem {
     pub resources: Vec<MessageResource>,
 }
 
+/// A live native tool approval, restored independently of persisted messages.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PendingToolApproval {
+    pub approval_id: String,
+    pub frame_id: String,
+    pub message: String,
+    pub tool: String,
+    pub preview: String,
+}
+
 #[derive(Deserialize)]
 pub struct LoadedSessionPage {
     pub items: Vec<LoadedItem>,
@@ -2454,6 +2499,8 @@ pub struct LoadedSessionPage {
     pub branches: Vec<SessionBranchLink>,
     #[serde(default)]
     pub branch_state: Option<String>,
+    #[serde(default)]
+    pub pending_approvals: Vec<PendingToolApproval>,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -2514,6 +2561,13 @@ impl LoadedItem {
                 .unwrap_or_else(|_| ChatItem::Assistant {
                     text: self.text,
                     model: None,
+                    resources: self.resources,
+                }),
+            "app_context" => serde_json::from_str(&self.text)
+                .map(ChatItem::AppContextNotice)
+                .unwrap_or_else(|_| ChatItem::Assistant {
+                    text: self.text,
+                    model: self.model_name,
                     resources: self.resources,
                 }),
             "acp_tool" => ChatItem::AcpTool {
@@ -2673,8 +2727,10 @@ pub struct ProjectInfo {
     pub memory_file_count: usize,
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSummary {
+    #[serde(default)]
+    pub starred: bool,
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -4144,18 +4200,55 @@ pub struct SkillPortfolioTaskSummary {
     pub depends_on: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkillPortfolioRequest {
+    pub request: String,
+    pub model_id: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_skill_ids: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_template_id: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_workflow_id: Option<String>,
+}
+
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PortfolioPlanSummary {
     pub planner_model_id: String,
     pub planner_model_label: String,
     pub rationale: String,
     pub tasks: Vec<SkillPortfolioTaskSummary>,
+    #[serde(default)]
+    pub source_sha256: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SkillPortfolioDraft {
     pub plan: PortfolioPlanSummary,
     pub proposal: DynamicAgentWorkflowProposal,
+}
+
+/// Actual conversion stages, reported by the host rather than estimated percentages.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowConversionStage {
+    Preparing,
+    SelectingSources,
+    ReadingSources,
+    Generating,
+    Validating,
+    Repairing,
+    Saving,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct WorkflowConversionProgress {
+    pub conversion_id: String,
+    pub stage: WorkflowConversionStage,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]

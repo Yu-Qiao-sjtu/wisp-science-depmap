@@ -684,6 +684,25 @@ pub(crate) async fn approve_agent_workflow(
     let project = state.require_active(window.label())?;
     let current = project_workflow(&state.store, &project.id, &workflow_id).await?;
     require_workflow_delegation(&state.store, &current).await?;
+    if stored_dynamic_plan(&current)?
+        .steps
+        .iter()
+        .any(|step| !step.spec.skill_bindings.is_empty())
+    {
+        return Err(wisp_core::workflow_conversion::LEGACY_WORKFLOW_ERROR.into());
+    }
+    let policy = dynamic_delegation_policy_for_project(
+        &state.store,
+        &project,
+        current.frame_id.as_deref(),
+        &state.app_data,
+        true,
+    )
+    .await?;
+    policy
+        .registry
+        .validate_resolved_plan(&stored_dynamic_plan(&current)?, &policy.host)
+        .map_err(|e| e.to_string())?;
     let automatic = current.mode == "automatic";
     if !state
         .store
@@ -954,6 +973,13 @@ pub(crate) async fn prepare_agent_workflow_retry(
 ) -> Result<AgentWorkflowSnapshot, String> {
     let workflow = project_workflow(store, project_id, workflow_id).await?;
     require_workflow_delegation(store, &workflow).await?;
+    if stored_dynamic_plan(&workflow)?
+        .steps
+        .iter()
+        .any(|step| !step.spec.skill_bindings.is_empty())
+    {
+        return Err(wisp_core::workflow_conversion::LEGACY_WORKFLOW_ERROR.into());
+    }
     if !matches!(
         workflow.status,
         AgentWorkflowStatus::Failed | AgentWorkflowStatus::Cancelled
@@ -1776,6 +1802,24 @@ async fn execute_agent_workflow_with_delegator_inner(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Agent workflow project does not exist".to_string())?;
+    for previous in prior_steps.as_ref().unwrap_or(&completed_steps) {
+        if previous.response.status == DelegationStatus::Succeeded {
+            let spec = &plan
+                .steps
+                .iter()
+                .find(|step| step.id == previous.step_id)
+                .ok_or("Cached Workflow node is no longer in the plan")?
+                .spec;
+            crate::workflow_artifacts::validate_cached(
+                store,
+                project_id,
+                std::path::Path::new(&project_workspace),
+                &spec.output_contract,
+                &previous.response,
+            )
+            .await?;
+        }
+    }
     let activity_driver = Arc::new(
         crate::method_search_coordinator::StoreWorkflowRunActivityDriver::new(
             store.clone(),
@@ -2901,6 +2945,19 @@ impl AgentDelegator for NativeDelegator {
                 run.usage,
             ));
         }
+        if wisp_core::workflow_conversion::is_independent_contract(&request.spec.output_contract)
+            && !run.tool_errors.is_empty()
+        {
+            return Ok(failed_backend_response_with_usage(
+                &request.request_id,
+                format!(
+                    "Workflow node had failed tool calls: {}",
+                    run.tool_errors.join("; ")
+                ),
+                Some(child_frame_id),
+                run.usage,
+            ));
+        }
         let content = match run.result {
             Ok(content) => content,
             Err(error) => {
@@ -2923,6 +2980,29 @@ impl AgentDelegator for NativeDelegator {
                 ))
             }
         };
+        let (verified_artifacts, artifact_evidence) =
+            match crate::workflow_artifacts::validate_and_capture(
+                &self.store,
+                &self.project.id,
+                &self.project.root,
+                &child_frame_id,
+                &request.workflow_id,
+                &request.step_id,
+                &request.spec.output_contract,
+                &output,
+            )
+            .await
+            {
+                Ok(artifacts) => artifacts,
+                Err(error) => {
+                    return Ok(failed_backend_response_with_usage(
+                        &request.request_id,
+                        error,
+                        Some(child_frame_id),
+                        run.usage,
+                    ))
+                }
+            };
         if reviewer
             && request.spec.output_schema_source == AgentOutputSchemaSource::Standard
             && !output.get("findings").is_some_and(Value::is_array)
@@ -2946,6 +3026,9 @@ impl AgentDelegator for NativeDelegator {
                 path: Some(path),
             })
             .collect::<Vec<_>>();
+        if wisp_core::workflow_conversion::is_independent_contract(&request.spec.output_contract) {
+            artifacts = verified_artifacts;
+        }
         for artifact in artifacts_from_output(&output) {
             if !artifacts.iter().any(|item| item.id == artifact.id) {
                 artifacts.push(artifact);
@@ -2960,7 +3043,11 @@ impl AgentDelegator for NativeDelegator {
             status: DelegationStatus::Succeeded,
             artifact_ids,
             artifacts,
-            evidence: evidence_from_output(&output),
+            evidence: {
+                let mut evidence = evidence_from_output(&output);
+                evidence.extend(artifact_evidence);
+                evidence
+            },
             output,
             usage: run.usage,
             agent_session_id: None,
@@ -3319,12 +3406,10 @@ impl AgentDelegator for AcpDelegator {
                 .await?;
         }
         sync_child_execution_contexts(&self.store, Some(&parent_frame_id), &child_frame_id).await?;
-        let project_skills = crate::active_skill_index(&self.store, &self.project).await;
         let prompt_text = format!(
-            "{}{}{}{}",
+            "{}{}{}",
             delegation_prompt(&request)?,
             resource_grant.prompt_section(),
-            bound_skill_prompt(&request.spec, &project_skills)?,
             crate::network::package_guidance(
                 &crate::network::load(&self.store)
                     .await
@@ -3512,6 +3597,9 @@ async fn run_acp_request(
     prompt_text: String,
     mut next_seq: i64,
 ) -> anyhow::Result<AgentDelegationResponse> {
+    let confirmer =
+        crate::workflow_approval::for_node(store, project_id, child_frame_id, &request.spec.name)
+            .await;
     let prompt = handle.prompt(
         session_id.clone(),
         vec![ContentBlock::Text(TextContent::new(prompt_text))],
@@ -3587,12 +3675,19 @@ async fn run_acp_request(
                     }
                 }
                 Some(AcpSessionEvent::Permission(permission)) => {
-                    let allowed = permission_option_with_resources(
+                    let mut allowed = permission_option_with_resources(
                         &permission,
                         &request.spec.permissions,
                         resource_grant,
                         project_root,
                     );
+                    if allowed.is_some() && wisp_tools::safety::check_command_safety(&permission.tool_call.to_string()).is_some() {
+                        let approved=match &confirmer {
+                            Some(confirmer)=>crate::workflow_approval::confirm_during_workflow(confirmer.as_ref(),&format!("Run ACP tool within the approved node grant?\n{}",permission.tool_call),store,&request.workflow_id).await.approved(),
+                            None=>false,
+                        };
+                        if !approved {allowed=None;}
+                    }
                     handle.respond_permission(permission.request_id, allowed)?;
                 }
                 Some(AcpSessionEvent::Exited { error }) => anyhow::bail!(error.unwrap_or_else(|| "ACP Agent exited".into())),
@@ -3741,6 +3836,31 @@ async fn run_acp_request(
             ))
         }
     };
+    let (verified_artifacts, artifact_evidence) =
+        match crate::workflow_artifacts::validate_and_capture(
+            store,
+            project_id,
+            project_root,
+            child_frame_id,
+            &request.workflow_id,
+            &request.step_id,
+            &request.spec.output_contract,
+            &output,
+        )
+        .await
+        {
+            Ok(artifacts) => artifacts,
+            Err(error) => {
+                return Ok(failed_acp_response(
+                    &request.request_id,
+                    error,
+                    &session_id,
+                    child_frame_id,
+                    evidence,
+                    usage.value,
+                ))
+            }
+        };
     let mut artifacts = store
         .list_artifacts(child_frame_id)
         .await?
@@ -3752,6 +3872,9 @@ async fn run_acp_request(
             path: Some(path),
         })
         .collect::<Vec<_>>();
+    if wisp_core::workflow_conversion::is_independent_contract(&request.spec.output_contract) {
+        artifacts = verified_artifacts;
+    }
     for artifact in artifacts_from_output(&output) {
         if !artifacts.iter().any(|item| item.id == artifact.id) {
             artifacts.push(artifact);
@@ -3762,6 +3885,7 @@ async fn run_acp_request(
         .map(|artifact| artifact.id.clone())
         .collect();
     evidence.extend(evidence_from_output(&output));
+    evidence.extend(artifact_evidence);
     Ok(AgentDelegationResponse {
         request_id: request.request_id.clone(),
         status: DelegationStatus::Succeeded,
@@ -4428,6 +4552,14 @@ fn delegation_task_prompt(
     ))
 }
 
+fn delegation_prompt(request: &AgentDelegationRequest) -> anyhow::Result<String> {
+    Ok(format!(
+        "{}\n\n{}",
+        request.spec.prompt_template.trim(),
+        delegation_task_prompt(request, "")?
+    ))
+}
+
 fn bound_skill_prompt(
     spec: &wisp_core::AgentSpec,
     skills: &wisp_skills::SkillIndex,
@@ -4461,14 +4593,6 @@ fn bound_skill_prompt(
         ));
     }
     Ok(rendered)
-}
-
-fn delegation_prompt(request: &AgentDelegationRequest) -> anyhow::Result<String> {
-    Ok(format!(
-        "{}\n\n{}",
-        request.spec.prompt_template.trim(),
-        delegation_task_prompt(request, "")?
-    ))
 }
 
 /// Every JSON value that can be recovered from the Agent's final message.

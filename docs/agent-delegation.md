@@ -50,16 +50,33 @@ directly on the canvas. Every graph interaction updates the ordinary
 rejected before save.
 
 Workflow Studio replaces the normal Settings chrome with a dedicated
-full-window editor. Its stable layout keeps the template library on the left,
-save and lifecycle controls in the top bar, the DAG canvas in the center, and
-the selected-node inspector on the right. Drag the divider between the canvas
-and inspector to allocate space to either side. Workflow-level fields live in
-a collapsible configuration strip so they do not permanently reduce the
-canvas. The node inspector keeps selected Skills visible as removable chips
-and searches the effective Skill catalog on demand instead of rendering the
-whole catalog. The canvas includes zoom controls, a reset-to-100% action, a
-dotted orientation grid, and a minimap; large graphs remain scrollable without
-shrinking the inspector.
+full-window editor. The template library stays on the left, the DAG canvas in
+the center, and **Workflow configuration** on the right. Goal, approval policy,
+and shared context live in a collapsible section alongside the canvas. Save and
+lifecycle controls stay in the top bar. No node is selected initially. A single
+click shows a read-only task summary at the bottom of the right column without
+resizing the canvas. Double-click a node (or choose **Edit node** in its summary)
+to edit instructions, capabilities, output contracts, Specialist, executor and
+model in a modal. Closing the modal keeps the selected-node summary and returns
+focus to the node; edits stay in the workflow draft until Save Workflow. Source
+Skills are selected in the conversion dialog, not bound to executable nodes.
+
+The library has a single **New workflow** button. It opens a dialog with **Blank**,
+**From a template**, and **From Skills**. Blank starts with one empty task; a
+template creates an editable copy; From Skills opens the existing conversion
+workspace.
+Cancelling the dialog preserves the current draft. The configuration panel no
+longer contains a Roundtable generator; Roundtable is available in the template
+chooser alongside other workflows.
+
+On desktop, drag the inner edges of the library and configuration panels to
+adjust their widths, or focus a separator and use the left/right arrow keys.
+Panel widths are bounded to keep the graph usable; narrow windows keep the
+stacked layout. When saving is unavailable, a message below the header explains
+the missing field or invalid task. Successful saves show a confirmation toast;
+backend errors stay visible in the editor. Deleting a custom workflow requires
+confirmation in a dialog naming the saved workflow. Cancel, clicking outside,
+or Escape dismisses only that dialog and preserves the workflow and draft.
 
 The composer `/` picker searches both enabled Skills and Workflow templates.
 Selecting a Workflow adds a typed Workflow chip instead of copying prose into
@@ -139,7 +156,8 @@ the raw text (or non-conforming value) is delivered with a
 `delivery: {degraded, reason}` marker, the task counts as succeeded, and
 dependent tasks receive the degraded result rather than being blocked.
 Consumers must treat a degraded delivery as raw evidence, not contract-shaped
-data. Reviewer verdicts are exempt: a reviewer result that is not a JSON
+data. Independently converted nodes have strict success/artifact contracts and
+fail when those contracts are not met; they never use this degraded-success path. Reviewer verdicts are exempt: a reviewer result that is not a JSON
 object with a summary (and, for standard reviews, a findings array) still
 fails, because review gates must not be satisfiable by unparseable output.
 
@@ -154,7 +172,7 @@ ceilings; a rejected budget names the triggered limit, the requested value,
 and the ceiling.
 
 Omitting `specialist_id` creates a generic temporary Agent. Selecting a
-Specialist reuses its persona, model preference, skills, and connector
+Specialist reuses its persona, model preference, and connector
 restrictions as an immutable snapshot for that run. A Specialist is therefore
 an optional preset, not a required fixed team slot. The parent Agent sees only
 the currently available Specialist IDs, names, and descriptions; private
@@ -172,29 +190,12 @@ automatically.
 
 ## Roundtable template
 
-Workflow Studio can generate a structured Roundtable without introducing a
-second workflow or chat protocol. Expand **Roundtable template**, choose two or
-three discussion seats, and assign each seat an optional Specialist plus a
-Native or ACP executor. A Native seat may also select a Wisp model; an ACP
-seat's model and reasoning settings remain owned by that ACP Agent profile.
-Configure the chair separately, then apply the template.
-
-The generated proposal uses the ordinary dynamic workflow contract:
-
-1. Every seat produces an independent opening position. These tasks have no
-   dependencies and may run in parallel.
-2. Every seat then reviews all opening positions, records agreements and
-   conflicts, and revises its recommendation.
-3. The chair receives all second-round reviews and synthesizes the shared
-   conclusions, unresolved disagreements, evidence gaps, risks, and next steps.
-
-The same Specialist, executor, and model assignment is copied into both rounds
-for each seat. Enter the overall goal before applying the template; Wisp embeds
-that goal into every generated task so detached children receive the actual
-discussion topic. Applying preserves the goal, shared context, and approval
-policy, and replaces only the task cards. Reapply after changing the goal.
-After generation, every task remains editable, including its capabilities,
-dependencies, budgets, and output schema.
+Choose **New workflow → From a template → Roundtable** to create a copy of the
+built-in five-task graph: two parallel opening positions, two cross-reviews,
+and a neutral chair synthesis. Edit the goal and double-click each node to customize
+its instructions, Specialist, executor, model, capabilities and output contract.
+The task instructions are copied from the template; changing the workflow goal
+does not rewrite them. Add nodes and dependencies for additional perspectives.
 
 This is a bounded DAG, not a live multi-model group chat. Temporary children do
 not share hidden transcripts or freely message peers; dependency results are
@@ -309,7 +310,7 @@ client. This is the default eligible executor and is enough for a code task.
 
 Scientific resources are resolved for the owning project and conversation at
 draft time, then checked again before execution. Wisp considers the project's
-enabled Skills, enabled bundled/custom MCP connections, selected
+enabled bundled/custom MCP connections, selected
 ExecutionContexts, configured Python/R interpreters, runtime workers, and
 vision-capable models. A disabled or missing resource is omitted from both the
 editor and `delegate_tasks` schema instead of being advertised optimistically.
@@ -318,8 +319,8 @@ snapshot, so the task must be reviewed against the new authority.
 
 The initial resource mapping is deliberately capability-shaped:
 
-- `literature_search` grants only enabled literature Skills and literature
-  connectors.
+- `literature_search` requires enabled, authorized literature connectors.
+  Installing or binding a Skill never satisfies an execution resource.
 - `external_research` grants only enabled non-literature MCP connections.
 - Native Agents using any research capability also receive the host-owned
   `report_research_progress` checkpoint tool.
@@ -330,13 +331,14 @@ The initial resource mapping is deliberately capability-shaped:
   approval-visible capability and is not implied by either network capability.
 - `visualization` grants configured Python/R tools and figure-oriented Skills.
 - `code_run` grants `run_in_context`, `get_run`, and `cancel_run`. A generic
-  temporary code task does not inherit every project Skill; a selected
-  Specialist may reuse its configured non-literature Skill set.
+  temporary task does not inherit every parent Skill. Only Skills explicitly
+  bound and authorized in the resolved task are loaded at runtime, and their
+  recorded digest must still match the project catalog.
 - `image_inspection` grants local image reading only when the selected Native
   model supports vision.
 
 For every task, its capability grant and its immutable Specialist whitelist
-must both allow a Skill or connector. `None` on a selected Specialist keeps
+must both allow a connector. `None` on a selected Specialist keeps
 the existing “inherit project settings” behavior; an explicit list narrows it.
 The resulting exact resource IDs are installed directly in a Native child or
 encoded as private allowlist tokens for that ACP child's filtered Wisp MCP
@@ -475,11 +477,10 @@ the coordination paths.
 - Children receive only their instruction, bounded shared context, applicable
   project instructions, explicit inputs, and direct dependency results. They
   do not receive the full parent transcript.
-- Dynamic tasks bind Skill guidance with explicit `skill_ids`, independently
-  from capability permissions. Resolution snapshots each effective Skill's
-  scope, path, declared version, package origin, and SHA-256. Native and ACP
-  children receive only those rendered instructions; a disabled, shadowed, or
-  changed Skill fails closed and requires the draft to be regenerated.
+- Workflow nodes use their saved instructions and contracts. Conversion source
+  documents and hashes are provenance; changing or removing a source Skill
+  does not change an independent Workflow or invalidate its resource grant.
+  Nonempty legacy `skill_ids`/resolved Skill bindings cannot execute.
 - Delegated Agents receive `delegate_tasks` only from an approved `delegation`
   capability and only while root-wide depth, task, concurrency, token, tool,
   cost, cancellation, and time checks still have capacity.
@@ -488,41 +489,104 @@ the coordination paths.
   backend session IDs remain auditable in SQLite. Secrets stay in the existing
   credential stores.
 
-## Skill Portfolio Planner
+## Convert Skills into independent Workflows
 
-Workflow Studio can ask a user-selected configured chat model to generate a draft from the current
-effective Skill Catalog. The planning Agent receives the research request plus catalog summaries
-and returns a structured goal, rationale, selected Skill ids, node instructions, and dependency
-graph. There is no lexical/metadata ranking fallback: an unavailable model, invalid response, or
-invented Skill fails explicitly.
+In Workflow Studio, **New workflow → From Skills** opens a conversion workspace with three
+stages: choose sources, convert to nodes, and review the draft. Enter the research
+question, available inputs and expected deliverables on the left. Choose up to
+eight installed source Skills using the searchable checklist, or let the model
+select up to three relevant methods. The full-width conversion model selector
+is separate from the execution models configured later for individual nodes.
+The converter reads the complete selected
+method documents and Markdown references, then produces independent node
+instructions, dependency edges, capability requests and output contracts.
+The review pane shows the actual proposal: each node's saved instructions,
+dependencies, requested capabilities and expandable output schema. Missing
+structured output contracts are stated explicitly. Source methods appear once
+as conversion provenance, with the selection rationale and source fingerprint
+available for inspection. No runtime node calls
+`use_skill`, and `side_effects` is not used to infer permissions.
 
-The host, not the model, derives capabilities from each selected Skill and validates that every
-Skill is currently effective, the required resources are available, and the task graph is valid
-and acyclic. Generated drafts always require review and open in Workflow Studio for editing.
-Planning does not estimate, reserve, or enforce token budgets; every generated node is unlimited
-until the user explicitly adds limits in Workflow Studio.
+**Use draft and edit** transfers the proposal into the graph editor without
+saving or executing it. The proposed goal supplies the initial template name;
+legacy conversions retain the original template name. Review and save the
+template in Studio before using the normal execution/approval flow.
 
-The built-in **Data-driven research design** Workflow is the first validation template. It keeps
-the general planner domain-neutral while giving the final synthesis a strict eight-part schema:
-data observations and robustness; literature consensus, conflicts, and gaps; hypotheses and
-alternatives; deductive predictions; discriminating experiments plus rescue/falsification;
-failure-driven iteration; translation, feasibility, and risk; and a source-marked evidence–claim
-matrix with priorities. Its data and literature nodes run independently before synthesis and each
-binds only its declared Skill.
+During conversion, the review pane reports the host's current stage: preparing,
+matching source methods (automatic selection only), reading documents, generating
+nodes, checking the proposal, correcting rejected nodes if needed, and saving
+source provenance. The activity indicator is indeterminate; elapsed time is shown
+without guessing a completion percentage or deadline.
 
-The main Agent can inspect any configured template with the read-only `explain_workflow` tool.
-Questions such as “What is Data-driven research design?” return the saved goal, task graph,
-dependencies, capabilities, Skill bindings, and output sections. Inspection never starts the
-Workflow; execution still requires a separate `delegate_tasks` call or an explicit UI action.
+**Continue in background**, the close button, backdrop click and Escape all hide
+the conversion dialog while work continues. You can leave Settings or switch
+projects. A persistent status card shows progress, completion or failure; **View
+progress / View result** returns to the originating project and reopens the same
+request and draft. Completion does not overwrite the graph editor or save a
+template automatically. Inputs stay disabled during conversion. A window handles
+one conversion at a time; the draft remains available until used or its inputs
+are edited. This state lasts for the current app window, not across window
+closure, reload or app restart.
 
-The main Agent can also turn an installed Skill into a reusable template with the
-`create_workflow` tool. It reads the named Skill, derives capabilities from the Skill's declared
-side effects, and registers a single-task Workflow that binds the Skill — the same binding the
-delegation runtime expands into full Skill guidance at run time. Optional `params` overrides
-(`goal`, `context`, `instruction`, `capabilities`, `approval_policy`, `output_schema`) expose the
-Skill as a parameterized Workflow input. The generated template behaves like any user-authored
-Workflow: `explain_workflow` shows it, Settings → Workflows edits it, and `delegate_tasks` runs
-it. Names must be unique across built-in and user templates.
+Changing conversion inputs invalidates the previous draft. Conversion failures
+appear inside the conversion window and can be retried with the original inputs.
+Escape closes this window before any graph connection operation or the parent
+Studio. Missing source Skills or configured
+models show setup guidance and disable generation. The layout stacks vertically
+in narrow windows, scrolls to the generated draft, and keeps footer actions visible.
+
+The host validates the resulting graph against the current resource policy.
+An unavailable source, unsupported package resource, invented capability or
+invalid graph fails explicitly. Generated drafts use **Review every draft**;
+conversion neither runs a node nor grants execution permission. Review the
+instructions, tools, execution context and output schema before saving or
+creating a run. Node budgets remain unset unless explicitly configured.
+
+The main Agent's `create_workflow` tool uses this same shared converter. It
+accepts `skill_name`, optional `workflow_name`/`description`, and an optional
+`planner_model_id`. Legacy single-node `params` overrides are retired; edit the
+result in Studio instead. `explain_workflow` inspects a saved graph without
+running it. Execution still uses the normal reviewed Workflow/`delegate_tasks`
+path. Main Agents can continue to use Skills directly in ordinary conversations.
+
+The source reader currently supports method documents and external CLI
+requirements. Packages with executable scripts, runtime sidecars, assets or non-Markdown references report a
+resource-snapshot limitation instead of silently creating a dependent wrapper.
+No additional Skill frontmatter, Workflow YAML or script-entrypoint grammar is
+required. Runtime tool support still depends on the host: CLI children currently
+use local Runs, while desktop nodes use their resolved Native/ACP resource grants.
+
+### Existing templates and historical runs
+
+Legacy Skill-bound templates remain visible with a conversion warning. Their
+Skill picker is removed and saving/running is blocked until **Convert to
+independent Workflow** generates a draft for review. Saving the replacement
+preserves the prior template under a separate legacy record. Missing source
+Skills must be reinstalled before conversion. Historical runs remain inspectable;
+their conversion action creates a new definition rather than rewriting past
+results. Legacy runs cannot be approved, restarted or resumed with their old
+Skill bindings. Built-in templates now contain their own method instructions.
+
+### Node approvals and verified results
+
+Native child confirmations and flagged, already-authorized ACP operations use
+the existing confirmation card in the owning conversation. The card identifies
+the node and offers a one-time decision; it does not inherit the parent's full
+permission or create a persistent grant. Requests sharing an owner queue so
+parallel nodes cannot replace one another's pending question. Cancellation
+cleans up its request without dismissing a newer card.
+
+Converted output contracts require a successful status, summary and artifact
+paths. Native and ACP hosts validate these contracts and capture declared files
+as durable ArtifactVersions before reporting success. Failed tool calls cannot
+be hidden by a Native success summary. Missing files, escaped paths or invalid
+contracts fail the node and block its dependents. Before reusing a successful
+converted node on retry, the host checks its output contract and pinned artifact
+checksums. Changed outputs require a new run. A textual success claim alone is
+insufficient; these strict contracts are exempt from degraded-success delivery.
+
+The built-in Data-driven research design retains its eight-part synthesis and
+records upstream task evidence sources. It no longer binds mutable Skill packages.
 
 - Turning Delegation off prevents the main conversation and its MCP bridge from
   listing or invoking delegation tools. It does not erase workflow history or
@@ -552,6 +616,45 @@ capabilities, Specialist persona, model, eligible executor, isolation,
 budgets, and output schemas there. Turning Delegation off disables approvals,
 runs, and retries while leaving supported dynamic history and cancellation
 available in the activity panel.
+
+### Editing a research workflow
+
+Workflow Studio centers and fits the existing tasks when a template opens or the
+structure changes. While fit mode is active, resizing the window refits the graph.
+Selecting nodes, folding configuration, and opening the node editor preserve the
+canvas dimensions. The zoom buttons switch to manual zoom; click the percentage
+(**Fit workflow to viewport**) to return to automatic fitting. Editing instructions preserves
+manual zoom and input focus.
+
+Task cards show the instruction, Agent assignment, capabilities, dependencies, and
+**Not run** template status. Stage backgrounds group tasks by dependency depth;
+the summary reports task count, stage count and the widest stage. This is the
+parallel task count within a stage, not a prediction of peak live concurrency. Selecting a task highlights its incoming and
+outgoing edges; hovering an edge highlights its endpoints. The minimap appears for
+more than eight tasks or zoom below 70%.
+
+Use **Add task → Independent task** for a new root, or **After selected task** for
+a dependent task. Escape closes the add menu first, then cancels an active connection,
+then clears the selected-node summary, then leaves the studio. A node-editing or
+new-workflow dialog closes before these underlying surfaces. Capability choices
+are collapsed initially, with up to three
+selected capability names and an additional count visible. Expand the section to
+edit them. Dependency choices and advanced settings expand separately. Workflow-wide
+settings remain in the right-hand **Workflow configuration** column.
+
+Manual layout smoke check: open Literature evidence review at 1280×800 and
+1920×1080, confirm all three task cards are centered and readable, resize the
+window, then zoom manually and edit an instruction. Expand capabilities,
+toggle a choice, and confirm the section stays open. Open Add task and immediately
+press Escape: the editor must remain open. Add an independent task and a task after
+it, then save a copy and verify the dependency survives reopening. Test New workflow
+with all three creation options and cancel. Single-click a node for its summary,
+double-click it to edit, and verify Escape closes only the modal. Fold and unfold
+configuration without changing the canvas dimensions. At 1280×800, 1920×1080 and 3840×2160,
+confirm the zoom percentage and classic scrollbar visibility settle instead of
+oscillating. Manual zoom must still allow scrolling; Fit resets the scroll position. Check both light
+and dark themes. These layout changes apply to the template editor; live execution
+status remains in the Agents activity panel.
 
 Only schema-version-2 dynamic plans are part of the product surface. Earlier
 fixed-plan records are not migrated or deleted, but the Agents panel does not
