@@ -15,6 +15,7 @@ import logging
 import os
 import csv
 import re
+import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -649,6 +650,42 @@ def _read_csv_records(path: Path) -> list[dict[str, Any]]:
         ]
 
 
+def _indexed_true_love_rows(
+    settings: Settings, *, catalog: str, coverage: str,
+    gene: str | None, partner: str | None, limit: int,
+) -> list[dict[str, Any]] | None:
+    """Return bounded indexed rows, or None when the optional index is unavailable."""
+    path = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    if not path.is_file():
+        return None
+    symbol = gene.strip().upper() if gene else None
+    mate = partner.strip().upper() if partner else None
+    clauses = ["catalog = ?", "coverage = ?"]
+    params: list[Any] = [catalog, coverage]
+    if symbol:
+        clauses.append("(gene_a = ? OR gene_b = ?)")
+        params.extend((symbol, symbol))
+    if mate:
+        clauses.append("(gene_a = ? OR gene_b = ?)")
+        params.extend((mate, mate))
+    params.append(limit)
+    uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
+    db: sqlite3.Connection | None = None
+    try:
+        db = sqlite3.connect(uri, uri=True)
+        rows = db.execute(
+                f"SELECT row_json FROM true_love WHERE {' AND '.join(clauses)} "
+                "ORDER BY sort_1, sort_2 LIMIT ?", params,
+        ).fetchall()
+    except (sqlite3.Error, OSError):
+        LOGGER.exception("DepMap query index unavailable; falling back to source files")
+        return None
+    finally:
+        if db is not None:
+            db.close()
+    return [{key: _coerce_csv_value(value) for key, value in json.loads(row[0]).items()} for row in rows]
+
+
 def _complete_module(
     root: Path, *, mode: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -889,7 +926,14 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         )
     gene = query.get("gene")
     partner = query.get("partner")
-    rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
+    index_coverage = "all" if catalog == "stable_negative_rank1" else coverage
+    rows = _indexed_true_love_rows(
+        settings, catalog=catalog, coverage=index_coverage,
+        gene=gene, partner=partner, limit=int(query.get("limit", 20)),
+    )
+    used_index = rows is not None
+    if rows is None:
+        rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
     if catalog == "stable_negative_rank1":
         rows.sort(key=lambda row: (-float(row.get("bootstrap_reciprocal_stability") or 0), float(row.get("worst_direction_fdr") or 1), -abs(float(row.get("strongest_absolute_correlation") or 0))))
     elif catalog == "negative_r_lt_minus_0_3":
@@ -905,7 +949,7 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         catalog=catalog, coverage=(None if catalog == "stable_negative_rank1" else coverage), rows=rows[:limit],
         summary={"matched_pair_count": len(rows), "returned_count": min(limit, len(rows)), "stability_layer": path == stable_path},
         manifest=selected_manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[str(root / "manifest.json"), str(path), *([str(settings.knowledge_root / "depmap-26q1-query-index.sqlite")] if used_index else [])],
     )
 
 

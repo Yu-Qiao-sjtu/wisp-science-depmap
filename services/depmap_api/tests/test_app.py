@@ -1,6 +1,7 @@
 import json
 import gzip
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -370,6 +371,35 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(synthetic_reverse["rows"][0]["target_gene"], "ARID1B")
         self.assertEqual(three_d["status"], "FOUND")
         self.assertEqual(three_d["rows"][0]["mean_gene_effect"], -0.62)
+
+    def test_true_love_prefers_bounded_sqlite_index(self):
+        index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
+        db = sqlite3.connect(index)
+        try:
+            db.execute(
+                "CREATE TABLE true_love (catalog TEXT, coverage TEXT, gene_a TEXT, gene_b TEXT, sort_1 REAL, sort_2 REAL, row_json TEXT)"
+            )
+            indexed = {
+                "gene_a": "KRAS", "gene_b": "NRAS",
+                "bootstrap_reciprocal_stability": "0.99",
+                "worst_direction_fdr": "0.0001",
+            }
+            db.execute(
+                "INSERT INTO true_love VALUES (?,?,?,?,?,?,?)",
+                ("stable_negative_rank1", "all", "KRAS", "NRAS", -0.99, 0.0001, json.dumps(indexed)),
+            )
+            db.commit()
+        finally:
+            db.close()
+        client = TestClient(create_app(self.settings))
+        with client:
+            result = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 5},
+            ).json()
+        self.assertEqual(result["status"], "FOUND")
+        self.assertEqual(result["rows"][0]["bootstrap_reciprocal_stability"], 0.99)
+        self.assertTrue(any(path.endswith("depmap-26q1-query-index.sqlite") for path in result["provenance"]))
 
     def test_precomputed_tcga_query_returns_bounded_expression_survival_row(self):
         client = TestClient(create_app(self.settings))

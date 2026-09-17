@@ -4,6 +4,22 @@ This service implements the fixed Wisp Science remote knowledge contract. It
 is read-only, accepts only bounded query modes, and delegates data access to
 `skills/depmap-knowledge-query/scripts/query_depmap_kb.R`.
 
+## Query index
+
+Large retained tables remain the scientific source of truth, while bounded
+API lookups can use the optional read-only SQLite index at
+`depmap-26q1-query-index.sqlite`. Rebuild it atomically after indexed results
+change:
+
+```bash
+python scripts/build_depmap_query_index.py --knowledge-root /path/to/depmap-26q1
+```
+
+The database indexes TLG pairs on both genes, TF-dependency rows on TF and
+target, and predictive-biomarker eligibility on target gene. The API uses it
+for TLG lookups and falls back to the original CSV/GZIP files when the index
+is absent or unreadable. Result files and manifests remain authoritative.
+
 Required environment variables:
 
 - `DEPMAP_KNOWLEDGE_ROOT`
