@@ -4,11 +4,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import get_args
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from services.depmap_api.app import Settings
+from services.depmap_api.app import QueryRequest
+from services.depmap_mcp.catalog_readers import MODE_ALIASES
 from services.depmap_mcp.server import DepMapEvidenceService
 
 
@@ -68,6 +71,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             provenance, "depmap://26Q1/depmap-26q1-full/fixture.parquet"
         )
+
         tcga = result["evidence"]["items"][-1]
         self.assertEqual(
             tcga["query"],
@@ -83,6 +87,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             tcga["metric_semantics"]["metric"],
             "tcga_expression_and_survival_association",
         )
+
+    def test_every_bounded_query_mode_has_a_catalog_reader_family(self):
+        modes = set(get_args(QueryRequest.model_fields["mode"].annotation))
+        self.assertEqual(modes - set(MODE_ALIASES), set())
+        self.assertEqual(MODE_ALIASES["enrichment"], "enrichment")
 
     async def test_capability_catalog_is_lightweight_and_marks_direction_ambiguity(self):
         result = await self.service.capabilities()

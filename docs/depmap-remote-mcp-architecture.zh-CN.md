@@ -171,6 +171,26 @@ flowchart LR
 - 1,466 个脚本、清单和文档使用内容 SHA-256，43,856 个大型或结构化数据文件使用大小与修改时间指纹；
 - 服务器每小时运行新鲜度检查，源文件发生变化时通过临时库原子重建索引。
 
+## Catalog-driven Reader执行边界
+
+所有科学查询模式在进入原有格式读取逻辑前，统一经过
+`CatalogReaderRegistry`：
+
+1. 将API查询模式映射到`reader_registry`中的Reader族；
+2. 只选择`analysis_catalog`中状态为`COMPLETE`的分析单元；
+3. 从`artifact_catalog`和`analysis_relation`取得有限候选结果；
+4. 对包含基因实体的查询，从`matrix_block_index`取得对应分块；
+5. 执行受限格式Reader，并把Reader、analysis ID、artifact URI和分块URI写入
+   `catalog_resolution`。
+
+Reader执行时接收上述目录绑定；结果返回后，注册表再次校验实际provenance，
+只有属于`COMPLETE`分析单元的已索引文件才能进入evidence。矩阵分块同时限定在
+当前解析的分析单元内，最多返回32个稳定URI。
+
+生产服务器存在索引时，缺少Reader或没有匹配完成分析会返回明确覆盖错误，
+不会静默回退到代码内固定路径。`status`、癌种术语解析和能力目录属于控制面，
+不读取科学结果，因此不经过科学Reader。
+
 ## 结果传输契约
 
 除明确的目录盘点问题外，MCP 返回包使用 `scientific_result` 契约，至少包含当前查询可获得的以下内容：

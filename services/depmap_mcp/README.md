@@ -73,6 +73,18 @@ build-time definition used to populate that table; code fallback is used only
 when the index is absent. Result adapters and gene-to-shard locations are
 registered in `reader_registry` and `matrix_block_index`.
 
+All bounded scientific calls enter through `CatalogReaderRegistry` before the
+format-specific query adapter runs. The registry maps every API query mode to a
+reader family, permits only `COMPLETE` analysis units, returns stable
+`depmap://` artifact URIs, and adds `catalog_resolution` to every evidence item.
+When a production index is installed, a missing reader or matching completed
+analysis is a terminal coverage error; the MCP does not silently bypass the
+catalog with a fixed path. Matrix queries additionally resolve requested genes
+through `matrix_block_index`, restricted to the resolved analyses and 32 shards.
+The registry passes the resolved analysis, artifact, shard, and Reader binding
+into the adapter and validates every returned provenance path against a
+`COMPLETE` artifact entry before evidence leaves the server.
+
 If the optional TCGA bridge is absent, TCGA queries return
 `MODULE_UNAVAILABLE`; this is a coverage state, not a biological result. Install
 only the validated, precomputed bridge with this layout:

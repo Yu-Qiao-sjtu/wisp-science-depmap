@@ -32,6 +32,7 @@ from services.depmap_api.app import (
     resolve_lineage_term,
     verify_installation,
 )
+from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 
 
 Runner = Callable[[Settings, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -266,6 +267,9 @@ class DepMapEvidenceService:
         self.runner = runner
         self.semaphore = asyncio.Semaphore(settings.max_concurrency)
         self.qa = verify_installation(settings)
+        self.catalog_readers = CatalogReaderRegistry(
+            settings.knowledge_root, settings.release
+        )
 
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
@@ -402,7 +406,9 @@ class DepMapEvidenceService:
         validated = QueryRequest.model_validate(query).bounded_dict()
         try:
             async with self.semaphore:
-                result = await self.runner(self.settings, validated)
+                resolution, result = await self.catalog_readers.read(
+                    self.settings, validated, self.runner
+                )
         except HTTPException as exc:
             return {
                 "query": validated,
@@ -420,6 +426,7 @@ class DepMapEvidenceService:
             }
         return {
             "query": validated,
+            "catalog_resolution": resolution.evidence(self.settings.release),
             "metric_semantics": _metric_semantics(validated),
             "status": result.get("status", result.get("state", "FOUND")),
             "result": result,
