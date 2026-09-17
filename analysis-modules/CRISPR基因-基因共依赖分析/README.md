@@ -24,6 +24,9 @@ TM00-03：示例基因对、ESR1 × 全部基因、全基因矩阵
 | `scripts/04_build_global_correlation_matrices.R` | 26Q1 全局矩阵脚本；其中 `dataset=effect` 属于本模块 |
 | `scripts/17_build_lineage_sparse_networks.R` | 癌种内网络脚本；其中 `family=effect_correlation` 属于本模块 |
 | `scripts/18_verify_lineage_sparse_networks.R` | 癌种内结果数值抽查脚本 |
+| `scripts/20_build_tlg_tm00_derived_catalogs.R` | 从26Q1全局矩阵派生TLG负相关阈值表和正相关互惠Top20 |
+| `scripts/21_validate_tlg_tm00_derived_catalogs.R` | 验证阈值、互惠排名、覆盖门槛、唯一性和行数 |
+| `scripts/22_validate_tlg_known_pairs.R` | 用原始Gene Effect、相关矩阵和派生目录三路复核已知正负配对 |
 | `scripts/22_finalize_lineage_networks_server.R` | 服务器端覆盖率和结构验收脚本 |
 | `scripts/脚本来源.md` | 原始位置和快照哈希 |
 | `data/输入数据清单.md` | 输入数据结构及筛选规则 |
@@ -49,3 +52,12 @@ TM00-03：示例基因对、ESR1 × 全部基因、全基因矩阵
 | TM00 三表交集复现 | 1,140 | 0.3682355 | 6.2618 × 10^-38 |
 
 两个口径均为中等正相关，方向和结论一致。纯共依赖分析以 1,208 个样本为主结果；1,140 个交集样本用于复现 TM00 和敏感性验证。涉及表达—依赖联合分析时必须使用共同细胞系。
+
+## TLG／真爱基因派生目录
+
+“TLG／True Love Gene／真爱基因”是本项目对互惠共依赖筛选家族的名称。本次补齐两类 TM00 结果：
+
+- `05.2_synthetic_lethal.R` 等价层：全部唯一基因对中 `Pearson r < -0.3`；
+- `19_find_TLG_all(1).R`：A与B分别进入对方正相关Top20的互惠基因对。
+
+每类同时提供全部有限配对的原脚本等价层和 `pair_n ≥ 500` 质量视图。默认返回全部结果，并携带 `pair_n`、P值和质量标记供用户自行筛选；质量视图不删除或覆盖全量层。负相关结果称为“负共依赖候选”，不以相关性单独认定合成致死；正相关结果称为“正共依赖互惠邻居”，表示依赖谱相似。

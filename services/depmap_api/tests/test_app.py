@@ -100,6 +100,17 @@ class DepMapApiTests(unittest.TestCase):
         with gzip.open(stable_root / "final_high_confidence_true_love_genes.csv.gz", "wt", encoding="utf-8") as handle:
             handle.write("true_love_pair_id,gene_a,gene_b,worst_direction_fdr,strongest_absolute_correlation,bootstrap_reciprocal_stability\n")
             handle.write("TL-1,KRAS,NRAS,0.001,0.72,0.94\n")
+        derived_root = true_love_root / "tm00_derived_catalogs_26Q1"
+        derived_root.mkdir()
+        (derived_root / "manifest.json").write_text(
+            json.dumps({"status": "complete", "quality_min_pair_n": 500}), encoding="utf-8"
+        )
+        with gzip.open(derived_root / "negative_codependency_r_lt_minus_0.3_n500.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("gene_a,gene_b,correlation,pair_n,p_value\nKRAS,NRAS,-0.41,1208,1e-30\n")
+        with gzip.open(derived_root / "negative_codependency_r_lt_minus_0.3_legacy.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("gene_a,gene_b,correlation,pair_n,p_value,coverage_pass_n500\nKRAS,NRAS,-0.41,1208,1e-30,TRUE\nLOWA,LOWB,-0.99,4,0.01,FALSE\n")
+        with gzip.open(derived_root / "positive_reciprocal_top20_n500.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write("gene_a,gene_b,correlation_a_to_b,correlation_b_to_a,rank_a_to_b,rank_b_to_a,reciprocal_rank_sum\nKRAS,RAF1,0.66,0.66,2,3,5\n")
 
         synthetic_root = root / "depmap-26q1-full" / "observational_synthetic_lethal_candidates"
         synthetic_root.mkdir(parents=True)
@@ -222,7 +233,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 7)
+        self.assertEqual(response.json()["query_contract_version"], 8)
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
         self.assertIn("subtype", response.json()["query_modes"])
@@ -334,6 +345,23 @@ class DepMapApiTests(unittest.TestCase):
             ).json()
         self.assertEqual(true_love["status"], "FOUND")
         self.assertEqual(true_love["rows"][0]["bootstrap_reciprocal_stability"], 0.94)
+        with client:
+            negative = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "catalog": "negative_r_lt_minus_0_3", "coverage": "quality", "gene": "KRAS", "limit": 5},
+            ).json()
+            positive = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "catalog": "positive_reciprocal_top20", "coverage": "quality", "gene": "KRAS", "limit": 5},
+            ).json()
+            all_rows = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "true_love", "catalog": "negative_r_lt_minus_0_3", "limit": 5},
+            ).json()
+        self.assertEqual(negative["rows"][0]["correlation"], -0.41)
+        self.assertEqual(positive["rows"][0]["gene_b"], "RAF1")
+        self.assertEqual(all_rows["coverage"], "all")
+        self.assertEqual(all_rows["summary"]["matched_pair_count"], 2)
         self.assertEqual(synthetic["status"], "FOUND")
         self.assertEqual(synthetic["rows"][0]["target_gene"], "ARID1B")
         self.assertEqual(synthetic_forward["status"], "FOUND")

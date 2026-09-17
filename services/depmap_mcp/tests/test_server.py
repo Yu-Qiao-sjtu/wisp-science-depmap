@@ -98,6 +98,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
                 "tf_activity_to_dependency",
+                "true_love_gene_catalog",
                 "gene_evidence",
             },
         )
@@ -310,9 +311,15 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         true_love = await self.service.true_love_evidence("kras", "nras", 8)
         self.assertEqual(
             self.queries[-1],
-            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8},
+            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8, "catalog": "stable_negative_rank1"},
         )
         self.assertIn("not proof", true_love["evidence"]["metric_semantics"]["interpretation"])
+        positive = await self.service.true_love_evidence(
+            "kras", "raf1", 6, "positive_reciprocal_top20", "quality"
+        )
+        self.assertEqual(self.queries[-1]["catalog"], "positive_reciprocal_top20")
+        self.assertEqual(self.queries[-1]["coverage"], "quality")
+        self.assertIn("similar dependency profiles", positive["evidence"]["metric_semantics"]["interpretation"])
         synthetic = await self.service.synthetic_lethal_evidence(
             "arid1a", "arid1b", "damaging_mutation", 6
         )
