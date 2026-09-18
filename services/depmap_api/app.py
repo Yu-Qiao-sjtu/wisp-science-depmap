@@ -41,6 +41,7 @@ from services.depmap_api.scientific_query import (
     criteria_failures,
     filter_before_limit,
     annotate_common_essential,
+    annotate_qc,
 )
 
 
@@ -1920,6 +1921,8 @@ def _evidence_response(
 ) -> dict[str, Any]:
     if status_name not in EVIDENCE_STATUSES:
         raise ValueError(f"invalid evidence status: {status_name}")
+    if isinstance(identity.get("rows"), list):
+        identity["rows"] = annotate_qc(identity["rows"])
     return {
         "mode": mode,
         "status": status_name,
