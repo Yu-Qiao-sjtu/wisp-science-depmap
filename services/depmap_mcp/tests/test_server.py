@@ -362,6 +362,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result["presentation_contract"]["do_not_answer_with_paths_only"])
         self.assertFalse(result["presentation_contract"]["artifact_requested"])
+        self.assertEqual(
+            result["presentation_contract"]["disclosure"]["default"],
+            ["status_sentence", "bounded_top_rows", "filter_truncation_flags"],
+        )
+        self.assertEqual(
+            result["presentation_contract"]["disclosure"]["expanded"],
+            ["manifest", "evidence_id", "provenance"],
+        )
+        self.assertTrue(
+            result["presentation_contract"]["literature_is_separate_evidence_class"]
+        )
 
     async def test_analysis_catalog_normalizes_null_adapter_result(self):
         async def null_runner(_settings, _query):

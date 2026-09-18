@@ -33,5 +33,9 @@ Query-only turns default to `artifact_requested=false`. `write`/`edit` must not
 create `results/reports/**` or unsolicited CSV; the answer stays a bounded
 envelope in chat.
 
+Scientific envelopes use progressive disclosure: default layer is status,
+bounded top rows, and filter/truncation flags; manifests and evidence IDs are
+expanded-only. Literature remains a separate evidence class from DepMap.
+
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).
