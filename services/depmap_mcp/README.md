@@ -42,6 +42,11 @@ The exposed tools are intentionally small:
   and matrix shards by module, kind, or relative-path fragment;
 - `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return
   a bounded table/text preview or binary artifact metadata;
+
+Resource content is sanitized recursively before it crosses the MCP boundary.
+Paths inside the configured knowledge root become stable `depmap://` URIs;
+other Linux, Windows, and UNC absolute paths are redacted from structured
+content, tabular fields, and bounded text previews.
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

@@ -13,6 +13,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import closing
@@ -462,18 +463,66 @@ class DepMapEvidenceService:
                 rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle, delimiter="\t" if path.suffix.lower()==".tsv" else ","))]
             content = rows
         else:
-            content = path.read_text(encoding="utf-8-sig", errors="replace")[:65536]
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
+                try:
+                    content = json.loads(text)
+                except json.JSONDecodeError:
+                    content = text[:65536]
+            else:
+                content = text[:65536]
         return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows}, evidence={"status":"FOUND","uri":uri,"content":content})
 
+    def _portable_string(self, value: str) -> str:
+        root_variants = {
+            str(self.settings.knowledge_root).rstrip("\\/"),
+            self.settings.knowledge_root.as_posix().rstrip("/"),
+        }
+        safe = value
+        for root in sorted((item for item in root_variants if item), key=len, reverse=True):
+            pattern = re.compile(
+                re.escape(root) + r"(?P<tail>(?:[\\/][^\s\"'<>|,;\]\)}]*)?)",
+                re.IGNORECASE,
+            )
+
+            def replace_root(match: re.Match[str]) -> str:
+                relative = match.group("tail").lstrip("\\/").replace("\\", "/")
+                base = f"depmap://{self.settings.release}"
+                return f"{base}/{relative}" if relative else base
+
+            safe = pattern.sub(replace_root, safe)
+
+        stripped = safe.strip()
+        exact_absolute = (
+            re.fullmatch(r"[A-Za-z]:[\\/].+", stripped)
+            or re.fullmatch(r"\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?", stripped)
+            or re.fullmatch(r"//[^/]+/[^/]+(?:/.*)?", stripped)
+            or re.fullmatch(r"/(?:[^/\r\n]+/)+[^/\r\n]+", stripped)
+        )
+        if exact_absolute and not stripped.startswith(f"depmap://{self.settings.release}/"):
+            indent = value[: len(value) - len(value.lstrip())]
+            return indent + "<redacted:absolute-path>"
+
+        patterns = (
+            r"(?<![A-Za-z0-9:])[A-Za-z]:[\\/][^\s\"'<>|,;\]\)}]+",
+            r"(?<![A-Za-z0-9:])\\\\[^\s\\/]+[\\/][^\s\\/]+(?:[\\/][^\s\"'<>|,;\]\)}]+)*",
+            r"(?<![A-Za-z0-9:])//[^\s/]+/[^\s/]+(?:/[^\s\"'<>|,;\]\)}]+)*",
+            r"(?<![A-Za-z0-9:/])/(?:[^/\s\"'<>|,;\]\)}]+/)+[^/\s\"'<>|,;\]\)}]+",
+        )
+        for pattern in patterns:
+            safe = re.sub(pattern, "<redacted:absolute-path>", safe)
+        return safe
+
     def _portable(self, value: Any) -> Any:
-        root = str(self.settings.knowledge_root)
         if isinstance(value, dict):
-            return {key: self._portable(item) for key, item in value.items()}
+            return {
+                self._portable_string(key) if isinstance(key, str) else key: self._portable(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [self._portable(item) for item in value]
-        if isinstance(value, str) and value.lower().startswith(root.lower()):
-            relative = value[len(root) :].lstrip("\\/").replace("\\", "/")
-            return f"depmap://{self.settings.release}/{relative}"
+        if isinstance(value, str):
+            return self._portable_string(value)
         return value
 
     def _envelope(

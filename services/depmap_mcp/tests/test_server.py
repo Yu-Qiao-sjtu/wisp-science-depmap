@@ -1,8 +1,10 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from typing import get_args
 
@@ -62,6 +64,23 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def index_resource(self, relative: str, content: str) -> str:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS artifact_catalog "
+                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER)"
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?)",
+                (relative, "manifest", path.stat().st_size),
+            )
+            db.commit()
+        return f"depmap://26Q1/{relative}"
+
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
         self.assertEqual(result["request"]["gene"], "ESR1")
@@ -88,6 +107,59 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             tcga["metric_semantics"]["metric"],
             "tcga_expression_and_survival_association",
         )
+
+    async def test_read_resource_recursively_redacts_absolute_paths(self):
+        inside = self.root / "depmap-26q1-full" / "blocks" / "part-001.rds"
+        uri = self.index_resource(
+            "depmap-26q1-full/true_love_gene/manifest.json",
+            json.dumps(
+                {
+                    "inputs": [
+                        str(inside),
+                        "/home/private/depmap/secret.csv",
+                        r"C:\Users\analyst\secret.csv",
+                        r"\\fileserver\team\secret.csv",
+                    ],
+                    "/private/path/as-key": "key is sanitized too",
+                    "nested": {"safe_url": "https://example.org/reference"},
+                }
+            ),
+        )
+
+        result = await self.service.read_resource(uri, max_rows=20)
+        content = result["evidence"]["content"]
+        self.assertEqual(
+            content["inputs"][0],
+            "depmap://26Q1/depmap-26q1-full/blocks/part-001.rds",
+        )
+        self.assertEqual(content["inputs"][1:], ["<redacted:absolute-path>"] * 3)
+        self.assertEqual(content["nested"]["safe_url"], "https://example.org/reference")
+        self.assertEqual(content["<redacted:absolute-path>"], "key is sanitized too")
+        serialized = json.dumps(result)
+        self.assertNotIn(str(self.root), serialized)
+        self.assertNotIn("/home/private", serialized)
+        self.assertNotIn("fileserver", serialized)
+
+    async def test_read_resource_sanitizes_csv_fields_and_text_previews(self):
+        csv_uri = self.index_resource(
+            "depmap-26q1-full/fixture.csv",
+            "gene,input,note\nESR1,/srv/private/input.rds,safe\n",
+        )
+        csv_result = await self.service.read_resource(csv_uri, max_rows=10)
+        self.assertEqual(
+            csv_result["evidence"]["content"][0]["input"],
+            "<redacted:absolute-path>",
+        )
+
+        text_uri = self.index_resource(
+            "depmap-26q1-full/fixture.yaml",
+            "input: /srv/private/input.rds\nwindows: D:\\private\\input.rds\n",
+        )
+        text_result = await self.service.read_resource(text_uri, max_rows=10)
+        preview = text_result["evidence"]["content"]
+        self.assertNotIn("/srv/private", preview)
+        self.assertNotIn(r"D:\private", preview)
+        self.assertEqual(preview.count("<redacted:absolute-path>"), 2)
 
     def test_every_bounded_query_mode_has_a_catalog_reader_family(self):
         modes = set(get_args(QueryRequest.model_fields["mode"].annotation))
