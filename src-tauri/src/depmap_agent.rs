@@ -767,7 +767,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "new_analysis" | "report_generation" => (
                 "L4_DURABLE",
                 true,
-                "Create a persisted Run or registered Workflow only after explicit user approval.",
+                "Create a persisted Run through the non-exfiltrating remote-compute gateway after explicit user approval. Missing knowledge context or MCP dropout is MODULE_UNAVAILABLE, not folder guessing or live SSH.",
                 vec!["start_workflow", "run_in_context"],
             ),
             _ => unreachable!(),
@@ -1076,6 +1076,14 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "strategy": strategy,
         "recommended_query": recommended_query,
         "artifact_requested": matches!(intent.as_str(), "report_generation" | "new_analysis"),
+        "remote_compute": {
+            "gateway": "non_exfiltrating",
+            "live_ssh_forbidden": true,
+            "matrix_export": false,
+            "knowledge_context_miss": "MODULE_UNAVAILABLE",
+            "mcp_dropout": "MODULE_UNAVAILABLE",
+            "new_compute": "gated_run"
+        },
         "allowed_next_tools": tools,
         "evidence_budget": {
             "max_scientific_tool_calls": if intent == "pan_cancer_dependency_summary" { 1 } else { 4 },
@@ -3310,6 +3318,8 @@ mod tests {
         .unwrap();
         assert_eq!(report["execution_level"], "L4_DURABLE");
         assert_eq!(report["requires_approval"], true);
+        assert_eq!(report["remote_compute"]["live_ssh_forbidden"], true);
+        assert_eq!(report["remote_compute"]["knowledge_context_miss"], "MODULE_UNAVAILABLE");
         assert_eq!(
             report["guardrails"]["workflow_semantic_match_alone_is_sufficient"],
             false
