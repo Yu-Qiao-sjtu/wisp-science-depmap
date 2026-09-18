@@ -177,6 +177,23 @@ impl KernelClient {
             envs.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         );
+        // Python otherwise inherits the active Windows console code page (often
+        // GBK), which can reject Chinese, Greek, or non-BMP text before our
+        // byte-framed protocol gets a chance to carry it. These variables are
+        // harmless for non-Python transports and preserve the caller's explicit
+        // override when one was supplied.
+        if !envs
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("PYTHONUTF8"))
+        {
+            cmd.env("PYTHONUTF8", "1");
+        }
+        if !envs
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("PYTHONIOENCODING"))
+        {
+            cmd.env("PYTHONIOENCODING", "utf-8");
+        }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

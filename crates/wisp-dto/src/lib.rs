@@ -1043,6 +1043,24 @@ mod question_card_tests {
     }
 
     #[test]
+    fn parses_unicode_question_card_without_loss() {
+        let payload = serde_json::json!({
+            "question": "肝癌中的 GPX4 与 α/β？🧬",
+            "options": [{ "label": "继续🧪", "description": "检查 γ 信号" }],
+            "allow_freeform": true,
+            "source": "native"
+        });
+        let encoded = serde_json::to_vec(&payload).unwrap();
+        let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        let card = parse_question_card(&decoded);
+
+        assert_eq!(card.question, "肝癌中的 GPX4 与 α/β？🧬");
+        assert!(!card.question.is_empty());
+        assert_eq!(card.options[0].label, "继续🧪");
+        assert_eq!(card.options[0].description, "检查 γ 信号");
+    }
+
+    #[test]
     fn parses_the_acp_reload_row() {
         let card = parse_question_card(&serde_json::json!({
             "question": "Deploy now?",
@@ -3265,6 +3283,10 @@ pub struct ConnectorInfo {
     pub subtitle: String,
     #[serde(default)]
     pub auth: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub last_error: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]

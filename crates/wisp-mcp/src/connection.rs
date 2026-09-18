@@ -25,6 +25,8 @@ pub struct ManagedConnection {
     generation: AtomicU64,
     registered_generation: AtomicU64,
     catalog_changed: AtomicBool,
+    connecting: AtomicBool,
+    last_error: RwLock<Option<String>>,
     closed: AtomicBool,
 }
 impl ManagedConnection {
@@ -38,6 +40,8 @@ impl ManagedConnection {
             generation: AtomicU64::new(0),
             registered_generation: AtomicU64::new(0),
             catalog_changed: AtomicBool::new(false),
+            connecting: AtomicBool::new(false),
+            last_error: RwLock::new(None),
             closed: AtomicBool::new(false),
         }
     }
@@ -73,6 +77,21 @@ impl ManagedConnection {
                 .as_ref()
                 .is_some_and(|c| c.is_connected())
     }
+    pub fn status(&self) -> (&'static str, Option<String>) {
+        let status = if self.closed.load(Ordering::SeqCst) {
+            "disabled"
+        } else if self.connecting.load(Ordering::SeqCst) {
+            "reconnecting"
+        } else if self.is_connected() {
+            "ready"
+        } else {
+            "disconnected"
+        };
+        (status, self.last_error.read().unwrap().clone())
+    }
+    pub fn record_error(&self, error: &anyhow::Error) {
+        *self.last_error.write().unwrap() = Some(format!("{error:#}"));
+    }
     pub async fn ready(&self) -> Result<Arc<McpClient>> {
         let attempt = self.attempts.load(Ordering::SeqCst);
         let mut last_error = self.connect.lock().await;
@@ -97,6 +116,7 @@ impl ManagedConnection {
         }
         self.current.write().unwrap().take();
         self.generation.fetch_add(1, Ordering::SeqCst);
+        self.connecting.store(true, Ordering::SeqCst);
         tracing::info!(target: "wisp", generation=self.generation(), "mcp.connection.connecting");
         let result = tokio::select! {
             result = async {
@@ -110,6 +130,7 @@ impl ManagedConnection {
             } } => Err(anyhow!("MCP connector closed during initialization")),
         };
         self.attempts.fetch_add(1, Ordering::SeqCst);
+        self.connecting.store(false, Ordering::SeqCst);
         match result {
             Ok(client) => {
                 if self.closed.load(Ordering::SeqCst) {
@@ -119,12 +140,14 @@ impl ManagedConnection {
                 let client = Arc::new(client);
                 *self.current.write().unwrap() = Some(client.clone());
                 *last_error = None;
+                *self.last_error.write().unwrap() = None;
                 let generation = self.generation();
                 tracing::info!(target: "wisp", generation, "mcp.connection.ready");
                 Ok(client)
             }
             Err(error) => {
                 *last_error = Some(error.to_string());
+                self.record_error(&error);
                 tracing::warn!(target: "wisp", "mcp.connection.failed; next explicit use may retry");
                 Err(error)
             }
@@ -133,6 +156,7 @@ impl ManagedConnection {
     pub async fn shutdown(&self) -> Result<()> {
         // Reject new requests before waiting for a concurrent bounded initialization.
         self.closed.store(true, Ordering::SeqCst);
+        self.connecting.store(false, Ordering::SeqCst);
         let _connect = self.connect.lock().await;
         let client = self.current.write().unwrap().take();
         tracing::info!(target: "wisp", generation=self.generation(), "mcp.connection.shutdown");

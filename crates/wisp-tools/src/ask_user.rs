@@ -184,6 +184,27 @@ mod tests {
         assert_eq!(AskUserTool.name(), ASK_USER);
     }
 
+    #[test]
+    fn preserves_unicode_question_and_options_through_json_round_trip() {
+        let text = "乳腺癌中的 GPX4 与 α/β？🧬";
+        let body = question_body(&json!({
+            "question": format!("  {text}  "),
+            "options": [
+                { "label": "继续分析🧪", "description": "保留 α 信号" },
+                { "label": "先澄清", "description": "比较 β/γ" }
+            ]
+        }))
+        .unwrap();
+        let encoded = serde_json::to_vec(&body).unwrap();
+        let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded["question"], text);
+        assert!(!decoded["question"].as_str().unwrap().is_empty());
+        assert_eq!(decoded["options"][0]["label"], "继续分析🧪");
+        assert_eq!(decoded["options"][0]["description"], "保留 α 信号");
+        assert_eq!(decoded["options"][1]["description"], "比较 β/γ");
+    }
+
     #[tokio::test]
     async fn successful_question_is_a_hard_turn_boundary() {
         let result = AskUserTool

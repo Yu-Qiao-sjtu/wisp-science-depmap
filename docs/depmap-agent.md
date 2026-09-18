@@ -467,3 +467,14 @@ For a breast-cancer direction, the intended conversation is:
 If the user supplies only a cancer type, the Agent may inventory available
 analysis families, but it must request a resolved gene before claiming that a
 gene-specific topic has been evaluated.
+# Client reliability
+
+Wisp keeps the configured DepMap MCP identity when a transient HTTP failure
+invalidates its transport. A later read-only catalog request reconnects and
+restores tool discovery automatically. Calls with possible side effects are
+never replayed after an ambiguous disconnect. The Connections page reports
+disconnected, reconnecting, and ready states and retains the latest error for
+diagnosis.
+
+Clarification cards, trajectory exports, and local Python workers use UTF-8
+end to end, including on Windows systems whose console code page is GBK.

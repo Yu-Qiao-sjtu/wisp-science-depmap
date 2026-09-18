@@ -153,6 +153,8 @@ fn bundled_connector_infos(
                 transport: String::new(),
                 subtitle: String::new(),
                 auth: String::new(),
+                status: String::new(),
+                last_error: None,
                 description: metadata.map(|m| m.description.clone()).unwrap_or_default(),
                 description_zh: metadata
                     .map(|m| m.description_zh.clone())
@@ -193,6 +195,13 @@ pub(super) async fn list_connectors(
             McpTransport::Stdio { command, .. } => ("stdio", command.clone(), String::new()),
             McpTransport::Http { url, auth, .. } => ("http", url.clone(), auth.as_str().into()),
         };
+        let runtime = if let Some(project) = project_id.as_deref() {
+            crate::mcp_connections::host()
+                .connector_status(project, &c.id)
+                .await
+        } else {
+            None
+        };
         connectors.push(ConnectorInfo {
             key: c.id,
             name: c.name,
@@ -202,6 +211,11 @@ pub(super) async fn list_connectors(
             transport: transport.into(),
             subtitle,
             auth,
+            status: runtime
+                .as_ref()
+                .map(|(status, _)| status.clone())
+                .unwrap_or_default(),
+            last_error: runtime.and_then(|(_, error)| error),
             description: String::new(),
             description_zh: String::new(),
             maintainer: String::new(),
