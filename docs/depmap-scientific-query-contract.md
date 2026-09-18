@@ -36,6 +36,8 @@ envelope in chat.
 Scientific envelopes use progressive disclosure: default layer is status,
 bounded top rows, and filter/truncation flags; manifests and evidence IDs are
 expanded-only. Literature remains a separate evidence class from DepMap.
+Every evidence row may carry shared `qc_annotations` (`small_n`,
+`sparse_pair`, `near_perfect_correlation`, `prism_noise`).
 
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

@@ -126,6 +126,69 @@ def annotate_common_essential(
     }
 
 
+SMALL_N_MAX = 10
+NEAR_UNIT_ABS_CORR = 0.99
+_N_KEYS = (
+    "pair_n",
+    "sample_n",
+    "n",
+    "mut_n",
+    "control_n",
+    "n_mut",
+    "n_wt",
+    "event_n",
+    "valid_gene_effect_n",
+)
+_R_KEYS = (
+    "correlation",
+    "r",
+    "pearson_r",
+    "strongest_absolute_correlation",
+    "correlation_a_to_b",
+)
+_PAIR_KEYS = ("gene_a", "gene_b", "partner", "source_gene", "target_gene")
+
+
+def _first_number(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def qc_annotations_for_row(row: dict[str, Any]) -> list[str]:
+    """Shared QC sidecar flags. Display-only; not gene-specific tools."""
+    flags: list[str] = []
+    n = _first_number(row, _N_KEYS)
+    if n is not None and n < SMALL_N_MAX:
+        flags.append("small_n")
+    r = _first_number(row, _R_KEYS)
+    if r is not None and abs(r) >= NEAR_UNIT_ABS_CORR:
+        flags.append("near_perfect_correlation")
+    pairish = any(str(row.get(key) or "").strip() for key in _PAIR_KEYS)
+    if pairish and (n is None or n < SMALL_N_MAX):
+        flags.append("sparse_pair")
+    joined = " ".join(str(row.get(key) or "") for key in ("dataset", "screen", "assay", "provider"))
+    if "prism" in joined.casefold() or row.get("prism_z") is not None:
+        flags.append("prism_noise")
+    return flags
+
+
+def annotate_qc(rows: list[Any]) -> list[Any]:
+    annotated = []
+    for row in rows:
+        if not isinstance(row, dict):
+            annotated.append(row)
+            continue
+        annotated.append({**row, "qc_annotations": qc_annotations_for_row(row)})
+    return annotated
+
+
 def filter_before_limit(
     rows: Iterable[T],
     match: Callable[[T], bool],

@@ -95,3 +95,21 @@ class ScientificQueryContractTests(unittest.TestCase):
             criteria_failures(observed={"mut": None, "wt": 10}, required={"mut": 3, "wt": 5}),
             ["COUNTS_UNAVAILABLE"],
         )
+
+    def test_qc_annotations_are_shared_sidecar_fields(self):
+        from services.depmap_api.scientific_query import annotate_qc
+
+        rows = annotate_qc(
+            [
+                {"gene_a": "GPX4", "gene_b": "A", "pair_n": 4, "correlation": 0.995},
+                {"gene": "PTK7", "mut_n": 2, "control_n": 40},
+                {"gene": "ESR1", "sample_n": 80, "dataset": "PRISM"},
+                {"symbol": "CLEAN", "n": 50, "correlation": 0.2},
+            ]
+        )
+        self.assertIn("small_n", rows[0]["qc_annotations"])
+        self.assertIn("sparse_pair", rows[0]["qc_annotations"])
+        self.assertIn("near_perfect_correlation", rows[0]["qc_annotations"])
+        self.assertIn("small_n", rows[1]["qc_annotations"])
+        self.assertIn("prism_noise", rows[2]["qc_annotations"])
+        self.assertEqual(rows[3]["qc_annotations"], [])
