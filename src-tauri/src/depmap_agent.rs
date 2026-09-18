@@ -957,6 +957,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "strategy": strategy,
         "recommended_query": recommended_query,
         "allowed_next_tools": tools,
+        "evidence_budget": {
+            "max_scientific_tool_calls": if intent == "pan_cancer_dependency_summary" { 1 } else { 4 },
+            "max_model_evidence_bytes_per_call": 98304,
+            "repeat_same_evidence_id": "stop_and_answer_from_existing_evidence",
+            "on_budget_exhausted": "state_coverage_limits_and_answer_without_more_retrieval"
+        },
         "guardrails": {
             "route_is_evidence": false,
             "workflow_semantic_match_alone_is_sufficient": false,
@@ -964,7 +970,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "model_confidence_is_not_a_calibrated_probability": true,
             "critical_direction_ambiguity_requires_clarification": true,
             "catalog_is_routing_metadata_unless_inventory_requested": true,
-            "never_answer_a_scientific_question_with_paths_or_module_status_only": true
+            "never_answer_a_scientific_question_with_paths_or_module_status_only": true,
+            "do_not_read_or_grep_spilled_tool_output_to_reconstruct_structured_evidence": true
         },
         "response_pipeline": [
             "resolve_user_intent",
@@ -3027,6 +3034,15 @@ mod tests {
         assert_eq!(
             pan_cancer["recommended_query"]["arguments"],
             json!({"ranking":"selective","exclude_common_essential":true,"common_essential_source":"depmap_26q1","limit":5})
+        );
+        assert_eq!(
+            pan_cancer["evidence_budget"]["max_scientific_tool_calls"],
+            1
+        );
+        assert_eq!(
+            pan_cancer["guardrails"]
+                ["do_not_read_or_grep_spilled_tool_output_to_reconstruct_structured_evidence"],
+            true
         );
 
         let directions = depmap_route(&json!({

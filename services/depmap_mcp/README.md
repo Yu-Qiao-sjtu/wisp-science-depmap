@@ -87,6 +87,14 @@ release, request, metric semantics, coverage states, and normalized provenance.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It
 never performs a sample-level join or creates a synthetic combined score.
 
+Model-facing MCP evidence is projected to a 96 KiB budget with bounded arrays
+and strings. `model_projection` reports the original/projected byte counts and
+any omitted items. The deterministic `evidence_id` is computed from the full
+portable evidence before projection, while retained results remain addressable
+through their catalog and `depmap://` provenance. The DepMap Agent consumes the
+structured projection directly and does not re-read `.wisp/tool-output` to
+reconstruct the same table.
+
 `depmap_capabilities` reads its 20 intent contracts from SQLite
 `capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
 build-time definition used to populate that table; code fallback is used only
