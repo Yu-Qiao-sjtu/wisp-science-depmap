@@ -1,5 +1,15 @@
 # DepMap Agent
 
+## MCP result retention
+
+Remote MCP queries keep two separate representations in the conversation
+trajectory: a bounded `content` preview for the interface and the complete
+`structured_content` JSON returned by the provider. Large result previews may
+be shortened without shortening the structured evidence used for audit and
+replay. New records use the `wisp.mcp-tool-result.v1` envelope; the trajectory
+reader also supports the two historical forms (a JSON object or one
+JSON-encoded string containing that object) without recursive decoding.
+
 中文远程数据、目录索引、MCP 和模型解释的完整链路见
 [DepMap Agent 远程数据桥接技术路线](depmap-remote-mcp-architecture.zh-CN.md)。
 

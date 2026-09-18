@@ -483,14 +483,24 @@ impl Tool for McpTool {
                     let artifacts =
                         materialize_html_resources(&result, env.project_root(), env).await;
                     if !artifacts.is_empty() {
-                        output.content.push_str("\n\nGenerated artifacts: ");
-                        output.content.push_str(
-                            &artifacts
+                        let artifact_text = format!(
+                            "Generated artifacts: {}",
+                            artifacts
                                 .iter()
                                 .map(|path| path.to_string_lossy())
                                 .collect::<Vec<_>>()
-                                .join(", "),
+                                .join(", ")
                         );
+                        if let Some(mut envelope) =
+                            crate::result::ModelResultEnvelope::decode(&output.content)
+                        {
+                            envelope.append_display_text(&artifact_text);
+                            output.content = serde_json::to_string(&envelope)
+                                .expect("MCP model-result envelope is JSON serializable");
+                        } else {
+                            output.content.push_str("\n\n");
+                            output.content.push_str(&artifact_text);
+                        }
                     }
                     if let Some(uri) = self.remote.ui_resource_uri() {
                         self.emit_mcp_app(uri, args, &result, env).await;

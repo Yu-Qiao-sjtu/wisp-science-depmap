@@ -1916,6 +1916,7 @@ mod tests {
             name: "shell".into(),
             ok: true,
             content: "SECRET=do-not-forward".into(),
+            structured_content: None,
             duration_ms: 42,
         });
         assert_eq!(

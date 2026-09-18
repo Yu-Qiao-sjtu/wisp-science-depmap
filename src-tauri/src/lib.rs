@@ -178,7 +178,12 @@ enum AgentEvent {
         frame_id: String,
         name: String,
         ok: bool,
+        /// Bounded human-readable projection shown in the transcript.
         content: String,
+        /// Lossless MCP structured evidence, persisted independently from the
+        /// bounded display text. Older event rows omit this field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_content: Option<serde_json::Value>,
         /// Added after UI events started being persisted; older rows omit it.
         #[serde(default)]
         duration_ms: u64,
@@ -3126,6 +3131,18 @@ struct TauriOutput {
     force_ask_mutations: bool,
 }
 
+fn live_agent_event(mut event: AgentEvent) -> AgentEvent {
+    if let AgentEvent::ToolResult {
+        structured_content, ..
+    } = &mut event
+    {
+        // The lossless value belongs in the persisted audit record. The
+        // WebView receives only the bounded display projection.
+        *structured_content = None;
+    }
+    event
+}
+
 impl TauriOutput {
     fn full_permission(&self) -> bool {
         self.full_permission_sessions
@@ -3142,16 +3159,17 @@ impl TauriOutput {
                 let _ = tx.send(SessionUiMessage::Event(event.clone()));
             }
         }
+        let live_event = live_agent_event(event);
         match &self.live_events {
             Some(tx) => {
-                if let Err(send_error) = tx.send(SessionUiMessage::Event(event)) {
+                if let Err(send_error) = tx.send(SessionUiMessage::Event(live_event)) {
                     let SessionUiMessage::Event(event) = send_error.0 else {
                         unreachable!()
                     };
                     emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id));
                 }
             }
-            None => emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id)),
+            None => emit_agent_event_to_surfaces_in(&self.app, live_event, Some(&self.project_id)),
         }
     }
 
@@ -3314,11 +3332,18 @@ impl Output for TauriOutput {
         });
     }
     fn tool_result(&self, name: &str, ok: bool, content: &str, duration_ms: u64) {
+        let (display, structured_content) =
+            if let Some(envelope) = wisp_mcp::result::ModelResultEnvelope::decode(content) {
+                (envelope.display_text, envelope.structured_content)
+            } else {
+                (content.to_string(), None)
+            };
         self.emit(AgentEvent::ToolResult {
             frame_id: self.frame_id.clone(),
             name: name.into(),
             ok,
-            content: bounded_ui_tool_result(name, content),
+            content: bounded_ui_tool_result(name, &display),
+            structured_content,
             duration_ms,
         });
     }

@@ -2,6 +2,7 @@
 //! Apps; model context must never inherit App-only `_meta` or binary blobs.
 
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wisp_tools::{ImageData, ToolResult};
 
@@ -9,6 +10,35 @@ use crate::McpCallResult;
 
 const MAX_IMAGES: usize = 8;
 const MAX_TOTAL_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+pub const MODEL_RESULT_SCHEMA: &str = "wisp.mcp-tool-result.v1";
+
+/// Canonical model/persistence boundary for MCP results. The human-readable
+/// projection and lossless structured evidence remain separate, so UI
+/// previews can be bounded without truncating the evidence used for audit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelResultEnvelope {
+    pub schema: String,
+    pub display_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
+}
+
+impl ModelResultEnvelope {
+    pub fn decode(value: &str) -> Option<Self> {
+        let parsed = serde_json::from_str::<Value>(value).ok()?;
+        let object = parsed.as_object()?;
+        (object.get("schema").and_then(Value::as_str) == Some(MODEL_RESULT_SCHEMA))
+            .then(|| serde_json::from_value(parsed).ok())
+            .flatten()
+    }
+
+    pub fn append_display_text(&mut self, value: &str) {
+        if !self.display_text.is_empty() {
+            self.display_text.push_str("\n\n");
+        }
+        self.display_text.push_str(value);
+    }
+}
 
 fn model_visible(block: &Value) -> bool {
     block
@@ -75,19 +105,23 @@ pub fn model_result(result: &McpCallResult) -> ToolResult {
         }
     }
     if let Some(structured) = &result.structured_content {
-        // Some servers already serialize the same object in a text block.
-        if !text
-            .iter()
-            .any(|value| serde_json::from_str::<Value>(value).ok().as_ref() == Some(structured))
-        {
-            text.push(format!("MCP structuredContent: {structured}"));
-        }
+        text.retain(|value| serde_json::from_str::<Value>(value).ok().as_ref() != Some(structured));
     }
-    let content = if text.is_empty() {
-        "(no model-visible output)".to_string()
+    let display_text = if text.is_empty() {
+        if result.structured_content.is_some() {
+            "(structured MCP result)".to_string()
+        } else {
+            "(no model-visible output)".to_string()
+        }
     } else {
         text.join("\n")
     };
+    let content = serde_json::to_string(&ModelResultEnvelope {
+        schema: MODEL_RESULT_SCHEMA.into(),
+        display_text,
+        structured_content: result.structured_content.clone(),
+    })
+    .expect("MCP model-result envelope is JSON serializable");
     let mut output = if result.is_error {
         ToolResult::fail(content)
     } else {
@@ -222,18 +256,54 @@ mod tests {
     #[test]
     fn structured_only_result_is_not_no_output_or_duplicated_json() {
         let input = result(vec![]);
-        assert!(model_result(&input).content.contains("exact-digest"));
+        let output = model_result(&input);
+        let envelope = ModelResultEnvelope::decode(&output.content).unwrap();
+        assert_eq!(envelope.display_text, "(structured MCP result)");
+        assert_eq!(
+            envelope.structured_content.unwrap()["planDigest"],
+            "exact-digest"
+        );
         let mut repeated = input.clone();
         repeated.content = vec![json!({
             "type": "text", "text": input.structured_content.unwrap().to_string()
         })];
+        let envelope = ModelResultEnvelope::decode(&model_result(&repeated).content).unwrap();
         assert_eq!(
-            model_result(&repeated)
-                .content
-                .matches("exact-digest")
-                .count(),
-            1
+            envelope.structured_content.unwrap()["planDigest"],
+            "exact-digest"
         );
+    }
+
+    #[test]
+    fn canonical_envelope_round_trips_large_empty_and_not_retained_results() {
+        for structured in [
+            json!({"rows": (0..10_000).map(|index| json!({"index":index})).collect::<Vec<_>>() }),
+            json!({"rows": []}),
+            json!({"status":"NOT_RETAINED", "reason":"below frozen threshold"}),
+        ] {
+            let input = McpCallResult {
+                content: vec![],
+                structured_content: Some(structured.clone()),
+                meta: None,
+                is_error: false,
+            };
+            let envelope = ModelResultEnvelope::decode(&model_result(&input).content).unwrap();
+            assert_eq!(envelope.structured_content, Some(structured));
+        }
+    }
+
+    #[test]
+    fn appending_artifact_text_keeps_the_envelope_decodable() {
+        let mut envelope = ModelResultEnvelope {
+            schema: MODEL_RESULT_SCHEMA.into(),
+            display_text: "result".into(),
+            structured_content: Some(json!({"status":"FOUND"})),
+        };
+        envelope.append_display_text("Generated artifacts: plot.html");
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        let decoded = ModelResultEnvelope::decode(&encoded).unwrap();
+        assert!(decoded.display_text.contains("plot.html"));
+        assert_eq!(decoded.structured_content.unwrap()["status"], "FOUND");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! database.
 
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use wisp_llm::{Message, Role};
 use wisp_store::SessionUiEventRecord;
@@ -41,6 +42,10 @@ pub struct TrajectoryCell {
     pub detail_input: Option<String>,
     /// Tool cells: full result text; assistant cells: full text.
     pub detail_output: Option<String>,
+    /// Tool cells: canonical structured MCP evidence. This is persisted and
+    /// exported independently from the bounded display output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<Value>,
     pub ok: Option<bool>,
     pub is_error: bool,
     /// Unix epoch milliseconds.
@@ -129,7 +134,14 @@ impl TurnBuild {
         self.cells.len() - 1
     }
 
-    fn match_tool_result(&mut self, name: &str, ok: bool, duration_ms: u64) {
+    fn match_tool_result(
+        &mut self,
+        name: &str,
+        ok: bool,
+        duration_ms: u64,
+        display_output: Option<String>,
+        structured_output: Option<Value>,
+    ) {
         for index in 0..self.cells.len() {
             if self.matched.contains(&index) {
                 continue;
@@ -143,8 +155,37 @@ impl TurnBuild {
             if duration_ms > 0 {
                 self.cells[index].duration_ms = Some(duration_ms as i64);
             }
+            if display_output.is_some() {
+                self.cells[index].detail_output = display_output;
+            }
+            if structured_output.is_some() {
+                self.cells[index].structured_output = structured_output;
+            }
             return;
         }
+    }
+}
+
+/// Read exactly the two historical MCP result shapes that predate the typed
+/// event field: a JSON object, or one JSON string containing that object.
+/// This deliberately does not perform open-ended recursive decoding.
+fn legacy_structured_output(content: &str) -> Option<Value> {
+    let first = serde_json::from_str::<Value>(content).ok()?;
+    let value = match first {
+        Value::String(inner) => serde_json::from_str::<Value>(&inner).ok()?,
+        value => value,
+    };
+    match value {
+        Value::Object(mut object) => {
+            if object.get("schema").and_then(Value::as_str)
+                == Some(wisp_mcp::result::MODEL_RESULT_SCHEMA)
+            {
+                object.remove("structured_content")
+            } else {
+                Some(Value::Object(object))
+            }
+        }
+        _ => None,
     }
 }
 
@@ -242,7 +283,12 @@ pub fn fold_trajectory(
                     turns.push(TurnBuild::new(1, ts));
                 }
                 let turn = turns.last_mut().expect("turn created above");
-                let result = message.content.as_text();
+                let raw_result = message.content.as_text();
+                let (result, structured_output) =
+                    match wisp_mcp::result::ModelResultEnvelope::decode(&raw_result) {
+                        Some(envelope) => (envelope.display_text, envelope.structured_content),
+                        None => (raw_result, None),
+                    };
                 let name = message.tool_name.clone().unwrap_or_default();
                 match message
                     .tool_call_id
@@ -254,6 +300,7 @@ pub fn fold_trajectory(
                         let arguments = cell.detail_input.clone();
                         cell.summary = tool_summary(&name, arguments.as_deref(), Some(&result));
                         cell.detail_output = Some(result);
+                        cell.structured_output = structured_output;
                     }
                     None => {
                         // Result without a matching call (e.g. compacted or
@@ -263,6 +310,7 @@ pub fn fold_trajectory(
                                 kind: "tool".into(),
                                 summary: tool_summary(&name, None, Some(&result)),
                                 detail_output: Some(result),
+                                structured_output,
                                 ts,
                                 ..Default::default()
                             },
@@ -318,6 +366,8 @@ pub fn fold_trajectory(
             AgentEvent::ToolResult {
                 name,
                 ok,
+                content,
+                structured_content,
                 duration_ms,
                 ..
             } => {
@@ -325,7 +375,17 @@ pub fn fold_trajectory(
                     continue;
                 }
                 let index = turn_index_for(&turns, record.created_at);
-                turns[index].match_tool_result(&name, ok, duration_ms);
+                let is_mcp =
+                    name.starts_with(wisp_tools::MCP_EVENT_PREFIX) || name == "use_mcp_tool";
+                let structured_output = structured_content
+                    .or_else(|| is_mcp.then(|| legacy_structured_output(&content)).flatten());
+                turns[index].match_tool_result(
+                    &name,
+                    ok,
+                    duration_ms,
+                    is_mcp.then_some(content),
+                    structured_output,
+                );
             }
             _ => {}
         }
@@ -625,6 +685,106 @@ mod tests {
         assert!(tools[1].is_error);
         assert_eq!(tools[1].duration_ms, Some(200));
         assert_eq!(snapshot.stats.tool_ms, 300);
+    }
+
+    #[test]
+    fn tool_result_event_keeps_typed_evidence_separate_from_display_text() {
+        let messages = vec![
+            (1, timed_message(Message::user("q"), 1000)),
+            (
+                2,
+                assistant_with_calls(
+                    "",
+                    vec![tool_call(
+                        "c1",
+                        "use_mcp_tool",
+                        r#"{"tool_name":"depmap_query"}"#,
+                    )],
+                    1001,
+                ),
+            ),
+            (
+                3,
+                timed_message(
+                    Message::tool(
+                        "c1",
+                        "use_mcp_tool",
+                        r#"{"schema":"wisp.mcp-tool-result.v1","display_te…truncated"#,
+                    ),
+                    1002,
+                ),
+            ),
+        ];
+        let event = serde_json::json!({
+            "kind":"ToolResult",
+            "frame_id":"f",
+            "name":"use_mcp_tool",
+            "ok":true,
+            "content":"bounded display",
+            "structured_content":{"status":"NOT_RETAINED","rows":[]},
+            "duration_ms":12
+        })
+        .to_string();
+        let snapshot = fold_trajectory("f", None, &messages, &[record(1, Some(1_002_000), event)]);
+        let tool = snapshot.turns[0]
+            .cells
+            .iter()
+            .find(|cell| cell.kind == "tool")
+            .unwrap();
+        assert_eq!(tool.detail_output.as_deref(), Some("bounded display"));
+        assert_eq!(
+            tool.structured_output.as_ref().unwrap()["status"],
+            "NOT_RETAINED"
+        );
+    }
+
+    #[test]
+    fn ordinary_json_tool_result_is_not_promoted_to_mcp_evidence() {
+        let messages = vec![
+            (1, timed_message(Message::user("q"), 1000)),
+            (
+                2,
+                assistant_with_calls(
+                    "",
+                    vec![tool_call("c1", "shell", r#"{"cmd":"status"}"#)],
+                    1001,
+                ),
+            ),
+            (
+                3,
+                timed_message(Message::tool("c1", "shell", r#"{"ok":true}"#), 1002),
+            ),
+        ];
+        let event = serde_json::json!({
+            "kind":"ToolResult",
+            "frame_id":"f",
+            "name":"shell",
+            "ok":true,
+            "content":"{\"ok\":true}",
+            "duration_ms":1
+        })
+        .to_string();
+        let snapshot = fold_trajectory("f", None, &messages, &[record(1, None, event)]);
+        let tool = snapshot.turns[0]
+            .cells
+            .iter()
+            .find(|cell| cell.kind == "tool")
+            .unwrap();
+        assert!(tool.structured_output.is_none());
+    }
+
+    #[test]
+    fn legacy_tool_results_decode_only_known_object_and_single_string_shapes() {
+        let object = r#"{"status":"FOUND","rows":[{"gene":"ESR1"}]}"#;
+        assert_eq!(legacy_structured_output(object).unwrap()["status"], "FOUND");
+        let encoded_once = serde_json::to_string(object).unwrap();
+        assert_eq!(
+            legacy_structured_output(&encoded_once).unwrap()["rows"][0]["gene"],
+            "ESR1"
+        );
+        let encoded_twice = serde_json::to_string(&encoded_once).unwrap();
+        assert!(legacy_structured_output(&encoded_twice).is_none());
+        assert!(legacy_structured_output("ordinary tool text").is_none());
     }
 
     #[test]

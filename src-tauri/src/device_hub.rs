@@ -314,6 +314,7 @@ mod tests {
                 name: "read_file".into(),
                 ok: true,
                 content: "ok".into(),
+                structured_content: None,
                 duration_ms: 1,
             },
             AgentEvent::CorrectionStarted {
@@ -351,6 +352,7 @@ mod tests {
                 name: "shell".into(),
                 ok: false,
                 content: "failed".into(),
+                structured_content: None,
                 duration_ms: 1,
             },
             None,
