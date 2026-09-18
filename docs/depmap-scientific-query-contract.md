@@ -33,6 +33,10 @@ Query-only turns default to `artifact_requested=false`. `write`/`edit` must not
 create `results/reports/**` or unsolicited CSV; the answer stays a bounded
 envelope in chat.
 
+New computation is a gated Run behind a non-exfiltrating remote-compute
+gateway. Tests use fakes; missing knowledge context or MCP dropout is
+`MODULE_UNAVAILABLE` / `configuration_blocked`, not folder guessing or live SSH.
+
 Scientific envelopes use progressive disclosure: default layer is status,
 bounded top rows, and filter/truncation flags; manifests and evidence IDs are
 expanded-only. Literature remains a separate evidence class from DepMap.
