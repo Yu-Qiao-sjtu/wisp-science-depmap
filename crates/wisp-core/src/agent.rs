@@ -358,6 +358,7 @@ async fn agent_loop_inner(
     let mut iteration = 0usize;
     let mut auto_continues = 0usize;
     let mut recent_observations: VecDeque<[u8; 32]> = VecDeque::with_capacity(STUCK_WINDOW);
+    let mut allowed_next_tools: Option<Vec<String>> = None;
     loop {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             anyhow::bail!("stopped by user");
@@ -555,6 +556,13 @@ async fn agent_loop_inner(
             }
             let name = tc.function.name.clone();
             let args = tc.args_value();
+            let requested_name = if name == "use_mcp_tool" {
+                args.get("tool_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&name)
+            } else {
+                &name
+            };
             let producing = provenance::is_producing(&name);
             let root = producing.then(|| env.project_root().to_path_buf());
             let source = provenance::source_of(&name, &args);
@@ -583,7 +591,24 @@ async fn agent_loop_inner(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let result = tools.run(&name, &args, &env).await;
+            let result = if allowed_next_tools.as_ref().is_some_and(|allowed| {
+                !allowed.iter().any(|pattern| {
+                    pattern == requested_name
+                        || pattern
+                            .strip_suffix('*')
+                            .is_some_and(|prefix| requested_name.starts_with(prefix))
+                })
+            }) {
+                wisp_tools::ToolResult::fail(format!(
+                    "tool '{requested_name}' is blocked by the active turn route; use only the route's allowed_next_tools or answer with the current blocker"
+                ))
+                .stop_batch()
+            } else {
+                tools.run(&name, &args, &env).await
+            };
+            if let Some(next) = result.allowed_next_tools.clone() {
+                allowed_next_tools = Some(next);
+            }
             // Drain even for non-producing calls so a stale kernel report
             // cannot leak into the next call's provenance record.
             let reported = env.take_reported_writes();
@@ -2511,6 +2536,27 @@ mod tests {
         ran: Arc<AtomicBool>,
     }
 
+    struct RoutePolicyTool;
+
+    #[async_trait]
+    impl Tool for RoutePolicyTool {
+        fn name(&self) -> &str {
+            "route_policy"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new(
+                "route_policy",
+                "install a turn tool policy",
+                serde_json::json!({"type": "object"}),
+            )
+        }
+
+        async fn run(&self, _args: &serde_json::Value, _env: &dyn ToolEnv) -> ToolResult {
+            ToolResult::ok("routed").allow_next_tools(vec!["allowed_*".into()])
+        }
+    }
+
     #[async_trait]
     impl Tool for SpyTool {
         fn name(&self) -> &str {
@@ -2581,6 +2627,59 @@ mod tests {
         assert!(!spy_ran.load(Ordering::SeqCst), "truncated tool ran");
         assert_eq!(ctx.messages.len(), 1, "only the user message is persisted");
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn route_policy_blocks_disallowed_sibling_tool_execution() {
+        let spy_ran = Arc::new(AtomicBool::new(false));
+        let call = |id: &str, name: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: "{}".into(),
+            },
+        };
+        let provider = SequenceProvider::new([
+            Completion {
+                tool_calls: vec![call("route", "route_policy"), call("spy", "spy")],
+                finish_reason: Some("tool_calls".into()),
+                ..Completion::default()
+            },
+            Completion {
+                content: "blocked and reported".into(),
+                finish_reason: Some("stop".into()),
+                ..Completion::default()
+            },
+        ]);
+        let mut tools = Registry::builtins();
+        tools.add(Box::new(RoutePolicyTool));
+        tools.add(Box::new(SpyTool {
+            ran: spy_ran.clone(),
+        }));
+        let mut ctx = ContextManager::new(100_000);
+
+        agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &NullOutput,
+            "route then inspect",
+            2,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!spy_ran.load(Ordering::SeqCst));
+        assert!(ctx.messages.iter().any(|message| {
+            message
+                .content
+                .as_text()
+                .contains("blocked by the active turn route")
+        }));
     }
 
     #[tokio::test]

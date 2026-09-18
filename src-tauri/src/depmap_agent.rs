@@ -1011,8 +1011,26 @@ impl Tool for DepMapAgentRouteTool {
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
         match depmap_route(args) {
-            Ok(route) if route["state"] == "routed" => ToolResult::ok(pretty(route)),
-            Ok(route) => ToolResult::fail(pretty(route)).stop_batch(),
+            Ok(route) if route["state"] == "routed" => {
+                let mut allowed = route["allowed_next_tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                allowed.extend([
+                    "search_mcp_tools".into(),
+                    "depmap_*".into(),
+                    "tcga_*".into(),
+                    "ask_user".into(),
+                    "attempt_completion".into(),
+                ]);
+                ToolResult::ok(pretty(route)).allow_next_tools(allowed)
+            }
+            Ok(route) => ToolResult::fail(pretty(route))
+                .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                .stop_batch(),
             Err(error) => ToolResult::fail(blocked("invalid_agent_route", error)),
         }
     }

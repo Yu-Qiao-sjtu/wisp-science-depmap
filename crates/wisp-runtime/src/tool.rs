@@ -505,6 +505,7 @@ async fn run_runtime(
                         ),
                         images: Vec::new(),
                         control: wisp_tools::ToolControl::Continue,
+                        allowed_next_tools: None,
                     };
                 }
                 Some(RuntimeEvent::Finished(Err(error))) => {
