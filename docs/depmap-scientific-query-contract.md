@@ -11,5 +11,10 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
    Absence from a retained shortlist is `NOT_RETAINED` or `NOT_OBSERVED`, never
    a fabricated Mut/WT bound.
 
-Future issues (#52 selectivity, #28 common-essential, later TF/TLG) add
+`lineage_dependency` / `pan_cancer_dependency` add exact-gene statuses
+(`FOUND` / `NOT_RETAINED` / `NOT_TESTED`) and a one-pass common-essential
+sidecar join (`exclude_common_essential`). Later TF/TLG issues add more
 predicates to this plane. They do not add gene- or lineage-specific tools.
+
+Case-folder remapping (user ask → failure mode → issue rewrite) lives in
+[depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

@@ -34,6 +34,43 @@ class ScientificQueryContractTests(unittest.TestCase):
             "FOUND",
         )
 
+    def test_tested_entity_distinguishes_untested_from_not_retained(self):
+        from services.depmap_api.scientific_query import classify_tested_entity
+
+        self.assertEqual(
+            classify_tested_entity(in_table=False, tested=None, retained=None),
+            "NOT_TESTED",
+        )
+        self.assertEqual(
+            classify_tested_entity(in_table=True, tested=False, retained=None),
+            "NOT_TESTED",
+        )
+        self.assertEqual(
+            classify_tested_entity(in_table=True, tested=True, retained=False),
+            "NOT_RETAINED",
+        )
+        self.assertEqual(
+            classify_tested_entity(in_table=True, tested=True, retained=True),
+            "FOUND",
+        )
+
+    def test_common_essential_join_is_one_pass_and_does_not_infer_labels(self):
+        from services.depmap_api.scientific_query import annotate_common_essential
+
+        rows = [{"symbol": "KEEP", "fdr": 0.01}, {"symbol": "DROP", "fdr": 0.01}]
+        kept, meta = annotate_common_essential(
+            rows, labels={"DROP"}, source="depmap_26q1", exclude=True
+        )
+        self.assertEqual([row["symbol"] for row in kept], ["KEEP"])
+        self.assertTrue(kept[0]["is_common_essential"] is False)
+        self.assertEqual(meta["removed_count"], 1)
+        missing, gap = annotate_common_essential(
+            rows, labels=None, source="depmap_26q1", exclude=True
+        )
+        self.assertEqual(len(missing), 2)
+        self.assertEqual(gap["annotation_status"], "ANNOTATION_UNAVAILABLE")
+        self.assertFalse(gap["filter_applied"])
+
     def test_filter_applies_before_limit_on_decoy_prefix(self):
         rows = [{"id": f"d{i}"} for i in range(30)] + [{"id": "key"}]
         matched = filter_before_limit(rows, lambda row: row["id"] == "key", limit=1)
