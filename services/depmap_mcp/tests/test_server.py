@@ -119,8 +119,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "/home/private/depmap/secret.csv",
                         r"C:\Users\analyst\secret.csv",
                         r"\\fileserver\team\secret.csv",
+                        "/scratch",
+                        str(self.root) + "-secrets/token.txt",
                     ],
                     "/private/path/as-key": "key is sanitized too",
+                    "/another/private/key": "second key survives",
                     "nested": {"safe_url": "https://example.org/reference"},
                 }
             ),
@@ -132,13 +135,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             content["inputs"][0],
             "depmap://26Q1/depmap-26q1-full/blocks/part-001.rds",
         )
-        self.assertEqual(content["inputs"][1:], ["<redacted:absolute-path>"] * 3)
+        self.assertEqual(content["inputs"][1:], ["<redacted:absolute-path>"] * 5)
         self.assertEqual(content["nested"]["safe_url"], "https://example.org/reference")
         self.assertEqual(content["<redacted:absolute-path>"], "key is sanitized too")
+        self.assertEqual(
+            content["<redacted:absolute-path>#2"], "second key survives"
+        )
         serialized = json.dumps(result)
         self.assertNotIn(str(self.root), serialized)
         self.assertNotIn("/home/private", serialized)
         self.assertNotIn("fileserver", serialized)
+        self.assertNotIn("-secrets", serialized)
 
     async def test_read_resource_sanitizes_csv_fields_and_text_previews(self):
         csv_uri = self.index_resource(

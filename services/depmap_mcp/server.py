@@ -481,7 +481,8 @@ class DepMapEvidenceService:
         safe = value
         for root in sorted((item for item in root_variants if item), key=len, reverse=True):
             pattern = re.compile(
-                re.escape(root) + r"(?P<tail>(?:[\\/][^\s\"'<>|,;\]\)}]*)?)",
+                re.escape(root)
+                + r"(?=$|[\\/])(?P<tail>(?:[\\/][^\s\"'<>|,;\]\)}]*)?)",
                 re.IGNORECASE,
             )
 
@@ -497,7 +498,7 @@ class DepMapEvidenceService:
             re.fullmatch(r"[A-Za-z]:[\\/].+", stripped)
             or re.fullmatch(r"\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?", stripped)
             or re.fullmatch(r"//[^/]+/[^/]+(?:/.*)?", stripped)
-            or re.fullmatch(r"/(?:[^/\r\n]+/)+[^/\r\n]+", stripped)
+            or re.fullmatch(r"/[^/\r\n]+(?:/[^/\r\n]+)*", stripped)
         )
         if exact_absolute and not stripped.startswith(f"depmap://{self.settings.release}/"):
             indent = value[: len(value) - len(value.lstrip())]
@@ -507,7 +508,7 @@ class DepMapEvidenceService:
             r"(?<![A-Za-z0-9:])[A-Za-z]:[\\/][^\s\"'<>|,;\]\)}]+",
             r"(?<![A-Za-z0-9:])\\\\[^\s\\/]+[\\/][^\s\\/]+(?:[\\/][^\s\"'<>|,;\]\)}]+)*",
             r"(?<![A-Za-z0-9:])//[^\s/]+/[^\s/]+(?:/[^\s\"'<>|,;\]\)}]+)*",
-            r"(?<![A-Za-z0-9:/])/(?:[^/\s\"'<>|,;\]\)}]+/)+[^/\s\"'<>|,;\]\)}]+",
+            r"(?<![A-Za-z0-9:/])/[^/\s\"'<>|,;\]\)}]+(?:/[^/\s\"'<>|,;\]\)}]+)*",
         )
         for pattern in patterns:
             safe = re.sub(pattern, "<redacted:absolute-path>", safe)
@@ -515,10 +516,16 @@ class DepMapEvidenceService:
 
     def _portable(self, value: Any) -> Any:
         if isinstance(value, dict):
-            return {
-                self._portable_string(key) if isinstance(key, str) else key: self._portable(item)
-                for key, item in value.items()
-            }
+            portable: dict[Any, Any] = {}
+            for key, item in value.items():
+                safe_key = self._portable_string(key) if isinstance(key, str) else key
+                candidate = safe_key
+                collision = 1
+                while candidate in portable:
+                    collision += 1
+                    candidate = f"{safe_key}#{collision}"
+                portable[candidate] = self._portable(item)
+            return portable
         if isinstance(value, list):
             return [self._portable(item) for item in value]
         if isinstance(value, str):
