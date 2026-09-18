@@ -157,6 +157,14 @@ async fn reconnect_coalesces_and_never_replays_ambiguous_write() {
     assert!(error.to_string().contains("no automatic replay"));
     assert_eq!(state.writes.load(Ordering::SeqCst), 1);
     assert!(!client.is_connected());
+
+    // Catalog discovery is itself read-only. A fresh tools/list must restore
+    // the configured connector without requiring the user to edit or toggle it.
+    let restored = client.tools_list().await.unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].name, "echo");
+    assert!(client.is_connected());
+
     let mut calls = tokio::task::JoinSet::new();
     for _ in 0..8 {
         let client = client.clone();

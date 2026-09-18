@@ -761,6 +761,25 @@ mod tests {
     }
 
     #[test]
+    fn unicode_summary_and_detail_are_exported_as_utf8_without_loss() {
+        let text = "肝癌中的 GPX4 与 α/β？🧬";
+        let mut snapshot = sample_snapshot();
+        snapshot.turns[0].cells[0].summary = text.into();
+        snapshot.turns[0].cells[0].detail_output = Some(text.into());
+
+        let html = render_trajectory_html(&snapshot, "zh-CN", "t");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+        assert_eq!(
+            html.matches(text).count(),
+            3,
+            "summary, detail, and raw JSON must agree"
+        );
+        assert!(!html.contains('\u{fffd}'));
+        let bytes = html.into_bytes();
+        assert!(std::str::from_utf8(&bytes).unwrap().contains(text));
+    }
+
+    #[test]
     fn empty_snapshot_still_produces_a_document() {
         let html = render_trajectory_html(
             &TrajectorySnapshot {

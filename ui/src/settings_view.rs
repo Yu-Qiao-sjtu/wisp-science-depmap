@@ -6739,6 +6739,7 @@ pub(super) fn SettingsView(
                                             None
                                         };
                                         let has_error = error.is_some();
+                                        let has_tools = !tools.is_empty();
                                         view! {
                                             <div class="conn-detail-heading">
                                                 <div class="conn-detail-title">{compose_icon("grid")}<h2>{c.name.clone()}</h2>
@@ -6771,10 +6772,16 @@ pub(super) fn SettingsView(
                                                     <div class="settings-list-row">
                                                         <div class="settings-list-main">
                                                             <span class="settings-list-title">{move || t(locale.get(), "conn.status")}</span>
-                                                            <span class="settings-list-sub">{move || t(locale.get(), if enabled {
-                                                                "conn.status.enabled"
-                                                            } else {
+                                                            <span class="settings-list-sub">{move || t(locale.get(), if !enabled {
                                                                 "conn.status.disabled"
+                                                            } else if loading {
+                                                                "conn.status.reconnecting"
+                                                            } else if has_error {
+                                                                "conn.status.disconnected"
+                                                            } else if has_tools {
+                                                                "conn.status.ready"
+                                                            } else {
+                                                                "conn.status.enabled"
                                                             })}</span>
                                                         </div>
                                                     </div>
