@@ -82,6 +82,12 @@ class QueryContractTests(unittest.TestCase):
         top = QueryRequest(mode="tf_dependency", source="STAT3", limit=5)
         self.assertNotIn("target", top.bounded_dict())
 
+    def test_tf_dependency_accepts_universe_and_bulk_ranking(self):
+        universe = QueryRequest(mode="tf_dependency", view="universe", limit=20)
+        self.assertEqual(universe.bounded_dict()["view"], "universe")
+        bulk = QueryRequest(mode="tf_dependency", limit=5)
+        self.assertNotIn("source", bulk.bounded_dict())
+
     def test_tf_dependency_requires_tf_source(self):
         with self.assertRaises(ValueError):
             QueryRequest(mode="tf_dependency", target="GPX4")
@@ -1572,6 +1578,18 @@ class TfActivityReaderTests(DepMapApiTests):
             {"mode": "tf_dependency", "source": "STAT3", "target": "ABSENTTARGET"}
         )
         self.assertEqual(untested["status"], "NOT_TESTED")
+
+    def test_universe_and_bulk_ranking_are_bounded_query_surfaces(self):
+        universe = self._query({"mode": "tf_dependency", "view": "universe", "limit": 2})
+        self.assertEqual(universe["status"], "FOUND")
+        self.assertEqual(universe["universe_size"], 4)
+        self.assertEqual(universe["matched_row_count"], 4)
+        self.assertEqual(universe["returned_count"], 2)
+        self.assertEqual(len(universe["rows"]), 2)
+        bulk = self._query({"mode": "tf_dependency", "limit": 2})
+        self.assertEqual(bulk["matched_row_count"], 3)
+        self.assertEqual(bulk["returned_count"], 2)
+        self.assertGreater(bulk["matched_row_count"], bulk["returned_count"])
 
     def test_missing_module_is_unavailable(self):
         import shutil

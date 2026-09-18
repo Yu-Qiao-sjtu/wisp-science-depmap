@@ -119,6 +119,15 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tail["evidence"]["truncated"])
         self.assertIsNone(tail["evidence"]["next_cursor"])
 
+    async def test_csv_resource_pages_honor_max_rows_greater_than_one(self):
+        relative = "analysis-modules/tf/tf_order.csv"
+        payload = "TF\n" + "".join(f"TF{index}\n" for index in range(8))
+        uri = self.index_resource(relative, payload)
+        page = await self.service.read_resource(uri, max_rows=5)
+        self.assertEqual(page["evidence"]["returned_count"], 5)
+        self.assertEqual(page["evidence"]["total_row_count"], 8)
+        self.assertGreater(page["evidence"]["returned_count"], 1)
+
     async def test_compressed_table_reader_types_empty_and_malformed_inputs(self):
         empty_uri = self.index_bytes(
             "depmap-26q1-full/results/empty.csv.gz",
@@ -639,6 +648,16 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(semantics["analysis_label"], "inferred_tf_activity_to_crispr_dependency")
         self.assertIn("stronger dependency", semantics["interpretation"])
         self.assertFalse(result["new_analysis_started"])
+
+    async def test_tf_universe_and_bulk_ranking_are_forwarded(self):
+        universe = await self.service.tf_dependency_evidence(view="universe", limit=20)
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "tf_dependency", "limit": 20, "view": "universe"},
+        )
+        self.assertEqual(universe["request"]["view"], "universe")
+        bulk = await self.service.tf_dependency_evidence(limit=5)
+        self.assertEqual(self.queries[-1], {"mode": "tf_dependency", "limit": 5})
 
     async def test_biomarker_model_intent_bridges_target_to_indexed_query(self):
         result = await self.service.biomarker_model_evidence("gpx4")

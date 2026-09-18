@@ -86,7 +86,7 @@ MODE_REQUIRED_FIELDS = {
     "synthetic_lethal": set(),
     "three_d": {"family"},
     "tcga_expression_survival": {"gene"},
-    "tf_dependency": {"source"},
+    "tf_dependency": set(),
     "biomarker_target": {"target"},
 }
 MODE_OPTIONAL_FIELDS = {
@@ -106,7 +106,7 @@ MODE_OPTIONAL_FIELDS = {
     "synthetic_lethal": {"source", "target", "event", "lineage", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
-    "tf_dependency": {"target", "limit"},
+    "tf_dependency": {"source", "target", "limit", "view"},
     "biomarker_target": set(),
 }
 LINEAGE_NETWORK_FAMILIES = {
@@ -152,6 +152,7 @@ QUERY_FIELD_ORDER = (
     "endpoint",
     "catalog",
     "coverage",
+    "view",
 )
 TCGA_SURVIVAL_ENDPOINTS = {"OS", "DSS", "DFI", "PFI"}
 CANONICAL_LINEAGES = (
@@ -451,6 +452,7 @@ class QueryRequest(BaseModel):
     endpoint: str | None = None
     catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
     coverage: Literal["all", "legacy", "quality"] | None = None
+    view: Literal["universe", "ranking"] | None = None
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
@@ -460,7 +462,7 @@ class QueryRequest(BaseModel):
             "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
-            "catalog", "coverage",
+            "catalog", "coverage", "view",
         }
         supplied = {
             name
@@ -513,8 +515,10 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love partner requires gene")
         if self.mode == "true_love" and self.catalog in {None, "stable_negative_rank1"} and self.coverage is not None:
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
-        if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
-            raise ValueError("synthetic_lethal requires source, target, or both")
+        if self.mode == "tf_dependency" and self.target is not None and self.source is None:
+            raise ValueError("tf_dependency target requires source")
+        if self.mode == "tf_dependency" and self.view == "universe" and self.source is not None:
+            raise ValueError("tf_dependency universe view does not take a source")
         if self.mode == "lineage_mutation_dependency" and self.source is None and self.target is None:
             raise ValueError("lineage_mutation_dependency requires source, target, or both")
         for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential"}):
@@ -3087,17 +3091,34 @@ def _tf_order_symbols(path: Path) -> set[str]:
     return symbols
 
 
+def _tf_hits_path(root: Path) -> Path | None:
+    for name in ("top_hits.csv.gz", "top_hits.csv"):
+        path = root / name
+        if path.is_file():
+            return path
+    return None
+
+
 def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     """Read the installed TF-activity module in Python. Valid universe keys never 500."""
-    source = str(query.get("source") or "").strip().upper()
+    source = str(query["source"]).strip().upper() if query.get("source") else None
     target = str(query["target"]).strip().upper() if query.get("target") else None
+    view = "universe" if query.get("view") == "universe" else "ranking"
     limit = min(int(query.get("limit") or 20), 100)
     root = _tf_activity_root(settings)
     manifest, unavailable = _complete_module(root, mode="tf_dependency")
     if unavailable is not None:
         return unavailable
     order_path = root / "tf_order.csv"
-    universe = _tf_order_symbols(order_path)
+    universe_rows = [
+        {
+            "symbol": str(row.get("TF") or row.get("symbol") or row.get("tf") or "").strip().upper(),
+            "entity_class": "tf_activity",
+        }
+        for row in (_iter_csv_records(order_path) if order_path.is_file() else [])
+        if str(row.get("TF") or row.get("symbol") or row.get("tf") or "").strip()
+    ]
+    universe = {row["symbol"] for row in universe_rows}
     if not universe:
         return _evidence_response(
             "COVERAGE_GAP",
@@ -3105,9 +3126,64 @@ def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[
             reason="the completed TF-activity module has no frozen TF universe table",
             source=source,
             target=target,
+            view=view,
             entity_class="tf_activity",
             manifest=manifest,
             provenance=[str(root / "manifest.json")],
+        )
+    if view == "universe":
+        page, matched = bound_after_rank(
+            universe_rows, key=lambda row: row["symbol"], limit=limit
+        )
+        return _evidence_response(
+            "FOUND",
+            mode="tf_dependency",
+            reason="bounded page of the frozen TF-activity universe; DoRothEA is not reconstructed",
+            view="universe",
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rows=page,
+            returned_count=len(page),
+            matched_row_count=matched,
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(order_path)],
+        )
+    hits_path = _tf_hits_path(root)
+    if hits_path is None:
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="tf_dependency",
+            reason="the completed module has no queryable TF-activity ranking table",
+            source=source,
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(order_path)],
+        )
+    if source is None:
+        matched = list(_iter_csv_records(hits_path))
+        page, matched_count = bound_after_rank(
+            matched,
+            key=lambda row: (
+                int(row.get("rank") or 10**9),
+                str(row.get("TF") or ""),
+                str(row.get("target_gene") or ""),
+            ),
+            limit=limit,
+        )
+        return _evidence_response(
+            "FOUND" if page else "NOT_RETAINED",
+            mode="tf_dependency",
+            reason="bounded bulk TF-activity ranking from the completed table",
+            view="ranking",
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rows=page,
+            returned_count=len(page),
+            matched_row_count=matched_count,
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(hits_path)],
         )
     if source not in universe:
         status = classify_exact_entity(observed=False)
@@ -3122,21 +3198,6 @@ def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[
             rejection_reason=status,
             manifest=manifest,
             provenance=[str(order_path)],
-        )
-    hits_path = root / "top_hits.csv.gz"
-    if not hits_path.is_file():
-        hits_path = root / "top_hits.csv"
-    if not hits_path.is_file():
-        return _evidence_response(
-            "COVERAGE_GAP",
-            mode="tf_dependency",
-            reason="the completed module has no queryable TF-activity ranking table",
-            source=source,
-            target=target,
-            entity_class="tf_activity",
-            universe_size=len(universe),
-            manifest=manifest,
-            provenance=[str(root / "manifest.json"), str(order_path)],
         )
     if target:
         target_order = root / "target_gene_order.csv"

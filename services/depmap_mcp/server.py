@@ -1146,22 +1146,30 @@ class DepMapEvidenceService:
 
     async def tf_dependency_evidence(
         self,
-        transcription_factor: str,
+        transcription_factor: str | None = None,
         target: str | None = None,
         limit: int = 20,
+        view: Literal["universe", "ranking"] | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        tf = transcription_factor.strip().upper()
-        if not tf:
-            raise ValueError("transcription_factor must be non-empty")
-        query: dict[str, Any] = {"mode": "tf_dependency", "source": tf, "limit": limit}
+        query: dict[str, Any] = {"mode": "tf_dependency", "limit": limit}
+        if view:
+            query["view"] = view
+        tf = transcription_factor.strip().upper() if transcription_factor else None
+        if tf:
+            query["source"] = tf
         if target:
             query["target"] = target.strip().upper()
         item = await self._execute(query)
+        request = {"limit": limit, "view": query.get("view")}
+        if tf:
+            request["transcription_factor"] = tf
+        if query.get("target"):
+            request["target"] = query["target"]
         return self._envelope(
             tool="depmap_tf_dependency_evidence",
-            request={"transcription_factor": tf, "target": query.get("target"), "limit": limit},
+            request=request,
             evidence=item,
         )
 
@@ -1677,21 +1685,24 @@ def build_mcp_server(
     @mcp.tool(
         title="DepMap TF activity to CRISPR dependency evidence",
         description=(
-            "Query a completed pan-cancer association matrix between DoRothEA A-C/"
-            "decoupleR ULM inferred TF activity and CRISPR Gene Effect. With target, "
-            "return the exact pair; without target, return bounded positive and "
-            "negative Top candidates. FDR is BH-adjusted within each TF among pairs "
+            "Query the completed TF-activity module. view=universe pages the frozen TF "
+            "list (tf_order) without reconstructing DoRothEA. Omit transcription_factor "
+            "for bulk ranking with matched_row_count. With a TF, return exact pair or "
+            "that TF's bounded ranking. FDR is BH-adjusted within each TF among pairs "
             "with at least 800 observations."
         ),
         annotations=READ_ONLY,
         structured_output=True,
     )
     async def depmap_tf_dependency_evidence(
-        transcription_factor: str,
+        transcription_factor: str | None = None,
         target: str | None = None,
         limit: int = 20,
+        view: Literal["universe", "ranking"] | None = None,
     ) -> dict[str, Any]:
-        return await service.tf_dependency_evidence(transcription_factor, target, limit)
+        return await service.tf_dependency_evidence(
+            transcription_factor, target, limit, view
+        )
 
     @mcp.tool(
         title="DepMap expression biomarker model eligibility",
