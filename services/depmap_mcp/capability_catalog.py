@@ -98,6 +98,17 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "inventory_patterns": ["*lineage_dependency_tests*"],
     },
     {
+        "intent": "pan_cancer_dependency_summary",
+        "description": "Summarize bounded precomputed lineage dependency rankings across every completed cancer lineage in one request.",
+        "required": [],
+        "optional": ["ranking", "exclude_common_essential", "limit"],
+        "examples_zh": ["概览所有癌种的依赖基因", "做一个泛癌依赖汇总"],
+        "precise_prompt_template_zh": "汇总全部已完成癌种的CRISPR dependency结果，每个癌种返回Top {limit}并说明截断与复现统计范围。",
+        "confusable_with": ["cancer_dependency_ranking"],
+        "mcp_tool": "depmap_pan_cancer_dependencies",
+        "inventory_patterns": ["*lineage_dependency_tests*"],
+    },
+    {
         "intent": "tf_activity_to_dependency",
         "description": "Fix an inferred transcription-factor activity and query associated CRISPR Gene Effect targets.",
         "required": ["transcription_factor"],

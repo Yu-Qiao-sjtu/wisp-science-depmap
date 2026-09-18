@@ -389,6 +389,7 @@ fn depmap_route_schema() -> Value {
                 "enum":[
                     "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking",
+                    "pan_cancer_dependency_summary",
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
@@ -429,7 +430,7 @@ fn depmap_route_schema() -> Value {
                 "type":"array",
                 "items":{"type":"string","enum":[
                     "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
-                    "cancer_dependency_ranking", "cancer_direction_discovery",
+                    "cancer_dependency_ranking", "pan_cancer_dependency_summary", "cancer_direction_discovery",
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
                     "expression_biomarker_model",
@@ -585,6 +586,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         }
         "provider_status"
         | "analysis_inventory"
+        | "pan_cancer_dependency_summary"
         | "subtype_evidence"
         | "evidence_comparison"
         | "result_interpretation"
@@ -632,6 +634,12 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 false,
                 "Read the bounded precomputed lineage dependency ranking; this is a query over an existing lineage-vs-rest test, not a new analysis.",
                 vec![TOOL_NAME],
+            ),
+            "pan_cancer_dependency_summary" => (
+                "L1_DIRECT",
+                false,
+                "Read one bounded precomputed summary across all completed lineage dependency tables; recurrence must use full retained sets before Top-N display truncation.",
+                vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "gene_evidence" if cancer.is_some() => (
                 "L1_DIRECT",
@@ -817,6 +825,17 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "arguments": {"limit": 100},
             "single_call": true
         }),
+        ("pan_cancer_dependency_summary", _) if !requires_user_input => json!({
+            "tool": "depmap_pan_cancer_dependencies",
+            "transport": "remote_mcp",
+            "arguments": {
+                "ranking": "selective",
+                "exclude_common_essential": exclude_common_essential,
+                "common_essential_source": "depmap_26q1",
+                "limit": 5
+            },
+            "single_call": true
+        }),
         ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => {
             if evidence_provider == "remote_mcp" {
                 json!({
@@ -967,7 +986,7 @@ impl Tool for DepMapAgentRouteTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             ROUTE_TOOL_NAME,
-            "Classify one new DepMap request into a host-validated execution level before querying evidence. Set evidence_provider=remote_mcp when the user explicitly requests the configured remote DepMap MCP. Use cancer_dependency_ranking when the user asks for a cancer's top, strongest, selective, essential, or dependency genes without naming a gene. Use once per new request, not for a follow-up that only interprets the current tool result. This routing record is not scientific evidence. Ordinary status, cancer inventory, dependency ranking, gene, pair, drug, and initial topic exploration requests do not require a Workflow.",
+            "Classify one new DepMap request into a host-validated execution level before querying evidence. Set evidence_provider=remote_mcp when the user explicitly requests the configured remote DepMap MCP. Use cancer_dependency_ranking for one cancer's strongest or selective dependency genes, and pan_cancer_dependency_summary when the user asks for one overview across all cancers. Use once per new request, not for a follow-up that only interprets the current tool result. This routing record is not scientific evidence. Ordinary status, cancer inventory, dependency ranking, gene, pair, drug, and initial topic exploration requests do not require a Workflow.",
             depmap_route_schema(),
         )
     }
@@ -2994,6 +3013,20 @@ mod tests {
         assert_eq!(
             remote_dependency_ranking["entities"]["evidence_provider"],
             "remote_mcp"
+        );
+        let pan_cancer = depmap_route(&json!({
+            "intent":"pan_cancer_dependency_summary",
+            "exclude_common_essential":true
+        }))
+        .unwrap();
+        assert_eq!(pan_cancer["execution_level"], "L1_DIRECT");
+        assert_eq!(
+            pan_cancer["recommended_query"]["tool"],
+            "depmap_pan_cancer_dependencies"
+        );
+        assert_eq!(
+            pan_cancer["recommended_query"]["arguments"],
+            json!({"ranking":"selective","exclude_common_essential":true,"common_essential_source":"depmap_26q1","limit":5})
         );
 
         let directions = depmap_route(&json!({

@@ -35,7 +35,7 @@ class QueryIndexTests(unittest.TestCase):
 
             counts = build(root, output)
 
-            self.assertEqual(counts["capabilities"], 19)
+            self.assertEqual(counts["capabilities"], 20)
             self.assertEqual(counts["matrix_gene_blocks"], 1)
             self.assertTrue(is_fresh(root, output))
             with closing(sqlite3.connect(output)) as db:

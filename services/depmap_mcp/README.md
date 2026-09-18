@@ -46,6 +46,7 @@ The exposed tools are intentionally small:
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
 - `depmap_lineage_dependencies`
+- `depmap_pan_cancer_dependencies`
 - `depmap_lineage_direction_discovery`
 - `depmap_gene_evidence`
 - `tcga_gene_expression_survival`
@@ -72,12 +73,21 @@ and after filtering, and returns `ANNOTATION_UNAVAILABLE` without silently
 dropping rows when that asset is missing. Housekeeping-gene annotations remain
 a separate concept and are never inferred from gene names or model memory.
 
+`depmap_pan_cancer_dependencies` performs the same bounded read across every
+completed lineage table in one call. `limit` is a display limit per lineage;
+the response reports tested/retained counts and computes gene recurrence from
+the complete retained sets before display truncation, so Top-N rows are never
+misrepresented as complete cross-cancer coverage. For descriptive
+`mean_dependency` displays, recurrence additionally requires lineage mean Gene
+Effect ≤ -0.5; merely tested genes are reported as assay coverage, not recurrent
+dependencies.
+
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It
 never performs a sample-level join or creates a synthetic combined score.
 
-`depmap_capabilities` reads its 19 intent contracts from SQLite
+`depmap_capabilities` reads its 20 intent contracts from SQLite
 `capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
 build-time definition used to populate that table; code fallback is used only
 when the index is absent. Result adapters and gene-to-shard locations are

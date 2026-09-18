@@ -13,16 +13,38 @@ from fastapi.testclient import TestClient
 from services.depmap_api.app import (
     CANONICAL_LINEAGES,
     CHINESE_LINEAGE_ALIASES,
+    QUERY_FIELD_ORDER,
     Settings,
     QueryRequest,
     _canonical_lineage_label,
     _coverage_gap_reason,
+    _r_query_command,
     create_app,
     resolve_lineage_term,
 )
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_common_essential_options_are_forwarded_to_r_runner(self):
+        self.assertIn("exclude_common_essential", QUERY_FIELD_ORDER)
+        self.assertIn("common_essential_source", QUERY_FIELD_ORDER)
+        settings = Settings(
+            knowledge_root=Path("knowledge"),
+            query_script=Path("query.R"),
+            api_token="test-token-with-at-least-thirty-two-characters",
+        )
+        command = _r_query_command(
+            settings,
+            {
+                "mode": "pan_cancer_dependency",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
+            },
+        )
+        self.assertIn("--exclude-common-essential", command)
+        self.assertEqual(command[command.index("--exclude-common-essential") + 1], "True")
+        self.assertIn("--common-essential-source", command)
+
     def test_mutation_anchor_has_explicit_lineage_event_and_tier_contract(self):
         request = QueryRequest(
             mode="mutation_anchor", lineage="Lung", event="damaging",
@@ -554,6 +576,22 @@ class DepMapApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(invalid.status_code, 422)
+
+    def test_pan_cancer_dependency_summary_is_bounded(self):
+        response = self.client.post(
+            "/api/v1/query",
+            headers=self.headers,
+            json={
+                "mode": "pan_cancer_dependency",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
+                "limit": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.queries[-1]["mode"], "pan_cancer_dependency")
+        self.assertEqual(self.queries[-1]["limit"], 5)
 
     def test_every_canonical_lineage_has_working_chinese_aliases(self):
         self.assertEqual(set(CHINESE_LINEAGE_ALIASES), set(CANONICAL_LINEAGES))
