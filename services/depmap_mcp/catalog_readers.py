@@ -83,11 +83,18 @@ class CatalogReaderRegistry:
             with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 reader = db.execute(
-                    "SELECT query_mode,adapter,module_pattern FROM reader_registry WHERE query_mode=?",
+                    "SELECT r.query_mode,r.adapter,r.module_pattern,rc.analysis_id AS coverage_analysis_id,"
+                    "rc.coverage_state FROM reader_registry r LEFT JOIN reader_coverage rc "
+                    "ON rc.query_mode=r.query_mode WHERE r.query_mode=?",
                     (reader_mode,),
                 ).fetchone()
                 if reader is None:
                     return CatalogResolution("READER_UNAVAILABLE", mode, reader_mode=reader_mode, reason="no registered reader")
+                if reader["coverage_state"] != "AVAILABLE" or not reader["coverage_analysis_id"]:
+                    return CatalogResolution(
+                        "NOT_INDEXED", mode, reader_mode, reader["adapter"],
+                        reason="registered reader has no current release-scoped coverage record",
+                    )
                 patterns = [part.strip() for part in str(reader["module_pattern"]).split("|") if part.strip()]
                 likes = []
                 for pattern in patterns:
@@ -103,17 +110,19 @@ class CatalogReaderRegistry:
                 analyses = db.execute(
                     f"""
                     SELECT analysis_id FROM analysis_catalog
-                    WHERE completion_state='COMPLETE' AND ({predicates})
+                    WHERE completion_state='COMPLETE' AND (release=? OR release IS NULL)
+                      AND ({predicates})
                     ORDER BY manifest_mtime_ns DESC LIMIT 32
                     """,
-                    parameters,
+                    (self.release, *parameters),
                 ).fetchall()
                 if not analyses and requested_module:
                     analyses = db.execute(
                         f"""SELECT analysis_id FROM analysis_catalog
-                        WHERE completion_state='COMPLETE' AND ({base_predicates})
+                        WHERE completion_state='COMPLETE' AND (release=? OR release IS NULL)
+                          AND ({base_predicates})
                         ORDER BY manifest_mtime_ns DESC LIMIT 32""",
-                        base_parameters,
+                        (self.release, *base_parameters),
                     ).fetchall()
                 analysis_ids = tuple(row[0] for row in analyses)
                 artifacts: tuple[str, ...] = ()

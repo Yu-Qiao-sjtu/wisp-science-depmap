@@ -40,13 +40,24 @@ The exposed tools are intentionally small:
   zero rows instead of raising an adapter exception;
 - `depmap_artifact_catalog`: query indexed scripts, data, manifests, results,
   and matrix shards by module, kind, or relative-path fragment;
+- `depmap_data_coverage`: inspect release, cohort scope, lineage, modality,
+  model and gene counts, event definition, storage completeness, and QA state
+  without returning internal paths or raw matrices;
 - `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return
-  a bounded table/text preview or binary artifact metadata;
+  a bounded table/text preview or binary artifact metadata. Compressed tables
+  report total and returned row counts and accept a bounded cursor; malformed
+  tables return a typed error instead of terminating the MCP call;
 
 Resource content is sanitized recursively before it crosses the MCP boundary.
 Paths inside the configured knowledge root become stable `depmap://` URIs;
 other Linux, Windows, and UNC absolute paths are redacted from structured
 content, tabular fields, and bounded text previews.
+
+The query index also records one current coverage state for every registered
+Reader. Enrichment is advertised only when the active release has both a
+compatible Reader and a complete indexed artifact. A missing Reader or
+artifact is returned as `MODULE_UNAVAILABLE`/`NOT_COMPUTED`; it is a service
+coverage condition and must never be interpreted as biological absence.
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

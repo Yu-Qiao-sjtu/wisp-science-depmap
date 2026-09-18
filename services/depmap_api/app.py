@@ -758,6 +758,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     params: list[Any] = []
     module = query.get("module")
     state = query.get("completion_state") or "COMPLETE"
+    invalid_capability_record_count = 0
     if module:
         module_patterns: list[str] = []
         try:
@@ -771,13 +772,18 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
                 ).fetchone()
                 if row:
                     details = json.loads(str(row[0]))
-                    module_patterns = [
-                        str(part).strip().replace("*", "%")
-                        for part in details.get("inventory_patterns", [])
-                        if str(part).strip()
-                    ]
-        except (sqlite3.Error, json.JSONDecodeError, TypeError):
+                    if isinstance(details, dict):
+                        patterns = details.get("inventory_patterns") or []
+                        if isinstance(patterns, list):
+                            module_patterns = [
+                                str(part).strip().replace("*", "%")
+                                for part in patterns if str(part).strip()
+                            ]
+                    else:
+                        invalid_capability_record_count += 1
+        except (sqlite3.Error, json.JSONDecodeError, TypeError, AttributeError):
             module_patterns = []
+            invalid_capability_record_count += 1
         module_clauses = ["module = ?", "analysis_unit = ?"]
         params.extend([module, module])
         for pattern in module_patterns:
@@ -817,6 +823,8 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
         "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
         reason="completed analysis directory entries from the unified relative-path catalog",
         rows=rows, returned_count=len(rows), state_totals=totals,
+        catalog_status=("PARTIAL" if invalid_capability_record_count else "FOUND"),
+        invalid_record_count=invalid_capability_record_count,
         path_policy="knowledge-root-relative paths only",
         provenance=[index.name],
     )
