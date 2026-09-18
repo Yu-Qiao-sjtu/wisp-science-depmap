@@ -25,6 +25,14 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from services.depmap_api.scientific_query import (
+    EVIDENCE_STATUSES,
+    bound_after_rank,
+    classify_exact_entity,
+    criteria_failures,
+    filter_before_limit,
+)
+
 
 LOGGER = logging.getLogger("depmap_api")
 MAX_REQUEST_BYTES = 8 * 1024
@@ -102,15 +110,6 @@ LINEAGE_NETWORK_FAMILIES = {
     "effect_correlation",
     "expression_correlation",
     "expression_dependency",
-}
-EVIDENCE_STATUSES = {
-    "FOUND",
-    "NOT_RETAINED",
-    "INELIGIBLE",
-    "NOT_COMPUTED",
-    "MODULE_UNAVAILABLE",
-    "NOT_OBSERVED",
-    "COVERAGE_GAP",
 }
 MUTATION_EVENT_MATRIX = {
     "damaging": "Damaging",
@@ -715,14 +714,7 @@ def _filter_csv_records(
     """Scan a CSV and keep matching rows before applying any bound."""
     if not path.is_file():
         return []
-    rows: list[dict[str, Any]] = []
-    for row in _iter_csv_records(path):
-        if not match(row):
-            continue
-        rows.append(row)
-        if limit is not None and len(rows) >= limit:
-            break
-    return rows
+    return filter_before_limit(_iter_csv_records(path), match, limit=limit)
 
 
 def _mutation_event_matrix(event: str | None) -> str | None:
@@ -814,26 +806,26 @@ def _evaluate_anchor_criteria(
     role_match = _bool_field(card or {}, "role_match")
     oncokb_role = (card or {}).get("oncokb_role")
     failures: list[str] = []
-    if mut_n is None or wt_n is None:
-        failures.append("COUNTS_UNAVAILABLE")
-    else:
-        needed = strict if requested_tier in {"priority", "strict"} else standard
-        if mut_n < needed["min_mut"]:
-            failures.append("TOO_FEW_MUT")
-        if wt_n < needed["min_wt"]:
-            failures.append("TOO_FEW_WT")
+    needed = strict if requested_tier in {"priority", "strict"} else standard
+    failures.extend(
+        criteria_failures(
+            observed={"mut": mut_n, "wt": wt_n},
+            required={"mut": needed["min_mut"], "wt": needed["min_wt"]},
+        )
+    )
     if requested_tier == "priority" and "TOO_FEW_MUT" not in failures and "TOO_FEW_WT" not in failures:
         if role_match is False:
             failures.append("ROLE_MISMATCH")
         elif card is None:
             failures.append("ANNOTATION_EXCLUSION")
     rejection = failures[0] if failures else None
-    if rejection in {"TOO_FEW_MUT", "TOO_FEW_WT", "COUNTS_UNAVAILABLE"}:
-        status = "INELIGIBLE"
-    elif rejection in {"ROLE_MISMATCH", "ANNOTATION_EXCLUSION"}:
-        status = "NOT_RETAINED"
-    else:
-        status = "FOUND"
+    size_ok = rejection not in {"TOO_FEW_MUT", "TOO_FEW_WT", "COUNTS_UNAVAILABLE"}
+    retained = rejection not in {"ROLE_MISMATCH", "ANNOTATION_EXCLUSION"}
+    status = classify_exact_entity(
+        observed=True,
+        eligible=size_ok,
+        retained=retained if size_ok else None,
+    )
     return {
         "gene": str(row.get("gene") or "").upper(),
         "lineage": row.get("lineage"),
@@ -1701,18 +1693,26 @@ def _run_synthetic_lethal_query(settings: Settings, query: dict[str, Any]) -> di
     target = query.get("target")
     source = source.strip().upper() if source else None
     target = target.strip().upper() if target else None
-    rows = [
-        row for row in _read_csv_records(path)
-        if (source is None or row.get("source_gene") == source)
-        and (target is None or row.get("target_gene") == target)
-    ]
-    rows.sort(key=lambda row: (float(row.get("best_fdr") or row.get("fdr") or 1), -int(row.get("evidence_family_count") or 0), float(row.get("strongest_mean_difference") or row.get("mean_difference") or 0)))
+    matched = filter_before_limit(
+        _iter_csv_records(path),
+        lambda row: (source is None or row.get("source_gene") == source)
+        and (target is None or row.get("target_gene") == target),
+    )
     limit = int(query.get("limit", 20))
+    rows, matched_count = bound_after_rank(
+        matched,
+        key=lambda row: (
+            float(row.get("best_fdr") or row.get("fdr") or 1),
+            -int(row.get("evidence_family_count") or 0),
+            float(row.get("strongest_mean_difference") or row.get("mean_difference") or 0),
+        ),
+        limit=limit,
+    )
     return _evidence_response(
         "FOUND" if rows else "NOT_RETAINED", mode="synthetic_lethal",
         reason=("observational synthetic-lethal candidate evidence found" if rows else "the completed candidate screen retained no matching row"),
-        source=source, target=target, event=event, rows=rows[:limit],
-        summary={"matched_row_count": len(rows), "returned_count": min(limit, len(rows))},
+        source=source, target=target, event=event, rows=rows,
+        summary={"matched_row_count": matched_count, "returned_count": len(rows)},
         manifest=manifest, provenance=[str(root / "manifest.json"), str(path)],
     )
 

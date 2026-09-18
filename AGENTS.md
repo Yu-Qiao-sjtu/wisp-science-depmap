@@ -25,6 +25,7 @@ Do not implement broad product vision in one change. Prefer small PRs that add o
 
 ## Engineering Rules
 
+- Treat issue write-ups as evidence of a control-plane defect (query contract, Reader/catalog, evidence status, provider schema, presentation, or remote-compute boundary). Implement the shared layer; the named gene, lineage, or trajectory is a regression fixture, not the feature. Do not add case-specific branches for ticket examples.
 - Keep Windows and macOS behavior explicit. Avoid Unix-only assumptions unless gated behind an SSH/WSL context.
 - Never require a real SSH host, GPU, SLURM cluster, WSL distro, API key, or network access in automated tests. Use pure parsing tests, fake command runners, temporary directories, and mocked Tauri commands.
 - Store secrets in the existing keyring path, not SQLite. SSH private key contents must never be copied into SQLite.

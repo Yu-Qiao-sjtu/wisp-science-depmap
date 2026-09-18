@@ -95,7 +95,9 @@ New sparse lineage modes return one explicit status:
 mutation-to-dependency uses `lineage_mutation_dependency` (or
 `depmap_synthetic_lethal_evidence` with `lineage`) and reads
 `depmap_official_gene_effect_v2`. Pan-cancer `synthetic_lethal` remains a
-separate provider.
+separate provider. Both go through the shared filter-before-limit and status
+classifier in `services/depmap_api/scientific_query.py`
+([contract](../../../docs/depmap-scientific-query-contract.md)).
 
 `lineage_network` reads the sparse all-gene scans and can require reciprocal
 retention. `lineage_cnv` reports amplification-vs-control dependency effects;
