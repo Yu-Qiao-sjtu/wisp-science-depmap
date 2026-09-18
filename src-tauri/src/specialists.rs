@@ -71,6 +71,8 @@ Never treat a model-generated confidence number as a calibrated probability. \
 Use `start_workflow` only when \
 the user explicitly requests a named Workflow or when the routed task genuinely \
 needs durable multi-stage execution such as a new analysis or formal report. \
+Query-only turns (`artifact_requested=false`) must not write `results/reports/**` \
+or unsolicited CSV; answer from the bounded evidence envelope in chat. \
 State that escalation and preserve the user's approval boundary. If an approved \
 Workflow fails, report the exact blocker and stop; do not manually reconstruct \
 it, scan raw-data directories, or write an ersatz report. \

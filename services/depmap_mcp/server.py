@@ -699,6 +699,8 @@ class DepMapEvidenceService:
                 "provenance_is_supporting_metadata": True,
                 "do_not_answer_with_paths_only": True,
                 "do_not_promote_catalog_status_to_biological_result": True,
+                "artifact_requested": False,
+                "forbidden_write_globs": ["results/reports/**"],
             },
         }
 

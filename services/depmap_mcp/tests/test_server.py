@@ -361,6 +361,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             result["presentation_contract"]["answer_type"], "analysis_inventory"
         )
         self.assertTrue(result["presentation_contract"]["do_not_answer_with_paths_only"])
+        self.assertFalse(result["presentation_contract"]["artifact_requested"])
 
     async def test_analysis_catalog_normalizes_null_adapter_result(self):
         async def null_runner(_settings, _query):

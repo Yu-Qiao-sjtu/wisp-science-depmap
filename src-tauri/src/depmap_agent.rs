@@ -1075,6 +1075,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "entity_class": entity_class,
         "strategy": strategy,
         "recommended_query": recommended_query,
+        "artifact_requested": matches!(intent.as_str(), "report_generation" | "new_analysis"),
         "allowed_next_tools": tools,
         "evidence_budget": {
             "max_scientific_tool_calls": if intent == "pan_cancer_dependency_summary" { 1 } else { 4 },
@@ -3120,6 +3121,7 @@ mod tests {
                 ["never_answer_a_scientific_question_with_paths_or_module_status_only"],
             true
         );
+        assert_eq!(cancer_only["artifact_requested"], false);
 
         let dependency_ranking = depmap_route(&json!({
             "intent":"cancer_dependency_ranking",

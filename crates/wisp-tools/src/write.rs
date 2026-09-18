@@ -38,6 +38,9 @@ impl Tool for WriteTool {
             Ok(p) => p,
             Err(e) => return ToolResult::fail(e),
         };
+        if !env.artifact_requested() && crate::presentation::query_only_forbids_path(&path) {
+            return ToolResult::fail(crate::presentation::query_only_write_error(&path));
+        }
         let content = match arg_str(args, "content") {
             Ok(c) => c,
             Err(e) => return ToolResult::fail(e),
@@ -170,6 +173,44 @@ mod tests {
         assert!(!result.success, "{}", result.content);
         assert!(result.content.contains("interrupted by user"));
         assert!(!tmp.join("skip.txt").exists());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    struct QueryOnlyEnv {
+        root: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolEnv for QueryOnlyEnv {
+        fn project_root(&self) -> &Path {
+            &self.root
+        }
+        fn artifact_requested(&self) -> bool {
+            false
+        }
+        async fn confirm(&self, _message: &str) -> bool {
+            true
+        }
+        async fn emit(&self, _event: ToolEvent) {}
+    }
+
+    #[tokio::test]
+    async fn query_only_turn_writes_zero_report_files() {
+        let tmp = std::env::temp_dir().join(format!("wisp_query_only_{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let env = QueryOnlyEnv { root: tmp.clone() };
+        let result = WriteTool
+            .run(
+                &json!({
+                    "path": "results/reports/depmap.md",
+                    "content": "should not land"
+                }),
+                &env,
+            )
+            .await;
+        assert!(!result.success, "{}", result.content);
+        assert!(!tmp.join("results/reports/depmap.md").exists());
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

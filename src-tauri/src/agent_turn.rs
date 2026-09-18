@@ -1208,6 +1208,9 @@ pub(crate) async fn send_message_inner(
         approvals: state.approvals.clone(),
         plan_mode: plan_mode_enabled,
         project_write_locked,
+        artifact_requested: !specialist
+            .as_ref()
+            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID),
         approval_grants: state.approval_grants.clone(),
         full_permission_sessions: state.full_permission_sessions.clone(),
         persist: Some(persist_tx),
