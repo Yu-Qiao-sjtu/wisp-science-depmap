@@ -10912,7 +10912,7 @@ test("Notion uses the generic Remote URL OAuth connection flow", async ({ page }
   await expect(page.getByText("Service", { exact: true })).toBeVisible();
   await expect(page.getByText("https://mcp.notion.com/mcp", { exact: true })).toBeVisible();
   await expect(page.getByText("Status", { exact: true })).toBeVisible();
-  await expect(page.getByText("Enabled", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("connector-detail").getByText("Ready", { exact: true })).toBeVisible();
   await expect(page.getByText("Authentication", { exact: true })).toBeVisible();
   await expect(page.getByText("OAuth", { exact: true })).toBeVisible();
 });
