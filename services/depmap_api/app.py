@@ -28,9 +28,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from services.depmap_api.scientific_query import (
     EVIDENCE_STATUSES,
     bound_after_rank,
+    classify_coverage,
     classify_exact_entity,
+    classify_tested_entity,
     criteria_failures,
     filter_before_limit,
+    annotate_common_essential,
 )
 
 
@@ -57,7 +60,7 @@ THREE_D_FAMILIES = {
     "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
-QUERY_CONTRACT_VERSION = 9
+QUERY_CONTRACT_VERSION = 10
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
@@ -91,8 +94,8 @@ MODE_OPTIONAL_FIELDS = {
     "mutation_anchor": {"gene", "event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_mutation_dependency": {"source", "target", "event", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
-    "lineage_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
-    "pan_cancer_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
+    "lineage_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
+    "pan_cancer_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
     "lineage_drug": {"drug", "target", "limit"},
@@ -2824,6 +2827,245 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
     }
 
 
+def _common_essential_labels(settings: Settings, source: str) -> set[str] | None:
+    if source != "depmap_26q1":
+        return None
+    path = settings.knowledge_root / "depmap-26q1-core" / "common_essential_genes.csv"
+    if not path.is_file():
+        return None
+    labels: set[str] = set()
+    for row in _iter_csv_records(path):
+        symbol = row.get("symbol") or row.get("gene") or row.get("Gene") or row.get("gene_symbol")
+        if symbol:
+            labels.add(str(symbol).strip().upper())
+    return labels
+
+
+def _lineage_dependency_root(settings: Settings) -> Path:
+    return settings.knowledge_root / "depmap-26q1-core" / "lineage_dependency_tests"
+
+
+def _lineage_dependency_parquets(root: Path, lineage: str | None = None) -> list[Path]:
+    if lineage:
+        key = _lineage_key(lineage)
+        return sorted(root.glob(f"[0-9]*_{key}.parquet"))
+    return sorted(root.glob("[0-9]*_*.parquet"))
+
+
+def _selectivity_retained(row: dict[str, Any], ranking: str) -> bool:
+    if ranking == "mean_dependency":
+        return row.get("effect_mean_lineage") is not None
+    fdr = row.get("fdr_lineage_more_dependent")
+    delta = row.get("effect_mean_difference")
+    return (
+        fdr is not None
+        and delta is not None
+        and float(fdr) <= 0.05
+        and float(delta) < 0
+    )
+
+
+def _exact_lineage_gene_state(
+    row: dict[str, Any],
+    *,
+    ranking: str,
+    labels: set[str] | None,
+    source: str,
+    exclude: bool,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    tested = str(row.get("test_status") or "").lower() == "tested"
+    retained = tested and _selectivity_retained(row, ranking)
+    annotated, meta = annotate_common_essential(
+        [row], labels=labels, source=source, exclude=False
+    )
+    out = annotated[0]
+    if exclude and meta["annotation_status"] == "AVAILABLE" and out["is_common_essential"]:
+        retained = False
+    status = classify_tested_entity(in_table=True, tested=tested, retained=retained)
+    return out, status, meta
+
+
+def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    lineage = _canonical_lineage_label(query["lineage"])
+    ranking = query.get("ranking") or "selective"
+    gene = str(query["gene"]).strip().upper() if query.get("gene") else None
+    exclude = bool(query.get("exclude_common_essential"))
+    source = query.get("common_essential_source") or "depmap_26q1"
+    limit = min(int(query.get("limit") or 20), 100)
+    root = _lineage_dependency_root(settings)
+    coverage = classify_coverage(module_present=root.is_dir())
+    if coverage:
+        return _evidence_response(
+            coverage, mode="lineage_dependency", lineage=lineage, ranking=ranking,
+            reason="the precomputed lineage dependency-test module is not installed",
+            provenance=[str(root)],
+        )
+    paths = _lineage_dependency_parquets(root, lineage)
+    manifest_path = root / "manifest.json"
+    manifest = _load_manifest(root)
+    if not paths:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="lineage_dependency", lineage=lineage, ranking=ranking,
+            reason="no completed lineage-vs-rest dependency table matches this lineage",
+            manifest=manifest, provenance=[str(manifest_path)],
+        )
+    path = paths[0]
+    table = _read_parquet_records(path)
+    labels = _common_essential_labels(settings, source)
+    if gene:
+        hits = filter_before_limit(
+            table, lambda row: str(row.get("symbol") or "").upper() == gene
+        )
+        if not hits:
+            status = classify_tested_entity(in_table=False, tested=False, retained=None)
+            return _evidence_response(
+                status, mode="lineage_dependency", lineage=lineage, ranking=ranking, gene=gene,
+                reason="the gene is absent from the completed lineage test universe; top-N absence is not used",
+                rejection_reason=status, rows=[], returned_count=0,
+                exclude_common_essential_requested=exclude,
+                common_essential_annotation_status=(
+                    "AVAILABLE" if labels is not None else "ANNOTATION_UNAVAILABLE"
+                ),
+                housekeeping_filter_applied=False,
+                manifest=manifest, provenance=[str(manifest_path), str(path)],
+            )
+        row = hits[0]
+        out, status, meta = _exact_lineage_gene_state(
+            row, ranking=ranking, labels=labels, source=source, exclude=exclude
+        )
+        return _evidence_response(
+            status, mode="lineage_dependency", lineage=lineage, ranking=ranking, gene=gene,
+            reason="exact gene row from the completed lineage-vs-rest table",
+            rejection_reason=None if status == "FOUND" else status,
+            rows=[out], returned_count=1, matched_row_count=1,
+            tested_gene_count=sum(1 for item in table if str(item.get("test_status") or "").lower() == "tested"),
+            rank_more_dependent=out.get("rank_more_dependent"),
+            exclude_common_essential_requested=exclude,
+            common_essential_filter_applied=bool(exclude and out.get("is_common_essential") and labels is not None),
+            common_essential_source=source,
+            common_essential_annotation_status=meta["annotation_status"],
+            housekeeping_filter_applied=False,
+            manifest=manifest, provenance=[str(manifest_path), str(path)],
+        )
+    tested_rows = [
+        row for row in table
+        if str(row.get("test_status") or "").lower() == "tested"
+        and row.get("effect_mean_lineage") is not None
+    ]
+    candidates = [row for row in tested_rows if _selectivity_retained(row, ranking)]
+    annotated, meta = annotate_common_essential(
+        candidates, labels=labels, source=source, exclude=exclude
+    )
+    if exclude and labels is None:
+        annotated, meta = annotate_common_essential(
+            candidates, labels=None, source=source, exclude=False
+        )
+        meta = {**meta, "filter_applied": False}
+    page, matched = bound_after_rank(
+        annotated,
+        key=lambda row: (
+            float(row.get("rank_more_dependent") or 10**9),
+            float(row.get("effect_mean_difference") or 0),
+        ),
+        limit=limit,
+    )
+    return _evidence_response(
+        "FOUND" if page else "NOT_RETAINED",
+        mode="lineage_dependency", lineage=lineage, ranking=ranking,
+        reason="bounded rows selected from the completed precomputed lineage dependency test",
+        rows=page, returned_count=len(page), matched_row_count=matched,
+        exclude_common_essential_requested=exclude,
+        common_essential_filter_applied=meta["filter_applied"],
+        common_essential_source=source,
+        common_essential_annotation_status=meta["annotation_status"],
+        common_essential_removed_count=meta["removed_count"],
+        housekeeping_filter_applied=False,
+        summary={
+            "tested_gene_count": len(tested_rows),
+            "eligible_before_common_essential_filter": meta["before_count"],
+            "eligible_after_common_essential_filter": meta["after_count"],
+        },
+        manifest=manifest, provenance=[str(manifest_path), str(path)],
+    )
+
+
+def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    ranking = query.get("ranking") or "selective"
+    gene = str(query["gene"]).strip().upper() if query.get("gene") else None
+    exclude = bool(query.get("exclude_common_essential"))
+    source = query.get("common_essential_source") or "depmap_26q1"
+    limit = min(int(query.get("limit") or 5), 20)
+    root = _lineage_dependency_root(settings)
+    if not root.is_dir():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="pan_cancer_dependency", ranking=ranking,
+            reason="the precomputed lineage dependency-test module is not installed",
+        )
+    paths = _lineage_dependency_parquets(root)
+    if not paths:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="pan_cancer_dependency", ranking=ranking,
+            reason="no completed lineage-vs-rest dependency tables are indexed",
+        )
+    labels = _common_essential_labels(settings, source)
+    manifest = _load_manifest(root)
+    lineages: list[dict[str, Any]] = []
+    for path in paths:
+        table = _read_parquet_records(path)
+        lineage = str((table[0].get("lineage") if table else "") or "")
+        if gene:
+            hits = filter_before_limit(
+                table, lambda row, symbol=gene: str(row.get("symbol") or "").upper() == symbol
+            )
+            if not hits:
+                lineages.append({
+                    "lineage": lineage or path.stem,
+                    "association_status": "NOT_TESTED",
+                    "rows": [],
+                })
+                continue
+            row = hits[0]
+            out, status, _meta = _exact_lineage_gene_state(
+                row, ranking=ranking, labels=labels, source=source, exclude=exclude
+            )
+            lineages.append({
+                "lineage": lineage or path.stem,
+                "association_status": status,
+                "rows": [out],
+            })
+            continue
+        tested_rows = [
+            row for row in table
+            if str(row.get("test_status") or "").lower() == "tested"
+        ]
+        candidates = [row for row in tested_rows if _selectivity_retained(row, ranking)]
+        annotated, meta = annotate_common_essential(
+            candidates, labels=labels, source=source, exclude=exclude
+        )
+        page, matched = bound_after_rank(
+            annotated,
+            key=lambda row: float(row.get("rank_more_dependent") or 10**9),
+            limit=limit,
+        )
+        lineages.append({
+            "lineage": lineage or path.stem,
+            "association_status": "FOUND" if page else "NOT_RETAINED",
+            "returned_count": len(page),
+            "matched_row_count": matched,
+            "common_essential_removed_count": meta["removed_count"],
+            "rows": page,
+        })
+    return _evidence_response(
+        "FOUND", mode="pan_cancer_dependency", ranking=ranking, gene=gene,
+        reason="exact per-lineage states from completed tables" if gene else "bounded per-lineage rows from completed tables",
+        lineages=lineages, lineage_count=len(lineages),
+        exclude_common_essential_requested=exclude,
+        common_essential_source=source,
+        housekeeping_filter_applied=False,
+        manifest=manifest, provenance=[str(root / "manifest.json"), *[str(path) for path in paths]],
+    )
+
+
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     if query["mode"] == "analysis_catalog":
         return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
@@ -2835,6 +3077,10 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":
         return await asyncio.to_thread(_run_lineage_directions_query, settings, query)
+    if query["mode"] == "lineage_dependency":
+        return await asyncio.to_thread(_run_lineage_dependency_query, settings, query)
+    if query["mode"] == "pan_cancer_dependency":
+        return await asyncio.to_thread(_run_pan_cancer_dependency_query, settings, query)
     if query["mode"] == "core":
         result = await asyncio.to_thread(_run_core_query, settings, query["gene"])
         if not result["summary"]:

@@ -293,7 +293,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 9)
+        self.assertEqual(response.json()["query_contract_version"], 10)
         self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
         self.assertIn("NOT_OBSERVED", response.json()["evidence_statuses"])
         self.assertIn("COVERAGE_GAP", response.json()["evidence_statuses"])
@@ -1219,6 +1219,57 @@ def write_lineage_mutation_fixtures(root: Path) -> None:
     )
 
 
+def write_lineage_selectivity_fixtures(root: Path) -> None:
+    tests = root / "depmap-26q1-core" / "lineage_dependency_tests"
+    tests.mkdir(parents=True, exist_ok=True)
+    (tests / "manifest.json").write_text(
+        json.dumps({"status": "complete", "release": "26Q1", "lineage_count": 2}),
+        encoding="utf-8",
+    )
+    (root / "depmap-26q1-core" / "common_essential_genes.csv").write_text(
+        "symbol\nDROPCE\n", encoding="utf-8"
+    )
+    decoys = [f"DECOY{i:03d}" for i in range(120)]
+    symbols = ["KEEP", "DROPCE", *decoys, "BELOW", "UNTESTED"]
+    n = len(symbols)
+    fdr = [0.01, 0.01] + [0.01] * len(decoys) + [0.2, 1.0]
+    delta = [-0.8, -0.8] + [-0.8] * len(decoys) + [-0.01, -0.8]
+    pq.write_table(
+        pa.table(
+            {
+                "symbol": symbols,
+                "lineage": ["Myeloid"] * n,
+                "test_status": ["tested"] * (n - 1) + ["untested"],
+                "lineage_n": [40] * n,
+                "rest_n": [200] * n,
+                "effect_mean_lineage": [-1.0] * n,
+                "effect_mean_rest": [-0.2] * n,
+                "effect_mean_difference": delta,
+                "fdr_lineage_more_dependent": fdr,
+                "rank_more_dependent": list(range(1, n + 1)),
+            }
+        ),
+        tests / "01_Myeloid.parquet",
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "symbol": ["KEEP", "OTHER"],
+                "lineage": ["Breast", "Breast"],
+                "test_status": ["tested", "tested"],
+                "lineage_n": [50, 50],
+                "rest_n": [180, 180],
+                "effect_mean_lineage": [-0.3, -1.1],
+                "effect_mean_rest": [-0.2, -0.1],
+                "effect_mean_difference": [-0.1, -1.0],
+                "fdr_lineage_more_dependent": [0.4, 0.01],
+                "rank_more_dependent": [80, 1],
+            }
+        ),
+        tests / "02_Breast.parquet",
+    )
+
+
 class LineageMutationQueryTests(DepMapApiTests):
     def setUp(self):
         super().setUp()
@@ -1361,6 +1412,105 @@ class LineageMutationQueryTests(DepMapApiTests):
             }
         )
         self.assertEqual(untested["status"], "NOT_COMPUTED")
+
+
+class LineageSelectivityQueryTests(DepMapApiTests):
+    def setUp(self):
+        super().setUp()
+        write_lineage_selectivity_fixtures(self.settings.knowledge_root)
+
+    def _query(self, payload):
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post("/api/v1/query", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_exact_gene_is_not_inferred_from_topn(self):
+        below = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "BELOW",
+                "ranking": "selective",
+                "limit": 5,
+            }
+        )
+        self.assertEqual(below["status"], "NOT_RETAINED")
+        self.assertEqual(below["rows"][0]["symbol"], "BELOW")
+        self.assertGreater(below["rows"][0]["rank_more_dependent"], 100)
+        found = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "KEEP",
+                "ranking": "selective",
+            }
+        )
+        self.assertEqual(found["status"], "FOUND")
+        missing = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "ABSENTGENE",
+                "ranking": "selective",
+            }
+        )
+        self.assertEqual(missing["status"], "NOT_TESTED")
+
+    def test_common_essential_filter_is_one_reader_join(self):
+        unfiltered = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "ranking": "selective",
+                "limit": 20,
+            }
+        )
+        symbols = [row["symbol"] for row in unfiltered["rows"]]
+        self.assertIn("DROPCE", symbols)
+        filtered = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
+                "limit": 20,
+            }
+        )
+        self.assertNotIn("DROPCE", [row["symbol"] for row in filtered["rows"]])
+        self.assertTrue(filtered["common_essential_filter_applied"])
+        self.assertEqual(filtered["common_essential_removed_count"], 1)
+        self.assertGreater(unfiltered["matched_row_count"], unfiltered["returned_count"])
+        labeled = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "DROPCE",
+                "ranking": "selective",
+            }
+        )
+        self.assertEqual(labeled["status"], "FOUND")
+        self.assertTrue(labeled["rows"][0]["is_common_essential"])
+        excluded = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "DROPCE",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+            }
+        )
+        self.assertEqual(excluded["status"], "NOT_RETAINED")
+        self.assertTrue(excluded["rows"][0]["is_common_essential"])
+
+    def test_cross_lineage_exact_gene_states(self):
+        payload = self._query(
+            {"mode": "pan_cancer_dependency", "gene": "KEEP", "ranking": "selective"}
+        )
+        states = {item["lineage"]: item["association_status"] for item in payload["lineages"]}
+        self.assertEqual(states["Myeloid"], "FOUND")
+        self.assertEqual(states["Breast"], "NOT_RETAINED")
 
 
 if __name__ == "__main__":

@@ -537,6 +537,19 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["evidence_id"], breast_cancer["evidence_id"])
         self.assertEqual(result["evidence_id"], short_alias["evidence_id"])
 
+    async def test_lineage_dependency_forwards_exact_gene(self):
+        result = await self.service.lineage_dependencies(
+            "肝癌", "selective", 5, gene="mdm2"
+        )
+        self.assertEqual(self.queries[-1]["gene"], "MDM2")
+        self.assertEqual(self.queries[-1]["lineage"], "Liver")
+        self.assertEqual(result["request"]["gene"], "MDM2")
+
+    async def test_pan_cancer_dependency_forwards_exact_gene(self):
+        result = await self.service.pan_cancer_dependencies("selective", 5, gene="fbxo7")
+        self.assertEqual(self.queries[-1]["gene"], "FBXO7")
+        self.assertEqual(result["request"]["gene"], "FBXO7")
+
     async def test_pan_cancer_dependency_summary_is_one_bounded_query(self):
         result = await self.service.pan_cancer_dependencies(
             "selective", 5, exclude_common_essential=True
