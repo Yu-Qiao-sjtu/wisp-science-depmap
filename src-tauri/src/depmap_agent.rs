@@ -489,7 +489,7 @@ fn depmap_route_schema() -> Value {
             },
             "ambiguity": {
                 "type":"string",
-                "enum":["none", "missing_entity", "critical_direction", "out_of_scope"]
+                "enum":["none", "missing_entity", "critical_direction", "out_of_scope", "tf_predicate"]
             },
             "ambiguity_reason": {"type":"string","maxLength":500},
             "explicit_workflow_request": {"type":"boolean"}
@@ -773,8 +773,31 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             _ => unreachable!(),
         };
 
-    let requires_clarification =
-        matches!(ambiguity, "critical_direction" | "out_of_scope") || !unsupported.is_empty();
+    let tf_family = [
+        "tf_activity_to_dependency",
+        "cancer_dependency_ranking",
+        "gene_evidence",
+        "expression_biomarker_model",
+    ];
+    let tf_conflict = {
+        let mut hits = 0u8;
+        if tf_family.contains(&intent.as_str()) {
+            hits += 1;
+        }
+        for alt in &alternative_intents {
+            if tf_family.contains(&alt.as_str()) && alt != &intent {
+                hits += 1;
+            }
+        }
+        hits >= 2
+            || (intent == "expression_biomarker_model" && transcription_factor.is_some())
+            || ambiguity == "tf_predicate"
+    };
+    let requires_clarification = matches!(
+        ambiguity,
+        "critical_direction" | "out_of_scope" | "tf_predicate"
+    ) || !unsupported.is_empty()
+        || tf_conflict;
     let requires_user_input = !missing.is_empty() || requires_clarification;
     if explicit_workflow && !requires_user_input {
         execution_level = "L4_DURABLE";
@@ -807,6 +830,25 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 {
                     "label": "改为该癌种的突变锚点筛选",
                     "description": "保留癌种范围，查看该癌种中有哪些突变基因具备后续分析条件。"
+                }
+            ],
+            "allow_freeform": true
+        })
+    } else if tf_conflict {
+        json!({
+            "question": "TF 可以指三种不可互换的查询。请选择一种谓词。",
+            "options": [
+                {
+                    "label": "TF 基因的 CRISPR Gene Effect 依赖",
+                    "description": "把符号当基因，查 core/gene CRISPR 依赖，不是推断活性。"
+                },
+                {
+                    "label": "推断 TF 活性与 CRISPR 依赖的关联",
+                    "description": "使用已完成的 TF-activity 模块；不得改走 biomarker 或基因摘要。"
+                },
+                {
+                    "label": "TF 名录与谱系选择性依赖的交集",
+                    "description": "在冻结 TF universe 上做 lineage-selective ranking，不是活性矩阵。"
                 }
             ],
             "allow_freeform": true
@@ -933,8 +975,15 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         }),
         ("tf_activity_to_dependency", _) if !requires_user_input => json!({
             "tool": "depmap_tf_dependency_evidence",
-            "arguments": {"transcription_factor": transcription_factor, "target": target_gene, "limit": 20},
-            "single_call": true
+            "arguments": {
+                "transcription_factor": transcription_factor,
+                "target": target_gene,
+                "limit": 20,
+                "entity_class": "tf_activity"
+            },
+            "single_call": true,
+            "entity_class": "tf_activity",
+            "forbidden_tools": ["depmap_biomarker_model_evidence"]
         }),
         ("true_love_gene_catalog", _) if !requires_user_input => json!({
             "tool": "depmap_true_love_evidence",
@@ -962,6 +1011,13 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "single_call": true
         }),
         _ => Value::Null,
+    };
+    let entity_class = match intent.as_str() {
+        "tf_activity_to_dependency" => Some("tf_activity"),
+        "gene_evidence" => Some("gene_crispr"),
+        "cancer_dependency_ranking" => Some("lineage_selective"),
+        "expression_biomarker_model" => Some("expression_biomarker"),
+        _ => None,
     };
     Ok(json!({
         "state": if requires_user_input { "needs_input" } else { "routed" },
@@ -996,6 +1052,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "layer": layer
             ,"evidence_provider": evidence_provider
         },
+        "entity_class": entity_class,
         "strategy": strategy,
         "recommended_query": recommended_query,
         "allowed_next_tools": tools,
@@ -1011,6 +1068,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "do_not_invent_missing_entities": true,
             "model_confidence_is_not_a_calibrated_probability": true,
             "critical_direction_ambiguity_requires_clarification": true,
+            "tf_predicate_ambiguity_requires_clarification": true,
+            "do_not_substitute_biomarker_or_gene_crispr_for_tf_activity": true,
             "catalog_is_routing_metadata_unless_inventory_requested": true,
             "never_answer_a_scientific_question_with_paths_or_module_status_only": true,
             "do_not_read_or_grep_spilled_tool_output_to_reconstruct_structured_evidence": true
@@ -3349,6 +3408,57 @@ mod tests {
             );
             assert_eq!(route["recommended_query"]["single_call"], true);
         }
+    }
+
+    #[test]
+    fn agent_route_keeps_tf_predicates_distinct() {
+        let activity = depmap_route(&json!({
+            "intent":"tf_activity_to_dependency",
+            "transcription_factor":"STAT3",
+            "target_gene":"GPX4",
+            "ambiguity":"none"
+        }))
+        .unwrap();
+        assert_eq!(activity["state"], "routed");
+        assert_eq!(activity["entity_class"], "tf_activity");
+        assert_eq!(
+            activity["recommended_query"]["tool"],
+            "depmap_tf_dependency_evidence"
+        );
+        assert_eq!(
+            activity["recommended_query"]["forbidden_tools"],
+            json!(["depmap_biomarker_model_evidence"])
+        );
+
+        let ambiguous = depmap_route(&json!({
+            "intent":"tf_activity_to_dependency",
+            "transcription_factor":"MYC",
+            "alternative_intents":["gene_evidence","cancer_dependency_ranking"],
+            "ambiguity":"none"
+        }))
+        .unwrap();
+        assert_eq!(ambiguous["state"], "needs_input");
+        assert_eq!(ambiguous["decision"], "clarify");
+        assert_eq!(
+            ambiguous["clarification_card"]["options"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let swapped = depmap_route(&json!({
+            "intent":"expression_biomarker_model",
+            "transcription_factor":"STAT3",
+            "target_gene":"GPX4",
+            "ambiguity":"none"
+        }))
+        .unwrap();
+        assert_eq!(swapped["state"], "needs_input");
+        assert_ne!(
+            swapped["recommended_query"]["tool"],
+            "depmap_biomarker_model_evidence"
+        );
     }
 
     #[test]
