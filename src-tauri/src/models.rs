@@ -2275,12 +2275,18 @@ mod tests {
 
     #[test]
     fn clamp_to_catalog_caps_over_declared_limits() {
+        let ceiling = crate::model_catalog::lookup(
+            "openai",
+            "https://api.kimi.com/coding/v1",
+            "k3-256k",
+        )
+        .expect("k3-256k must resolve under kimi-for-coding");
         let mut profile = kimi_coding_profile("k3-256k");
-        profile.context_window = 1_000_000;
-        profile.max_tokens = 999_999;
+        profile.context_window = ceiling.c.saturating_add(1);
+        profile.max_tokens = ceiling.o.saturating_add(1);
         clamp_to_catalog(&mut profile);
-        assert_eq!(profile.context_window, 262_144);
-        assert_eq!(profile.max_tokens, 131_072);
+        assert_eq!(profile.context_window, ceiling.c);
+        assert_eq!(profile.max_tokens, ceiling.o);
     }
 
     #[test]
@@ -2301,9 +2307,15 @@ mod tests {
 
     #[test]
     fn effective_context_window_respects_catalog_ceiling() {
+        let ceiling = crate::model_catalog::lookup(
+            "openai",
+            "https://api.kimi.com/coding/v1",
+            "k3-256k",
+        )
+        .expect("k3-256k must resolve under kimi-for-coding");
         let mut over = kimi_coding_profile("k3-256k");
-        over.context_window = 1_000_000;
-        assert_eq!(effective_context_window(&over), 262_144);
+        over.context_window = ceiling.c.saturating_add(1);
+        assert_eq!(effective_context_window(&over), ceiling.c);
         // Unknown models keep their declared value.
         let mut unknown = test_profile("m2", "x", "totally-unknown");
         unknown.context_window = 500_000;
