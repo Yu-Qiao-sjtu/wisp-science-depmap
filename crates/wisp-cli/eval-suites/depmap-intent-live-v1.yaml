@@ -48,7 +48,7 @@ cases:
             cohort: {type: string}
             layer: {type: string, enum: [exhaustive_high_confidence, lineage_adjusted]}
             alternative_intents: {type: array, items: {type: string}, maxItems: 3, uniqueItems: true}
-            ambiguity: {type: string, enum: [none, missing_entity, critical_direction, out_of_scope]}
+            ambiguity: {type: string, enum: [none, missing_entity, critical_direction, out_of_scope, tf_predicate]}
             ambiguity_reason: {type: string}
             explicit_workflow_request: {type: boolean}
           required: [intent]
