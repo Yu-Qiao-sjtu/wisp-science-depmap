@@ -389,6 +389,51 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(found["hits"][0]["lineage_adjusted_effect"], -0.27)
         self.assertEqual(not_retained["status"], "NOT_RETAINED")
 
+    def test_provider_schema_rejects_catalog_conditional_args_with_envelope(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            coverage = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "true_love",
+                    "catalog": "stable_negative_rank1",
+                    "coverage": "quality",
+                    "limit": 20,
+                },
+            )
+            oversize = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_directions", "lineage": "Liver", "limit": 60},
+            )
+            true_love_limit = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "true_love", "catalog": "stable_negative_rank1", "limit": 150},
+            )
+            valid_derived = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "true_love",
+                    "catalog": "negative_r_lt_minus_0_3",
+                    "coverage": "quality",
+                    "gene": "KRAS",
+                    "limit": 5,
+                },
+            )
+        self.assertEqual(coverage.status_code, 422)
+        self.assertTrue(coverage.json()["schema_error"])
+        self.assertEqual(coverage.json()["status"], "INELIGIBLE")
+        self.assertNotIn("Traceback", coverage.text)
+        self.assertEqual(oversize.status_code, 422)
+        self.assertTrue(oversize.json()["schema_error"])
+        self.assertEqual(true_love_limit.status_code, 422)
+        self.assertTrue(true_love_limit.json()["schema_error"])
+        self.assertEqual(valid_derived.status_code, 200)
+        self.assertEqual(valid_derived.json()["status"], "FOUND")
+
     def test_true_love_synthetic_lethal_and_three_d_are_bounded_precomputed_queries(self):
         client = TestClient(create_app(self.settings))
         with client:

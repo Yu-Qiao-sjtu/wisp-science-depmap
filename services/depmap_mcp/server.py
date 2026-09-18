@@ -18,7 +18,9 @@ import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
 MAX_MODEL_LIST_ITEMS = 40
@@ -147,6 +149,11 @@ from services.depmap_api.app import (
     run_bounded_query,
     resolve_lineage_term,
     verify_installation,
+)
+from services.depmap_api.provider_schema import (
+    TOOL_LIMIT_MAX,
+    limit_violation,
+    true_love_arg_violation,
 )
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 
@@ -872,8 +879,20 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        request = {
+            "lineage": lineage,
+            "ranking": ranking,
+            "exclude_common_essential": exclude_common_essential,
+            "common_essential_source": common_essential_source,
+            "limit": limit,
+        }
+        if gene:
+            request["gene"] = gene.strip().upper()
+        rejected = limit_violation("lineage_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_lineage_dependencies", request=request, evidence=rejected
+            )
         query: dict[str, Any] = {
             "mode": "lineage_dependency",
             "lineage": lineage,
@@ -902,8 +921,14 @@ class DepMapEvidenceService:
         )
 
     async def lineage_directions(self, lineage: str, limit: int = 20) -> dict[str, Any]:
-        if not 1 <= limit <= 50:
-            raise ValueError("limit must be between 1 and 50")
+        request = {"lineage": lineage, "limit": limit}
+        rejected = limit_violation("lineage_directions", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_lineage_direction_discovery",
+                request=request,
+                evidence=rejected,
+            )
         item = await self._execute(
             {"mode": "lineage_directions", "lineage": lineage, "limit": limit}
         )
@@ -923,8 +948,13 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
-        if not 1 <= limit <= 20:
-            raise ValueError("limit must be between 1 and 20 per lineage")
+        rejected = limit_violation("pan_cancer_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_pan_cancer_dependencies",
+                request={"ranking": ranking, "limit": limit},
+                evidence=rejected,
+            )
         query = {
             "mode": "pan_cancer_dependency",
             "ranking": ranking,
@@ -946,8 +976,13 @@ class DepMapEvidenceService:
         sections: list[Section] | None = None,
         limit: int = 5,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 20:
-            raise ValueError("limit must be between 1 and 20")
+        rejected = limit_violation("enrichment", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_gene_evidence",
+                request={"gene": gene, "lineage": lineage, "limit": limit},
+                evidence=rejected,
+            )
         selected = list(dict.fromkeys(sections or DEFAULT_SECTIONS))
         unknown = sorted(set(selected) - set(DEFAULT_SECTIONS))
         if unknown:
@@ -1052,8 +1087,13 @@ class DepMapEvidenceService:
             raise ValueError("endpoint must be one of OS, DSS, DFI, or PFI")
         if project and lineage:
             raise ValueError("project and lineage are alternative cohort selectors")
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("tcga_expression_survival", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="tcga_gene_expression_survival",
+                request={"gene": symbol, "limit": limit},
+                evidence=rejected,
+            )
         query: dict[str, Any] = {
             "mode": "tcga_expression_survival",
             "gene": symbol,
@@ -1151,8 +1191,13 @@ class DepMapEvidenceService:
         limit: int = 20,
         view: Literal["universe", "ranking"] | None = None,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("tf_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_tf_activity_dependency",
+                request={"limit": limit, "view": view},
+                evidence=rejected,
+            )
         query: dict[str, Any] = {"mode": "tf_dependency", "limit": limit}
         if view:
             query["view"] = view
@@ -1223,8 +1268,13 @@ class DepMapEvidenceService:
         contrast_id: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("subtype", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_subtype_evidence",
+                request={"limit": limit},
+                evidence=rejected,
+            )
         query: dict[str, Any] = {"mode": "subtype", "limit": limit}
         if gene:
             query["gene"] = gene.strip().upper()
@@ -1252,8 +1302,13 @@ class DepMapEvidenceService:
         layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] = "lineage_adjusted",
         limit: int = 20,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("coamplification", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_coamplification_evidence",
+                request={"source": source, "limit": limit},
+                evidence=rejected,
+            )
         source_symbol = source.strip().upper()
         if not source_symbol:
             raise ValueError("source must be non-empty")
@@ -1288,8 +1343,20 @@ class DepMapEvidenceService:
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
         coverage: Literal["all", "legacy", "quality"] | None = None,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        request = {
+            "gene": gene.strip().upper() if gene else None,
+            "partner": partner.strip().upper() if partner else None,
+            "limit": limit,
+            "catalog": catalog,
+            "coverage": coverage,
+        }
+        rejected = true_love_arg_violation(
+            catalog=catalog, coverage=coverage, limit=limit
+        )
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_true_love_evidence", request=request, evidence=rejected
+            )
         query: dict[str, Any] = {"mode": "true_love", "limit": limit, "catalog": catalog}
         if gene:
             query["gene"] = gene.strip().upper()
@@ -1318,8 +1385,13 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         if not source and not target:
             raise ValueError("source, target, or both are required")
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("synthetic_lethal", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_synthetic_lethal_evidence",
+                request={"limit": limit, "lineage": lineage},
+                evidence=rejected,
+            )
         if lineage:
             query: dict[str, Any] = {
                 "mode": "lineage_mutation_dependency",
@@ -1360,8 +1432,13 @@ class DepMapEvidenceService:
         omic: Literal["expression", "cnv", "damaging", "hotspot"] | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
+        rejected = limit_violation("three_d", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_3d_evidence",
+                request={"family": family, "limit": limit},
+                evidence=rejected,
+            )
         query: dict[str, Any] = {"mode": "three_d", "family": family, "limit": limit}
         for key, value in (("gene", gene), ("source", source), ("target", target)):
             if value:
@@ -1382,8 +1459,13 @@ class DepMapEvidenceService:
         lineage: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 20:
-            raise ValueError("limit must be between 1 and 20")
+        rejected = limit_violation("lineage_drug", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_drug_evidence",
+                request={"drug": drug, "gene": gene, "limit": limit},
+                evidence=rejected,
+            )
         drug_name = drug.strip()
         symbol = gene.strip().upper()
         if not drug_name or not symbol:
@@ -1570,7 +1652,7 @@ def build_mcp_server(
         ranking: Literal["selective", "mean_dependency"] = "selective",
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
-        limit: int = 10,
+        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_lineage_dependencies"])] = 10,
         gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.lineage_dependencies(
@@ -1597,7 +1679,7 @@ def build_mcp_server(
         ranking: Literal["selective", "mean_dependency"] = "selective",
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
-        limit: int = 5,
+        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_pan_cancer_dependencies"])] = 5,
         gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.pan_cancer_dependencies(
@@ -1620,7 +1702,7 @@ def build_mcp_server(
     )
     async def depmap_lineage_direction_discovery(
         lineage: str,
-        limit: int = 20,
+        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_lineage_direction_discovery"])] = 20,
     ) -> dict[str, Any]:
         return await service.lineage_directions(lineage, limit)
 
@@ -1638,7 +1720,7 @@ def build_mcp_server(
         gene: str,
         lineage: str | None = None,
         sections: list[Section] | None = None,
-        limit: int = 5,
+        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_gene_evidence"])] = 5,
     ) -> dict[str, Any]:
         return await service.gene_evidence(gene, lineage, sections, limit)
 
@@ -1792,9 +1874,18 @@ def build_mcp_server(
     async def depmap_true_love_evidence(
         gene: str | None = None,
         partner: str | None = None,
-        limit: int = 20,
+        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_true_love_evidence"])] = 20,
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
-        coverage: Literal["all", "legacy", "quality"] | None = None,
+        coverage: Annotated[
+            Literal["all", "legacy", "quality"] | None,
+            Field(
+                default=None,
+                description=(
+                    "Valid only for catalogs negative_r_lt_minus_0_3 and "
+                    "positive_reciprocal_top20. Omit for stable_negative_rank1."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         return await service.true_love_evidence(gene, partner, limit, catalog, coverage)
 

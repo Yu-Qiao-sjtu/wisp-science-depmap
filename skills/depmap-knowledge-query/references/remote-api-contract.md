@@ -69,8 +69,11 @@ larger than 4 MiB and does not follow redirects.
 contrast without a gene returns retained selective hits. `coamplification`
 requires `source` and optionally accepts `partner`, dependency `target`,
 `layer` (`exhaustive_high_confidence` or `lineage_adjusted`), and `limit`.
-`true_love` optionally accepts `gene`, `partner`, and `limit` and prefers the
-completed bootstrap-stability layer. `synthetic_lethal` requires `source`,
+`true_love` optionally accepts `gene`, `partner`, `catalog`, and `limit`.
+`coverage` is valid only for derived catalogs (`negative_r_lt_minus_0_3`,
+`positive_reciprocal_top20`). Invalid argument combinations return HTTP 422
+with an `INELIGIBLE` `schema_error` envelope, not a validator traceback.
+Per-mode `limit` maxima are in `services/depmap_api/provider_schema.py`. `synthetic_lethal` requires `source`,
 `target`, or both, and optionally accepts one frozen event family. `three_d`
 requires a supported analysis `family` and uses only catalog-validated cohort,
 contrast, omic, gene, source, and target selectors.
