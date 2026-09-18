@@ -49,9 +49,11 @@ THREE_D_FAMILIES = {
     "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
+QUERY_CONTRACT_VERSION = 9
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
+    "lineage_mutation_dependency": {"lineage"},
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
@@ -78,7 +80,8 @@ MODE_REQUIRED_FIELDS = {
 }
 MODE_OPTIONAL_FIELDS = {
     "analysis_catalog": {"module", "completion_state", "limit"},
-    "mutation_anchor": {"event", "anchor_tier", "include_common_essential", "limit"},
+    "mutation_anchor": {"gene", "event", "anchor_tier", "include_common_essential", "limit"},
+    "lineage_mutation_dependency": {"source", "target", "event", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "pan_cancer_dependency": {"ranking", "exclude_common_essential", "common_essential_source", "limit"},
@@ -89,7 +92,7 @@ MODE_OPTIONAL_FIELDS = {
     "subtype": {"gene", "lineage", "contrast", "limit"},
     "coamplification": {"partner", "target", "layer", "limit"},
     "true_love": {"gene", "partner", "catalog", "coverage", "limit"},
-    "synthetic_lethal": {"source", "target", "event", "limit"},
+    "synthetic_lethal": {"source", "target", "event", "lineage", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"target", "limit"},
@@ -106,7 +109,20 @@ EVIDENCE_STATUSES = {
     "INELIGIBLE",
     "NOT_COMPUTED",
     "MODULE_UNAVAILABLE",
+    "NOT_OBSERVED",
+    "COVERAGE_GAP",
 }
+MUTATION_EVENT_MATRIX = {
+    "damaging": "Damaging",
+    "damaging_mutation": "Damaging",
+    "hotspot": "Hotspot",
+    "hotspot_mutation": "Hotspot",
+    "anyselected": "AnySelected",
+    "custom_missense": "AnySelected",
+    "custom_missense_mutation": "AnySelected",
+}
+ANCHOR_MODULE = "癌种内突变锚定基因选择"
+OFFICIAL_MUTATION_DEPENDENCY = "depmap_official_gene_effect_v2"
 QUERY_FIELD_ORDER = (
     "mode",
     "gene",
@@ -395,6 +411,7 @@ class QueryRequest(BaseModel):
     mode: Literal[
         "analysis_catalog",
         "mutation_anchor",
+        "lineage_mutation_dependency",
         "catalog", "lineage_catalog", "lineage_dependency", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
@@ -458,10 +475,22 @@ class QueryRequest(BaseModel):
             )
         if self.module is not None and self.mode != "analysis_catalog" and self.module not in MATRIX_MODULES:
             raise ValueError("unsupported module")
-        if self.event is not None and self.mode != "synthetic_lethal" and self.event not in LINEAGE_EVENTS:
+        if (
+            self.event is not None
+            and self.mode not in {"synthetic_lethal", "lineage_mutation_dependency"}
+            and self.event not in LINEAGE_EVENTS
+        ):
             raise ValueError("unsupported lineage event")
         if self.mode == "synthetic_lethal" and self.event is not None and self.event not in SYNTHETIC_LETHAL_EVENTS:
             raise ValueError("unsupported synthetic-lethal event")
+        if (
+            self.mode == "lineage_mutation_dependency"
+            and self.event is not None
+            and self.event not in LINEAGE_EVENTS
+            and self.event not in SYNTHETIC_LETHAL_EVENTS
+            and self.event.casefold() not in MUTATION_EVENT_MATRIX
+        ):
+            raise ValueError("unsupported lineage mutation event")
         if self.omic is not None and self.mode != "three_d" and self.omic not in DRUG_OMICS:
             raise ValueError("unsupported drug omic")
         if self.mode == "three_d" and self.omic is not None and self.omic not in THREE_D_OMICS:
@@ -484,6 +513,8 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "synthetic_lethal" and self.source is None and self.target is None:
             raise ValueError("synthetic_lethal requires source, target, or both")
+        if self.mode == "lineage_mutation_dependency" and self.source is None and self.target is None:
+            raise ValueError("lineage_mutation_dependency requires source, target, or both")
         for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -665,12 +696,187 @@ def _coerce_csv_value(value: str) -> Any:
 
 
 def _read_csv_records(path: Path) -> list[dict[str, Any]]:
+    return list(_iter_csv_records(path))
+
+
+def _iter_csv_records(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
-        return [
-            {key: _coerce_csv_value(value) for key, value in row.items()}
-            for row in csv.DictReader(handle)
-        ]
+        for row in csv.DictReader(handle):
+            yield {key: _coerce_csv_value(value) for key, value in row.items()}
+
+
+def _filter_csv_records(
+    path: Path,
+    match,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Scan a CSV and keep matching rows before applying any bound."""
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in _iter_csv_records(path):
+        if not match(row):
+            continue
+        rows.append(row)
+        if limit is not None and len(rows) >= limit:
+            break
+    return rows
+
+
+def _mutation_event_matrix(event: str | None) -> str | None:
+    if event is None:
+        return None
+    key = event.strip().casefold().replace("-", "_")
+    if key in MUTATION_EVENT_MATRIX:
+        return MUTATION_EVENT_MATRIX[key]
+    if event.strip() in {"Damaging", "Hotspot", "AnySelected"}:
+        return event.strip()
+    return None
+
+
+def _anchor_catalog_root(settings: Settings) -> Path:
+    return (
+        settings.knowledge_root / "analysis-modules" / ANCHOR_MODULE / "cancer_anchor_catalog_v2"
+    )
+
+
+def _lineage_anchor_root(settings: Settings, lineage: str) -> Path:
+    return _anchor_catalog_root(settings) / "by_cancer" / _lineage_key(lineage)
+
+
+def _int_field(row: dict[str, Any], *names: str) -> int | None:
+    for name in names:
+        value = row.get(name)
+        if isinstance(value, bool) or value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _bool_field(row: dict[str, Any], name: str) -> bool | None:
+    value = row.get(name)
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().casefold()
+    if text in {"true", "yes", "1"}:
+        return True
+    if text in {"false", "no", "0"}:
+        return False
+    return None
+
+
+def _anchor_thresholds(manifest: dict[str, Any]) -> dict[str, dict[str, int]]:
+    raw = manifest.get("thresholds") or {}
+    standard = raw.get("standard") or {}
+    strict = raw.get("strict") or {}
+    return {
+        "standard": {
+            "min_mut": int(standard.get("min_mut") or 3),
+            "min_wt": int(standard.get("min_wt") or 5),
+        },
+        "strict": {
+            "min_mut": int(strict.get("min_mut") or 10),
+            "min_wt": int(strict.get("min_wt") or 5),
+        },
+    }
+
+
+def _evaluate_anchor_criteria(
+    row: dict[str, Any],
+    *,
+    thresholds: dict[str, dict[str, int]],
+    card: dict[str, Any] | None,
+    requested_tier: str,
+) -> dict[str, Any]:
+    mut_n = _int_field(row, "mut_n")
+    wt_n = _int_field(row, "wt_n")
+    standard = thresholds["standard"]
+    strict = thresholds["strict"]
+    pass_standard = (
+        mut_n is not None
+        and wt_n is not None
+        and mut_n >= standard["min_mut"]
+        and wt_n >= standard["min_wt"]
+    )
+    pass_strict = (
+        mut_n is not None
+        and wt_n is not None
+        and mut_n >= strict["min_mut"]
+        and wt_n >= strict["min_wt"]
+    )
+    role_match = _bool_field(card or {}, "role_match")
+    oncokb_role = (card or {}).get("oncokb_role")
+    failures: list[str] = []
+    if mut_n is None or wt_n is None:
+        failures.append("COUNTS_UNAVAILABLE")
+    else:
+        needed = strict if requested_tier in {"priority", "strict"} else standard
+        if mut_n < needed["min_mut"]:
+            failures.append("TOO_FEW_MUT")
+        if wt_n < needed["min_wt"]:
+            failures.append("TOO_FEW_WT")
+    if requested_tier == "priority" and "TOO_FEW_MUT" not in failures and "TOO_FEW_WT" not in failures:
+        if role_match is False:
+            failures.append("ROLE_MISMATCH")
+        elif card is None:
+            failures.append("ANNOTATION_EXCLUSION")
+    rejection = failures[0] if failures else None
+    if rejection in {"TOO_FEW_MUT", "TOO_FEW_WT", "COUNTS_UNAVAILABLE"}:
+        status = "INELIGIBLE"
+    elif rejection in {"ROLE_MISMATCH", "ANNOTATION_EXCLUSION"}:
+        status = "NOT_RETAINED"
+    else:
+        status = "FOUND"
+    return {
+        "gene": str(row.get("gene") or "").upper(),
+        "lineage": row.get("lineage"),
+        "matrix": row.get("matrix"),
+        "event_definition": row.get("matrix"),
+        "mut_n": mut_n,
+        "wt_n": wt_n,
+        "cohort_n": _int_field(row, "cohort_n"),
+        "mut_rate": row.get("mut_rate"),
+        "is_common_essential": _bool_field(row, "is_common_essential"),
+        "oncokb_role": oncokb_role,
+        "role_match": role_match,
+        "thresholds": thresholds,
+        "pass_standard": pass_standard,
+        "pass_strict": pass_strict,
+        "requested_tier": requested_tier,
+        "criteria": {
+            "standard_mut": {
+                "threshold": standard["min_mut"],
+                "observed": mut_n,
+                "pass": mut_n is not None and mut_n >= standard["min_mut"],
+            },
+            "standard_wt": {
+                "threshold": standard["min_wt"],
+                "observed": wt_n,
+                "pass": wt_n is not None and wt_n >= standard["min_wt"],
+            },
+            "strict_mut": {
+                "threshold": strict["min_mut"],
+                "observed": mut_n,
+                "pass": mut_n is not None and mut_n >= strict["min_mut"],
+            },
+            "strict_wt": {
+                "threshold": strict["min_wt"],
+                "observed": wt_n,
+                "pass": wt_n is not None and wt_n >= strict["min_wt"],
+            },
+            "role_match": role_match,
+        },
+        "criterion_failures": failures,
+        "rejection_reason": rejection,
+        "eligibility_status": status,
+    }
 
 
 def _indexed_true_love_rows(
@@ -830,13 +1036,134 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     )
 
 
+def _lookup_anchor_card(root: Path, gene: str, matrix: str | None) -> dict[str, Any] | None:
+    path = root / "data" / "anchor_gene_cards_standard.csv"
+    rows = _filter_csv_records(
+        path,
+        lambda row: str(row.get("gene") or "").upper() == gene
+        and (matrix is None or str(row.get("matrix") or "") == matrix),
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def _exact_anchor_eligibility(
+    settings: Settings,
+    *,
+    lineage: str,
+    gene: str,
+    event: str | None,
+    tier: str,
+    root: Path,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+) -> dict[str, Any]:
+    menu_path = root / "data" / "gene_by_lineage_mutation_menu.csv"
+    if not menu_path.is_file():
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="mutation_anchor",
+            lineage=lineage,
+            gene=gene,
+            event=event,
+            reason="the lineage catalog is installed but the mutation-count menu is missing",
+            rejection_reason="COVERAGE_GAP",
+            manifest=manifest,
+            provenance=[str(manifest_path)],
+        )
+    matrix = _mutation_event_matrix(event)
+    gene_rows = _filter_csv_records(
+        menu_path,
+        lambda row: str(row.get("gene") or "").upper() == gene,
+    )
+    if not gene_rows:
+        return _evidence_response(
+            "NOT_OBSERVED",
+            mode="mutation_anchor",
+            lineage=lineage,
+            gene=gene,
+            event=event,
+            reason="the gene is absent from the lineage mutation-count menu; absence from a retained candidate list is not a numeric proof",
+            rejection_reason="NOT_OBSERVED",
+            wording="not retained until an explicit eligibility record is available",
+            manifest=manifest,
+            provenance=[str(manifest_path), str(menu_path)],
+        )
+    if event and matrix is None:
+        return _evidence_response(
+            "NOT_COMPUTED",
+            mode="mutation_anchor",
+            lineage=lineage,
+            gene=gene,
+            event=event,
+            reason="the requested event class is not part of the lineage mutation-anchor menu",
+            rejection_reason="UNSUPPORTED_EVENT",
+            manifest=manifest,
+            provenance=[str(manifest_path), str(menu_path)],
+        )
+    matched = [
+        row for row in gene_rows
+        if matrix is None or str(row.get("matrix") or "") == matrix
+    ]
+    if event and not matched:
+        return _evidence_response(
+            "NOT_OBSERVED",
+            mode="mutation_anchor",
+            lineage=lineage,
+            gene=gene,
+            event=event,
+            observed_events=[str(row.get("matrix")) for row in gene_rows],
+            reason="the requested event class was not observed for this gene in the lineage menu",
+            rejection_reason="ABSENT_EVENT",
+            wording="not retained until an explicit eligibility record is available",
+            manifest=manifest,
+            provenance=[str(manifest_path), str(menu_path)],
+        )
+    thresholds = _anchor_thresholds(manifest)
+    records = []
+    for row in matched:
+        card = _lookup_anchor_card(root, gene, str(row.get("matrix") or "") or None)
+        record = _evaluate_anchor_criteria(
+            {**row, "cohort_n": manifest.get("cohort_n")},
+            thresholds=thresholds,
+            card=card,
+            requested_tier=tier,
+        )
+        records.append(record)
+    primary = records[0]
+    status = primary["eligibility_status"]
+    if any(item["eligibility_status"] == "FOUND" for item in records) and matrix is None:
+        status = "FOUND"
+        primary = next(item for item in records if item["eligibility_status"] == "FOUND")
+    reasons = {
+        "FOUND": "exact mutation-anchor eligibility record from the lineage mutation-count menu",
+        "INELIGIBLE": "the requested gene fails the recorded Mut/WT sample-size thresholds",
+        "NOT_RETAINED": "counts are available, but the requested tier excludes the gene by role or annotation policy",
+    }
+    return _evidence_response(
+        status,
+        mode="mutation_anchor",
+        lineage=lineage,
+        gene=gene,
+        event=event,
+        anchor_tier=tier,
+        reason=reasons[status],
+        rejection_reason=primary.get("rejection_reason"),
+        eligibility=primary,
+        rows=records,
+        returned_count=len(records),
+        cohort_n=manifest.get("cohort_n"),
+        thresholds=manifest.get("thresholds") or thresholds,
+        event_definitions=manifest.get("event_definitions"),
+        wording="use the returned rejection_reason; do not infer a numeric bound from a missing retained-candidate row",
+        manifest=manifest,
+        provenance=[str(manifest_path), str(menu_path)],
+    )
+
+
 def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     lineage = _canonical_lineage_label(query["lineage"])
-    lineage_dir = lineage.replace(" ", "_").replace("/", "_")
-    root = (
-        settings.knowledge_root / "analysis-modules" / "癌种内突变锚定基因选择"
-        / "cancer_anchor_catalog_v2" / "by_cancer" / lineage_dir
-    )
+    root = _lineage_anchor_root(settings, lineage)
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
         return _evidence_response(
@@ -850,20 +1177,36 @@ def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dic
             reason="the mutation-anchor catalog is not marked complete", manifest=manifest,
         )
     tier = query.get("anchor_tier") or "priority"
+    event = query.get("event")
+    gene = str(query["gene"]).strip().upper() if query.get("gene") else None
+    if gene:
+        return _exact_anchor_eligibility(
+            settings,
+            lineage=lineage,
+            gene=gene,
+            event=event,
+            tier=tier,
+            root=root,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
     relative = {
         "priority": "results/priority_role_matched_candidates.csv",
         "strict": "results/strict_functional_candidates.csv",
         "standard": "results/functional_candidates.csv",
     }[tier]
     path = root / relative
-    rows = _read_csv_records(path) if path.is_file() else []
-    event = query.get("event")
-    if event:
-        rows = [row for row in rows if str(row.get("matrix", "")).lower() == event.lower()]
-    if not query.get("include_common_essential", False):
-        rows = [row for row in rows if str(row.get("is_common_essential", "")).upper() != "TRUE"]
+    matrix = _mutation_event_matrix(event)
+    include_ce = bool(query.get("include_common_essential", False))
     limit = min(int(query.get("limit") or 20), 100)
-    rows = rows[:limit]
+    rows = _filter_csv_records(
+        path,
+        lambda row: (
+            (matrix is None or str(row.get("matrix") or "") == matrix)
+            and (include_ce or str(row.get("is_common_essential") or "").upper() != "TRUE")
+        ),
+        limit=limit,
+    )
     return _evidence_response(
         "FOUND" if rows else "NOT_RETAINED", mode="mutation_anchor", lineage=lineage,
         reason="eligible mutation anchors with analyzable Mut/WT support; candidate status is not a dependency association",
@@ -872,6 +1215,208 @@ def _run_mutation_anchor_query(settings: Settings, query: dict[str, Any]) -> dic
         event_definitions=manifest.get("event_definitions"), manifest=manifest,
         provenance=[str(manifest_path), str(path)],
     )
+
+
+def _read_parquet_records(
+    path: Path,
+    *,
+    filters: list[tuple[str, str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path, filters=filters or None)
+    return table.to_pylist()
+
+
+def _official_dependency_root(settings: Settings, lineage: str) -> Path:
+    return (
+        _lineage_anchor_root(settings, lineage)
+        / "dependency_analysis"
+        / OFFICIAL_MUTATION_DEPENDENCY
+    )
+
+
+def _run_lineage_mutation_dependency_query(
+    settings: Settings, query: dict[str, Any]
+) -> dict[str, Any]:
+    lineage = _canonical_lineage_label(query["lineage"])
+    source = str(query["source"]).strip().upper() if query.get("source") else None
+    target = str(query["target"]).strip().upper() if query.get("target") else None
+    event = query.get("event")
+    matrix = _mutation_event_matrix(event)
+    if event and matrix is None:
+        return _evidence_response(
+            "NOT_COMPUTED",
+            mode="lineage_mutation_dependency",
+            lineage=lineage,
+            source=source,
+            target=target,
+            event=event,
+            provider="lineage_official_gene_effect_v2",
+            reason="the requested event class is not part of the lineage official mutation-dependency analysis",
+        )
+    if event and matrix == "AnySelected":
+        return _evidence_response(
+            "NOT_COMPUTED",
+            mode="lineage_mutation_dependency",
+            lineage=lineage,
+            source=source,
+            target=target,
+            event=event,
+            provider="lineage_official_gene_effect_v2",
+            reason="AnySelected/custom-missense is a landscape event, not a completed official Gene Effect contrast",
+        )
+    anchor_root = _lineage_anchor_root(settings, lineage)
+    anchor_manifest_path = anchor_root / "manifest.json"
+    if not anchor_manifest_path.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="lineage_mutation_dependency",
+            lineage=lineage,
+            source=source,
+            target=target,
+            event=event,
+            provider="lineage_official_gene_effect_v2",
+            reason="the requested lineage has no completed mutation-anchor catalog",
+        )
+    official_root = _official_dependency_root(settings, lineage)
+    manifest, unavailable = _complete_module(official_root, mode="lineage_mutation_dependency")
+    if unavailable is not None:
+        unavailable["provider"] = "lineage_official_gene_effect_v2"
+        unavailable["lineage"] = lineage
+        unavailable["source"] = source
+        unavailable["target"] = target
+        unavailable["event"] = event
+        return unavailable
+    provenance = [str(anchor_manifest_path), str(official_root / "manifest.json")]
+    anchor_manifest = json.loads(anchor_manifest_path.read_text(encoding="utf-8-sig"))
+    eligibility = None
+    if source:
+        eligibility_result = _exact_anchor_eligibility(
+            settings,
+            lineage=lineage,
+            gene=source,
+            event=event,
+            tier="standard",
+            root=anchor_root,
+            manifest=anchor_manifest,
+            manifest_path=anchor_manifest_path,
+        )
+        eligibility = eligibility_result.get("eligibility") or (
+            (eligibility_result.get("rows") or [None])[0]
+        )
+        if eligibility_result["status"] in {
+            "INELIGIBLE",
+            "NOT_OBSERVED",
+            "COVERAGE_GAP",
+            "MODULE_UNAVAILABLE",
+        }:
+            eligibility_result["mode"] = "lineage_mutation_dependency"
+            eligibility_result["provider"] = "lineage_official_gene_effect_v2"
+            eligibility_result["source"] = source
+            eligibility_result["target"] = target
+            eligibility_result["claim_strength"] = "hypothesis_generating"
+            return eligibility_result
+    pairs_path = official_root / "all_pairs.parquet"
+    if not pairs_path.is_file():
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="lineage_mutation_dependency",
+            lineage=lineage,
+            source=source,
+            target=target,
+            event=event,
+            provider="lineage_official_gene_effect_v2",
+            eligibility=eligibility,
+            reason="the official lineage mutation-dependency analysis is complete but all_pairs.parquet is missing",
+            rejection_reason="COVERAGE_GAP",
+            manifest=manifest,
+            provenance=provenance,
+        )
+    filters: list[tuple[str, str, Any]] = [("lineage", "=", lineage)]
+    if source:
+        filters.append(("anchor_gene", "=", source))
+    if target:
+        filters.append(("dependency_gene", "=", target))
+    if matrix in {"Damaging", "Hotspot"}:
+        filters.append(("event_type", "=", matrix))
+    rows = _read_parquet_records(pairs_path, filters=filters)
+    provenance.append(str(pairs_path))
+    if source and not rows:
+        summary_path = official_root / "anchor_summary.csv"
+        tested = _filter_csv_records(
+            summary_path,
+            lambda row: str(row.get("anchor_gene") or "").upper() == source
+            and (matrix not in {"Damaging", "Hotspot"} or str(row.get("event_type") or "") == matrix),
+            limit=1,
+        )
+        if summary_path.is_file():
+            provenance.append(str(summary_path))
+        if not tested:
+            return _evidence_response(
+                "NOT_COMPUTED",
+                mode="lineage_mutation_dependency",
+                lineage=lineage,
+                source=source,
+                target=target,
+                event=event,
+                provider="lineage_official_gene_effect_v2",
+                eligibility=eligibility,
+                reason="the mutation anchor is catalogued but was not tested in the completed official Gene Effect analysis",
+                manifest=manifest,
+                provenance=provenance,
+            )
+        return _evidence_response(
+            "NOT_RETAINED",
+            mode="lineage_mutation_dependency",
+            lineage=lineage,
+            source=source,
+            target=target,
+            event=event,
+            provider="lineage_official_gene_effect_v2",
+            eligibility=eligibility,
+            reason="the lineage official analysis tested this anchor, but the requested target is absent from all tested pairs",
+            group_definition="mutation-positive versus mutation-matrix-negative within the lineage",
+            claim_strength="hypothesis_generating",
+            manifest=manifest,
+            provenance=provenance,
+        )
+    rows.sort(
+        key=lambda row: (
+            float(row.get("fdr_by_anchor") if row.get("fdr_by_anchor") is not None else 1),
+            float(row.get("delta_gene_effect") if row.get("delta_gene_effect") is not None else 0),
+            str(row.get("dependency_gene") or row.get("anchor_gene") or ""),
+        )
+    )
+    limit = min(int(query.get("limit") or 20), 100)
+    bounded = rows[:limit]
+    return _evidence_response(
+        "FOUND" if bounded else "NOT_RETAINED",
+        mode="lineage_mutation_dependency",
+        lineage=lineage,
+        source=source,
+        target=target,
+        event=event or matrix,
+        provider="lineage_official_gene_effect_v2",
+        provider_scope="lineage",
+        pan_cancer_provider="observational_synthetic_lethal",
+        eligibility=eligibility,
+        reason=(
+            "lineage-scoped mutation-positive versus matrix-negative Gene Effect evidence"
+            if bounded else
+            "no matching lineage official mutation-dependency row was retained"
+        ),
+        rows=bounded,
+        returned_count=len(bounded),
+        matched_row_count=len(rows),
+        group_definition="mutation-positive versus mutation-matrix-negative within the lineage",
+        claim_strength="hypothesis_generating",
+        interpretation="negative delta_gene_effect means stronger dependency in mutant models; this is observational and not causal synthetic lethality",
+        manifest=manifest,
+        provenance=provenance,
+    )
+
+
 def _complete_module(
     root: Path, *, mode: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -2284,6 +2829,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
     if query["mode"] == "mutation_anchor":
         return await asyncio.to_thread(_run_mutation_anchor_query, settings, query)
+    if query["mode"] == "lineage_mutation_dependency":
+        return await asyncio.to_thread(_run_lineage_mutation_dependency_query, settings, query)
     if query["mode"] == "lineage_catalog":
         return await asyncio.to_thread(_run_lineage_catalog_query, settings, query)
     if query["mode"] == "lineage_directions":
@@ -2319,6 +2866,11 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
     if query["mode"] == "biomarker_target":
         return await asyncio.to_thread(_run_biomarker_target_query, settings, query)
     if query["mode"] == "synthetic_lethal":
+        if query.get("lineage"):
+            redirected = {**query, "mode": "lineage_mutation_dependency"}
+            return await asyncio.to_thread(
+                _run_lineage_mutation_dependency_query, settings, redirected
+            )
         return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
     if query["mode"] == "three_d":
         return await asyncio.to_thread(_run_three_d_query, settings, query)
@@ -2372,7 +2924,7 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "schema_version": 1,
             "status": "ready",
             "release": qa["release"],
-            "query_contract_version": 8,
+            "query_contract_version": QUERY_CONTRACT_VERSION,
             "coverage_manifest_version": 5,
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),

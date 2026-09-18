@@ -272,8 +272,9 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             result["routing_policy"]["critical_direction_ambiguity"],
             "clarify_before_query",
         )
-        self.assertNotIn("lineage", intents["mutation_to_dependency"]["optional"])
-        self.assertNotIn("lineage", intents["dependency_to_mutation"]["optional"])
+        self.assertIn("lineage", intents["mutation_to_dependency"]["optional"])
+        self.assertIn("lineage", intents["dependency_to_mutation"]["optional"])
+        self.assertIn("gene", intents["mutation_anchor_discovery"]["optional"])
         self.assertEqual(
             intents["mutation_anchor_discovery"]["mcp_tool"],
             "depmap_mutation_anchor_evidence",
@@ -379,6 +380,25 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(result["request"]["lineage"], "Lung")
+
+    async def test_mutation_anchor_exact_gene_is_forwarded(self):
+        result = await self.service.mutation_anchor_evidence(
+            "肝癌", "damaging", "priority", False, 1, "ptk7"
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "event": "damaging",
+                "anchor_tier": "priority",
+                "include_common_essential": False,
+                "limit": 1,
+                "gene": "PTK7",
+            },
+        )
+        self.assertEqual(result["request"]["gene"], "PTK7")
+        self.assertEqual(result["request"]["lineage"], "Liver")
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
@@ -686,6 +706,27 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertIn("not causal", synthetic["evidence"]["metric_semantics"]["interpretation"])
+        lineage_scoped = await self.service.synthetic_lethal_evidence(
+            "ptk7", None, "damaging_mutation", 5, "肝癌"
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "PTK7",
+                "event": "damaging_mutation",
+                "limit": 5,
+            },
+        )
+        self.assertEqual(
+            lineage_scoped["request"]["provider"],
+            "lineage_official_gene_effect_v2",
+        )
+        self.assertIn(
+            "not causal synthetic lethality",
+            lineage_scoped["evidence"]["metric_semantics"]["interpretation"],
+        )
 
     async def test_three_d_tool_preserves_family_and_cohort_selectors(self):
         result = await self.service.three_d_evidence(

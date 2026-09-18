@@ -304,11 +304,13 @@ The route result uses a batch-stopping control boundary: if the model emitted
 an evidence query beside an ambiguous route in the same tool-call batch, that
 query is skipped and the model must present the clarification card first.
 
-The current `depmap_synthetic_lethal_evidence` capability is pan-cancer. Its
-mutation-to-dependency and dependency-to-mutation cards therefore do not offer
-a lineage field. Cancer-specific mutation ranking remains a separate completed
-lineage query contract and must not be simulated by silently dropping a cancer
-term from a pan-cancer request.
+The `depmap_synthetic_lethal_evidence` tool remains pan-cancer when `lineage`
+is omitted. When the user names a cancer, pass `lineage` so the same tool
+reads the completed lineage official Gene Effect mutation-positive versus
+matrix-negative analysis instead of the pan-cancer observational catalog.
+Exact mutation-anchor eligibility uses `depmap_mutation_anchor_evidence` with
+`gene`; Mut/WT counts and rejection reasons come from the lineage mutation
+menu, never from absence in a retained candidate shortlist.
 
 The product contract therefore does not depend on enumerating every synonym.
 Examples and aliases improve recall, while closed schemas, deterministic

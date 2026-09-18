@@ -28,9 +28,11 @@ same event-by-target result matrix.
 
 | User intent | Entity roles | Query |
 |---|---|---|
-| “A 突变后依赖哪些基因？” / fixed mutation, find targets | `source=A mutation event`; target omitted | `depmap_synthetic_lethal_evidence(source=A, event=...)` |
-| “哪些突变使细胞更依赖 B？” / fixed target, find mutation biomarkers | source omitted; `target=B dependency gene` | `depmap_synthetic_lethal_evidence(target=B, event=...)` |
+| “A 突变后依赖哪些基因？” / fixed mutation, find targets | `source=A mutation event`; target omitted | `depmap_synthetic_lethal_evidence(source=A, event=...)` pan-cancer, or with `lineage=` for the official lineage Gene Effect provider |
+| “哪些突变使细胞更依赖 B？” / fixed target, find mutation biomarkers | source omitted; `target=B dependency gene` | `depmap_synthetic_lethal_evidence(target=B, event=...)`; add `lineage=` for lineage-scoped reverse lookup |
 | “A 突变是否影响 B 依赖？” / one directed pair | `source=A mutation event`; `target=B dependency gene` | `depmap_synthetic_lethal_evidence(source=A, target=B, event=...)` |
+| “某癌种内 A 突变后敲除哪个基因效应最大？” | lineage + source mutation event | `depmap_synthetic_lethal_evidence(source=A, lineage=..., event=damaging_mutation|hotspot_mutation)` — never pan-cancer synthetic-lethal, never infer from a top-N list |
+| “A 在该癌种能不能当突变锚点 / 为什么没有？” | lineage + gene + event | `depmap_mutation_anchor_evidence(lineage=..., gene=A, event=...)` exact Mut/WT lookup |
 
 Apply these rules:
 

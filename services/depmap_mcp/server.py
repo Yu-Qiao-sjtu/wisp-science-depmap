@@ -141,6 +141,7 @@ from mcp.types import ToolAnnotations
 from services.depmap_api.app import (
     EVIDENCE_STATUSES,
     LINEAGE_NETWORK_FAMILIES,
+    QUERY_CONTRACT_VERSION,
     QueryRequest,
     Settings,
     run_bounded_query,
@@ -232,7 +233,18 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "relation_type": "candidate_eligibility",
             "scope": "one_depmap_lineage",
             "cohort_policy": "Mut/WT thresholds recorded in the returned manifest",
-            "interpretation": "candidate status means sufficient group support for downstream dependency testing; it is not a significant dependency association",
+            "interpretation": "candidate status means sufficient group support for downstream dependency testing; it is not a significant dependency association. Exact gene lookup returns Mut/WT counts and pass/fail criteria; do not infer a numeric bound from absence in a retained candidate list.",
+        }
+    if mode == "lineage_mutation_dependency":
+        return {
+            "metric": "mean_mutant_minus_mean_matrix_negative_gene_effect",
+            "analysis_label": "lineage_official_mutation_dependency",
+            "data_modality": "crispr_gene_effect",
+            "relation_type": "observational_mutation_to_dependency",
+            "scope": "one_depmap_lineage",
+            "provider": "lineage_official_gene_effect_v2",
+            "cohort_policy": "mutation-positive versus mutation-matrix-negative models in the same lineage, each group at least 5 complete cases per target",
+            "interpretation": "negative delta_gene_effect means stronger dependency in mutant models. This is observational and hypothesis-generating; it is not causal synthetic lethality. Pan-cancer observational_synthetic_lethal is a separate provider.",
         }
     if mode == "biomarker_target":
         return {
@@ -747,7 +759,7 @@ class DepMapEvidenceService:
             "status": "ready",
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
-            "query_contract_version": 8,
+            "query_contract_version": QUERY_CONTRACT_VERSION,
             "lineage_resolution_contract_version": 1,
             "coverage_manifest_version": 5,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
@@ -763,6 +775,7 @@ class DepMapEvidenceService:
                 "coamplification_dependency_evidence",
                 "true_love_gene_evidence",
                 "observational_synthetic_lethal_evidence",
+                "lineage_mutation_dependency_evidence",
                 "three_d_dependency_evidence",
                 "tcga_gene_expression_survival",
                 "tf_activity_dependency_evidence",
@@ -1170,6 +1183,7 @@ class DepMapEvidenceService:
         anchor_tier: Literal["priority", "strict", "standard"] = "priority",
         include_common_essential: bool = False,
         limit: int = 20,
+        gene: str | None = None,
     ) -> dict[str, Any]:
         query: dict[str, Any] = {
             "mode": "mutation_anchor", "lineage": lineage,
@@ -1178,6 +1192,8 @@ class DepMapEvidenceService:
         }
         if event:
             query["event"] = event
+        if gene:
+            query["gene"] = gene.strip().upper()
         item = await self._execute(query)
         canonical = item.get("query", {}).get("lineage", lineage)
         request = dict(query)
@@ -1282,22 +1298,39 @@ class DepMapEvidenceService:
         target: str | None = None,
         event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
         limit: int = 20,
+        lineage: str | None = None,
     ) -> dict[str, Any]:
         if not source and not target:
             raise ValueError("source, target, or both are required")
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        query: dict[str, Any] = {"mode": "synthetic_lethal", "limit": limit}
-        if source:
-            query["source"] = source.strip().upper()
-        if target:
-            query["target"] = target.strip().upper()
-        if event:
-            query["event"] = event
+        if lineage:
+            query: dict[str, Any] = {
+                "mode": "lineage_mutation_dependency",
+                "lineage": lineage,
+                "limit": limit,
+            }
+            if source:
+                query["source"] = source.strip().upper()
+            if target:
+                query["target"] = target.strip().upper()
+            if event:
+                query["event"] = event
+        else:
+            query = {"mode": "synthetic_lethal", "limit": limit}
+            if source:
+                query["source"] = source.strip().upper()
+            if target:
+                query["target"] = target.strip().upper()
+            if event:
+                query["event"] = event
         item = await self._execute(query)
         validated = item.get("query", query)
-        request = {key: validated.get(key) for key in ("source", "target", "event")}
+        request = {key: validated.get(key) for key in ("source", "target", "event", "lineage")}
         request["limit"] = limit
+        request["provider"] = (
+            "lineage_official_gene_effect_v2" if lineage else "observational_synthetic_lethal"
+        )
         return self._envelope(tool="depmap_synthetic_lethal_evidence", request=request, evidence=item)
 
     async def three_d_evidence(
@@ -1433,9 +1466,11 @@ def build_mcp_server(
         title="DepMap lineage mutation-anchor candidates",
         description=(
             "Return actual selectable mutation-anchor rows for one DepMap lineage, "
-            "including event type, Mut/WT counts, prevalence, selection tier, gene role, "
-            "common-essential flag, and interpretation. Candidate status indicates "
-            "analyzable group support, not a dependency association."
+            "or exact eligibility for one gene. The response includes event type, "
+            "Mut/WT counts, pass/fail for each threshold, and a machine-readable "
+            "rejection reason. Candidate status indicates analyzable group support, "
+            "not a dependency association. Do not infer mut_n from absence in a "
+            "retained candidate list."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -1446,9 +1481,10 @@ def build_mcp_server(
         anchor_tier: Literal["priority", "strict", "standard"] = "priority",
         include_common_essential: bool = False,
         limit: int = 20,
+        gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.mutation_anchor_evidence(
-            lineage, event, anchor_tier, include_common_essential, limit
+            lineage, event, anchor_tier, include_common_essential, limit, gene
         )
 
     @mcp.tool(
@@ -1740,8 +1776,11 @@ def build_mcp_server(
         title="DepMap observational synthetic-lethal evidence",
         description=(
             "Query retained mutation/CNV event-to-target dependency candidates. "
-            "The result is observational and hypothesis-generating; it must not be "
-            "reported as experimentally proven synthetic lethality."
+            "Without lineage this is the pan-cancer observational synthetic-lethal "
+            "catalog. With lineage it reads the completed lineage official Gene Effect "
+            "mutation-positive versus matrix-negative analysis, never a top-N ranking "
+            "as proof of absence. The result is observational and hypothesis-generating; "
+            "it must not be reported as experimentally proven synthetic lethality."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -1751,8 +1790,9 @@ def build_mcp_server(
         target: str | None = None,
         event: Literal["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"] | None = None,
         limit: int = 20,
+        lineage: str | None = None,
     ) -> dict[str, Any]:
-        return await service.synthetic_lethal_evidence(source, target, event, limit)
+        return await service.synthetic_lethal_evidence(source, target, event, limit, lineage)
 
     @mcp.tool(
         title="DepMap 3D screening evidence",

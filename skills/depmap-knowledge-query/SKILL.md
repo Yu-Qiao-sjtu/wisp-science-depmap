@@ -86,10 +86,15 @@ expression-to-dependency association from gene names alone.
    querying: fixed mutation event and unknown dependency targets is a source
    query; fixed dependency target and unknown mutation biomarkers is a target
    query. Use `depmap_synthetic_lethal_evidence` with `source`, `target`, or both
-   as appropriate. The phrase “hotspot gene” is ambiguous between a Hotspot
-   mutation event and a user-selected dependency target; do not use the Hotspot
-   event filter unless the user's mutation meaning supports it. Follow the
-   mutation direction rules in [references/intent-routing.md](references/intent-routing.md).
+   as appropriate. If the user named a cancer or lineage, pass `lineage` so the
+   tool uses the completed lineage official Gene Effect provider instead of the
+   pan-cancer observational catalog. Ask `depmap_mutation_anchor_evidence` with
+   `gene` when the question is why an anchor is missing; never infer Mut count
+   from absence in a retained candidate list. The phrase “hotspot gene” is
+   ambiguous between a Hotspot mutation event and a user-selected dependency
+   target; do not use the Hotspot event filter unless the user's mutation
+   meaning supports it. Follow the mutation direction rules in
+   [references/intent-routing.md](references/intent-routing.md).
 5. Interpret returned JSON with the event definition, sample count, effect
    direction, P/FDR family, and source path intact.
 6. On a coverage gap, state exactly what is absent. Load
@@ -110,6 +115,10 @@ expression-to-dependency association from gene names alone.
   absence from a sparse top-K output, never as evidence of no association.
   Treat `INELIGIBLE` as a cohort/sample-size failure, never as a biological
   negative. `NOT_COMPUTED` and `MODULE_UNAVAILABLE` are coverage states.
+  `NOT_OBSERVED` means the gene or event is absent from the mutation-count menu.
+  `COVERAGE_GAP` means a catalog is installed but the exact table is missing.
+  Until an exact eligibility record is returned, say “not retained” rather than
+  inventing a Mut-count threshold.
 - A blocked query supplies no numerical evidence. Explain the gap and use other
   verified evidence only when it supports the requested scope; do not fill
   missing statistics with plausible values.

@@ -20,7 +20,7 @@ are ready. Recommended fields:
   "schema_version": 1,
   "status": "ready",
   "release": "26Q1",
-  "query_contract_version": 6,
+  "query_contract_version": 9,
   "coverage_manifest_version": 4
 }
 ```
@@ -42,7 +42,8 @@ query helper, for example:
 Supported modes are `catalog`, `lineage_catalog`, `lineage_dependency`, `lineage_directions`, `core`, `pair`, `top`,
 `lineage`, `pathway`, `drug`, `lineage_network`, `lineage_cnv`,
 `lineage_drug`, `enrichment`, `subtype`, `coamplification`, `true_love`,
-`synthetic_lethal`, `three_d`, and
+`synthetic_lethal`, `lineage_mutation_dependency`, `three_d`,
+`mutation_anchor`, and
 `tcga_expression_survival`.
 `lineage_catalog` inventories cancer-level
 module manifests without requiring or inventing a gene.

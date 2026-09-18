@@ -293,6 +293,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*", 0),
         ("enrichment", "pathway_enrichment", "*富集*", 0),
         ("mutation_anchor", "mutation_anchor_discovery", "*突变锚定基因选择*", 0),
+        ("lineage_mutation_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
         ("mutation_to_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
         ("dependency_to_mutation", "dependency_to_mutation", "*突变锚定基因选择*", 0),
         ("tf_dependency", "tf_activity_to_dependency", "*转录因子活性*", 1),
