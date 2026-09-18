@@ -701,6 +701,20 @@ class DepMapEvidenceService:
                 "do_not_promote_catalog_status_to_biological_result": True,
                 "artifact_requested": False,
                 "forbidden_write_globs": ["results/reports/**"],
+                "disclosure": {
+                    "default": [
+                        "status_sentence",
+                        "bounded_top_rows",
+                        "filter_truncation_flags",
+                    ],
+                    "expanded": [
+                        "manifest",
+                        "evidence_id",
+                        "provenance",
+                    ],
+                },
+                "evidence_classes": ["depmap"],
+                "literature_is_separate_evidence_class": True,
             },
         }
 
