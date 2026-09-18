@@ -5089,6 +5089,10 @@ pub struct TrajectoryCellDto {
     /// Tool cells: full result text; assistant cells: full text.
     #[serde(default)]
     pub detail_output: Option<String>,
+    /// Complete structured MCP evidence, kept separate from the bounded
+    /// human-readable result preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
     #[serde(default)]
     pub ok: Option<bool>,
     #[serde(default)]

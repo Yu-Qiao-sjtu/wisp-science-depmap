@@ -48,7 +48,9 @@ async fn main() -> anyhow::Result<()> {
         res.success, res.content
     );
     assert!(res.success);
-    assert_eq!(res.content, "echo: hello mcp");
+    let envelope = wisp_mcp::result::ModelResultEnvelope::decode(&res.content)
+        .expect("MCP tools return the canonical model-result envelope");
+    assert_eq!(envelope.display_text, "echo: hello mcp");
     let _ = ToolResult::ok(""); // touch ToolResult import
     client.shutdown().await?;
     println!("wisp-mcp smoke OK");

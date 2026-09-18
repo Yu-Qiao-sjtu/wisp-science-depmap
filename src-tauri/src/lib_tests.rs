@@ -1008,6 +1008,7 @@ fn persisted_ui_events_keep_live_step_order_and_boundaries() {
             name: "shell".into(),
             ok: true,
             content: "/tmp".into(),
+            structured_content: None,
             duration_ms: 12,
         },
         AgentEvent::MessageBoundary { frame_id, seq: 3 },
@@ -1109,6 +1110,7 @@ fn persisted_stdout_budget_caps_each_tool_and_resets_at_boundaries() {
             name: "shell".into(),
             ok: true,
             content: "done".into(),
+            structured_content: None,
             duration_ms: 1,
         },
         &mut bytes,
@@ -1140,6 +1142,7 @@ fn persisted_ui_events_restore_native_plan_and_question_cards() {
             name: wisp_tools::plan::PROPOSE_PLAN.into(),
             ok: true,
             content: r#"{"v":1,"source":"native","entries":[{"content":"Fix replay","status":"pending","priority":"high"}]}"#.into(),
+            structured_content: None,
             duration_ms: 1,
         },
         AgentEvent::ToolCall {
@@ -1152,6 +1155,7 @@ fn persisted_ui_events_restore_native_plan_and_question_cards() {
             name: wisp_tools::ask_user::ASK_USER.into(),
             ok: true,
             content: r#"{"v":1,"source":"native","question":"Which option?","options":[]}"#.into(),
+            structured_content: None,
             duration_ms: 1,
         },
     ];

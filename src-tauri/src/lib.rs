@@ -178,7 +178,12 @@ enum AgentEvent {
         frame_id: String,
         name: String,
         ok: bool,
+        /// Bounded human-readable projection shown in the transcript.
         content: String,
+        /// Lossless MCP structured evidence, persisted independently from the
+        /// bounded display text. Older event rows omit this field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_content: Option<serde_json::Value>,
         /// Added after UI events started being persisted; older rows omit it.
         #[serde(default)]
         duration_ms: u64,
@@ -3314,11 +3319,18 @@ impl Output for TauriOutput {
         });
     }
     fn tool_result(&self, name: &str, ok: bool, content: &str, duration_ms: u64) {
+        let (display, structured_content) =
+            if let Some(envelope) = wisp_mcp::result::ModelResultEnvelope::decode(content) {
+                (envelope.display_text, envelope.structured_content)
+            } else {
+                (content.to_string(), None)
+            };
         self.emit(AgentEvent::ToolResult {
             frame_id: self.frame_id.clone(),
             name: name.into(),
             ok,
-            content: bounded_ui_tool_result(name, content),
+            content: bounded_ui_tool_result(name, &display),
+            structured_content,
             duration_ms,
         });
     }
