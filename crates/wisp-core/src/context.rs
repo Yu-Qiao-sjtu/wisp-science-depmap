@@ -327,6 +327,10 @@ pub struct ContextManager {
     /// a doomed retry at every model boundary; cleared by any successful
     /// compaction.
     auto_compact_retry_floor: Option<usize>,
+    /// Host-enforced tool policy installed during the current user turn.
+    /// This deliberately survives a resumable provider/compaction failure and
+    /// is reset only when the host starts a genuinely new user turn.
+    active_turn_allowed_tools: Option<Vec<String>>,
 }
 
 impl ContextManager {
@@ -352,7 +356,20 @@ impl ContextManager {
             request_growth_ema: 0.0,
             last_boundary_tokens: None,
             auto_compact_retry_floor: None,
+            active_turn_allowed_tools: None,
         }
+    }
+
+    pub(crate) fn begin_user_turn(&mut self) {
+        self.active_turn_allowed_tools = None;
+    }
+
+    pub(crate) fn active_turn_allowed_tools(&self) -> Option<&[String]> {
+        self.active_turn_allowed_tools.as_deref()
+    }
+
+    pub(crate) fn set_active_turn_allowed_tools(&mut self, tools: Vec<String>) {
+        self.active_turn_allowed_tools = Some(tools);
     }
 
     pub fn len(&self) -> usize {

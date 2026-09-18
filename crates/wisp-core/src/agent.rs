@@ -237,6 +237,10 @@ pub async fn agent_loop_with_images(
     cancel: Option<&AtomicBool>,
     guidance: Option<&GuidanceQueue>,
 ) -> Result<AgentLoopOutcome> {
+    // A host resume does not enter through this function. Resetting here
+    // therefore distinguishes a new user turn from continuation of a failed
+    // turn and keeps any route-installed policy active across Resume.
+    ctx.begin_user_turn();
     let observations = if images.is_empty() || provider_supports_vision {
         None
     } else {
@@ -358,7 +362,6 @@ async fn agent_loop_inner(
     let mut iteration = 0usize;
     let mut auto_continues = 0usize;
     let mut recent_observations: VecDeque<[u8; 32]> = VecDeque::with_capacity(STUCK_WINDOW);
-    let mut allowed_next_tools: Option<Vec<String>> = None;
     loop {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             anyhow::bail!("stopped by user");
@@ -591,7 +594,7 @@ async fn agent_loop_inner(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let result = if allowed_next_tools.as_ref().is_some_and(|allowed| {
+            let result = if ctx.active_turn_allowed_tools().is_some_and(|allowed| {
                 !allowed.iter().any(|pattern| {
                     pattern == requested_name
                         || pattern
@@ -607,7 +610,7 @@ async fn agent_loop_inner(
                 tools.run(&name, &args, &env).await
             };
             if let Some(next) = result.allowed_next_tools.clone() {
-                allowed_next_tools = Some(next);
+                ctx.set_active_turn_allowed_tools(next);
             }
             // Drain even for non-producing calls so a stale kernel report
             // cannot leak into the next call's provenance record.
@@ -2680,6 +2683,78 @@ mod tests {
                 .as_text()
                 .contains("blocked by the active turn route")
         }));
+    }
+
+    #[tokio::test]
+    async fn route_policy_survives_same_turn_resume() {
+        let spy_ran = Arc::new(AtomicBool::new(false));
+        let call = |id: &str, name: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: "{}".into(),
+            },
+        };
+        let provider = SequenceProvider::new([Completion {
+            tool_calls: vec![call("route", "route_policy")],
+            finish_reason: Some("tool_calls".into()),
+            ..Completion::default()
+        }]);
+        let mut tools = Registry::builtins();
+        tools.add(Box::new(RoutePolicyTool));
+        tools.add(Box::new(SpyTool {
+            ran: spy_ran.clone(),
+        }));
+        let mut ctx = ContextManager::new(100_000);
+
+        let first_error = agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &NullOutput,
+            "route then pause",
+            2,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(first_error.to_string().contains(STREAM_CUT_MESSAGE));
+
+        provider.completions.lock().unwrap().extend([
+            Completion {
+                tool_calls: vec![call("spy", "spy")],
+                finish_reason: Some("tool_calls".into()),
+                ..Completion::default()
+            },
+            Completion {
+                content: "blocked after resume".into(),
+                finish_reason: Some("stop".into()),
+                ..Completion::default()
+            },
+        ]);
+
+        agent_loop_continue(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &NullOutput,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!spy_ran.load(Ordering::SeqCst));
+        assert!(ctx.messages.iter().any(|message| message
+            .content
+            .as_text()
+            .contains("blocked by the active turn route")));
     }
 
     #[tokio::test]

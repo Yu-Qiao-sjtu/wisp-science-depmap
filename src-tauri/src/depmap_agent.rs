@@ -254,7 +254,49 @@ pub(crate) struct DepMapEvidenceTool {
 /// evidence or compute tools. The model extracts the user's intent and
 /// entities; the host validates the required slots and chooses the execution
 /// level. This tool never supplies scientific evidence or starts work.
-pub(crate) struct DepMapAgentRouteTool;
+pub(crate) struct DepMapAgentRouteTool {
+    /// Exact model-visible tools exposed by the connector(s) explicitly
+    /// assigned to this specialist and declared read-only by their MCP server.
+    /// Route policy never grants an MCP name prefix.
+    remote_read_only_tools: Vec<String>,
+}
+
+impl DepMapAgentRouteTool {
+    pub(crate) fn new(mut remote_read_only_tools: Vec<String>) -> Self {
+        remote_read_only_tools.sort();
+        remote_read_only_tools.dedup();
+        Self {
+            remote_read_only_tools,
+        }
+    }
+}
+
+pub(crate) fn validated_remote_depmap_tools(
+    registry: &wisp_tools::Registry,
+    added_tools: &[String],
+) -> Vec<String> {
+    let connector_ids = added_tools
+        .iter()
+        .filter(|name| name.as_str() == "depmap_capabilities")
+        .filter_map(|name| registry.get(name))
+        .filter(|tool| tool.read_only())
+        .filter_map(Tool::connector_id)
+        .collect::<HashSet<_>>();
+    if connector_ids.len() != 1 {
+        return Vec::new();
+    }
+    let connector_id = connector_ids.iter().next().copied();
+    added_tools
+        .iter()
+        .filter(|name| name.starts_with("depmap_") || name.starts_with("tcga_"))
+        .filter(|name| {
+            registry
+                .get(name)
+                .is_some_and(|tool| tool.read_only() && tool.connector_id() == connector_id)
+        })
+        .cloned()
+        .collect()
+}
 
 pub(crate) struct DepMapEvidenceHistoryTool {
     store: wisp_store::Store,
@@ -1019,10 +1061,9 @@ impl Tool for DepMapAgentRouteTool {
                     .filter_map(Value::as_str)
                     .map(str::to_string)
                     .collect::<Vec<_>>();
+                allowed.extend(self.remote_read_only_tools.iter().cloned());
                 allowed.extend([
                     "search_mcp_tools".into(),
-                    "depmap_*".into(),
-                    "tcga_*".into(),
                     "ask_user".into(),
                     "attempt_completion".into(),
                 ]);
@@ -2926,6 +2967,38 @@ mod tests {
     use super::*;
 
     struct RouteTestEnv;
+    struct ConnectorTool {
+        name: &'static str,
+        connector: &'static str,
+        read_only: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for ConnectorTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new(self.name, "fixture", json!({"type":"object"}))
+        }
+
+        fn defer_schema(&self) -> bool {
+            true
+        }
+
+        fn read_only(&self) -> bool {
+            self.read_only
+        }
+
+        fn connector_id(&self) -> Option<&str> {
+            Some(self.connector)
+        }
+
+        async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+            ToolResult::ok("fixture")
+        }
+    }
 
     #[async_trait::async_trait]
     impl ToolEnv for RouteTestEnv {
@@ -3313,7 +3386,7 @@ mod tests {
 
     #[tokio::test]
     async fn ambiguous_route_stops_sibling_evidence_calls_in_the_batch() {
-        let result = DepMapAgentRouteTool
+        let result = DepMapAgentRouteTool::new(Vec::new())
             .run(
                 &json!({
                     "intent":"gene_evidence",
@@ -3326,6 +3399,67 @@ mod tests {
             .await;
         assert!(!result.success);
         assert_eq!(result.control, wisp_tools::ToolControl::StopBatch);
+    }
+
+    #[tokio::test]
+    async fn route_grants_only_exact_host_validated_remote_tools() {
+        let result = DepMapAgentRouteTool::new(vec!["depmap_safe_query".into()])
+            .run(
+                &json!({
+                    "intent":"cancer_dependency_ranking",
+                    "cancer":"Liver",
+                    "evidence_provider":"remote_mcp"
+                }),
+                &RouteTestEnv,
+            )
+            .await;
+        let allowed = result.allowed_next_tools.unwrap();
+        assert!(allowed.contains(&"depmap_safe_query".to_string()));
+        assert!(allowed.contains(&"search_mcp_tools".to_string()));
+        assert!(!allowed.iter().any(|name| name.ends_with('*')));
+        assert!(!allowed.contains(&"depmap_unrelated_write".to_string()));
+    }
+
+    #[test]
+    fn remote_route_tools_are_read_only_and_bound_to_one_connector() {
+        let mut registry = wisp_tools::Registry::builtins();
+        for tool in [
+            ConnectorTool {
+                name: "depmap_capabilities",
+                connector: "depmap-connection",
+                read_only: true,
+            },
+            ConnectorTool {
+                name: "depmap_lineage_dependencies",
+                connector: "depmap-connection",
+                read_only: true,
+            },
+            ConnectorTool {
+                name: "depmap_write_fixture",
+                connector: "depmap-connection",
+                read_only: false,
+            },
+            ConnectorTool {
+                name: "tcga_spoofed_fixture",
+                connector: "other-connection",
+                read_only: true,
+            },
+        ] {
+            registry.add(Box::new(tool));
+        }
+        let added = registry
+            .names()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            validated_remote_depmap_tools(&registry, &added),
+            vec![
+                "depmap_capabilities".to_string(),
+                "depmap_lineage_dependencies".to_string()
+            ]
+        );
     }
 
     #[test]
