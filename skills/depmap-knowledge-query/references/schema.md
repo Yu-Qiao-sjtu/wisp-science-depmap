@@ -79,11 +79,25 @@ New sparse lineage modes return one explicit status:
 - `FOUND`: one or more retained rows match.
 - `NOT_RETAINED`: the eligible analysis ran, but the requested association is
   absent from the retained top-K rows. This does not prove a null association.
+  For mutation-anchor exact lookup it also means counts exist but the requested
+  tier excluded the gene by role or annotation policy.
 - `INELIGIBLE`: the lineage or event failed the manifest's sample/event/control
   thresholds.
 - `NOT_COMPUTED`: the requested lineage, source universe, block, or indexed
   entity is absent.
 - `MODULE_UNAVAILABLE`: the module is not installed in this knowledge release.
+- `NOT_OBSERVED`: exact mutation-anchor lookup found no menu row for the gene
+  or requested event class. This is not a Mut-count inference from a shortlist.
+- `COVERAGE_GAP`: the lineage catalog exists but the count menu or official
+  pair table is missing.
+
+`mutation_anchor` accepts optional `gene` for exact eligibility. Lineage-scoped
+mutation-to-dependency uses `lineage_mutation_dependency` (or
+`depmap_synthetic_lethal_evidence` with `lineage`) and reads
+`depmap_official_gene_effect_v2`. Pan-cancer `synthetic_lethal` remains a
+separate provider. Both go through the shared filter-before-limit and status
+classifier in `services/depmap_api/scientific_query.py`
+([contract](../../../docs/depmap-scientific-query-contract.md)).
 
 `lineage_network` reads the sparse all-gene scans and can require reciprocal
 retention. `lineage_cnv` reports amplification-vs-control dependency effects;

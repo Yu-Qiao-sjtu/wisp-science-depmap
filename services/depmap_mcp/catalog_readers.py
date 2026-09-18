@@ -35,6 +35,7 @@ MODE_ALIASES = {
     "pan_cancer_dependency": "pan_cancer_dependency",
     "lineage_directions": "lineage_directions",
     "mutation_anchor": "mutation_anchor",
+    "lineage_mutation_dependency": "lineage_mutation_dependency",
     "synthetic_lethal": "synthetic_lethal",
     "tf_dependency": "tf_dependency",
     "biomarker_target": "biomarker_target",

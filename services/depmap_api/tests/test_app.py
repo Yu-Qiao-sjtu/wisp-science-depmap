@@ -60,6 +60,21 @@ class QueryContractTests(unittest.TestCase):
         self.assertEqual(request.bounded_dict()["lineage"], "Lung")
         with self.assertRaises(ValueError):
             QueryRequest(mode="mutation_anchor", event="damaging")
+        exact = QueryRequest(
+            mode="mutation_anchor", lineage="肝癌", gene="ptk7", event="damaging",
+        )
+        self.assertEqual(exact.bounded_dict()["lineage"], "Liver")
+        self.assertEqual(exact.bounded_dict()["gene"], "ptk7")
+        lineage_dep = QueryRequest(
+            mode="lineage_mutation_dependency",
+            lineage="Liver",
+            source="PTK7",
+            event="damaging_mutation",
+            limit=5,
+        )
+        self.assertEqual(lineage_dep.bounded_dict()["source"], "PTK7")
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="lineage_mutation_dependency", lineage="Liver")
 
     def test_tf_dependency_accepts_exact_pair_or_bounded_top_query(self):
         exact = QueryRequest(mode="tf_dependency", source="STAT3", target="GPX4", limit=20)
@@ -278,7 +293,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 8)
+        self.assertEqual(response.json()["query_contract_version"], 9)
+        self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
+        self.assertIn("NOT_OBSERVED", response.json()["evidence_statuses"])
+        self.assertIn("COVERAGE_GAP", response.json()["evidence_statuses"])
         self.assertIn("lineage_network", response.json()["query_modes"])
         self.assertIn("tcga_expression_survival", response.json()["query_modes"])
         self.assertIn("subtype", response.json()["query_modes"])
@@ -1078,6 +1096,271 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "FOUND")
         self.assertEqual(response.json()["rows"][0]["drug_name"], "Example inhibitor")
         self.assertEqual(response.json()["rows"][0]["n"], 58)
+
+
+def write_lineage_mutation_fixtures(root: Path) -> None:
+    module = (
+        root / "analysis-modules" / "癌种内突变锚定基因选择" / "cancer_anchor_catalog_v2"
+    )
+    liver = module / "by_cancer" / "Liver"
+    (liver / "data").mkdir(parents=True)
+    (liver / "results").mkdir(parents=True)
+    official = liver / "dependency_analysis" / "depmap_official_gene_effect_v2"
+    official.mkdir(parents=True)
+    (module / "by_cancer" / "Lung").mkdir(parents=True)
+    (module / "manifest.json").write_text(
+        json.dumps({"status": "complete", "lineage_count": 2}), encoding="utf-8"
+    )
+    (liver / "manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "lineage": "Liver",
+                "cohort_n": 25,
+                "thresholds": {
+                    "standard": {"min_mut": 3, "min_wt": 5},
+                    "strict": {"min_mut": 10, "min_wt": 5},
+                },
+                "event_definitions": ["AnySelected", "Damaging", "Hotspot"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (module / "by_cancer" / "Lung" / "manifest.json").write_text(
+        json.dumps({"status": "complete", "lineage": "Lung", "cohort_n": 80}),
+        encoding="utf-8",
+    )
+    decoys = "".join(
+        f"DECOY{index:02d},Liver,20,20,Damaging,0.5,TRUE,TRUE,FALSE\n"
+        for index in range(30)
+    )
+    (liver / "data" / "gene_by_lineage_mutation_menu.csv").write_text(
+        "gene,lineage,mut_n,wt_n,matrix,mut_rate,pass_standard,pass_strict,is_common_essential\n"
+        + decoys
+        + "PTK7,Liver,1,24,Damaging,0.04,FALSE,FALSE,FALSE\n"
+        + "PTK7,Liver,2,23,AnySelected,0.08,FALSE,FALSE,FALSE\n"
+        + "TP53,Liver,18,7,Damaging,0.72,TRUE,TRUE,FALSE\n"
+        + "TERT,Liver,16,9,Hotspot,0.64,TRUE,TRUE,FALSE\n"
+        + "AXIN1,Liver,5,20,Damaging,0.2,TRUE,FALSE,FALSE\n"
+        + "WTFAIL,Liver,12,2,Damaging,0.86,FALSE,FALSE,FALSE\n"
+        + "ROLEOG,Liver,12,20,Damaging,0.38,TRUE,TRUE,FALSE\n",
+        encoding="utf-8",
+    )
+    card_header = (
+        "lineage,gene,name,matrix,selection_tier,mut_n,wt_n,mut_rate,pass_standard,"
+        "pass_strict,oncokb_role,oncokb_class,role_match,is_common_essential,"
+        "locus_type,location,gene_group,interpretation,warning\n"
+    )
+    (liver / "data" / "anchor_gene_cards_standard.csv").write_text(
+        card_header
+        + "Liver,TP53,tumor protein p53,Damaging,A_role_matched_strict,18,7,0.72,TRUE,TRUE,TSG,TSG_dam,TRUE,FALSE,gene,,,,\n"
+        + "Liver,ROLEOG,oncogene,Damaging,C_exploratory,12,20,0.38,TRUE,TRUE,OG,OG_hot,FALSE,FALSE,gene,,,,\n",
+        encoding="utf-8",
+    )
+    candidate_header = card_header
+    (liver / "results" / "priority_role_matched_candidates.csv").write_text(
+        candidate_header
+        + "Liver,TP53,tumor protein p53,Damaging,A_role_matched_strict,18,7,0.72,TRUE,TRUE,TSG,TSG_dam,TRUE,FALSE,gene,,,,\n",
+        encoding="utf-8",
+    )
+    (liver / "results" / "strict_functional_candidates.csv").write_text(
+        candidate_header
+        + "Liver,TP53,tumor protein p53,Damaging,A_role_matched_strict,18,7,0.72,TRUE,TRUE,TSG,TSG_dam,TRUE,FALSE,gene,,,,\n"
+        + "Liver,TERT,telomerase,Hotspot,B_strict_unclassified,16,9,0.64,TRUE,TRUE,,,FALSE,FALSE,gene,,,,\n",
+        encoding="utf-8",
+    )
+    (liver / "results" / "functional_candidates.csv").write_text(
+        candidate_header
+        + "Liver,TP53,tumor protein p53,Damaging,A_role_matched_strict,18,7,0.72,TRUE,TRUE,TSG,TSG_dam,TRUE,FALSE,gene,,,,\n",
+        encoding="utf-8",
+    )
+    (official / "manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "lineage": "Liver",
+                "primary_metric": "Chronos CRISPR Gene Effect",
+                "tested_pair_count": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (official / "anchor_summary.csv").write_text(
+        "lineage,anchor_gene,event_type,selection_tier,oncokb_role,base_mut_n,base_wt_n,"
+        "tested_target_count,official_default_hit_count,strict_fdr_hit_count\n"
+        "Liver,TP53,Damaging,A_role_matched_strict,TSG,18,7,3,0,0\n",
+        encoding="utf-8",
+    )
+    (official / "top_dependency_hits.csv").write_text(
+        "scope,lineage,anchor_gene,event_type,dependency_gene,n_mut,n_wt,"
+        "delta_gene_effect,fdr_by_anchor,official_default_hit\n"
+        "lineage,Liver,TP53,Damaging,SCD,18,7,0.61,0.03,False\n",
+        encoding="utf-8",
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "scope": ["lineage", "lineage", "lineage"],
+                "lineage": ["Liver", "Liver", "Liver"],
+                "anchor_gene": ["TP53", "TP53", "TP53"],
+                "event_type": ["Damaging", "Damaging", "Damaging"],
+                "dependency_gene": ["SCD", "GPX4", "ZZZ3"],
+                "n_mut": [18, 18, 18],
+                "n_wt": [7, 7, 7],
+                "mean_gene_effect_mut": [-0.54, -1.2, -0.2],
+                "mean_gene_effect_wt": [-1.15, -0.4, -0.1],
+                "delta_gene_effect": [0.61, -0.8, -0.1],
+                "p_value": [1e-5, 2e-4, 0.4],
+                "fdr_by_anchor": [0.03, 0.08, 0.9],
+                "official_default_hit": [False, False, False],
+            }
+        ),
+        official / "all_pairs.parquet",
+    )
+
+
+class LineageMutationQueryTests(DepMapApiTests):
+    def setUp(self):
+        super().setUp()
+        write_lineage_mutation_fixtures(self.settings.knowledge_root)
+
+    def _query(self, payload):
+        with TestClient(create_app(self.settings)) as client:
+            return client.post(
+                "/api/v1/query", headers=self.headers, json=payload
+            ).json()
+
+    def test_exact_ptk7_liver_lookup_returns_too_few_mut_not_topn_absence(self):
+        payload = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "肝癌",
+                "gene": "PTK7",
+                "event": "damaging",
+                "limit": 1,
+            }
+        )
+        self.assertEqual(payload["status"], "INELIGIBLE")
+        self.assertEqual(payload["rejection_reason"], "TOO_FEW_MUT")
+        self.assertEqual(payload["eligibility"]["mut_n"], 1)
+        self.assertEqual(payload["eligibility"]["wt_n"], 24)
+        self.assertFalse(payload["eligibility"]["criteria"]["standard_mut"]["pass"])
+        self.assertTrue(payload["eligibility"]["criteria"]["standard_wt"]["pass"])
+
+    def test_exact_lookup_reports_too_few_wt_role_mismatch_absent_event_and_eligible(self):
+        wt_fail = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "gene": "WTFAIL",
+                "event": "damaging",
+            }
+        )
+        self.assertEqual(wt_fail["status"], "INELIGIBLE")
+        self.assertEqual(wt_fail["rejection_reason"], "TOO_FEW_WT")
+        role = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "gene": "ROLEOG",
+                "event": "damaging",
+                "anchor_tier": "priority",
+            }
+        )
+        self.assertEqual(role["status"], "NOT_RETAINED")
+        self.assertEqual(role["rejection_reason"], "ROLE_MISMATCH")
+        self.assertEqual(role["eligibility"]["mut_n"], 12)
+        absent = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "gene": "PTK7",
+                "event": "hotspot",
+            }
+        )
+        self.assertEqual(absent["status"], "NOT_OBSERVED")
+        self.assertEqual(absent["rejection_reason"], "ABSENT_EVENT")
+        missing = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "gene": "NOSUCHGENE",
+                "event": "damaging",
+            }
+        )
+        self.assertEqual(missing["status"], "NOT_OBSERVED")
+        eligible = self._query(
+            {
+                "mode": "mutation_anchor",
+                "lineage": "Liver",
+                "gene": "TP53",
+                "event": "damaging",
+            }
+        )
+        self.assertEqual(eligible["status"], "FOUND")
+        self.assertEqual(eligible["eligibility"]["mut_n"], 18)
+        self.assertIsNone(eligible["rejection_reason"])
+
+    def test_exact_lookup_coverage_states_do_not_use_ssh(self):
+        gap = self._query(
+            {"mode": "mutation_anchor", "lineage": "Lung", "gene": "EGFR", "event": "damaging"}
+        )
+        self.assertEqual(gap["status"], "COVERAGE_GAP")
+        missing = self._query(
+            {"mode": "mutation_anchor", "lineage": "Skin", "gene": "BRAF", "event": "hotspot"}
+        )
+        self.assertEqual(missing["status"], "MODULE_UNAVAILABLE")
+
+    def test_lineage_mutation_dependency_does_not_scan_pairs_for_ineligible_anchor(self):
+        payload = self._query(
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "PTK7",
+                "event": "damaging",
+                "limit": 5,
+            }
+        )
+        self.assertEqual(payload["status"], "INELIGIBLE")
+        self.assertEqual(payload["provider"], "lineage_official_gene_effect_v2")
+        self.assertEqual(payload["rejection_reason"], "TOO_FEW_MUT")
+        self.assertEqual(payload["rows"][0]["gene"], "PTK7")
+        self.assertNotIn("dependency_gene", payload["rows"][0])
+
+    def test_lineage_mutation_dependency_exact_pair_is_not_topn_bound(self):
+        found = self._query(
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "TP53",
+                "target": "GPX4",
+                "event": "damaging",
+                "limit": 1,
+            }
+        )
+        self.assertEqual(found["status"], "FOUND")
+        self.assertEqual(found["rows"][0]["dependency_gene"], "GPX4")
+        self.assertEqual(found["rows"][0]["n_mut"], 18)
+        self.assertEqual(found["matched_row_count"], 1)
+        missing = self._query(
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "TP53",
+                "target": "ABSENTTARGET",
+                "event": "damaging",
+            }
+        )
+        self.assertEqual(missing["status"], "NOT_RETAINED")
+        untested = self._query(
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "AXIN1",
+                "event": "damaging",
+            }
+        )
+        self.assertEqual(untested["status"], "NOT_COMPUTED")
 
 
 if __name__ == "__main__":

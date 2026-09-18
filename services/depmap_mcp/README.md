@@ -72,6 +72,7 @@ coverage condition and must never be interpreted as biological absence.
 - `depmap_coamplification_evidence`
 - `depmap_true_love_evidence`
 - `depmap_biomarker_model_evidence`
+- `depmap_mutation_anchor_evidence`
 - `depmap_synthetic_lethal_evidence`
 - `depmap_3d_evidence`
 
@@ -183,8 +184,12 @@ biological null.
 `depmap_true_love_evidence` reads the completed mutual-rank-1 negative
 codependency screen and prefers the bootstrap-stable high-confidence table.
 `depmap_synthetic_lethal_evidence` reads the completed observational
-mutation/CNV event-to-dependency candidate tables; its name is a screen label,
-not proof of causal synthetic lethality. `depmap_3d_evidence` exposes six
+mutation/CNV event-to-dependency candidate tables when no lineage is supplied.
+With `lineage` it reads the completed lineage official Gene Effect analysis
+(`depmap_official_gene_effect_v2`) instead. Its name is a screen label, not
+proof of causal synthetic lethality. `depmap_mutation_anchor_evidence` accepts
+an exact `gene` lookup and returns Mut/WT counts with pass/fail criteria.
+`depmap_3d_evidence` exposes six
 catalog-validated families: dependency profiles, 3D-vs-2D contrasts,
 codependency, 3D True Love pairs, omics-dependency associations, and
 lineage/pathway enrichment. All return bounded rows and their terminal
