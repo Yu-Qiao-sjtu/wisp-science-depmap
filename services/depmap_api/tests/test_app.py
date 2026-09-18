@@ -17,6 +17,7 @@ from services.depmap_api.app import (
     Settings,
     QueryRequest,
     _canonical_lineage_label,
+    _coerce_csv_value,
     _coverage_gap_reason,
     _r_query_command,
     create_app,
@@ -25,6 +26,12 @@ from services.depmap_api.app import (
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_scientific_csv_values_keep_small_and_threshold_precision(self):
+        self.assertEqual(_coerce_csv_value("1.6156e-8"), 1.6156e-8)
+        self.assertGreater(_coerce_csv_value("3.2669e-12"), 0.0)
+        self.assertEqual(_coerce_csv_value("0.049999999"), 0.049999999)
+        self.assertEqual(_coerce_csv_value("0.050000001"), 0.050000001)
+
     def test_common_essential_options_are_forwarded_to_r_runner(self):
         self.assertIn("exclude_common_essential", QUERY_FIELD_ORDER)
         self.assertIn("common_essential_source", QUERY_FIELD_ORDER)

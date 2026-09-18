@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 suppressPackageStartupMessages({library(data.table);library(jsonlite)})
 parse<-function(a){z<-list(limit=20L);i<-1L;while(i<=length(a)){k<-sub("^--","",a[[i]]);if(i==length(a))stop("missing value for ",a[[i]]);z[[gsub("-","_",k)]]<-a[[i+1L]];i<-i+2L};z$limit<-as.integer(z$limit);z}
-clean<-function(x)toupper(trimws(x));emit<-function(x)cat(toJSON(x,auto_unbox=TRUE,pretty=TRUE,na="null"),"\n");a<-parse(commandArgs(trailingOnly=TRUE));if(is.null(a$kb_root)||is.null(a$mode))stop("--kb-root and --mode are required")
+clean<-function(x)toupper(trimws(x));emit<-function(x)cat(toJSON(x,auto_unbox=TRUE,pretty=TRUE,na="null",digits=NA),"\n");a<-parse(commandArgs(trailingOnly=TRUE));if(is.null(a$kb_root)||is.null(a$mode))stop("--kb-root and --mode are required")
 decode_lineage_codepoints<-function(x){
   parts<-strsplit(trimws(x),"-",fixed=TRUE)[[1L]]
   values<-strtoi(parts,base=16L)

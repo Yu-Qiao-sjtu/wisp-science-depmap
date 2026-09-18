@@ -606,6 +606,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             query_script,
         )
 
+    def test_r_evidence_json_uses_lossless_numeric_serialization(self):
+        query_script = (
+            Path(__file__).resolve().parents[3]
+            / "skills"
+            / "depmap-knowledge-query"
+            / "scripts"
+            / "query_depmap_kb.R"
+        ).read_text(encoding="utf-8")
+        self.assertIn("digits=NA", query_script)
+        self.assertNotIn("digits=4", query_script)
+
     async def test_stdio_protocol_lists_read_only_tools_and_calls_status(self):
         env = {
             **os.environ,

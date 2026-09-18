@@ -10,6 +10,13 @@ replay. New records use the `wisp.mcp-tool-result.v1` envelope; the trajectory
 reader also supports the two historical forms (a JSON object or one
 JSON-encoded string containing that object) without recursive decoding.
 
+Scientific values retain their stored numeric precision through the Reader,
+API, MCP, and persisted evidence layers. Positive p-values and adjusted
+p-values must never become numeric zero because of JSON display rounding. The
+R knowledge reader uses jsonlite lossless numeric serialization; presentation
+may render scientific notation, while thresholds always use the structured
+machine-readable value.
+
 中文远程数据、目录索引、MCP 和模型解释的完整链路见
 [DepMap Agent 远程数据桥接技术路线](depmap-remote-mcp-architecture.zh-CN.md)。
 
