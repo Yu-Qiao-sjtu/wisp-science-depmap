@@ -20,6 +20,7 @@ EVIDENCE_STATUSES = {
     "NOT_COMPUTED",
     "MODULE_UNAVAILABLE",
     "NOT_OBSERVED",
+    "NOT_TESTED",
     "COVERAGE_GAP",
 }
 
@@ -60,6 +61,69 @@ def classify_exact_entity(
     if retained is False:
         return "NOT_RETAINED"
     return "FOUND"
+
+
+def classify_tested_entity(
+    *,
+    in_table: bool,
+    tested: bool | None,
+    retained: bool | None,
+) -> str:
+    """Exact gene-in-lineage (or gene-across-lineages) after coverage succeeded.
+
+    `in_table` means the full tested/untested universe contained the key.
+    Truncated ranking absence is not an input.
+    """
+    if not in_table or tested is False:
+        return "NOT_TESTED"
+    if retained is False:
+        return "NOT_RETAINED"
+    return "FOUND"
+
+
+def annotate_common_essential(
+    rows: list[dict[str, Any]],
+    *,
+    labels: set[str] | None,
+    source: str,
+    exclude: bool,
+    symbol_key: str = "symbol",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Join one common-essential sidecar in a single pass. Housekeeping is out of scope."""
+    if labels is None:
+        annotated = [
+            {**row, "is_common_essential": None, "common_essential_source": None}
+            for row in rows
+        ]
+        return annotated, {
+            "annotation_status": "ANNOTATION_UNAVAILABLE",
+            "filter_applied": False,
+            "before_count": len(annotated),
+            "after_count": len(annotated),
+            "removed_count": 0,
+            "source": source,
+        }
+    annotated = []
+    for row in rows:
+        symbol = str(row.get(symbol_key) or "").strip().upper()
+        flagged = symbol in labels
+        annotated.append(
+            {
+                **row,
+                "is_common_essential": flagged,
+                "common_essential_source": source,
+            }
+        )
+    before = len(annotated)
+    kept = [row for row in annotated if not (exclude and row["is_common_essential"])]
+    return kept, {
+        "annotation_status": "AVAILABLE",
+        "filter_applied": exclude,
+        "before_count": before,
+        "after_count": len(kept),
+        "removed_count": before - len(kept),
+        "source": source,
+    }
 
 
 def filter_before_limit(

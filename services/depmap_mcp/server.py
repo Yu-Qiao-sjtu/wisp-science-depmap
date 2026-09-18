@@ -868,31 +868,36 @@ class DepMapEvidenceService:
         limit: int = 10,
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
+        gene: str | None = None,
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
-        item = await self._execute(
-            {
-                "mode": "lineage_dependency",
-                "lineage": lineage,
-                "ranking": ranking,
-                "exclude_common_essential": exclude_common_essential,
-                "common_essential_source": common_essential_source,
-                "limit": limit,
-            }
-        )
+        query: dict[str, Any] = {
+            "mode": "lineage_dependency",
+            "lineage": lineage,
+            "ranking": ranking,
+            "exclude_common_essential": exclude_common_essential,
+            "common_essential_source": common_essential_source,
+            "limit": limit,
+        }
+        if gene:
+            query["gene"] = gene.strip().upper()
+        item = await self._execute(query)
         canonical_lineage = item.get("query", {}).get("lineage", lineage)
+        request = {
+            "lineage": canonical_lineage,
+            "ranking": ranking,
+            "exclude_common_essential": exclude_common_essential,
+            "common_essential_source": common_essential_source,
+            "limit": limit,
+        }
+        if gene:
+            request["gene"] = query["gene"]
         return self._envelope(
             tool="depmap_lineage_dependencies",
-            request={
-                "lineage": canonical_lineage,
-                "ranking": ranking,
-                "exclude_common_essential": exclude_common_essential,
-                "common_essential_source": common_essential_source,
-                "limit": limit,
-            },
+            request=request,
             evidence=item,
         )
 
@@ -914,6 +919,7 @@ class DepMapEvidenceService:
         limit: int = 5,
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
+        gene: str | None = None,
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
@@ -926,6 +932,8 @@ class DepMapEvidenceService:
             "common_essential_source": common_essential_source,
             "limit": limit,
         }
+        if gene:
+            query["gene"] = gene.strip().upper()
         item = await self._execute(query)
         return self._envelope(
             tool="depmap_pan_cancer_dependencies", request=query, evidence=item
@@ -1539,10 +1547,12 @@ def build_mcp_server(
     @mcp.tool(
         title="DepMap cancer lineage dependency ranking",
         description=(
-            "Return a bounded ranking from the completed precomputed lineage-vs-rest "
-            "CRISPR Gene Effect test without requiring a gene and without starting a "
-            "new analysis. selective uses the precomputed one-sided Welch/BH result; "
-            "mean_dependency is descriptive. Gene Effect mean difference is not logFC."
+            "Query the completed lineage-vs-rest CRISPR Gene Effect table. With gene, "
+            "match the exact row before limit and return FOUND, NOT_RETAINED, or "
+            "NOT_TESTED. Without gene, return a bounded ranking. selective uses the "
+            "precomputed one-sided Welch/BH result; mean_dependency is descriptive. "
+            "Gene Effect mean difference is not logFC. exclude_common_essential joins "
+            "the DepMap 26Q1 common-essential sidecar once; it is not a housekeeping list."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -1553,6 +1563,7 @@ def build_mcp_server(
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         limit: int = 10,
+        gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.lineage_dependencies(
             lineage,
@@ -1560,14 +1571,16 @@ def build_mcp_server(
             limit,
             exclude_common_essential=exclude_common_essential,
             common_essential_source=common_essential_source,
+            gene=gene,
         )
 
     @mcp.tool(
         title="DepMap pan-cancer dependency summary",
         description=(
-            "Return one bounded summary across every completed lineage dependency "
-            "table. The limit applies per lineage; recurrence is calculated over the "
-            "full retained sets before Top-N truncation."
+            "Query every completed lineage dependency table in one request. With gene, "
+            "return FOUND/NOT_RETAINED/NOT_TESTED per lineage from the full table. "
+            "Without gene, the limit applies per lineage after ranking the full "
+            "retained set. Recurrence is not inferred from truncated pages."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -1577,12 +1590,14 @@ def build_mcp_server(
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         limit: int = 5,
+        gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.pan_cancer_dependencies(
             ranking,
             limit,
             exclude_common_essential=exclude_common_essential,
             common_essential_source=common_essential_source,
+            gene=gene,
         )
 
     @mcp.tool(
