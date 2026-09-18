@@ -149,6 +149,7 @@ async fn reconnect_coalesces_and_never_replays_ambiguous_write() {
     });
     let client = Arc::new(McpClient::managed(ManagedConnection::new(factory)));
     client.tools_list().await.unwrap();
+    assert_eq!(client.connection_status(), ("ready", None));
     let old_generation = client.generation();
     let error = client
         .tool_call("echo", &json!({"mode":"stale_write"}))
@@ -157,6 +158,13 @@ async fn reconnect_coalesces_and_never_replays_ambiguous_write() {
     assert!(error.to_string().contains("no automatic replay"));
     assert_eq!(state.writes.load(Ordering::SeqCst), 1);
     assert!(!client.is_connected());
+    let (status, last_error) = client.connection_status();
+    assert_eq!(status, "disconnected");
+    let last_error = last_error.unwrap();
+    assert!(
+        last_error.contains("connection invalidated"),
+        "{last_error}"
+    );
 
     // Catalog discovery is itself read-only. A fresh tools/list must restore
     // the configured connector without requiring the user to edit or toggle it.
@@ -164,6 +172,7 @@ async fn reconnect_coalesces_and_never_replays_ambiguous_write() {
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].name, "echo");
     assert!(client.is_connected());
+    assert_eq!(client.connection_status(), ("ready", None));
 
     let mut calls = tokio::task::JoinSet::new();
     for _ in 0..8 {

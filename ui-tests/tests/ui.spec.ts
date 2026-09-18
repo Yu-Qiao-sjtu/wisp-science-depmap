@@ -10917,6 +10917,24 @@ test("Notion uses the generic Remote URL OAuth connection flow", async ({ page }
   await expect(page.getByText("OAuth", { exact: true })).toBeVisible();
 });
 
+test("custom MCP detail reports managed disconnect and reconnect state", async ({ page }) => {
+  await page.goto("/?mockMcpStatus=disconnected&mockMcpLastError=502%20Bad%20Gateway");
+  await page.locator(".proj-card-main").first().click();
+  await globalSettingsButton(page).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  await page.locator(".settings-list-row-link", { hasText: "wolai_cmp" }).click();
+  const detail = page.getByTestId("connector-detail");
+  await expect(detail.getByText("Disconnected", { exact: true })).toBeVisible();
+  await expect(detail.getByText("502 Bad Gateway", { exact: true })).toBeVisible();
+
+  await page.goto("/?mockMcpStatus=reconnecting");
+  await page.locator(".proj-card-main").first().click();
+  await globalSettingsButton(page).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  await page.locator(".settings-list-row-link", { hasText: "wolai_cmp" }).click();
+  await expect(page.getByTestId("connector-detail").getByText("Reconnecting…", { exact: true })).toBeVisible();
+});
+
 test("MCP env values stay focused while typing and can be revealed", async ({ page }) => {
   await enterApp(page);
   await globalSettingsButton(page).click();

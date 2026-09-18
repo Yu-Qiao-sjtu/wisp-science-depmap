@@ -6727,6 +6727,8 @@ pub(super) fn SettingsView(
                                         let enabled = c.enabled;
                                         let transport = c.transport.clone();
                                         let auth = c.auth.clone();
+                                        let runtime_status = c.status.clone();
+                                        let runtime_error = c.last_error.clone();
                                         let tools = if is_custom {
                                             custom_conn_tools.get().get(&c.key).cloned().unwrap_or_default()
                                         } else {
@@ -6739,7 +6741,6 @@ pub(super) fn SettingsView(
                                             None
                                         };
                                         let has_error = error.is_some();
-                                        let has_tools = !tools.is_empty();
                                         view! {
                                             <div class="conn-detail-heading">
                                                 <div class="conn-detail-title">{compose_icon("grid")}<h2>{c.name.clone()}</h2>
@@ -6774,11 +6775,11 @@ pub(super) fn SettingsView(
                                                             <span class="settings-list-title">{move || t(locale.get(), "conn.status")}</span>
                                                             <span class="settings-list-sub">{move || t(locale.get(), if !enabled {
                                                                 "conn.status.disabled"
-                                                            } else if loading {
+                                                            } else if runtime_status == "reconnecting" {
                                                                 "conn.status.reconnecting"
-                                                            } else if has_error {
+                                                            } else if runtime_status == "disconnected" {
                                                                 "conn.status.disconnected"
-                                                            } else if has_tools {
+                                                            } else if runtime_status == "ready" {
                                                                 "conn.status.ready"
                                                             } else {
                                                                 "conn.status.enabled"
@@ -6798,6 +6799,9 @@ pub(super) fn SettingsView(
                                                         </div>
                                                     })}
                                                 </div>
+                                            })}
+                                            {runtime_error.map(|msg| view! {
+                                                <div class="settings-status fail">{msg}</div>
                                             })}
                                             {(!is_custom).then(|| view! {
                                                 <div class="settings-list">

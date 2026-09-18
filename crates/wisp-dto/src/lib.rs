@@ -3284,6 +3284,10 @@ pub struct ConnectorInfo {
     #[serde(default)]
     pub auth: String,
     #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub description_zh: String,

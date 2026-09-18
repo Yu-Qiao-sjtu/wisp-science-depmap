@@ -1211,6 +1211,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       },
     },
   ];
+  const mockMcpStatus = query.get("mockMcpStatus") ?? "ready";
+  const mockMcpLastError = query.get("mockMcpLastError");
   let mockApprovalScope = query.get("mockApprovalScope") ?? "ask";
   let mockBioMartEnabled = true;
   let mockBioMartSkip = false;
@@ -4216,6 +4218,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                     ? String(connection.transport?.command ?? "")
                     : String(connection.transport?.url ?? ""),
                   auth: String(connection.transport?.auth ?? "none"),
+                  status: mockMcpStatus,
+                  last_error: mockMcpLastError,
                   tools: [],
                 })),
               ],

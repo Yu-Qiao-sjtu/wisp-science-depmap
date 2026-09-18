@@ -117,6 +117,28 @@ pub(crate) async fn configured(
 }
 
 impl Connections {
+    pub(crate) async fn connector_status(
+        &self,
+        project: &str,
+        connector: &str,
+    ) -> Option<(String, Option<String>)> {
+        let entries = self.entries.lock().await;
+        let mut states = entries
+            .iter()
+            .filter(|(key, _)| key.project == project && key.connector == connector)
+            .map(|(_, entry)| entry.client.connection_status())
+            .collect::<Vec<_>>();
+        states.sort_by_key(|(status, _)| match *status {
+            "reconnecting" => 0,
+            "ready" => 1,
+            "disconnected" => 2,
+            _ => 3,
+        });
+        states
+            .into_iter()
+            .next()
+            .map(|(status, error)| (status.to_string(), error))
+    }
     pub(crate) async fn needs_catalog_refresh(&self, frame: &str) -> bool {
         self.entries
             .lock()

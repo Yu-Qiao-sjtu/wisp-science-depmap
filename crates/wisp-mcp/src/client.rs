@@ -600,6 +600,13 @@ impl McpClient {
             _ => false,
         }
     }
+    pub fn connection_status(&self) -> (&'static str, Option<String>) {
+        match &self.transport {
+            Transport::Managed(m) => m.status(),
+            _ if self.is_connected() => ("ready", None),
+            _ => ("disconnected", None),
+        }
+    }
     pub fn mark_catalog_current(&self) {
         if let Transport::Managed(m) = &self.transport {
             m.mark_catalog_current();
@@ -667,9 +674,15 @@ impl McpClient {
                         "MCP connection changed while queued; request not sent"
                     ));
                 }
-                Box::pin(client.request(method, params))
+                let result = Box::pin(client.request(method, params))
                     .instrument(m.span())
-                    .await
+                    .await;
+                if let Err(error) = &result {
+                    if !client.is_connected() {
+                        m.record_error(error);
+                    }
+                }
+                result
             }
             Transport::Stdio {
                 writer,
