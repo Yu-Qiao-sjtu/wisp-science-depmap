@@ -343,6 +343,9 @@ pub struct ToolResult {
     /// boundaries out of prompt wording: stale sibling calls can be skipped,
     /// and tools such as `ask_user` can end the turn outright.
     pub control: ToolControl,
+    /// Optional turn-scoped execution policy installed after this tool call.
+    /// Entries are exact tool names or a single trailing-`*` prefix pattern.
+    pub allowed_next_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -368,6 +371,7 @@ impl ToolResult {
             content: content.into(),
             images: Vec::new(),
             control: ToolControl::Continue,
+            allowed_next_tools: None,
         }
     }
     pub fn fail(content: impl Into<String>) -> Self {
@@ -376,6 +380,7 @@ impl ToolResult {
             content: content.into(),
             images: Vec::new(),
             control: ToolControl::Continue,
+            allowed_next_tools: None,
         }
     }
     pub fn image(img: ImageData) -> Self {
@@ -385,6 +390,7 @@ impl ToolResult {
             content: label,
             images: vec![img],
             control: ToolControl::Continue,
+            allowed_next_tools: None,
         }
     }
     /// Skip tool calls that the model placed later in the same batch, then let
@@ -397,6 +403,13 @@ impl ToolResult {
     /// issuing another model request.
     pub fn stop_turn(mut self) -> Self {
         self.control = ToolControl::StopTurn;
+        self
+    }
+
+    /// Restrict subsequent calls in the current agent turn at the execution
+    /// layer. This is stronger than returning advisory policy in tool text.
+    pub fn allow_next_tools(mut self, tools: Vec<String>) -> Self {
+        self.allowed_next_tools = Some(tools);
         self
     }
 }

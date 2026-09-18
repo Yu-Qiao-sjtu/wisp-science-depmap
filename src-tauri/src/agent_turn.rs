@@ -675,7 +675,6 @@ pub(crate) async fn send_message_inner(
             .as_ref()
             .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
         {
-            agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool));
             agent.add_tool(Box::new(depmap_agent::DepMapEvidenceHistoryTool::new(
                 state.store.clone(),
                 ap.id.clone(),
@@ -815,6 +814,20 @@ pub(crate) async fn send_message_inner(
             connector_allow.as_ref(),
         )
         .await;
+        if specialist
+            .as_ref()
+            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
+        {
+            // Identify the intended remote server by its canonical read-only
+            // capability tool, then grant exact tools from that same connector
+            // only. Multiple candidates fail closed instead of trusting a
+            // spoofable `depmap_*` name prefix.
+            let remote_read_only_tools =
+                depmap_agent::validated_remote_depmap_tools(&agent.tools, &wiring.added_tools);
+            agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool::new(
+                remote_read_only_tools,
+            )));
+        }
         {
             let mut observed = state.plugin_runtime_errors.lock().unwrap();
             let project_errors = observed.entry(ap.id.clone()).or_default();

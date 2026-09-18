@@ -468,6 +468,9 @@ impl Tool for McpTool {
     fn read_only(&self) -> bool {
         self.remote.read_only()
     }
+    fn connector_id(&self) -> Option<&str> {
+        (!self.connector_id.is_empty()).then_some(self.connector_id.as_str())
+    }
     fn preview(&self, args: &Value) -> String {
         let s = args.to_string();
         s.chars().take(120).collect()

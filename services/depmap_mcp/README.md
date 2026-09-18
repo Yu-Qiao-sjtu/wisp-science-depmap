@@ -198,3 +198,10 @@ For the private server deployment, the MCP process binds only to server
 `127.0.0.1:18877`; configure Wisp Science with the remote-URL transport at
 `http://127.0.0.1:18877/mcp` and no additional authentication. SSH supplies the
 transport authentication and the MCP endpoint is never exposed to the LAN.
+
+DepMap routing also installs a turn-scoped execution allowlist. After
+`depmap_agent_route` selects a bounded evidence path, unrelated filesystem,
+shell, and configuration tools are rejected by the agent executor. A blocked
+local provider may fall back only to the configured read-only `depmap_*` or
+`tcga_*` MCP tools; otherwise the model must report the blocker or ask for the
+missing input.

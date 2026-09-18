@@ -28,6 +28,12 @@ pub trait Tool: Send + Sync {
     fn read_only(&self) -> bool {
         false
     }
+    /// Stable connector identity for MCP-backed tools. Native tools return
+    /// `None`. Host policy uses this to grant an exact remote server rather
+    /// than trusting a tool-name prefix that another connector could spoof.
+    fn connector_id(&self) -> Option<&str> {
+        None
+    }
     /// Optional ingestion budget for this tool's textual result. The global
     /// `WISP_TOOL_RESULT_BUDGET` override still wins. Tools should use this
     /// only for intentionally bounded, self-contained contracts where spilling
