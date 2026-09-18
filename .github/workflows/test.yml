@@ -99,6 +99,8 @@ jobs:
 
   rust:
     runs-on: ubuntu-latest
+    env:
+      WISP_CATALOG_OFFLINE: "1"
     strategy:
       matrix:
         toolchain: [stable, 1.88.0]
