@@ -13,8 +13,11 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
 
 `lineage_dependency` / `pan_cancer_dependency` add exact-gene statuses
 (`FOUND` / `NOT_RETAINED` / `NOT_TESTED`) and a one-pass common-essential
-sidecar join (`exclude_common_essential`). Later TF/TLG issues add more
-predicates to this plane. They do not add gene- or lineage-specific tools.
+sidecar join (`exclude_common_essential`). `tf_dependency` reads the installed
+TF-activity module in-process: keys in the frozen `tf_order` universe return
+`FOUND` / `NOT_RETAINED` / `NOT_TESTED` / `NOT_OBSERVED`, never HTTP 500.
+Later TLG issues add more predicates to this plane. They do not add gene- or
+lineage-specific tools.
 
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

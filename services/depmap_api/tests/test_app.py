@@ -1513,5 +1513,77 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertEqual(states["Breast"], "NOT_RETAINED")
 
 
+def write_tf_activity_fixtures(root: Path) -> Path:
+    module = (
+        root
+        / "analysis-modules"
+        / "转录因子活性-CRISPR基因依赖相关性分析"
+        / "results"
+        / "tf_activity_dependency_26Q1_v2"
+    )
+    module.mkdir(parents=True, exist_ok=True)
+    (module / "manifest.json").write_text(
+        json.dumps({"status": "complete", "release": "26Q1", "tf_count": 4}),
+        encoding="utf-8",
+    )
+    (module / "tf_order.csv").write_text("TF\nMYC\nAHR\nSTAT3\nATF5\n", encoding="utf-8")
+    (module / "target_gene_order.csv").write_text(
+        "symbol\nZFP36L1\nGPX4\nILK\n", encoding="utf-8"
+    )
+    with gzip.open(module / "top_hits.csv.gz", "wt", encoding="utf-8", newline="") as handle:
+        handle.write(
+            "TF,target_gene,direction,rank,correlation,fdr\n"
+            "STAT3,ZFP36L1,negative,1,-0.4,0.01\n"
+            "STAT3,ILK,negative,2,-0.3,0.02\n"
+            "ATF5,ZFP36L1,positive,1,0.35,0.04\n"
+        )
+    return module
+
+
+class TfActivityReaderTests(DepMapApiTests):
+    def setUp(self):
+        super().setUp()
+        write_tf_activity_fixtures(self.settings.knowledge_root)
+
+    def _query(self, payload):
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post("/api/v1/query", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_catalog_valid_tf_never_returns_http_error(self):
+        myc = self._query({"mode": "tf_dependency", "source": "MYC", "limit": 5})
+        self.assertEqual(myc["status"], "NOT_RETAINED")
+        self.assertEqual(myc["entity_class"], "tf_activity")
+        self.assertNotEqual(myc["status"], "QUERY_ERROR")
+        found = self._query({"mode": "tf_dependency", "source": "STAT3", "limit": 5})
+        self.assertEqual(found["status"], "FOUND")
+        self.assertEqual(found["rows"][0]["target_gene"], "ZFP36L1")
+        atf5 = self._query({"mode": "tf_dependency", "source": "atf5"})
+        self.assertEqual(atf5["status"], "FOUND")
+        ahr = self._query({"mode": "tf_dependency", "source": "AHR", "target": "GPX4"})
+        self.assertEqual(ahr["status"], "NOT_RETAINED")
+        self.assertEqual(ahr["source"], "AHR")
+
+    def test_absent_tf_is_coverage_status_not_server_error(self):
+        missing = self._query({"mode": "tf_dependency", "source": "NOTATF"})
+        self.assertEqual(missing["status"], "NOT_OBSERVED")
+        untested = self._query(
+            {"mode": "tf_dependency", "source": "STAT3", "target": "ABSENTTARGET"}
+        )
+        self.assertEqual(untested["status"], "NOT_TESTED")
+
+    def test_missing_module_is_unavailable(self):
+        import shutil
+
+        shutil.rmtree(
+            self.settings.knowledge_root
+            / "analysis-modules"
+            / "转录因子活性-CRISPR基因依赖相关性分析"
+        )
+        payload = self._query({"mode": "tf_dependency", "source": "MYC"})
+        self.assertEqual(payload["status"], "MODULE_UNAVAILABLE")
+
+
 if __name__ == "__main__":
     unittest.main()

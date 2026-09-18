@@ -3066,6 +3066,157 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
     )
 
 
+def _tf_activity_root(settings: Settings) -> Path:
+    return (
+        settings.knowledge_root
+        / "analysis-modules"
+        / "转录因子活性-CRISPR基因依赖相关性分析"
+        / "results"
+        / "tf_activity_dependency_26Q1_v2"
+    )
+
+
+def _tf_order_symbols(path: Path) -> set[str]:
+    symbols: set[str] = set()
+    if not path.is_file():
+        return symbols
+    for row in _iter_csv_records(path):
+        symbol = row.get("TF") or row.get("symbol") or row.get("tf")
+        if symbol:
+            symbols.add(str(symbol).strip().upper())
+    return symbols
+
+
+def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    """Read the installed TF-activity module in Python. Valid universe keys never 500."""
+    source = str(query.get("source") or "").strip().upper()
+    target = str(query["target"]).strip().upper() if query.get("target") else None
+    limit = min(int(query.get("limit") or 20), 100)
+    root = _tf_activity_root(settings)
+    manifest, unavailable = _complete_module(root, mode="tf_dependency")
+    if unavailable is not None:
+        return unavailable
+    order_path = root / "tf_order.csv"
+    universe = _tf_order_symbols(order_path)
+    if not universe:
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="tf_dependency",
+            reason="the completed TF-activity module has no frozen TF universe table",
+            source=source,
+            target=target,
+            entity_class="tf_activity",
+            manifest=manifest,
+            provenance=[str(root / "manifest.json")],
+        )
+    if source not in universe:
+        status = classify_exact_entity(observed=False)
+        return _evidence_response(
+            status,
+            mode="tf_dependency",
+            reason="requested symbol is absent from the frozen TF-activity universe",
+            source=source,
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rejection_reason=status,
+            manifest=manifest,
+            provenance=[str(order_path)],
+        )
+    hits_path = root / "top_hits.csv.gz"
+    if not hits_path.is_file():
+        hits_path = root / "top_hits.csv"
+    if not hits_path.is_file():
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="tf_dependency",
+            reason="the completed module has no queryable TF-activity ranking table",
+            source=source,
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(order_path)],
+        )
+    if target:
+        target_order = root / "target_gene_order.csv"
+        if target_order.is_file():
+            targets = {
+                str(row.get("symbol") or row.get("target_gene") or "").strip().upper()
+                for row in _iter_csv_records(target_order)
+            }
+            if target not in targets:
+                return _evidence_response(
+                    "NOT_TESTED",
+                    mode="tf_dependency",
+                    reason="target gene is absent from the Gene Effect target universe",
+                    source=source,
+                    target=target,
+                    entity_class="tf_activity",
+                    universe_size=len(universe),
+                    rows=[],
+                    returned_count=0,
+                    manifest=manifest,
+                    provenance=[str(order_path), str(target_order)],
+                )
+        matched = filter_before_limit(
+            _iter_csv_records(hits_path),
+            lambda row: str(row.get("TF") or "").upper() == source
+            and str(row.get("target_gene") or "").upper() == target,
+        )
+        status = "FOUND" if matched else "NOT_RETAINED"
+        return _evidence_response(
+            status,
+            mode="tf_dependency",
+            reason=(
+                "exact TF-activity pair from the completed ranking table"
+                if matched
+                else "TF is in the frozen universe; the pair was not retained in the ranking table"
+            ),
+            source=source,
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rows=matched[:1],
+            returned_count=len(matched[:1]),
+            matched_row_count=len(matched),
+            rejection_reason=None if status == "FOUND" else status,
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(hits_path)],
+        )
+    matched = filter_before_limit(
+        _iter_csv_records(hits_path),
+        lambda row: str(row.get("TF") or "").upper() == source,
+    )
+    page, matched_count = bound_after_rank(
+        matched,
+        key=lambda row: (
+            str(row.get("direction") or ""),
+            int(row.get("rank") or 10**9),
+        ),
+        limit=limit,
+    )
+    status = "FOUND" if page else "NOT_RETAINED"
+    return _evidence_response(
+        status,
+        mode="tf_dependency",
+        reason=(
+            "bounded TF-activity ranking from the completed module"
+            if page
+            else "TF is in the frozen universe but the ranking table retained no rows"
+        ),
+        source=source,
+        entity_class="tf_activity",
+        universe_size=len(universe),
+        rows=page,
+        returned_count=len(page),
+        matched_row_count=matched_count,
+        rejection_reason=None if status == "FOUND" else status,
+        manifest=manifest,
+        provenance=[str(root / "manifest.json"), str(hits_path)],
+    )
+
+
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     if query["mode"] == "analysis_catalog":
         return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
@@ -3120,6 +3271,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
     if query["mode"] == "three_d":
         return await asyncio.to_thread(_run_three_d_query, settings, query)
+    if query["mode"] == "tf_dependency":
+        return await asyncio.to_thread(_run_tf_dependency_query, settings, query)
     return await run_r_query(settings, query)
 
 
