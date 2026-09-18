@@ -139,7 +139,7 @@ impl TurnBuild {
         name: &str,
         ok: bool,
         duration_ms: u64,
-        display_output: String,
+        display_output: Option<String>,
         structured_output: Option<Value>,
     ) {
         for index in 0..self.cells.len() {
@@ -155,7 +155,9 @@ impl TurnBuild {
             if duration_ms > 0 {
                 self.cells[index].duration_ms = Some(duration_ms as i64);
             }
-            self.cells[index].detail_output = Some(display_output);
+            if display_output.is_some() {
+                self.cells[index].detail_output = display_output;
+            }
             if structured_output.is_some() {
                 self.cells[index].structured_output = structured_output;
             }
@@ -377,7 +379,13 @@ pub fn fold_trajectory(
                     name.starts_with(wisp_tools::MCP_EVENT_PREFIX) || name == "use_mcp_tool";
                 let structured_output = structured_content
                     .or_else(|| is_mcp.then(|| legacy_structured_output(&content)).flatten());
-                turns[index].match_tool_result(&name, ok, duration_ms, content, structured_output);
+                turns[index].match_tool_result(
+                    &name,
+                    ok,
+                    duration_ms,
+                    is_mcp.then_some(content),
+                    structured_output,
+                );
             }
             _ => {}
         }
