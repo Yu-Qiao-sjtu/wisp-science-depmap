@@ -760,6 +760,37 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             lineage_scoped["evidence"]["metric_semantics"]["interpretation"],
         )
 
+    async def test_provider_schema_matches_runtime_and_returns_envelopes(self):
+        catalog = await self.service.capabilities()
+        tlg = next(
+            item
+            for item in catalog["capabilities"]
+            if item["intent"] == "true_love_gene_catalog"
+        )
+        self.assertNotIn("coverage", tlg["optional"])
+        self.assertEqual(tlg["limit_max"], 100)
+        self.assertEqual(
+            tlg["conditional_optional"]["coverage"]["when_catalog_in"],
+            ["negative_r_lt_minus_0_3", "positive_reciprocal_top20"],
+        )
+        coverage = await self.service.true_love_evidence(
+            None, None, 20, "stable_negative_rank1", "quality"
+        )
+        self.assertTrue(coverage["evidence"]["schema_error"])
+        self.assertEqual(coverage["evidence"]["status"], "INELIGIBLE")
+        self.assertEqual(self.queries, [])
+        limit_60 = await self.service.lineage_directions("Liver", 60)
+        self.assertTrue(limit_60["evidence"]["schema_error"])
+        self.assertEqual(limit_60["evidence"]["limit_max"], 50)
+        limit_120 = await self.service.true_love_evidence(None, None, 120)
+        self.assertTrue(limit_120["evidence"]["schema_error"])
+        limit_150 = await self.service.gene_evidence("KRAS", None, None, 150)
+        self.assertTrue(limit_150["evidence"]["schema_error"])
+        valid = await self.service.true_love_evidence(
+            "kras", "nras", 8, "stable_negative_rank1", None
+        )
+        self.assertEqual(valid["evidence"]["status"], "FOUND")
+
     async def test_three_d_tool_preserves_family_and_cohort_selectors(self):
         result = await self.service.three_d_evidence(
             "dependency_profiles", gene="kras", cohort="three_d_all", limit=4

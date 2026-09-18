@@ -134,7 +134,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "intent": "true_love_gene_catalog",
         "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
         "required": ["catalog"],
-        "optional": ["gene", "partner", "coverage", "limit"],
+        "optional": ["gene", "partner", "limit"],
+        "conditional_optional": {
+            "coverage": {
+                "when_catalog_in": [
+                    "negative_r_lt_minus_0_3",
+                    "positive_reciprocal_top20",
+                ]
+            }
+        },
+        "limit_max": 100,
         "examples_zh": ["查询真爱基因", "找r小于-0.3的负共依赖候选", "查询正相关互惠Top20"],
         "precise_prompt_template_zh": "查询26Q1的{catalog}真爱基因目录，可选{coverage}覆盖层，并说明相关性不能证明合成致死。",
         "confusable_with": ["gene_pair_evidence"],

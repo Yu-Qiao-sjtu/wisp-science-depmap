@@ -20,5 +20,10 @@ TF-activity queries also page the frozen `tf_order` universe (`view=universe`)
 and bulk `top_hits` rankings, reporting `matched_row_count` separately from the
 bounded page. DoRothEA is not reconstructed from the browser.
 
+Provider schema (`services/depmap_api/provider_schema.py`): MCP advertised
+arguments match runtime validators. `coverage` is catalog-conditional. Each
+mode/tool has its own `limit` maximum. Invalid combinations return an
+`INELIGIBLE` envelope with `schema_error: true` (HTTP 422), not a traceback.
+
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

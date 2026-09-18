@@ -25,6 +25,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from fastapi.exceptions import RequestValidationError
+
+from services.depmap_api.provider_schema import MODE_LIMIT_MAX, schema_violation
 from services.depmap_api.scientific_query import (
     EVIDENCE_STATUSES,
     bound_after_rank,
@@ -433,7 +436,7 @@ class QueryRequest(BaseModel):
     common_essential_source: Literal["depmap_26q1"] | None = None
     source: str | None = None
     target: str | None = None
-    limit: int | None = Field(default=None, ge=1, le=100)
+    limit: int | None = Field(default=None, ge=1)
     event: str | None = None
     lineage: str | None = None
     pathway: str | None = None
@@ -515,6 +518,10 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love partner requires gene")
         if self.mode == "true_love" and self.catalog in {None, "stable_negative_rank1"} and self.coverage is not None:
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
+        if self.limit is not None:
+            maximum = MODE_LIMIT_MAX.get(self.mode, 100)
+            if self.limit > maximum:
+                raise ValueError(f"limit must be between 1 and {maximum} for mode {self.mode}")
         if self.mode == "tf_dependency" and self.target is not None and self.source is None:
             raise ValueError("tf_dependency target requires source")
         if self.mode == "tf_dependency" and self.view == "universe" and self.source is not None:
@@ -3358,6 +3365,19 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     api.state.settings = settings
     api.state.runner = runner
     api.state.semaphore = None
+
+    @api.exception_handler(RequestValidationError)
+    async def provider_schema_validation(_request: Request, exc: RequestValidationError):
+        messages = []
+        for err in exc.errors():
+            msg = err.get("msg") or "invalid argument"
+            if msg.lower().startswith("value error, "):
+                msg = msg[13:]
+            messages.append(msg)
+        return JSONResponse(
+            status_code=422,
+            content=schema_violation(reason="; ".join(messages) or "invalid provider arguments"),
+        )
 
     @api.middleware("http")
     async def reject_large_requests(request: Request, call_next):
