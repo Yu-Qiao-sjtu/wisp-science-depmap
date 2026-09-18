@@ -19,7 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-CATALOG_SCHEMA_VERSION = "3"
+CATALOG_SCHEMA_VERSION = "4"
 FULL_HASH_MAX_BYTES = 8 * 1024 * 1024
 FULL_HASH_SUFFIXES = {".json", ".md", ".r", ".py", ".sh", ".ps1", ".toml", ".yaml", ".yml"}
 
@@ -147,6 +147,17 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
           query_mode TEXT PRIMARY KEY, adapter TEXT NOT NULL,
           module_pattern TEXT NOT NULL, supported_formats TEXT NOT NULL
         );
+        CREATE TABLE coverage_registry (
+          analysis_id TEXT PRIMARY KEY, module TEXT NOT NULL, release TEXT,
+          scope TEXT, lineage TEXT, modality TEXT, model_count INTEGER,
+          model_set_fingerprint TEXT, tested_gene_count INTEGER,
+          retained_gene_count INTEGER, gene_universe TEXT,
+          cohort_definition TEXT, intersection_policy TEXT,
+          event_definition TEXT, mutation_policy TEXT, threshold_definition TEXT,
+          source_asset_fingerprint TEXT, storage_completeness TEXT NOT NULL,
+          qa_state TEXT NOT NULL, generated_at TEXT, payload_json TEXT NOT NULL,
+          FOREIGN KEY(analysis_id) REFERENCES analysis_catalog(analysis_id)
+        );
         CREATE TABLE matrix_block_index (
           analysis_id TEXT NOT NULL, gene TEXT NOT NULL, gene_index INTEGER NOT NULL,
           block_path TEXT NOT NULL, PRIMARY KEY(analysis_id,gene)
@@ -154,6 +165,12 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         CREATE TABLE analysis_relation (
           analysis_id TEXT NOT NULL, artifact_path TEXT NOT NULL,
           role TEXT NOT NULL, PRIMARY KEY(analysis_id,artifact_path)
+        );
+        CREATE TABLE reader_coverage (
+          query_mode TEXT PRIMARY KEY, analysis_id TEXT,
+          coverage_state TEXT NOT NULL,
+          FOREIGN KEY(query_mode) REFERENCES reader_registry(query_mode),
+          FOREIGN KEY(analysis_id) REFERENCES coverage_registry(analysis_id)
         );
         """
     )
@@ -188,6 +205,53 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
                 str(manifest.get("dataset") or "") or None,
                 str(manifest.get("method") or "") or None,
                 relative.as_posix(), stat.st_mtime_ns,
+            ),
+        )
+        def first(*keys):
+            for key in keys:
+                value = manifest.get(key)
+                if value not in (None, "", [], {}):
+                    return value
+            return None
+        cohort_definition = first("cohort_definition", "cohort")
+        intersection_policy = first("intersection_policy", "sample_intersection")
+        event_definition = first("event_definition", "mutation_definition", "event")
+        mutation_policy = first("mutation_policy", "mut_wt_policy", "missing_policy")
+        threshold_definition = first("threshold_definition", "thresholds", "cutoffs")
+        source_checksums = first("source_checksums", "input_checksums", "checksums")
+        source_asset_fingerprint = (
+            hashlib.sha256(json.dumps(source_checksums, sort_keys=True, default=str).encode()).hexdigest()
+            if source_checksums is not None else None
+        )
+        coverage = {
+            "cohort_definition": cohort_definition,
+            "intersection_policy": intersection_policy,
+            "event_definition": event_definition,
+            "mutation_policy": mutation_policy,
+            "threshold_definition": threshold_definition,
+        }
+        db.execute(
+            "INSERT INTO coverage_registry VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                analysis_id, _module_name(relative), str(manifest.get("release") or "") or None,
+                str(first("scope", "analysis_scope") or "") or None,
+                str(first("lineage", "oncotree_lineage") or "") or None,
+                str(first("modality", "data_modality") or "") or None,
+                first("model_count", "n_models", "cell_line_count"),
+                str(first("model_set_fingerprint", "cohort_fingerprint") or "") or None,
+                first("tested_gene_count", "n_tested_genes", "gene_count"),
+                first("retained_gene_count", "n_retained_genes"),
+                str(first("gene_universe", "gene_universe_id") or "") or None,
+                json.dumps(cohort_definition, ensure_ascii=False) if cohort_definition is not None else None,
+                json.dumps(intersection_policy, ensure_ascii=False) if intersection_policy is not None else None,
+                json.dumps(event_definition, ensure_ascii=False) if event_definition is not None else None,
+                json.dumps(mutation_policy, ensure_ascii=False) if mutation_policy is not None else None,
+                json.dumps(threshold_definition, ensure_ascii=False) if threshold_definition is not None else None,
+                source_asset_fingerprint,
+                str(first("storage_completeness") or ("full" if state == "COMPLETE" else "partial")),
+                str(first("qa_status", "qa_state") or state),
+                str(first("generated_at", "created_at") or "") or None,
+                json.dumps(coverage, ensure_ascii=False, separators=(",", ":")),
             ),
         )
         manifests.append((path.parent, analysis_id, state))
@@ -263,7 +327,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             "gene_pair_evidence":"pair", "cancer_dependency_ranking":"lineage_dependency",
             "pan_cancer_dependency_summary":"pan_cancer_dependency",
             "tf_activity_to_dependency":"tf_dependency", "expression_biomarker_model":"biomarker_target",
-            "true_love_gene_catalog":"true_love", "gene_evidence":"core",
+            "true_love_gene_catalog":"true_love", "gene_evidence":"enrichment",
             "tcga_expression_survival":"tcga_expression_survival", "drug_gene_evidence":"drug",
             "subtype_evidence":"subtype", "coamplification_evidence":"coamplification",
             "three_d_evidence":"three_d",
@@ -272,10 +336,28 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         capabilities.append((mode, intent, base[2], base[3], capability["mcp_tool"], json.dumps(capability, ensure_ascii=False, separators=(",", ":"))))
     db.executemany("INSERT INTO capability_catalog VALUES (?,?,?,?,?,?)", capabilities)
     readers = []
-    for mode in sorted({row[0] for row in capabilities}):
+    for mode in sorted({row[0] for row in capabilities} | {row[0] for row in reader_rows}):
         base = cap_by_mode.get(mode, (mode, mode, "analysis-modules", 0))
         readers.append((mode, f"{mode}_adapter", base[2], "csv,csv.gz,parquet,rds,json"))
     db.executemany("INSERT INTO reader_registry VALUES (?,?,?,?)", readers)
+    for mode, _adapter, pattern, _formats in readers:
+        likes = [part.strip().replace("*", "%") for part in pattern.split("|") if part.strip()]
+        predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
+        parameters = tuple(value for like in likes for value in (like, like))
+        current = db.execute(
+            f"SELECT analysis_id FROM analysis_catalog WHERE completion_state='COMPLETE' "
+            f"AND ({predicates}) ORDER BY manifest_mtime_ns DESC LIMIT 1",
+            parameters,
+        ).fetchone() if likes else None
+        db.execute(
+            "INSERT INTO reader_coverage VALUES (?,?,?)",
+            (mode, current[0] if current else None, "AVAILABLE" if current else "NOT_COMPUTED"),
+        )
+    db.execute(
+        "DELETE FROM capability_catalog WHERE query_mode='enrichment' AND NOT EXISTS ("
+        "SELECT 1 FROM reader_coverage WHERE query_mode='enrichment' "
+        "AND coverage_state='AVAILABLE' AND analysis_id IS NOT NULL)"
+    )
 
     # Map every ordered gene to its declared matrix block without opening RDS files.
     for directory, analysis_id, state in manifests:
@@ -306,6 +388,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         """
         CREATE INDEX idx_analysis_module_state ON analysis_catalog(module, completion_state);
         CREATE INDEX idx_analysis_unit ON analysis_catalog(analysis_unit);
+        CREATE INDEX idx_coverage_dimensions ON coverage_registry(release,module,scope,lineage,modality);
         CREATE INDEX idx_artifact_analysis ON artifact_catalog(analysis_id, artifact_kind);
         CREATE INDEX idx_artifact_kind ON artifact_catalog(artifact_kind, extension);
         CREATE INDEX idx_artifact_path ON artifact_catalog(artifact_path);
@@ -313,14 +396,17 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         CREATE INDEX idx_capability_mode ON capability_catalog(query_mode);
         CREATE INDEX idx_relation_role ON analysis_relation(analysis_id,role);
         CREATE INDEX idx_matrix_gene ON matrix_block_index(gene);
+        CREATE INDEX idx_reader_coverage_analysis ON reader_coverage(analysis_id);
         """
     )
     return {
         "analysis_units": len(manifests),
         "completed_analysis_units": complete,
         "artifacts": artifact_count,
-        "capabilities": len(capabilities),
+        "capabilities": db.execute("SELECT COUNT(*) FROM capability_catalog").fetchone()[0],
         "readers": len(readers),
+        "coverage_records": db.execute("SELECT COUNT(*) FROM coverage_registry").fetchone()[0],
+        "reader_coverage_records": db.execute("SELECT COUNT(*) FROM reader_coverage").fetchone()[0],
         "matrix_gene_blocks": db.execute("SELECT COUNT(*) FROM matrix_block_index").fetchone()[0],
     }
 

@@ -516,3 +516,36 @@ cases:
         - {name: depmap_query, pointer: /lineage, equals: Liver}
         - {name: depmap_query, pointer: /source, equals: NANOG}
         - {name: depmap_query, pointer: /target, equals: TRRAP}
+
+  - id: breast-gpx4-enrichment-uses-registered-reader
+    description: A plain-language enrichment request routes to the bounded precomputed enrichment reader and preserves statistical scope.
+    tags: [depmap, enrichment, breast, gpX4, reader-contract]
+    prompt: GPX4 在乳腺癌有哪些通路或调控因子富集？只查服务器已经算好的结果。
+    allowed_tools: [depmap_query, attempt_completion]
+    fixture_tools:
+      depmap_query:
+        schema:
+          type: object
+          properties:
+            mode: {type: string, enum: [enrichment]}
+            lineage: {type: string}
+            source: {type: string}
+            limit: {type: integer, minimum: 1, maximum: 100}
+          required: [mode, lineage, source]
+          additionalProperties: false
+        result: '{"state":"precomputed_query","release":"26Q1","query":{"mode":"enrichment","lineage":"Breast","source":"GPX4","limit":20},"result":{"status":"FOUND","tested_universe":{"genes":17787,"collections":2},"multiple_testing":"BH within lineage and collection","completeness":"FDR-retained sparse rows","rows":[{"source_gene":"GPX4","collection":"Reactome","term":"Lipid metabolism","enrichment_z":3.1,"fdr":0.018}]},"new_analysis_started":false}'
+    script:
+      - tool_calls:
+          - {id: enrichment-1, name: depmap_query, arguments: {mode: enrichment, lineage: Breast, source: GPX4, limit: 20}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "26Q1 Breast 的 GPX4 预计算富集返回 Reactome Lipid metabolism，enrichment z=3.1、BH FDR=0.018。该结果来自 17,787 个基因、2 个集合的 FDR 保留稀疏表；未返回的条目不能解释为没有富集。本轮没有启动新分析。"}}
+    expect:
+      completion_contains: [26Q1, Breast, GPX4, Reactome, Lipid metabolism, "3.1", "0.018", 稀疏表, 没有启动]
+      completion_not_contains: [READER_UNAVAILABLE, 服务器路径, 原始矩阵]
+      required_tools: [depmap_query, attempt_completion]
+      forbidden_tools: [shell, read, write, edit, run_in_context, python]
+      tool_order: [depmap_query, attempt_completion]
+      tool_args:
+        - {name: depmap_query, pointer: /mode, equals: enrichment}
+        - {name: depmap_query, pointer: /lineage, equals: Breast}
+        - {name: depmap_query, pointer: /source, equals: GPX4}

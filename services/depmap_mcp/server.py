@@ -395,17 +395,31 @@ class DepMapEvidenceService:
             try:
                 with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                     rows = db.execute("SELECT payload_json FROM capability_catalog ORDER BY rowid").fetchall()
-                loaded = [json.loads(row[0]) for row in rows]
+                loaded = []
+                invalid_records = 0
+                for row in rows:
+                    try:
+                        item = json.loads(row[0]) if row and row[0] else None
+                    except (json.JSONDecodeError, TypeError):
+                        item = None
+                    if isinstance(item, dict):
+                        loaded.append(item)
+                    else:
+                        invalid_records += 1
                 if loaded:
                     capabilities, source = loaded, "sqlite_capability_catalog"
             except (sqlite3.Error, json.JSONDecodeError, OSError):
-                pass
+                invalid_records = 0
+        else:
+            invalid_records = 0
         return {
             "schema_version": 1,
             "release": self.settings.release,
             "state": "CAPABILITY_CATALOG",
             "capabilities": capabilities,
             "catalog_source": source,
+            "catalog_status": "PARTIAL" if invalid_records else "FOUND",
+            "invalid_record_count": invalid_records,
             "routing_policy": {
                 "unknown_or_out_of_scope": "return_no_match",
                 "missing_required_entity": "request_only_the_missing_field",
@@ -438,7 +452,55 @@ class DepMapEvidenceService:
             )]
         return self._envelope(tool="depmap_artifact_catalog", request={"module":module,"kind":kind,"path_contains":path_contains,"limit":limit}, evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows})
 
-    async def read_resource(self, uri: str, max_rows: int = 20) -> dict[str, Any]:
+    async def data_coverage(
+        self,
+        module: str | None = None,
+        scope: str | None = None,
+        lineage: str | None = None,
+        modality: str | None = None,
+        release: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        clauses, params = ["1=1"], []
+        for column, value in (
+            ("module", module), ("scope", scope), ("lineage", lineage),
+            ("modality", modality), ("release", release),
+        ):
+            if value:
+                clauses.append(f"{column}=?")
+                params.append(value)
+        limit = min(max(int(limit), 1), 100)
+        params.append(limit)
+        try:
+            with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                db.row_factory = sqlite3.Row
+                rows = [dict(row) for row in db.execute(
+                    f"SELECT c.analysis_id,c.module,c.release,c.scope,c.lineage,c.modality,c.model_count,"
+                    f"model_set_fingerprint,tested_gene_count,retained_gene_count,gene_universe,"
+                    f"cohort_definition,intersection_policy,event_definition,mutation_policy,"
+                    f"threshold_definition,source_asset_fingerprint,storage_completeness,qa_state,generated_at,"
+                    f"GROUP_CONCAT(rc.query_mode) AS reader_modes "
+                    f"FROM coverage_registry c LEFT JOIN reader_coverage rc ON rc.analysis_id=c.analysis_id "
+                    f"WHERE {' AND '.join('c.' + clause if clause != '1=1' else clause for clause in clauses)} "
+                    f"GROUP BY c.analysis_id ORDER BY c.module,c.analysis_id LIMIT ?", params
+                )]
+        except sqlite3.Error as exc:
+            return self._envelope(
+                tool="depmap_data_coverage", request={"module": module},
+                evidence={"status": "MODULE_UNAVAILABLE", "reason": f"coverage registry unavailable: {exc}", "rows": []},
+            )
+        return self._envelope(
+            tool="depmap_data_coverage",
+            request={"module":module,"scope":scope,"lineage":lineage,"modality":modality,"release":release,"limit":limit},
+            evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows,"returned_count":len(rows)},
+        )
+
+    async def read_resource(
+        self, uri: str, max_rows: int = 20, cursor: int = 0
+    ) -> dict[str, Any]:
+        max_rows = min(max(int(max_rows), 1), 100)
+        cursor = max(int(cursor), 0)
         prefix = f"depmap://{self.settings.release}/"
         if not uri.startswith(prefix):
             raise ValueError(f"uri must start with {prefix}")
@@ -453,15 +515,61 @@ class DepMapEvidenceService:
             raise ValueError("resource path is unavailable")
         if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
             return self._envelope(tool="depmap_read_resource", request={"uri":uri}, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"content":"binary artifact; use its registered scientific query adapter"})
-        if path.name.endswith(".csv.gz"):
-            import gzip
-            with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as handle:
-                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle))]
-            content: Any = rows
-        elif path.suffix.lower() in {".csv", ".tsv"}:
-            with path.open(encoding="utf-8-sig", newline="") as handle:
-                rows = [row for _, row in zip(range(min(max_rows, 1, 100)), csv.DictReader(handle, delimiter="\t" if path.suffix.lower()==".tsv" else ","))]
-            content = rows
+        if path.name.endswith(".csv.gz") or path.suffix.lower() in {".csv", ".tsv"}:
+            try:
+                if path.name.endswith(".csv.gz"):
+                    import gzip
+                    handle_context = gzip.open(
+                        path, "rt", encoding="utf-8-sig", newline=""
+                    )
+                    delimiter = ","
+                else:
+                    handle_context = path.open(
+                        encoding="utf-8-sig", newline=""
+                    )
+                    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
+                with handle_context as handle:
+                    reader = csv.DictReader(handle, delimiter=delimiter)
+                    rows = []
+                    total_row_count = 0
+                    for index, row in enumerate(reader):
+                        if cursor <= index < cursor + max_rows:
+                            rows.append(row)
+                        total_row_count += 1
+                returned_count = len(rows)
+                next_cursor = (
+                    cursor + returned_count
+                    if cursor + returned_count < total_row_count
+                    else None
+                )
+                return self._envelope(
+                    tool="depmap_read_resource",
+                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
+                    evidence={
+                        "status": "FOUND" if total_row_count else "NOT_RETAINED",
+                        "uri": uri,
+                        "content": rows,
+                        "rows": rows,
+                        "returned_count": returned_count,
+                        "total_row_count": total_row_count,
+                        "truncated": next_cursor is not None,
+                        "next_cursor": next_cursor,
+                    },
+                )
+            except (OSError, EOFError, UnicodeError, csv.Error) as exc:
+                return self._envelope(
+                    tool="depmap_read_resource",
+                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
+                    evidence={
+                        "status": "ERROR",
+                        "uri": uri,
+                        "reason": f"indexed table could not be decoded: {type(exc).__name__}",
+                        "rows": [],
+                        "returned_count": 0,
+                        "truncated": False,
+                        "next_cursor": None,
+                    },
+                )
         else:
             text = path.read_text(encoding="utf-8-sig", errors="replace")
             if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
@@ -471,7 +579,7 @@ class DepMapEvidenceService:
                     content = text[:65536]
             else:
                 content = text[:65536]
-        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows}, evidence={"status":"FOUND","uri":uri,"content":content})
+        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows,"cursor":cursor}, evidence={"status":"FOUND","uri":uri,"content":content})
 
     def _portable_string(self, value: str) -> str:
         root_variants = {
@@ -1311,9 +1419,15 @@ def build_mcp_server(
     async def depmap_artifact_catalog(module: str | None = None, kind: str | None = None, path_contains: str | None = None, limit: int = 50) -> dict[str, Any]:
         return await service.artifacts(module, kind, path_contains, limit)
 
+    @mcp.tool(title="DepMap data coverage registry", description="Query release-scoped cohort, model/gene-universe, event-definition, completeness, and QA metadata without exposing model identities or server paths.", annotations=READ_ONLY, structured_output=True)
+    async def depmap_data_coverage(module: str | None = None, scope: str | None = None, lineage: str | None = None, modality: str | None = None, release: str | None = None, limit: int = 50) -> dict[str, Any]:
+        return await service.data_coverage(module, scope, lineage, modality, release, limit)
+
     @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI through the artifact index and return a bounded text/table preview or binary metadata. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
-    async def depmap_read_resource(uri: str, max_rows: int = 20) -> dict[str, Any]:
-        return await service.read_resource(uri, max_rows)
+    async def depmap_read_resource(
+        uri: str, max_rows: int = 20, cursor: int = 0
+    ) -> dict[str, Any]:
+        return await service.read_resource(uri, max_rows, cursor)
 
     @mcp.tool(
         title="DepMap lineage mutation-anchor candidates",

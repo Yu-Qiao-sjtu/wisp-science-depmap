@@ -1,4 +1,5 @@
 import json
+import gzip
 import os
 import sqlite3
 import sys
@@ -80,6 +81,60 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             )
             db.commit()
         return f"depmap://26Q1/{relative}"
+
+    def index_bytes(self, relative: str, content: bytes) -> str:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS artifact_catalog "
+                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER)"
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?)",
+                (relative, "result", path.stat().st_size),
+            )
+            db.commit()
+        return f"depmap://26Q1/{relative}"
+
+    async def test_compressed_table_reader_honors_bounds_counts_and_cursor(self):
+        relative = "depmap-26q1-full/results/pairs.csv.gz"
+        payload = "gene,value\n" + "".join(
+            f"G{index},{index}\n" for index in range(110)
+        )
+        uri = self.index_bytes(relative, gzip.compress(payload.encode("utf-8")))
+
+        first = await self.service.read_resource(uri, max_rows=100)
+        self.assertEqual(first["evidence"]["returned_count"], 100)
+        self.assertEqual(first["evidence"]["total_row_count"], 110)
+        self.assertTrue(first["evidence"]["truncated"])
+        self.assertEqual(first["evidence"]["next_cursor"], 100)
+        self.assertEqual(first["evidence"]["rows"][0]["gene"], "G0")
+
+        tail = await self.service.read_resource(uri, max_rows=100, cursor=100)
+        self.assertEqual(tail["evidence"]["returned_count"], 10)
+        self.assertEqual(tail["evidence"]["rows"][0]["gene"], "G100")
+        self.assertFalse(tail["evidence"]["truncated"])
+        self.assertIsNone(tail["evidence"]["next_cursor"])
+
+    async def test_compressed_table_reader_types_empty_and_malformed_inputs(self):
+        empty_uri = self.index_bytes(
+            "depmap-26q1-full/results/empty.csv.gz",
+            gzip.compress(b"gene,value\n"),
+        )
+        empty = await self.service.read_resource(empty_uri, max_rows=20)
+        self.assertEqual(empty["evidence"]["status"], "NOT_RETAINED")
+        self.assertEqual(empty["evidence"]["total_row_count"], 0)
+        self.assertEqual(empty["evidence"]["rows"], [])
+
+        bad_uri = self.index_bytes(
+            "depmap-26q1-full/results/broken.csv.gz", b"not gzip"
+        )
+        broken = await self.service.read_resource(bad_uri, max_rows=20)
+        self.assertEqual(broken["evidence"]["status"], "ERROR")
+        self.assertEqual(broken["evidence"]["returned_count"], 0)
 
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
@@ -223,6 +278,62 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             intents["mutation_anchor_discovery"]["mcp_tool"],
             "depmap_mutation_anchor_evidence",
         )
+
+    async def test_capability_catalog_skips_nullable_or_malformed_records(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        valid = {"intent": "provider_status", "mcp_tool": "depmap_status"}
+        with closing(sqlite3.connect(index)) as db:
+            db.execute("CREATE TABLE capability_catalog (payload_json TEXT)")
+            db.executemany(
+                "INSERT INTO capability_catalog VALUES (?)",
+                [(json.dumps(valid),), ("null",), ("{broken",)],
+            )
+            db.commit()
+
+        result = await self.service.capabilities()
+        self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
+        self.assertEqual(result["catalog_status"], "PARTIAL")
+        self.assertEqual(result["invalid_record_count"], 2)
+        self.assertEqual(result["capabilities"], [valid])
+
+    async def test_data_coverage_is_bounded_and_omits_internal_paths(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE coverage_registry (analysis_id TEXT,module TEXT,release TEXT,"
+                "scope TEXT,lineage TEXT,modality TEXT,model_count INTEGER,"
+                "model_set_fingerprint TEXT,tested_gene_count INTEGER,retained_gene_count INTEGER,"
+                "gene_universe TEXT,cohort_definition TEXT,intersection_policy TEXT,"
+                "event_definition TEXT,mutation_policy TEXT,threshold_definition TEXT,"
+                "source_asset_fingerprint TEXT,storage_completeness TEXT,"
+                "qa_state TEXT,generated_at TEXT,payload_json TEXT)"
+            )
+            db.execute(
+                "CREATE TABLE reader_coverage (query_mode TEXT,analysis_id TEXT,coverage_state TEXT)"
+            )
+            db.execute(
+                "INSERT INTO coverage_registry VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "analysis-1", "dependency", "26Q1", "lineage", "Liver",
+                    "CRISPRGeneEffect", 25, "cohort-hash", 18531, 17787,
+                    "DepMap genes", '"Liver vs rest"', '"GeneEffect intersection"',
+                    '"damaging > 0"', '"Mut/WT/missing"', '"FDR <= 0.05"',
+                    "asset-hash", "full", "PASS",
+                    "2026-09-18T00:00:00Z", '{"private_path":"/srv/secret"}',
+                ),
+            )
+            db.execute(
+                "INSERT INTO reader_coverage VALUES ('lineage_dependency','analysis-1','AVAILABLE')"
+            )
+            db.commit()
+
+        result = await self.service.data_coverage(lineage="Liver", limit=1000)
+        self.assertEqual(result["evidence"]["status"], "FOUND")
+        self.assertEqual(result["evidence"]["returned_count"], 1)
+        self.assertEqual(result["evidence"]["rows"][0]["model_count"], 25)
+        serialized = json.dumps(result)
+        self.assertNotIn("private_path", serialized)
+        self.assertNotIn("/srv/secret", serialized)
 
     async def test_analysis_catalog_uses_completed_directory_index(self):
         result = await self.service.analysis_catalog("癌种内突变锚定基因选择", 25)
@@ -640,6 +751,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "depmap_analysis_catalog",
                         "depmap_artifact_catalog",
+                        "depmap_data_coverage",
                         "depmap_read_resource",
                         "depmap_mutation_anchor_evidence",
                         "depmap_capabilities",
