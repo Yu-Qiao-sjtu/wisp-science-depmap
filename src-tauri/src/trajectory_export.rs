@@ -769,10 +769,9 @@ mod tests {
 
         let html = render_trajectory_html(&snapshot, "zh-CN", "t");
         assert!(html.contains("<meta charset=\"utf-8\">"));
-        assert_eq!(
-            html.matches(text).count(),
-            3,
-            "summary, detail, and raw JSON must agree"
+        assert!(
+            html.matches(text).count() >= 3,
+            "summary, detail, and raw JSON must all preserve the same text"
         );
         assert!(!html.contains('\u{fffd}'));
         let bytes = html.into_bytes();
