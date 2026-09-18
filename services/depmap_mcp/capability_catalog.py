@@ -132,9 +132,9 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
     },
     {
         "intent": "true_love_gene_catalog",
-        "description": "Query TLG/True Love Gene catalogs: stable reciprocal negative rank-1, r<-0.3 negative candidates, or positive reciprocal Top20.",
+        "description": "Query TLG catalogs by explicit scope: pancancer rank-1/derived tables, or lineage-scoped TLG when that table exists.",
         "required": ["catalog"],
-        "optional": ["gene", "partner", "limit"],
+        "optional": ["gene", "partner", "limit", "scope", "lineage"],
         "conditional_optional": {
             "coverage": {
                 "when_catalog_in": [

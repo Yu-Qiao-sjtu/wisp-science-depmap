@@ -715,7 +715,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         true_love = await self.service.true_love_evidence("kras", "nras", 8)
         self.assertEqual(
             self.queries[-1],
-            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8, "catalog": "stable_negative_rank1"},
+            {"mode": "true_love", "gene": "KRAS", "partner": "NRAS", "limit": 8, "catalog": "stable_negative_rank1", "scope": "pancancer"},
         )
         self.assertIn("not proof", true_love["evidence"]["metric_semantics"]["interpretation"])
         positive = await self.service.true_love_evidence(
@@ -790,6 +790,15 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "kras", "nras", 8, "stable_negative_rank1", None
         )
         self.assertEqual(valid["evidence"]["status"], "FOUND")
+        lineage = await self.service.true_love_evidence(
+            None, None, 8, "stable_negative_rank1", None, "lineage", "Liver"
+        )
+        self.assertEqual(self.queries[-1]["scope"], "lineage")
+        self.assertEqual(self.queries[-1]["lineage"], "Liver")
+        mixed = await self.service.true_love_evidence(
+            None, None, 8, "stable_negative_rank1", None, "pancancer", "Liver"
+        )
+        self.assertTrue(mixed["evidence"]["schema_error"])
 
     async def test_three_d_tool_preserves_family_and_cohort_selectors(self):
         result = await self.service.three_d_evidence(

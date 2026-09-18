@@ -24,6 +24,10 @@ Provider schema (`services/depmap_api/provider_schema.py`): MCP advertised
 arguments match runtime validators. `coverage` is catalog-conditional. Each
 mode/tool has its own `limit` maximum. Invalid combinations return an
 `INELIGIBLE` envelope with `schema_error: true` (HTTP 422), not a traceback.
+True Love queries are scope-typed (`scope=lineage|pancancer`). A lineage
+request does not filter the pan-cancer catalog; a missing lineage table is
+`NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
+merged with direction-discovery or effect-correlation lists.
 
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

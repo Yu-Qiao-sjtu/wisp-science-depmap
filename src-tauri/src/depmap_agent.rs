@@ -985,10 +985,30 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "entity_class": "tf_activity",
             "forbidden_tools": ["depmap_biomarker_model_evidence"]
         }),
-        ("true_love_gene_catalog", _) if !requires_user_input => json!({
+        ("true_love_gene_catalog", Some(_)) if !requires_user_input => json!({
             "tool": "depmap_true_love_evidence",
-            "arguments": {"catalog": catalog, "gene": gene, "limit": 20},
-            "single_call": true
+            "arguments": {
+                "catalog": catalog,
+                "gene": gene,
+                "limit": 20,
+                "scope": "lineage",
+                "lineage": canonical_lineage
+            },
+            "single_call": true,
+            "pair_definition": "stable_mutual_rank1_negative_codependency",
+            "forbidden_tools": ["depmap_lineage_direction_discovery", "depmap_pair_evidence"]
+        }),
+        ("true_love_gene_catalog", None) if !requires_user_input => json!({
+            "tool": "depmap_true_love_evidence",
+            "arguments": {
+                "catalog": catalog,
+                "gene": gene,
+                "limit": 20,
+                "scope": "pancancer"
+            },
+            "single_call": true,
+            "pair_definition": "stable_mutual_rank1_negative_codependency",
+            "forbidden_tools": ["depmap_lineage_direction_discovery", "depmap_pair_evidence"]
         }),
         ("tcga_expression_survival", _) if !requires_user_input => json!({
             "tool": "tcga_gene_expression_survival",
@@ -3408,6 +3428,28 @@ mod tests {
             );
             assert_eq!(route["recommended_query"]["single_call"], true);
         }
+    }
+
+    #[test]
+    fn true_love_route_is_scope_typed() {
+        let pan = depmap_route(&json!({
+            "intent":"true_love_gene_catalog",
+            "catalog":"stable_negative_rank1"
+        }))
+        .unwrap();
+        assert_eq!(pan["recommended_query"]["arguments"]["scope"], "pancancer");
+        assert_eq!(
+            pan["recommended_query"]["forbidden_tools"],
+            json!(["depmap_lineage_direction_discovery", "depmap_pair_evidence"])
+        );
+        let liver = depmap_route(&json!({
+            "intent":"true_love_gene_catalog",
+            "catalog":"stable_negative_rank1",
+            "cancer":"肝癌"
+        }))
+        .unwrap();
+        assert_eq!(liver["recommended_query"]["arguments"]["scope"], "lineage");
+        assert_eq!(liver["recommended_query"]["arguments"]["lineage"], "Liver");
     }
 
     #[test]

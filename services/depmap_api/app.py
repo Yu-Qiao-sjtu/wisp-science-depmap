@@ -27,7 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fastapi.exceptions import RequestValidationError
 
-from services.depmap_api.provider_schema import MODE_LIMIT_MAX, schema_violation
+from services.depmap_api.provider_schema import (
+    MODE_LIMIT_MAX,
+    TLG_PAIR_DEFINITIONS,
+    schema_violation,
+)
 from services.depmap_api.scientific_query import (
     EVIDENCE_STATUSES,
     bound_after_rank,
@@ -105,7 +109,7 @@ MODE_OPTIONAL_FIELDS = {
     "enrichment": {"collection", "term", "limit"},
     "subtype": {"gene", "lineage", "contrast", "limit"},
     "coamplification": {"partner", "target", "layer", "limit"},
-    "true_love": {"gene", "partner", "catalog", "coverage", "limit"},
+    "true_love": {"gene", "partner", "catalog", "coverage", "limit", "scope", "lineage"},
     "synthetic_lethal": {"source", "target", "event", "lineage", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
@@ -156,6 +160,7 @@ QUERY_FIELD_ORDER = (
     "catalog",
     "coverage",
     "view",
+    "scope",
 )
 TCGA_SURVIVAL_ENDPOINTS = {"OS", "DSS", "DFI", "PFI"}
 CANONICAL_LINEAGES = (
@@ -456,6 +461,7 @@ class QueryRequest(BaseModel):
     catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
     coverage: Literal["all", "legacy", "quality"] | None = None
     view: Literal["universe", "ranking"] | None = None
+    scope: Literal["lineage", "pancancer"] | None = None
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
@@ -465,7 +471,7 @@ class QueryRequest(BaseModel):
             "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
-            "catalog", "coverage", "view",
+            "catalog", "coverage", "view", "scope",
         }
         supplied = {
             name
@@ -518,6 +524,12 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love partner requires gene")
         if self.mode == "true_love" and self.catalog in {None, "stable_negative_rank1"} and self.coverage is not None:
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
+        if self.mode == "true_love":
+            resolved_scope = self.scope or ("lineage" if self.lineage else "pancancer")
+            if resolved_scope == "lineage" and self.lineage is None:
+                raise ValueError("true_love scope=lineage requires lineage")
+            if resolved_scope == "pancancer" and self.lineage is not None:
+                raise ValueError("true_love pancancer scope does not take lineage")
         if self.limit is not None:
             maximum = MODE_LIMIT_MAX.get(self.mode, 100)
             if self.limit > maximum:
@@ -1633,6 +1645,85 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         return unavailable
     catalog = query.get("catalog") or "stable_negative_rank1"
     coverage = query.get("coverage") or "all"
+    tlg_scope = query.get("scope") or ("lineage" if query.get("lineage") else "pancancer")
+    pair_definition = TLG_PAIR_DEFINITIONS.get(
+        catalog, "stable_mutual_rank1_negative_codependency"
+    )
+    if tlg_scope == "lineage":
+        lineage = query["lineage"]
+        lineage_root = root / "lineage_scope"
+        if not lineage_root.is_dir():
+            return _evidence_response(
+                "COVERAGE_GAP",
+                mode="true_love",
+                reason=(
+                    "no lineage-scoped TLG catalog is installed; the pan-cancer TLG "
+                    "table is a different pair-definition scope"
+                ),
+                catalog=catalog,
+                scope="lineage",
+                lineage=_canonical_lineage_label(lineage),
+                pair_definition=pair_definition,
+                manifest=manifest,
+                provenance=[str(root / "manifest.json")],
+            )
+        unit = lineage_root / _lineage_key(lineage)
+        table = unit / "pairs.csv.gz"
+        unit_manifest = _load_manifest(unit)
+        coverage_status = classify_coverage(
+            module_present=True,
+            complete=bool(unit_manifest and unit_manifest.get("status") == "complete"),
+            table_present=table.is_file(),
+        )
+        if coverage_status is not None:
+            return _evidence_response(
+                coverage_status,
+                mode="true_love",
+                reason=(
+                    "lineage-scoped TLG was not computed for this lineage"
+                    if coverage_status == "NOT_COMPUTED"
+                    else "the lineage-scoped TLG table is absent"
+                ),
+                catalog=catalog,
+                scope="lineage",
+                lineage=_canonical_lineage_label(lineage),
+                pair_definition=pair_definition,
+                manifest=unit_manifest,
+                provenance=[str(unit)],
+            )
+        gene = query.get("gene")
+        partner = query.get("partner")
+        rows = _filter_pair_rows(_read_csv_records(table), gene, partner)
+        rows.sort(
+            key=lambda row: (
+                -float(row.get("bootstrap_reciprocal_stability") or 0),
+                float(row.get("worst_direction_fdr") or 1),
+                str(row.get("gene_a")),
+            )
+        )
+        limit = int(query.get("limit", 20))
+        return _evidence_response(
+            "FOUND" if rows else "NOT_RETAINED",
+            mode="true_love",
+            reason=(
+                "bounded rows found in the lineage-scoped TLG catalog"
+                if rows
+                else "the lineage-scoped TLG catalog retained no matching pair"
+            ),
+            gene=gene.strip().upper() if gene else None,
+            partner=partner.strip().upper() if partner else None,
+            catalog=catalog,
+            scope="lineage",
+            lineage=_canonical_lineage_label(lineage),
+            pair_definition=pair_definition,
+            rows=rows[:limit],
+            summary={
+                "matched_pair_count": len(rows),
+                "returned_count": min(limit, len(rows)),
+            },
+            manifest=unit_manifest,
+            provenance=[str(unit / "manifest.json"), str(table)],
+        )
     stable_root = root / "high_confidence_stability"
     stable_manifest = _load_manifest(stable_root)
     stable_path = stable_root / "final_high_confidence_true_love_genes.csv.gz"
@@ -1684,6 +1775,8 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
         gene=gene.strip().upper() if gene else None,
         partner=partner.strip().upper() if partner else None,
         catalog=catalog, coverage=(None if catalog == "stable_negative_rank1" else coverage), rows=rows[:limit],
+        scope="pancancer",
+        pair_definition=pair_definition,
         summary={"matched_pair_count": len(rows), "returned_count": min(limit, len(rows)), "stability_layer": path == stable_path},
         manifest=selected_manifest,
         provenance=[str(root / "manifest.json"), str(path), *([str(settings.knowledge_root / "depmap-26q1-query-index.sqlite")] if used_index else [])],
