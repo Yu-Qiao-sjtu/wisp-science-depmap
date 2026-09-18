@@ -19,6 +19,120 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
+MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
+MAX_MODEL_LIST_ITEMS = 40
+MAX_MODEL_STRING_CHARS = 4096
+
+
+def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
+    """Bound model-facing evidence while retained artifacts remain addressable."""
+    original_bytes = len(_canonical_json(value).encode("utf-8"))
+    projected: Any = value
+    omitted_items = 0
+    truncated_strings = 0
+
+    def project(item: Any, list_limit: int, string_limit: int) -> tuple[Any, int, int]:
+        local_omitted = 0
+        local_truncated = 0
+
+        def visit(child: Any) -> Any:
+            nonlocal local_omitted, local_truncated
+            if isinstance(child, dict):
+                return {key: visit(nested) for key, nested in child.items()}
+            if isinstance(child, list):
+                local_omitted += max(0, len(child) - list_limit)
+                return [visit(nested) for nested in child[:list_limit]]
+            if isinstance(child, str) and len(child) > string_limit:
+                local_truncated += 1
+                return child[:string_limit] + "…[truncated]"
+            return child
+
+        return visit(item), local_omitted, local_truncated
+
+    # Tighten the projection in stages so scientific rows survive whenever possible.
+    # Counters are recalculated from the original evidence for the final chosen pass.
+    for list_limit, string_limit in (
+        (MAX_MODEL_LIST_ITEMS, MAX_MODEL_STRING_CHARS),
+        (20, 2048),
+        (10, 1024),
+        (5, 512),
+        (2, 256),
+        (1, 128),
+    ):
+        projected, omitted_items, truncated_strings = project(
+            value, list_limit, string_limit
+        )
+        projected_bytes = len(_canonical_json(projected).encode("utf-8"))
+        if projected_bytes <= MAX_MODEL_EVIDENCE_BYTES:
+            break
+
+    omitted_fields = 0
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES and isinstance(value, dict):
+        # Preserve the scientific result rather than replacing it with provenance.
+        # The fallback intentionally keeps a small, explicit schema and accounts for
+        # every top-level field it omits.
+        retained_keys = (
+            "status",
+            "state",
+            "reason",
+            "summary",
+            "result",
+            "rows",
+            "recurrence",
+            "metric_semantics",
+        )
+        reduced = {key: value[key] for key in retained_keys if key in value}
+        omitted_fields = len(value) - len(reduced)
+        projected, omitted_items, truncated_strings = project(reduced, 1, 128)
+        projected["projection_notice"] = (
+            "Evidence was reduced to a bounded scientific result; request a narrower "
+            "query or follow a depmap:// evidence reference for more rows."
+        )
+        projected_bytes = len(_canonical_json(projected).encode("utf-8"))
+
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES:
+        # A pathological mapping can still contain thousands of scalar fields. Keep
+        # one compact scientific row/result and guarantee the advertised byte limit.
+        compact: dict[str, Any] = {}
+        if isinstance(value, dict):
+            for key in ("status", "state", "reason", "summary"):
+                if key in value:
+                    compact[key], _, extra_truncated = project(value[key], 1, 64)
+                    truncated_strings += extra_truncated
+            scientific = value.get("result", value.get("rows"))
+            if scientific is not None:
+                compact["result"], extra_omitted, extra_truncated = project(
+                    scientific, 1, 64
+                )
+                omitted_items += extra_omitted
+                truncated_strings += extra_truncated
+            omitted_fields = max(omitted_fields, len(value) - len(compact))
+        compact["projection_notice"] = "Evidence exceeded the model budget; one scientific result was retained."
+        projected = compact
+        projected_bytes = len(_canonical_json(projected).encode("utf-8"))
+
+    # The compact schema above is deliberately tiny; this final assertion protects
+    # the API contract if it is changed later.
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES:
+        projected = {
+            "status": "BOUNDED",
+            "projection_notice": "Evidence exceeded the model budget; submit a narrower query.",
+        }
+        omitted_fields = len(value) if isinstance(value, dict) else 1
+        projected_bytes = len(_canonical_json(projected).encode("utf-8"))
+    return projected, {
+        "original_bytes": original_bytes,
+        "projected_bytes": projected_bytes,
+        "max_model_bytes": MAX_MODEL_EVIDENCE_BYTES,
+        "max_list_items": MAX_MODEL_LIST_ITEMS,
+        "omitted_items": omitted_items,
+        "omitted_fields": omitted_fields,
+        "truncated_strings": truncated_strings,
+        "is_bounded_projection": omitted_items > 0
+        or truncated_strings > 0
+        or original_bytes != projected_bytes,
+    }
+
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -378,6 +492,7 @@ class DepMapEvidenceService:
             "evidence": portable,
         }
         digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+        model_evidence, projection = _bounded_model_projection(portable)
         inventory_only = tool == "depmap_analysis_catalog"
         return {
             "schema_version": 1,
@@ -387,7 +502,8 @@ class DepMapEvidenceService:
             "read_only": True,
             "new_analysis_started": False,
             "request": request,
-            "evidence": portable,
+            "evidence": model_evidence,
+            "model_projection": projection,
             "presentation_contract": {
                 "answer_type": "analysis_inventory" if inventory_only else "scientific_result",
                 "primary_content": (

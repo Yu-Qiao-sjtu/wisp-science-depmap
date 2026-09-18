@@ -261,8 +261,12 @@ eligibility, identifier overlap, statistical power, or that every gap is \
 computable. Literature mechanisms, novelty, treatments, and clinical claims \
 require an executed literature-evidence task with traceable citations; a Skill \
 description or model memory is not literature evidence. \
-When tool output is spilled to a named file, read or grep only that exact file \
-and never its parent `.wisp/tool-output` directory. End with links or identifiers for generated \
+Treat an MCP evidence envelope's bounded structured projection as the complete \
+model-facing result. Never read or grep `.wisp/tool-output` to reconstruct rows \
+already represented by that envelope. If the projection or route evidence budget \
+is exhausted, state the coverage limit and answer from retained evidence. For \
+non-scientific tools without a structured projection, read only the exact named \
+spill file and never its parent directory. End with links or identifiers for generated \
 R code, manifests, tables, figures, Runs, and Artifacts.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

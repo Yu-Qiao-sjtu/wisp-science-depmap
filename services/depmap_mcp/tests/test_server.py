@@ -13,6 +13,7 @@ from services.depmap_api.app import Settings
 from services.depmap_api.app import QueryRequest
 from services.depmap_mcp.catalog_readers import MODE_ALIASES
 from services.depmap_mcp.server import DepMapEvidenceService
+from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
 
 
 class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
@@ -230,6 +231,52 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         first = await self.service.drug_evidence("olaparib", "BRCA1", "Breast")
         second = await self.service.drug_evidence("olaparib", "BRCA1", "Breast")
         self.assertEqual(first["evidence_id"], second["evidence_id"])
+
+    async def test_large_evidence_is_projected_without_changing_evidence_id(self):
+        async def large_runner(_settings, query):
+            return {
+                "mode": query["mode"],
+                "status": "FOUND",
+                "result": {
+                    "rows": [
+                        {"symbol": f"G{index}", "detail": "x" * 5000}
+                        for index in range(200)
+                    ]
+                },
+            }
+
+        service = DepMapEvidenceService(self.settings, large_runner)
+        first = await service.pan_cancer_dependencies(limit=5)
+        second = await service.pan_cancer_dependencies(limit=5)
+        self.assertEqual(first["evidence_id"], second["evidence_id"])
+        self.assertTrue(first["model_projection"]["is_bounded_projection"])
+        self.assertLessEqual(
+            first["model_projection"]["projected_bytes"], MAX_MODEL_EVIDENCE_BYTES
+        )
+        self.assertIn("result", first["evidence"])
+        self.assertGreater(
+            len(first["evidence"]["result"]["result"]["rows"]), 0
+        )
+        self.assertGreater(first["model_projection"]["omitted_items"], 0)
+
+    async def test_projection_rechecks_budget_for_many_long_provenance_strings(self):
+        async def provenance_runner(_settings, query):
+            return {
+                "status": "FOUND",
+                "result": {"rows": [{"symbol": "ESR1", "score": -0.42}]},
+                "provenance": ["p" * 5000 for _ in range(40)],
+            }
+
+        service = DepMapEvidenceService(self.settings, provenance_runner)
+        result = await service.pan_cancer_dependencies(limit=5)
+        self.assertLessEqual(
+            result["model_projection"]["projected_bytes"], MAX_MODEL_EVIDENCE_BYTES
+        )
+        self.assertEqual(
+            result["evidence"]["result"]["result"]["rows"][0]["symbol"],
+            "ESR1",
+        )
+        self.assertGreater(result["model_projection"]["truncated_strings"], 0)
 
     async def test_cancer_only_direction_discovery_needs_no_anchor_gene(self):
         result = await self.service.lineage_directions("结肠癌", 20)
