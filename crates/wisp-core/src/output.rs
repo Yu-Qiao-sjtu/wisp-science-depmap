@@ -114,6 +114,11 @@ pub trait Output: Send + Sync {
     fn project_write_locked(&self) -> bool {
         false
     }
+    /// False on query-only DepMap turns: `write`/`edit` must not create
+    /// `results/reports/**` or unsolicited CSV.
+    fn artifact_requested(&self) -> bool {
+        true
+    }
     /// Fired once per message appended to the context during a turn (user,
     /// assistant, tool). Lets the host persist incrementally so a crash or a
     /// mid-turn "new session" doesn't lose the whole turn. Default: no-op.
@@ -258,6 +263,9 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
     }
     fn project_write_locked(&self) -> bool {
         self.out.project_write_locked()
+    }
+    fn artifact_requested(&self) -> bool {
+        self.out.artifact_requested()
     }
     fn is_cancelled(&self) -> bool {
         self.cancel

@@ -29,5 +29,9 @@ request does not filter the pan-cancer catalog; a missing lineage table is
 `NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
 merged with direction-discovery or effect-correlation lists.
 
+Query-only turns default to `artifact_requested=false`. `write`/`edit` must not
+create `results/reports/**` or unsolicited CSV; the answer stays a bounded
+envelope in chat.
+
 Case-folder remapping (user ask → failure mode → issue rewrite) lives in
 [depmap-case-to-control-plane.md](depmap-case-to-control-plane.md).

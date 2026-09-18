@@ -94,6 +94,9 @@ impl Tool for EditTool {
             Ok(p) => p,
             Err(e) => return ToolResult::fail(e),
         };
+        if !env.artifact_requested() && crate::presentation::query_only_forbids_path(&path) {
+            return ToolResult::fail(crate::presentation::query_only_write_error(&path));
+        }
         let old = match arg_str(args, "old") {
             Ok(o) => o,
             Err(e) => return ToolResult::fail(e),

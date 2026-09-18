@@ -271,6 +271,11 @@ pub trait ToolEnv: Send + Sync {
     fn project_write_locked(&self) -> bool {
         false
     }
+    /// Query-only scientific turns default to chat envelopes. Hosts that must
+    /// not materialize `results/reports/**` or unsolicited CSV return false.
+    fn artifact_requested(&self) -> bool {
+        true
+    }
     /// Whether the "full" approval scope is active — auto-approve everything,
     /// dangerous commands included. Only the shell danger check consults this;
     /// default `false` keeps the CLI and tests prompting on dangerous commands.

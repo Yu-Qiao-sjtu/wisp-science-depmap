@@ -3101,6 +3101,8 @@ struct TauriOutput {
     /// Project state is frozen by an active isolated exploration. The
     /// conversation remains usable, but mutating tools fail closed.
     project_write_locked: bool,
+    /// DepMap query-only turns keep answers in chat; report paths are forbidden.
+    artifact_requested: bool,
     approval_grants: Arc<StdMutex<ApprovalGrants>>,
     /// Shared live set so enabling Full Permission can take effect during a
     /// running turn, including while it is approaching an approval boundary.
@@ -3560,6 +3562,9 @@ impl Output for TauriOutput {
     }
     fn project_write_locked(&self) -> bool {
         self.project_write_locked
+    }
+    fn artifact_requested(&self) -> bool {
+        self.artifact_requested
     }
     fn on_message(&self, msg: &Message) {
         if msg.role == wisp_llm::Role::User {
