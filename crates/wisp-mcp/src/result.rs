@@ -31,6 +31,13 @@ impl ModelResultEnvelope {
             .then(|| serde_json::from_value(parsed).ok())
             .flatten()
     }
+
+    pub fn append_display_text(&mut self, value: &str) {
+        if !self.display_text.is_empty() {
+            self.display_text.push_str("\n\n");
+        }
+        self.display_text.push_str(value);
+    }
 }
 
 fn model_visible(block: &Value) -> bool {
@@ -283,6 +290,20 @@ mod tests {
             let envelope = ModelResultEnvelope::decode(&model_result(&input).content).unwrap();
             assert_eq!(envelope.structured_content, Some(structured));
         }
+    }
+
+    #[test]
+    fn appending_artifact_text_keeps_the_envelope_decodable() {
+        let mut envelope = ModelResultEnvelope {
+            schema: MODEL_RESULT_SCHEMA.into(),
+            display_text: "result".into(),
+            structured_content: Some(json!({"status":"FOUND"})),
+        };
+        envelope.append_display_text("Generated artifacts: plot.html");
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        let decoded = ModelResultEnvelope::decode(&encoded).unwrap();
+        assert!(decoded.display_text.contains("plot.html"));
+        assert_eq!(decoded.structured_content.unwrap()["status"], "FOUND");
     }
 
     #[test]

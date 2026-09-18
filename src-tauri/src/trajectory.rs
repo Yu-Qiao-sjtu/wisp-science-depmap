@@ -139,6 +139,7 @@ impl TurnBuild {
         name: &str,
         ok: bool,
         duration_ms: u64,
+        display_output: String,
         structured_output: Option<Value>,
     ) {
         for index in 0..self.cells.len() {
@@ -154,6 +155,7 @@ impl TurnBuild {
             if duration_ms > 0 {
                 self.cells[index].duration_ms = Some(duration_ms as i64);
             }
+            self.cells[index].detail_output = Some(display_output);
             if structured_output.is_some() {
                 self.cells[index].structured_output = structured_output;
             }
@@ -371,9 +373,11 @@ pub fn fold_trajectory(
                     continue;
                 }
                 let index = turn_index_for(&turns, record.created_at);
-                let structured_output =
-                    structured_content.or_else(|| legacy_structured_output(&content));
-                turns[index].match_tool_result(&name, ok, duration_ms, structured_output);
+                let is_mcp =
+                    name.starts_with(wisp_tools::MCP_EVENT_PREFIX) || name == "use_mcp_tool";
+                let structured_output = structured_content
+                    .or_else(|| is_mcp.then(|| legacy_structured_output(&content)).flatten());
+                turns[index].match_tool_result(&name, ok, duration_ms, content, structured_output);
             }
             _ => {}
         }
@@ -693,7 +697,14 @@ mod tests {
             ),
             (
                 3,
-                timed_message(Message::tool("c1", "use_mcp_tool", "bounded display"), 1002),
+                timed_message(
+                    Message::tool(
+                        "c1",
+                        "use_mcp_tool",
+                        r#"{"schema":"wisp.mcp-tool-result.v1","display_te…truncated"#,
+                    ),
+                    1002,
+                ),
             ),
         ];
         let event = serde_json::json!({
@@ -717,6 +728,41 @@ mod tests {
             tool.structured_output.as_ref().unwrap()["status"],
             "NOT_RETAINED"
         );
+    }
+
+    #[test]
+    fn ordinary_json_tool_result_is_not_promoted_to_mcp_evidence() {
+        let messages = vec![
+            (1, timed_message(Message::user("q"), 1000)),
+            (
+                2,
+                assistant_with_calls(
+                    "",
+                    vec![tool_call("c1", "shell", r#"{"cmd":"status"}"#)],
+                    1001,
+                ),
+            ),
+            (
+                3,
+                timed_message(Message::tool("c1", "shell", r#"{"ok":true}"#), 1002),
+            ),
+        ];
+        let event = serde_json::json!({
+            "kind":"ToolResult",
+            "frame_id":"f",
+            "name":"shell",
+            "ok":true,
+            "content":"{\"ok\":true}",
+            "duration_ms":1
+        })
+        .to_string();
+        let snapshot = fold_trajectory("f", None, &messages, &[record(1, None, event)]);
+        let tool = snapshot.turns[0]
+            .cells
+            .iter()
+            .find(|cell| cell.kind == "tool")
+            .unwrap();
+        assert!(tool.structured_output.is_none());
     }
 
     #[test]

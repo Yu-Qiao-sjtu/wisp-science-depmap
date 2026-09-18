@@ -3131,6 +3131,18 @@ struct TauriOutput {
     force_ask_mutations: bool,
 }
 
+fn live_agent_event(mut event: AgentEvent) -> AgentEvent {
+    if let AgentEvent::ToolResult {
+        structured_content, ..
+    } = &mut event
+    {
+        // The lossless value belongs in the persisted audit record. The
+        // WebView receives only the bounded display projection.
+        *structured_content = None;
+    }
+    event
+}
+
 impl TauriOutput {
     fn full_permission(&self) -> bool {
         self.full_permission_sessions
@@ -3147,16 +3159,17 @@ impl TauriOutput {
                 let _ = tx.send(SessionUiMessage::Event(event.clone()));
             }
         }
+        let live_event = live_agent_event(event);
         match &self.live_events {
             Some(tx) => {
-                if let Err(send_error) = tx.send(SessionUiMessage::Event(event)) {
+                if let Err(send_error) = tx.send(SessionUiMessage::Event(live_event)) {
                     let SessionUiMessage::Event(event) = send_error.0 else {
                         unreachable!()
                     };
                     emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id));
                 }
             }
-            None => emit_agent_event_to_surfaces_in(&self.app, event, Some(&self.project_id)),
+            None => emit_agent_event_to_surfaces_in(&self.app, live_event, Some(&self.project_id)),
         }
     }
 

@@ -5,11 +5,11 @@ use super::session_commands::transcript_page_items;
 use super::{
     begin_queued_cutin, branch_title, client_turn_error, coalesce_live_agent_events,
     copy_dir_recursive, enable_referenced_contexts, events_to_items, limit_persisted_ui_event,
-    merge_pending_ui_event, message_uses_resource_bindings, messages_to_items, navigation_allowed,
-    parse_disabled_skills, parse_enabled_skill_names, parse_follow_up_questions, parse_skill_tags,
-    persist_ui_events, provenance_ui_file_changes, receive_confirm_decision,
-    resolve_acp_artifact_references, resolve_composer_references, resolve_reader_references,
-    resolve_review_backend, resolve_workspace, session_runtime_status,
+    live_agent_event, merge_pending_ui_event, message_uses_resource_bindings, messages_to_items,
+    navigation_allowed, parse_disabled_skills, parse_enabled_skill_names,
+    parse_follow_up_questions, parse_skill_tags, persist_ui_events, provenance_ui_file_changes,
+    receive_confirm_decision, resolve_acp_artifact_references, resolve_composer_references,
+    resolve_reader_references, resolve_review_backend, resolve_workspace, session_runtime_status,
     should_hide_app_on_macos_close, should_persist_ui_event, specialist_skill_index,
     take_next_queued_turn, user_message_start, AgentEvent, ComposerReferenceArg, McpConnection,
     McpHttpAuth, McpTransport, ProjectActivityLocks, QueuedItem, SessionRuntime, SkillInfo,
@@ -1126,6 +1126,28 @@ fn persisted_stdout_budget_caps_each_tool_and_resets_at_boundaries() {
     )
     .is_some());
     assert_eq!(bytes, 4);
+}
+
+#[test]
+fn live_tool_result_omits_lossless_structured_evidence() {
+    let event = AgentEvent::ToolResult {
+        frame_id: "f".into(),
+        name: "mcp:depmap_query".into(),
+        ok: true,
+        content: "bounded display".into(),
+        structured_content: Some(serde_json::json!({"rows":[1,2,3]})),
+        duration_ms: 1,
+    };
+    let AgentEvent::ToolResult {
+        content,
+        structured_content,
+        ..
+    } = live_agent_event(event)
+    else {
+        panic!("expected tool result")
+    };
+    assert_eq!(content, "bounded display");
+    assert!(structured_content.is_none());
 }
 
 #[test]
