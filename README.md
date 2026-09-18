@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/wisp-depmap-logo.png" alt="Wisp DepMap logo combining a wisp, DNA helix, dependency matrix, and molecular network" width="180" />
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
@@ -13,6 +15,8 @@
 Version **0.1.0**, built on the Wisp Science **v1.13.0** codebase with a dedicated DepMap Agent, remote MCP bridge, and indexed 26Q1 evidence layer.
 
 Explore DepMap mutation, expression, and CRISPR gene-dependency data with reproducible scripts, analysis modules, and an AI research agent.
+
+The mark combines the Wisp Science silhouette and teal, sky, amber, and coral palette with a DNA helix, dependency matrix, and molecular network.
 
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/v/release/Yu-Qiao-sjtu/wisp-science-depmap" alt="Release"></a>
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/downloads/Yu-Qiao-sjtu/wisp-science-depmap/total" alt="Downloads"></a>
