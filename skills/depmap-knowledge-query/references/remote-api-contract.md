@@ -69,8 +69,9 @@ larger than 4 MiB and does not follow redirects.
 contrast without a gene returns retained selective hits. `coamplification`
 requires `source` and optionally accepts `partner`, dependency `target`,
 `layer` (`exhaustive_high_confidence` or `lineage_adjusted`), and `limit`.
-`true_love` optionally accepts `gene`, `partner`, `catalog`, and `limit`.
-`coverage` is valid only for derived catalogs (`negative_r_lt_minus_0_3`,
+`true_love` requires an explicit `scope` of `lineage` or `pancancer` (default
+`pancancer` when omitted). Lineage scope requires `lineage` and never reads the
+pan-cancer TLG table. `coverage` is valid only for derived catalogs (`negative_r_lt_minus_0_3`,
 `positive_reciprocal_top20`). Invalid argument combinations return HTTP 422
 with an `INELIGIBLE` `schema_error` envelope, not a validator traceback.
 Per-mode `limit` maxima are in `services/depmap_api/provider_schema.py`. `synthetic_lethal` requires `source`,

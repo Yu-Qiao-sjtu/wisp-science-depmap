@@ -153,6 +153,7 @@ from services.depmap_api.app import (
 from services.depmap_api.provider_schema import (
     TOOL_LIMIT_MAX,
     limit_violation,
+    tlg_scope_and_lineage,
     true_love_arg_violation,
 )
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
@@ -1342,6 +1343,8 @@ class DepMapEvidenceService:
         limit: int = 20,
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
         coverage: Literal["all", "legacy", "quality"] | None = None,
+        scope: Literal["lineage", "pancancer"] | None = None,
+        lineage: str | None = None,
     ) -> dict[str, Any]:
         request = {
             "gene": gene.strip().upper() if gene else None,
@@ -1349,6 +1352,8 @@ class DepMapEvidenceService:
             "limit": limit,
             "catalog": catalog,
             "coverage": coverage,
+            "scope": scope,
+            "lineage": lineage,
         }
         rejected = true_love_arg_violation(
             catalog=catalog, coverage=coverage, limit=limit
@@ -1357,13 +1362,26 @@ class DepMapEvidenceService:
             return self._envelope(
                 tool="depmap_true_love_evidence", request=request, evidence=rejected
             )
-        query: dict[str, Any] = {"mode": "true_love", "limit": limit, "catalog": catalog}
+        scoped = tlg_scope_and_lineage(scope=scope, lineage=lineage)
+        if isinstance(scoped, dict):
+            return self._envelope(
+                tool="depmap_true_love_evidence", request=request, evidence=scoped
+            )
+        resolved_scope, resolved_lineage = scoped
+        query: dict[str, Any] = {
+            "mode": "true_love",
+            "limit": limit,
+            "catalog": catalog,
+            "scope": resolved_scope,
+        }
         if gene:
             query["gene"] = gene.strip().upper()
         if partner:
             query["partner"] = partner.strip().upper()
         if coverage:
             query["coverage"] = coverage
+        if resolved_lineage:
+            query["lineage"] = resolved_lineage
         item = await self._execute(query)
         validated = item.get("query", query)
         request = {
@@ -1372,6 +1390,9 @@ class DepMapEvidenceService:
             "limit": limit,
             "catalog": catalog,
             "coverage": coverage,
+            "scope": validated.get("scope", resolved_scope),
+            "lineage": validated.get("lineage"),
+            "pair_definition": item.get("pair_definition"),
         }
         return self._envelope(tool="depmap_true_love_evidence", request=request, evidence=item)
 
@@ -1886,8 +1907,12 @@ def build_mcp_server(
                 ),
             ),
         ] = None,
+        scope: Literal["lineage", "pancancer"] | None = None,
+        lineage: str | None = None,
     ) -> dict[str, Any]:
-        return await service.true_love_evidence(gene, partner, limit, catalog, coverage)
+        return await service.true_love_evidence(
+            gene, partner, limit, catalog, coverage, scope, lineage
+        )
 
     @mcp.tool(
         title="DepMap observational synthetic-lethal evidence",

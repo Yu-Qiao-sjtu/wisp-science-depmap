@@ -434,6 +434,79 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(valid_derived.status_code, 200)
         self.assertEqual(valid_derived.json()["status"], "FOUND")
 
+    def test_true_love_scope_is_lineage_or_pancancer_not_a_filter(self):
+        client = TestClient(create_app(self.settings))
+        with client:
+            pancancer = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "true_love", "catalog": "stable_negative_rank1", "limit": 5},
+            ).json()
+            missing_lineage_table = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "true_love",
+                    "scope": "lineage",
+                    "lineage": "Liver",
+                    "limit": 5,
+                },
+            ).json()
+        self.assertEqual(pancancer["status"], "FOUND")
+        self.assertEqual(pancancer["scope"], "pancancer")
+        self.assertEqual(
+            pancancer["pair_definition"],
+            "stable_mutual_rank1_negative_codependency",
+        )
+        self.assertEqual(missing_lineage_table["status"], "COVERAGE_GAP")
+        self.assertEqual(missing_lineage_table["scope"], "lineage")
+        self.assertEqual(missing_lineage_table["lineage"], "Liver")
+        self.assertNotEqual(missing_lineage_table["status"], "FOUND")
+
+        lineage_root = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "true_love_gene"
+            / "lineage_scope"
+            / "Liver"
+        )
+        lineage_root.mkdir(parents=True)
+        (lineage_root / "manifest.json").write_text(
+            json.dumps({"status": "complete"}), encoding="utf-8"
+        )
+        with gzip.open(lineage_root / "pairs.csv.gz", "wt", encoding="utf-8") as handle:
+            handle.write(
+                "true_love_pair_id,gene_a,gene_b,worst_direction_fdr,"
+                "strongest_absolute_correlation,bootstrap_reciprocal_stability\n"
+            )
+            handle.write("LIV-1,FOXA1,HNF4A,0.01,0.55,0.81\n")
+        with client:
+            lineage_hit = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "true_love",
+                    "scope": "lineage",
+                    "lineage": "肝癌",
+                    "limit": 5,
+                },
+            ).json()
+            mixed = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={
+                    "mode": "true_love",
+                    "scope": "pancancer",
+                    "lineage": "Liver",
+                    "limit": 5,
+                },
+            )
+        self.assertEqual(lineage_hit["status"], "FOUND")
+        self.assertEqual(lineage_hit["rows"][0]["gene_a"], "FOXA1")
+        self.assertNotEqual(lineage_hit["rows"][0]["gene_a"], "KRAS")
+        self.assertEqual(mixed.status_code, 422)
+        self.assertTrue(mixed.json()["schema_error"])
+
     def test_true_love_synthetic_lethal_and_three_d_are_bounded_precomputed_queries(self):
         client = TestClient(create_app(self.settings))
         with client:

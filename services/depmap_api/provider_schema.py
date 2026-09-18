@@ -56,6 +56,36 @@ TOOL_LIMIT_MAX: dict[str, int] = {
 }
 
 
+TLG_PAIR_DEFINITIONS = {
+    "stable_negative_rank1": "stable_mutual_rank1_negative_codependency",
+    "negative_r_lt_minus_0_3": "negative_gene_effect_correlation_below_minus_0_3",
+    "positive_reciprocal_top20": "mutual_positive_top20_codependency",
+}
+
+
+def tlg_scope_and_lineage(
+    *,
+    scope: str | None,
+    lineage: str | None,
+) -> tuple[str, str | None] | dict[str, Any]:
+    """Return (scope, lineage) or a schema_violation payload."""
+    resolved = scope or ("lineage" if lineage else "pancancer")
+    if resolved == "lineage" and not lineage:
+        return schema_violation(
+            mode="true_love",
+            scope=resolved,
+            reason="true_love scope=lineage requires lineage",
+        )
+    if resolved == "pancancer" and lineage:
+        return schema_violation(
+            mode="true_love",
+            scope=resolved,
+            lineage=lineage,
+            reason="true_love pancancer scope does not take lineage",
+        )
+    return resolved, lineage
+
+
 def tlg_coverage_is_advertised(catalog: str | None) -> bool:
     return (catalog or "stable_negative_rank1") in TLG_COVERAGE_CATALOGS
 
