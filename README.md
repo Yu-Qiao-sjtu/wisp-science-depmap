@@ -6,7 +6,7 @@
 
 **A local-first AI research workbench for DepMap analysis.**
 
-Version **0.1.0**, built on the Wisp Science **v1.13.0** codebase with a dedicated DepMap Agent, remote MCP bridge, and indexed 26Q1 evidence layer.
+Version **0.12.0**, built on the Wisp Science **v1.13.0** codebase with a dedicated DepMap Agent, remote MCP bridge, and indexed 26Q1 evidence layer.
 
 Explore DepMap mutation, expression, and CRISPR gene-dependency data with reproducible scripts, analysis modules, and an AI research agent.
 
