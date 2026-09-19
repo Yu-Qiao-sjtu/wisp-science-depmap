@@ -1,12 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/wisp-depmap-logo.png" alt="Wisp DepMap logo combining a wisp, DNA helix, dependency matrix, and molecular network" width="180" />
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
-  <img src="docs/assets/wordmark-light.svg" alt="wisp-depmap" width="360" />
-</picture>
+<img src="docs/assets/wisp-knowledge-jade.png" alt="Wisp DepMap logo: a jade-inspired circular form with layered celadon curves and a cinnabar accent" width="320" />
 
 # wisp-depmap
 
@@ -16,7 +10,7 @@ Version **0.1.0**, built on the Wisp Science **v1.13.0** codebase with a dedicat
 
 Explore DepMap mutation, expression, and CRISPR gene-dependency data with reproducible scripts, analysis modules, and an AI research agent.
 
-The mark combines the Wisp Science silhouette and teal, sky, amber, and coral palette with a DNA helix, dependency matrix, and molecular network.
+The jade-inspired mark brings layered evidence and coherent understanding into a continuous cycle of scientific discovery.
 
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/v/release/Yu-Qiao-sjtu/wisp-science-depmap" alt="Release"></a>
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/downloads/Yu-Qiao-sjtu/wisp-science-depmap/total" alt="Downloads"></a>
