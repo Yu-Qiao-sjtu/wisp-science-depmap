@@ -36,6 +36,9 @@ envelope in chat.
 New computation is a gated Run behind a non-exfiltrating remote-compute
 gateway. Tests use fakes; missing knowledge context or MCP dropout is
 `MODULE_UNAVAILABLE` / `configuration_blocked`, not folder guessing or live SSH.
+Default replies are cohort aggregates. Restricted inspection is purpose-gated,
+capped (≤20 rows), query-scoped and pseudonymous, and rejects pagination,
+export, and overlapping reconstruction. ModelIDs never leave the compute side.
 
 Scientific envelopes use progressive disclosure: default layer is status,
 bounded top rows, and filter/truncation flags; manifests and evidence IDs are

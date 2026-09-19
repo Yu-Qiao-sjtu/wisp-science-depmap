@@ -3,6 +3,7 @@
 //! Tests inject fakes. Production never opens a live SSH session from this
 //! module; missing knowledge context is a typed blocked status.
 
+use crate::depmap_model_inspection::{DISCLOSURE_BUDGET, MAX_INSPECTION_ROWS};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +33,15 @@ impl GatewayDecision {
             "ssh_used": self.ssh_used,
             "matrix_export": self.matrix_export,
             "new_analysis_started": false,
-            "exfiltrates": false
+            "exfiltrates": false,
+            "inspection": {
+                "default": "aggregates",
+                "max_rows": MAX_INSPECTION_ROWS,
+                "disclosure_budget": DISCLOSURE_BUDGET,
+                "pagination": false,
+                "export": false,
+                "model_ids": false
+            }
         })
     }
 }
@@ -122,6 +131,9 @@ mod tests {
         let payload = decision.to_json();
         assert_eq!(payload["exfiltrates"], false);
         assert_eq!(payload["new_analysis_started"], false);
+        assert_eq!(payload["inspection"]["default"], "aggregates");
+        assert_eq!(payload["inspection"]["model_ids"], false);
+        assert_eq!(payload["inspection"]["pagination"], false);
     }
 
     #[test]

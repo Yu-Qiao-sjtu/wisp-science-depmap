@@ -40,6 +40,7 @@ mod delegation_resources;
 mod delegation_runtime;
 mod delegation_tool;
 mod depmap_agent;
+mod depmap_model_inspection;
 mod depmap_remote_compute;
 mod desktop_lifecycle;
 mod device_bridge;
