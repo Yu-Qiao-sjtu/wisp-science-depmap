@@ -1,6 +1,7 @@
 //! Restricted per-model inspection: server may traverse the full cohort;
 //! the client never receives ModelIDs, pagination, or exportable row dumps.
 
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
@@ -168,7 +169,11 @@ pub fn restricted_inspect(
         }
     }
     let selected: Vec<&ModelRow> = ranked.into_iter().take(cap).collect();
-    if ledger.disclosed_models.len() + selected.len() > DISCLOSURE_BUDGET {
+    let new_ids = selected
+        .iter()
+        .filter(|row| !ledger.disclosed_models.contains(&row.model_id))
+        .count();
+    if ledger.disclosed_models.len() + new_ids > DISCLOSURE_BUDGET {
         return Err(InspectionError::BudgetExceeded);
     }
     let overlap = selected
@@ -195,12 +200,186 @@ pub fn restricted_inspect(
             };
             values.push((field.clone(), value));
         }
-        out.push(RestrictedRow {
-            pseudonym,
-            values,
-        });
+        out.push(RestrictedRow { pseudonym, values });
     }
     Ok(out)
+}
+
+/// Runtime gate for any client-visible compute/query payload: ModelIDs stay
+/// server-side. Default is aggregates; `inspect` is purpose-gated.
+pub fn apply_output_policy(
+    mut payload: Value,
+    query: &Value,
+    ledger: &mut DisclosureLedger,
+) -> Result<Value, InspectionError> {
+    let rows = collect_model_rows(&payload);
+    if rows.is_empty() {
+        return Ok(payload);
+    }
+    let aggregates = aggregate_diagnostics(&rows);
+    strip_model_ids(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("rows");
+        object.insert(
+            "aggregates".into(),
+            json!({
+                "cohort_n": aggregates.cohort_n,
+                "non_missing_n": aggregates.non_missing_n,
+                "mean": aggregates.mean,
+                "median": aggregates.median,
+                "sd": aggregates.sd,
+                "outlier_count": aggregates.outlier_count,
+                "model_ids_returned": false
+            }),
+        );
+        object.insert("inspection_mode".into(), json!("aggregates"));
+    }
+    let wants_inspect = query.get("inspect").map(Value::is_object).unwrap_or(false);
+    if !wants_inspect {
+        return Ok(payload);
+    }
+    let request = inspection_request_from_query(query)?;
+    let restricted = restricted_inspect(&rows, &request, ledger)?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "restricted_rows".into(),
+            json!(restricted
+                .iter()
+                .map(|row| {
+                    json!({
+                        "pseudonym": row.pseudonym,
+                        "values": row.values
+                    })
+                })
+                .collect::<Vec<_>>()),
+        );
+        object.insert("inspection_mode".into(), json!("restricted"));
+    }
+    Ok(payload)
+}
+
+fn inspection_request_from_query(query: &Value) -> Result<InspectionRequest, InspectionError> {
+    let inspect = query.get("inspect").cloned().unwrap_or(Value::Null);
+    let purpose = inspect
+        .get("purpose")
+        .or_else(|| query.get("inspect_purpose"))
+        .and_then(Value::as_str)
+        .ok_or(InspectionError::PurposeRequired)?;
+    let purpose = match purpose {
+        "outlier_validation" => InspectionPurpose::OutlierValidation,
+        "missingness_check" => InspectionPurpose::MissingnessCheck,
+        "group_assignment" => InspectionPurpose::GroupAssignment,
+        _ => return Err(InspectionError::PurposeRequired),
+    };
+    Ok(InspectionRequest {
+        purpose,
+        max_rows: inspect
+            .get("max_rows")
+            .and_then(Value::as_u64)
+            .unwrap_or(MAX_INSPECTION_ROWS as u64) as usize,
+        offset: inspect
+            .get("offset")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize),
+        export_allowed: inspect
+            .get("export")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        fields: inspect
+            .get("fields")
+            .and_then(Value::as_array)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["gene_effect".into(), "mutation_group".into()]),
+        query_id: inspect
+            .get("query_id")
+            .or_else(|| query.get("query_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("anonymous")
+            .to_string(),
+    })
+}
+
+fn collect_model_rows(value: &Value) -> Vec<ModelRow> {
+    let mut rows = Vec::new();
+    walk_collect(value, &mut rows);
+    rows
+}
+
+fn walk_collect(value: &Value, rows: &mut Vec<ModelRow>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                walk_collect(item, rows);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(model_id) = object
+                .get("model_id")
+                .or_else(|| object.get("ModelID"))
+                .and_then(Value::as_str)
+            {
+                rows.push(ModelRow {
+                    model_id: model_id.to_string(),
+                    gene_effect: object
+                        .get("gene_effect")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    mutation_group: object
+                        .get("mutation_group")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    influence: object
+                        .get("influence")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    missing: object
+                        .get("missing")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+            for nested in object.values() {
+                walk_collect(nested, rows);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_model_ids(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                strip_model_ids(item);
+            }
+        }
+        Value::Object(object) => {
+            let keys: Vec<String> = object
+                .keys()
+                .filter(|key| {
+                    matches!(
+                        key.as_str(),
+                        "model_id" | "ModelID" | "depmap_id" | "cell_line_id"
+                    )
+                })
+                .cloned()
+                .collect();
+            for key in keys {
+                object.remove(&key);
+            }
+            for nested in object.values_mut() {
+                strip_model_ids(nested);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn query_scoped_pseudonym(query_id: &str, model_id: &str) -> String {
@@ -209,7 +388,10 @@ fn query_scoped_pseudonym(query_id: &str, model_id: &str) -> String {
     hasher.update(b"\0");
     hasher.update(model_id.as_bytes());
     let digest = hasher.finalize();
-    format!("m{:x}", u32::from_be_bytes(digest[0..4].try_into().unwrap()))
+    format!(
+        "m{:x}",
+        u32::from_be_bytes(digest[0..4].try_into().unwrap())
+    )
 }
 
 #[cfg(test)]
@@ -253,9 +435,8 @@ mod tests {
         let rows = restricted_inspect(&cohort(80), &request("q1"), &mut ledger).unwrap();
         assert!(rows.len() <= MAX_INSPECTION_ROWS);
         assert!(rows.iter().all(|row| row.pseudonym.starts_with('m')));
-        assert!(rows
-            .iter()
-            .all(|row| !row.pseudonym.contains("ACH-") && !row.values.iter().any(|(_, v)| v.contains("ACH-"))));
+        assert!(rows.iter().all(|row| !row.pseudonym.contains("ACH-")
+            && !row.values.iter().any(|(_, v)| v.contains("ACH-"))));
     }
 
     #[test]
@@ -264,13 +445,17 @@ mod tests {
         let mut paged = request("q1");
         paged.offset = Some(20);
         assert_eq!(
-            restricted_inspect(&cohort(80), &paged, &mut ledger).unwrap_err().code(),
+            restricted_inspect(&cohort(80), &paged, &mut ledger)
+                .unwrap_err()
+                .code(),
             "pagination_forbidden"
         );
         let mut export = request("q2");
         export.export_allowed = true;
         assert_eq!(
-            restricted_inspect(&cohort(80), &export, &mut ledger).unwrap_err().code(),
+            restricted_inspect(&cohort(80), &export, &mut ledger)
+                .unwrap_err()
+                .code(),
             "export_forbidden"
         );
     }
@@ -291,5 +476,46 @@ mod tests {
         assert!(!first.is_empty());
         let err = restricted_inspect(&cohort(80), &request("q1-repeat"), &mut ledger).unwrap_err();
         assert_eq!(err.code(), "overlapping_query_reconstruction");
+    }
+
+    #[test]
+    fn budget_counts_unique_models_not_repeat_rows() {
+        let mut ledger = DisclosureLedger::default();
+        for i in 0..2 {
+            let mut req = request(&format!("seed-{i}"));
+            req.max_rows = 20;
+            let slice: Vec<ModelRow> = cohort(80).into_iter().skip(i * 20).take(20).collect();
+            restricted_inspect(&slice, &req, &mut ledger).unwrap();
+        }
+        assert_eq!(ledger_size(&ledger), 40);
+        let mut overlap_req = request("small-overlap");
+        overlap_req.max_rows = 5;
+        let mixed: Vec<ModelRow> = cohort(80).into_iter().skip(38).take(5).collect();
+        let err = restricted_inspect(&mixed, &overlap_req, &mut ledger).unwrap_err();
+        assert_eq!(err.code(), "overlapping_query_reconstruction");
+    }
+
+    fn ledger_size(ledger: &DisclosureLedger) -> usize {
+        ledger.disclosed_models.len()
+    }
+
+    #[test]
+    fn output_policy_strips_model_ids_and_defaults_to_aggregates() {
+        let mut ledger = DisclosureLedger::default();
+        let payload = json!({
+            "rows": [
+                {"model_id": "ACH-000001", "gene_effect": -1.2, "mutation_group": "wt", "influence": 0.1},
+                {"model_id": "ACH-000002", "gene_effect": -0.4, "mutation_group": "mut", "influence": 0.2},
+                {"model_id": "ACH-000003", "gene_effect": -0.5, "mutation_group": "wt", "influence": 0.3},
+                {"model_id": "ACH-000004", "gene_effect": -0.6, "mutation_group": "wt", "influence": 0.4},
+                {"model_id": "ACH-000005", "gene_effect": -0.7, "mutation_group": "mut", "influence": 0.5}
+            ]
+        });
+        let out = apply_output_policy(payload, &json!({}), &mut ledger).unwrap();
+        let text = out.to_string();
+        assert!(!text.contains("ACH-"));
+        assert_eq!(out["inspection_mode"], "aggregates");
+        assert_eq!(out["aggregates"]["cohort_n"], 5);
+        assert!(out.get("restricted_rows").is_none());
     }
 }

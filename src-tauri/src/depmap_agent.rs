@@ -4,11 +4,14 @@
 //! opens raw DepMap matrices and never starts a recomputation; a coverage gap
 //! must transition to the persisted Run path explicitly.
 
+use crate::depmap_model_inspection::{self, DisclosureLedger};
+use crate::depmap_remote_compute::{ComputeKind, NonExfiltratingGateway, RemoteComputeGateway};
 use crate::models;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::process::Command;
 use url::{Host, Url};
@@ -1082,7 +1085,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "matrix_export": false,
             "knowledge_context_miss": "MODULE_UNAVAILABLE",
             "mcp_dropout": "MODULE_UNAVAILABLE",
-            "new_compute": "gated_run"
+            "new_compute": "gated_run",
+            "inspection": NonExfiltratingGateway
+                .admit(ComputeKind::RebuildRankings, true, true)
+                .to_json()["inspection"]
+                .clone()
         },
         "allowed_next_tools": tools,
         "evidence_budget": {
@@ -1540,6 +1547,21 @@ async fn read_bounded_json(path: &Path) -> Result<Value, String> {
     read_json_file(path).await
 }
 
+fn client_disclosure_ledger() -> &'static Mutex<DisclosureLedger> {
+    static LEDGER: OnceLock<Mutex<DisclosureLedger>> = OnceLock::new();
+    LEDGER.get_or_init(|| Mutex::new(DisclosureLedger::default()))
+}
+
+fn apply_client_output_policy(
+    payload: Value,
+    query: &Value,
+) -> Result<Value, depmap_model_inspection::InspectionError> {
+    let mut ledger = client_disclosure_ledger()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    depmap_model_inspection::apply_output_policy(payload, query, &mut ledger)
+}
+
 impl DepMapQueryTool {
     pub(crate) fn from_project(
         project_root: PathBuf,
@@ -1604,6 +1626,16 @@ impl DepMapQueryTool {
                     "tool":tool_name
                 })
             });
+        let query_for_policy = parsed.get("query").cloned().unwrap_or_else(|| args.clone());
+        parsed = match apply_client_output_policy(parsed, &query_for_policy) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return ToolResult::fail(blocked(
+                    error.code(),
+                    "Per-model identifiers cannot leave the compute side.",
+                ))
+            }
+        };
         let ledger_arguments = parsed.get("query").unwrap_or(args);
         let compact_payload = compact_ledger_payload(&parsed);
         let record = match self
@@ -3319,7 +3351,15 @@ mod tests {
         assert_eq!(report["execution_level"], "L4_DURABLE");
         assert_eq!(report["requires_approval"], true);
         assert_eq!(report["remote_compute"]["live_ssh_forbidden"], true);
-        assert_eq!(report["remote_compute"]["knowledge_context_miss"], "MODULE_UNAVAILABLE");
+        assert_eq!(
+            report["remote_compute"]["knowledge_context_miss"],
+            "MODULE_UNAVAILABLE"
+        );
+        assert_eq!(
+            report["remote_compute"]["inspection"]["default"],
+            "aggregates"
+        );
+        assert_eq!(report["remote_compute"]["inspection"]["model_ids"], false);
         assert_eq!(
             report["guardrails"]["workflow_semantic_match_alone_is_sufficient"],
             false
