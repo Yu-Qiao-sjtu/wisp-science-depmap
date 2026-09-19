@@ -1,0 +1,115 @@
+name: Upstream base sync
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: upstream-base-sync
+  cancel-in-progress: false
+
+jobs:
+  stable-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve latest stable upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repository="$(python -c 'import json; print(json.load(open(".github/upstream-base.json"))["repository"])')"
+          latest_tag="$(gh api "repos/${repository}/releases/latest" --jq .tag_name)"
+          git fetch --force "https://github.com/${repository}.git" "refs/tags/${latest_tag}:refs/tags/upstream-${latest_tag}"
+          latest_sha="$(git rev-list -n 1 "refs/tags/upstream-${latest_tag}")"
+          plan="$(python scripts/upstream_base_monitor.py check --marker .github/upstream-base.json --latest-tag "${latest_tag}" --latest-sha "${latest_sha}")"
+          echo "repository=${repository}" >> "$GITHUB_OUTPUT"
+          echo "tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "sha=${latest_sha}" >> "$GITHUB_OUTPUT"
+          echo "upgrade=$(python -c 'import json,sys; print(str(json.load(sys.stdin)["upgrade"]).lower())' <<< "${plan}")" >> "$GITHUB_OUTPUT"
+          echo "branch=$(python -c 'import json,sys; print(json.load(sys.stdin)["branch"])' <<< "${plan}")" >> "$GITHUB_OUTPUT"
+          echo "### Upstream base monitor" >> "$GITHUB_STEP_SUMMARY"
+          echo "Current: $(python -c 'import json; print(json.load(open(".github/upstream-base.json"))["tag"])')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Latest stable: ${latest_tag} (${latest_sha})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge upstream release into automation branch
+        if: steps.upstream.outputs.upgrade == 'true'
+        id: merge
+        env:
+          BRANCH: ${{ steps.upstream.outputs.branch }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "wisp-depmap upstream bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH}" "origin/main"
+          set +e
+          git merge --no-ff "refs/tags/upstream-${TAG}" -m "Merge Wisp Science ${TAG} base"
+          merge_status=$?
+          set -e
+          if [ "${merge_status}" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U | paste -sd ',' -)"
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "conflict_files=${conflicts}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python scripts/upstream_base_monitor.py record \
+            --marker .github/upstream-base.json \
+            --repository "${{ steps.upstream.outputs.repository }}" \
+            --tag "${TAG}" \
+            --sha "${{ steps.upstream.outputs.sha }}"
+          git add .github/upstream-base.json
+          git commit -m "Record Wisp Science ${TAG} base"
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update conflict issue
+        if: steps.upstream.outputs.upgrade == 'true' && steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+          CONFLICTS: ${{ steps.merge.outputs.conflict_files }}
+        run: |
+          set -euo pipefail
+          title="Upstream base sync blocked for ${TAG}"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')"
+          body="The scheduled Wisp Science base upgrade could not be prepared automatically because Git reported merge conflicts.\n\nConflicting repository-relative files: \`${CONFLICTS}\`.\n\nNo change was pushed to main. Resolve this in an isolated upgrade PR while preserving wisp-depmap branding, DepMap MCP contracts, and privacy boundaries."
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "$GITHUB_REPOSITORY" --body "${body}"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "${title}" --body "${body}"
+          fi
+
+      - name: Push upgrade branch and create PR
+        if: steps.upstream.outputs.upgrade == 'true' && steps.merge.outputs.conflict == 'false'
+        id: pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.upstream.outputs.branch }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin "${BRANCH}"
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "${BRANCH}" --json number --jq '.[0].number // empty')"
+          if [ -z "${pr}" ]; then
+            pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "${BRANCH}" \
+              --title "Upgrade Wisp Science base to ${TAG}" \
+              --body "Automated stable-base upgrade to upstream ${TAG}. The upstream release is merged as history, while wisp-depmap branding and DepMap-specific changes remain reviewable in this PR. Required checks run automatically, but a maintainer must review and merge the upgrade. Conflicts are never resolved automatically.")"
+          fi
+          echo "pr=${pr}" >> "$GITHUB_OUTPUT"
+          gh workflow run test.yml --repo "$GITHUB_REPOSITORY" --ref "${BRANCH}"
