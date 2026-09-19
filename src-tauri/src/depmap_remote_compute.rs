@@ -104,7 +104,11 @@ mod tests {
             knowledge_context_ready: bool,
             mcp_connected: bool,
         ) -> GatewayDecision {
-            NonExfiltratingGateway.admit(kind, knowledge_context_ready && self.ready, mcp_connected && self.mcp)
+            NonExfiltratingGateway.admit(
+                kind,
+                knowledge_context_ready && self.ready,
+                mcp_connected && self.mcp,
+            )
         }
     }
 

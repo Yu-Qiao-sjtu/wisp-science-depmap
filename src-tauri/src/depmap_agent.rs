@@ -3319,7 +3319,10 @@ mod tests {
         assert_eq!(report["execution_level"], "L4_DURABLE");
         assert_eq!(report["requires_approval"], true);
         assert_eq!(report["remote_compute"]["live_ssh_forbidden"], true);
-        assert_eq!(report["remote_compute"]["knowledge_context_miss"], "MODULE_UNAVAILABLE");
+        assert_eq!(
+            report["remote_compute"]["knowledge_context_miss"],
+            "MODULE_UNAVAILABLE"
+        );
         assert_eq!(
             report["guardrails"]["workflow_semantic_match_alone_is_sufficient"],
             false
