@@ -2,7 +2,6 @@
 //! the client never receives ModelIDs, pagination, or exportable row dumps.
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 pub const MAX_INSPECTION_ROWS: usize = 20;
@@ -186,7 +185,7 @@ pub fn restricted_inspect(
     let mut out = Vec::new();
     for row in selected {
         ledger.disclosed_models.insert(row.model_id.clone());
-        let pseudonym = query_scoped_pseudonym(&request.query_id, &row.model_id);
+        let pseudonym = opaque_pseudonym();
         if !ledger.issued_pseudonyms.insert(pseudonym.clone()) {
             return Err(InspectionError::OverlappingReconstruction);
         }
@@ -382,16 +381,8 @@ fn strip_model_ids(value: &mut Value) {
     }
 }
 
-fn query_scoped_pseudonym(query_id: &str, model_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(query_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(model_id.as_bytes());
-    let digest = hasher.finalize();
-    format!(
-        "m{:x}",
-        u32::from_be_bytes(digest[0..4].try_into().unwrap())
-    )
+fn opaque_pseudonym() -> String {
+    format!("m{}", &uuid::Uuid::new_v4().simple().to_string()[..12])
 }
 
 #[cfg(test)]
