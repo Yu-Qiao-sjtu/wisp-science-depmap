@@ -90,6 +90,13 @@ remote-file tools, shell, local configuration, or a saved SSH host. A future
 hosted computation capability must be an explicit authenticated MCP job API
 with its own submit/status/cancel contract.
 
+Before those remote scientific tools are enabled, the desktop calls
+`depmap_status` and verifies the server's query-contract version and deployment
+identities. An old, missing, or future incompatible contract is a typed
+`STALE_CONTRACT` / `INCOMPATIBLE_PROVIDER` boundary; only the status diagnostic
+remains registered until the server is redeployed, its index rebuilt, and the
+service restarted.
+
 ## Starting a session
 
 Open **Settings → Specialists → DepMap Agent**, then choose **Start specialist

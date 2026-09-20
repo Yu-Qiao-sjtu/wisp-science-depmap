@@ -172,6 +172,20 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "tcga_expression_and_survival_association",
         )
 
+    async def test_status_publishes_deployment_contract_identity(self):
+        first = await self.service.status()
+        second = await self.service.status()
+        evidence = first["evidence"]
+
+        self.assertEqual(evidence["query_contract_version"], 11)
+        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-11")
+        self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
+        self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
+        self.assertEqual(
+            evidence["capability_catalog_digest"],
+            second["evidence"]["capability_catalog_digest"],
+        )
+
     async def test_read_resource_recursively_redacts_absolute_paths(self):
         inside = self.root / "depmap-26q1-full" / "blocks" / "part-001.rds"
         uri = self.index_resource(

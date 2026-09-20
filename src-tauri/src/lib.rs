@@ -5311,6 +5311,7 @@ fn r_kernel_worker_path() -> PathBuf {
 struct ToolWiringResult {
     errors: Vec<String>,
     added_tools: Vec<String>,
+    depmap_contract: Option<depmap_agent::DepMapContractAssessment>,
     /// Plugin ids attempted while building this Agent and any startup or
     /// tools/list errors observed for each one. An empty list means the latest
     /// attempt succeeded and clears an older diagnostic.
@@ -5568,7 +5569,12 @@ async fn finish_custom_mcp_wiring(
                 match register_mcp_with_approval(registry, client, &connector_id, require_approval)
                     .await
                 {
-                    Ok(names) => result.added_tools.extend(names),
+                    Ok(registered) => {
+                        result.added_tools.extend(registered.names);
+                        if registered.depmap_contract.is_some() {
+                            result.depmap_contract = registered.depmap_contract;
+                        }
+                    }
                     Err(error) => {
                         let message = format!("MCP '{name}': {error}");
                         if let Some(plugin_id) = plugin_id {
@@ -5603,7 +5609,7 @@ async fn register_mcp_with_approval(
     client: std::sync::Arc<wisp_mcp::McpClient>,
     connector_id: &str,
     require_approval: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<RegisteredMcpTools, String> {
     if connector_id.trim().is_empty() {
         tracing::warn!(
             "registering MCP tools with an empty connector_id; Always-allow grants will not be offered"
@@ -5611,9 +5617,46 @@ async fn register_mcp_with_approval(
     }
     match client.tools_list().await {
         Ok(tools) => {
+            let depmap_status = tools.iter().find(|tool| tool.name == "depmap_status");
+            let is_depmap = tools.iter().any(|tool| tool.name == "depmap_capabilities");
+            let depmap_contract = if is_depmap {
+                Some(match depmap_status {
+                    Some(status_tool) => match client
+                        .tool_call_checked(status_tool, &serde_json::json!({}))
+                        .await
+                    {
+                        Ok(result) if !result.is_error => result
+                            .structured_content
+                            .as_ref()
+                            .map(depmap_agent::evaluate_depmap_contract)
+                            .unwrap_or_else(|| {
+                                depmap_agent::DepMapContractAssessment::handshake_error(
+                                    "depmap_status returned no structured contract payload",
+                                )
+                            }),
+                        Ok(_) => depmap_agent::DepMapContractAssessment::handshake_error(
+                            "depmap_status returned an MCP tool error",
+                        ),
+                        Err(error) => depmap_agent::DepMapContractAssessment::handshake_error(
+                            format!("depmap_status handshake failed: {error}"),
+                        ),
+                    },
+                    None => depmap_agent::DepMapContractAssessment::stale(
+                        "DepMap MCP does not expose the required depmap_status contract handshake",
+                    ),
+                })
+            } else {
+                None
+            };
             let collisions: Vec<_> = tools
                 .iter()
-                .filter(|tool| tool.visible_to_model() && registry.get(&tool.name).is_some())
+                .filter(|tool| {
+                    tool.visible_to_model()
+                        && depmap_contract.as_ref().is_none_or(|contract| {
+                            depmap_agent::depmap_tool_enabled_for_contract(contract, &tool.name)
+                        })
+                        && registry.get(&tool.name).is_some()
+                })
                 .map(|tool| tool.name.clone())
                 .collect();
             if !collisions.is_empty() {
@@ -5625,7 +5668,11 @@ async fn register_mcp_with_approval(
             let catalog = std::sync::Arc::new(tools);
             let mut names = Vec::new();
             for t in catalog.iter() {
-                if !t.visible_to_model() {
+                if !t.visible_to_model()
+                    || depmap_contract.as_ref().is_some_and(|contract| {
+                        !depmap_agent::depmap_tool_enabled_for_contract(contract, &t.name)
+                    })
+                {
                     continue;
                 }
                 names.push(t.name.clone());
@@ -5646,13 +5693,21 @@ async fn register_mcp_with_approval(
                 };
                 registry.add(Box::new(tool));
             }
-            Ok(names)
+            Ok(RegisteredMcpTools {
+                names,
+                depmap_contract,
+            })
         }
         Err(e) => {
             tracing::warn!("mcp tools_list failed: {e}");
             Err(format!("MCP tools/list: {e}"))
         }
     }
+}
+
+struct RegisteredMcpTools {
+    names: Vec<String>,
+    depmap_contract: Option<depmap_agent::DepMapContractAssessment>,
 }
 
 /// Get the active session frame id, creating a new SQLite frame if none.

@@ -119,6 +119,20 @@ through their catalog and `depmap://` provenance. The DepMap Agent consumes the
 structured projection directly and does not re-read `.wisp/tool-output` to
 reconstruct the same table.
 
+`depmap_status` is also the deployment-integrity handshake. It publishes the
+query-contract version, server build identity, capability-catalog digest, and
+query-index build identity. Wisp checks that structured response before it
+registers scientific DepMap tools. A missing or unsupported contract leaves
+only the status diagnostic available and reports `STALE_CONTRACT` or
+`INCOMPATIBLE_PROVIDER`; it never falls back to local files or SSH.
+Production deployments should set `DEPMAP_MCP_BUILD_ID` to an immutable image
+or commit identity; development falls back to a contract-derived label.
+
+After deploying a contract change, rebuild the query index, restart the MCP
+service, and call `depmap_status`. Confirm that the advertised contract version
+matches the desktop-supported range and record both catalog identities before
+running scientific queries.
+
 `depmap_capabilities` reads its 20 intent contracts from SQLite
 `capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
 build-time definition used to populate that table; code fallback is used only

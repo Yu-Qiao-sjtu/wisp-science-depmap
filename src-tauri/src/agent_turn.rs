@@ -824,8 +824,9 @@ pub(crate) async fn send_message_inner(
             // spoofable `depmap_*` name prefix.
             let remote_read_only_tools =
                 depmap_agent::validated_remote_depmap_tools(&agent.tools, &wiring.added_tools);
-            agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool::new(
+            agent.add_tool(Box::new(depmap_agent::DepMapAgentRouteTool::with_contract(
                 remote_read_only_tools,
+                wiring.depmap_contract.clone(),
             )));
         }
         {
