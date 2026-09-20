@@ -1,12 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/wisp-depmap-logo.png" alt="融合 Wisp、DNA、依赖矩阵与分子网络的 Wisp DepMap 标志" width="180" />
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/wordmark-light.svg" />
-  <img src="docs/assets/wordmark-light.svg" alt="wisp-depmap" width="360" />
-</picture>
+<img src="docs/assets/wisp-knowledge-jade.png" alt="Wisp DepMap 标志：玉璧般的圆形轮廓、层叠青瓷绿曲线与朱砂点缀" width="320" />
 
 # wisp-depmap
 
@@ -16,7 +10,7 @@
 
 通过可复现脚本、分析模块和 AI 科研智能体，探索 DepMap 的突变、表达量与 CRISPR 基因依赖数据。
 
-该标志沿用 Wisp Science 的精灵轮廓与青绿、天蓝、琥珀、珊瑚配色，并融入 DNA、依赖矩阵和分子网络。
+标志以玉璧与虚实相生为灵感，寓意多源证据汇聚成认识，并不断开启新的科学探索。
 
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/v/release/Yu-Qiao-sjtu/wisp-science-depmap" alt="Release"></a>
 <a href="https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases"><img src="https://img.shields.io/github/downloads/Yu-Qiao-sjtu/wisp-science-depmap/total" alt="下载量"></a>

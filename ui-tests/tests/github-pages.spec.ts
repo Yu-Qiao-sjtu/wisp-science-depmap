@@ -318,20 +318,24 @@ test("English links preserve language without storage and old configuration page
 });
 
 for (const readme of ["README.md", "README_zh.md"]) {
-  test(`${readme} wordmark selects a readable asset for each color scheme`, async ({ page }) => {
+  test(`${readme} jade logo loads for each color scheme`, async ({ page }) => {
     await page.route("https://wordmark.test/**", (route) => route.fulfill({
-      contentType: "image/svg+xml",
-      body: readRepositoryFile(new URL(route.request().url()).pathname.slice(1)),
+      path: resolve(repositoryRoot, new URL(route.request().url()).pathname.slice(1)),
     }));
-    const picture = readRepositoryFile(readme).match(/<picture>[\s\S]*?<\/picture>/)?.[0];
-    expect(picture).toBeTruthy();
-    await page.setContent(`<base href="https://wordmark.test/">${picture}`);
-    const logo = page.getByRole("img", { name: "wisp-depmap", exact: true });
+    const source = readRepositoryFile(readme);
+    expect(source).not.toMatch(/docs\/assets\/(?:wordmark-(?:light|dark)\.svg|wisp-depmap-logo\.png)/);
+    const image = source.match(/<img\b[^>]*>/)?.[0];
+    expect(image).toBeTruthy();
+    await page.setContent(`<base href="https://wordmark.test/">${image}`);
+    const logo = page.getByRole("img");
+    await expect(logo).toHaveAccessibleName(/Wisp DepMap/);
     for (const mode of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: mode });
+      await page.evaluate((dark) => { document.body.style.backgroundColor = dark ? "#0d1117" : "#ffffff"; }, mode === "dark");
       await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.currentSrc))
-        .toContain(`wordmark-${mode}.svg`);
+        .toContain("docs/assets/wisp-knowledge-jade.png");
       await expect.poll(() => logo.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+      await expect(logo).toBeVisible();
     }
   });
 }
