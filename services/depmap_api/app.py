@@ -12,6 +12,7 @@ import gzip
 import hmac
 import json
 import logging
+import math
 import os
 import csv
 import re
@@ -754,6 +755,7 @@ def _run_model_gene_effect_query(
         for row in parquet.read_table(metadata_path).to_pylist()
     }
     rows = []
+    untested_model_count = 0
     for effect in effect_rows:
         model_id = str(effect.get("model_id") or "").strip().upper()
         model = metadata.get(model_id)
@@ -765,8 +767,16 @@ def _run_model_gene_effect_query(
         if query.get("model_id") and model_id != query["model_id"]:
             continue
         value = effect.get("gene_effect")
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            untested_model_count += 1
+            continue
+        if not math.isfinite(numeric_value):
+            untested_model_count += 1
+            continue
         threshold = query.get("gene_effect_at_or_below")
-        if threshold is not None and (value is None or float(value) > float(threshold)):
+        if threshold is not None and numeric_value > float(threshold):
             continue
         rows.append(
             {
@@ -774,7 +784,7 @@ def _run_model_gene_effect_query(
                 "cell_line_name": model.get("cell_line_name"),
                 "lineage": lineage,
                 "symbol": gene,
-                "gene_effect": value,
+                "gene_effect": numeric_value,
             }
         )
     rows.sort(key=lambda row: (float(row["gene_effect"]), row["model_id"]))
@@ -788,7 +798,11 @@ def _run_model_gene_effect_query(
         reason=(
             "bounded exact-gene ModelID rows joined to versioned model metadata"
             if page
-            else "no model matched the declared ModelID, lineage, and threshold predicates"
+            else (
+                "matching models have no finite Gene Effect measurement"
+                if untested_model_count
+                else "no model matched the declared ModelID, lineage, and threshold predicates"
+            )
         ),
         gene=gene,
         lineage=query.get("lineage"),
@@ -797,6 +811,7 @@ def _run_model_gene_effect_query(
         rows=page,
         returned_count=len(page),
         matched_row_count=matched,
+        untested_model_count=untested_model_count,
         semantics={
             "metric": "chronos_gene_effect_model_score",
             "units": "Chronos Gene Effect score",

@@ -1417,9 +1417,9 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
     pq.write_table(
         pa.table(
             {
-                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003", "ACH-000001"],
-                "symbol": ["KEEP", "KEEP", "KEEP", "OTHER"],
-                "gene_effect": [-1.2, -0.4, -0.8, -2.0],
+                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003", "ACH-000004", "ACH-000001"],
+                "symbol": ["KEEP", "KEEP", "KEEP", "KEEP", "OTHER"],
+                "gene_effect": [-1.2, -0.4, -0.8, None, -2.0],
             }
         ),
         root / "depmap-26q1-core" / "model_gene_effect.parquet",
@@ -1427,9 +1427,9 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
     pq.write_table(
         pa.table(
             {
-                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003"],
-                "cell_line_name": ["Fixture A", "Fixture B", "Fixture C"],
-                "lineage": ["Myeloid", "Breast", "Myeloid"],
+                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003", "ACH-000004"],
+                "cell_line_name": ["Fixture A", "Fixture B", "Fixture C", "Fixture D"],
+                "lineage": ["Myeloid", "Breast", "Myeloid", "Myeloid"],
             }
         ),
         root / "depmap-26q1-core" / "model_metadata.parquet",
@@ -1677,6 +1677,13 @@ class LineageSelectivityQueryTests(DepMapApiTests):
             }
         )
         self.assertEqual(exact["rows"][0]["model_id"], "ACH-000003")
+
+        untested = self._query(
+            {"mode": "model_gene_effect", "gene": "KEEP", "model_id": "ACH-000004"}
+        )
+        self.assertEqual(untested["status"], "NOT_TESTED")
+        self.assertEqual(untested["rows"], [])
+        self.assertEqual(untested["untested_model_count"], 1)
 
     def test_model_gene_effect_rejects_invalid_lineage_and_modelid(self):
         with TestClient(create_app(self.settings)) as client:

@@ -41,7 +41,7 @@ class QueryIndexTests(unittest.TestCase):
 
             counts = build(root, output)
 
-            self.assertEqual(counts["capabilities"], 19)
+            self.assertEqual(counts["capabilities"], 20)
             self.assertEqual(counts["matrix_gene_blocks"], 1)
             self.assertEqual(counts["coverage_records"], 3)
             self.assertTrue(is_fresh(root, output))
@@ -76,6 +76,12 @@ class QueryIndexTests(unittest.TestCase):
                         "SELECT adapter FROM reader_registry WHERE query_mode='enrichment'"
                     ).fetchone()[0],
                     "enrichment_adapter",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT adapter FROM reader_registry WHERE query_mode='model_gene_effect'"
+                    ).fetchone()[0],
+                    "model_gene_effect_adapter",
                 )
             resolution = CatalogReaderRegistry(root, "26Q1").resolve(
                 {"mode": "pair", "source": "ESR1", "target": "FOXA1"}

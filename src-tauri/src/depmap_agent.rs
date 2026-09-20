@@ -557,6 +557,7 @@ fn depmap_route_schema() -> Value {
                     "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking",
                     "pan_cancer_dependency_summary",
+                    "model_gene_effect_slice",
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
@@ -598,6 +599,7 @@ fn depmap_route_schema() -> Value {
                 "items":{"type":"string","enum":[
                     "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking", "pan_cancer_dependency_summary", "cancer_direction_discovery",
+                    "model_gene_effect_slice",
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
                     "expression_biomarker_model",
@@ -707,7 +709,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("cancer");
             }
         }
-        "gene_evidence" => {
+        "gene_evidence" | "model_gene_effect_slice" => {
             if gene.is_none() {
                 missing.push("gene");
             }
@@ -824,6 +826,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 false,
                 "Read one bounded precomputed summary across all completed lineage dependency tables; recurrence must use full retained sets before Top-N display truncation.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
+            ),
+            "model_gene_effect_slice" => (
+                "L1_DIRECT",
+                false,
+                "Read bounded canonical ModelID Gene Effect rows for one exact gene; preserve missing measurements as NOT_TESTED.",
+                if evidence_provider == "remote_mcp" {
+                    vec!["search_mcp_tools", "use_mcp_tool"]
+                } else {
+                    vec![TOOL_NAME]
+                },
             ),
             "gene_evidence" if cancer.is_some() => (
                 "L1_DIRECT",
@@ -1192,6 +1204,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "arguments": {"gene": gene, "project": project, "lineage": canonical_lineage, "endpoint": endpoint.as_deref().unwrap_or("OS"), "limit": 20},
             "single_call": true
         }),
+        ("model_gene_effect_slice", _) if !requires_user_input => {
+            if remote_mcp_only {
+                json!({
+                    "tool": "depmap_model_gene_effect",
+                    "transport": "remote_mcp",
+                    "arguments": {"gene": gene, "lineage": canonical_lineage, "limit": 20},
+                    "single_call": true
+                })
+            } else {
+                json!({
+                    "tool": TOOL_NAME,
+                    "transport": "native",
+                    "arguments": {"mode": "model_gene_effect", "gene": gene, "lineage": canonical_lineage, "limit": 20},
+                    "single_call": true
+                })
+            }
+        }
         ("subtype_evidence", _) if !requires_user_input => json!({
             "tool": "depmap_subtype_evidence",
             "arguments": {"gene": gene, "lineage": canonical_lineage, "contrast_id": contrast_id, "limit": 20},
@@ -3674,6 +3703,36 @@ mod tests {
         assert!(intents.contains(&json!("subtype_evidence")));
         assert!(intents.contains(&json!("coamplification_evidence")));
         assert!(intents.contains(&json!("three_d_evidence")));
+        assert!(intents.contains(&json!("model_gene_effect_slice")));
+    }
+
+    #[test]
+    fn agent_route_bridges_model_gene_effect_slice_for_native_and_remote_providers() {
+        let native = depmap_route(&json!({
+            "intent":"model_gene_effect_slice", "gene":"KRAS", "cancer":"Lung"
+        }))
+        .unwrap();
+        assert_eq!(native["execution_level"], "L1_DIRECT");
+        assert_eq!(native["recommended_query"]["tool"], TOOL_NAME);
+        assert_eq!(
+            native["recommended_query"]["arguments"]["mode"],
+            "model_gene_effect"
+        );
+        assert_eq!(native["recommended_query"]["arguments"]["gene"], "KRAS");
+
+        let remote = depmap_route(&json!({
+            "intent":"model_gene_effect_slice", "gene":"KRAS", "evidence_provider":"remote_mcp"
+        }))
+        .unwrap();
+        assert_eq!(
+            remote["recommended_query"]["tool"],
+            "depmap_model_gene_effect"
+        );
+        assert_eq!(remote["recommended_query"]["transport"], "remote_mcp");
+
+        let missing = depmap_route(&json!({"intent":"model_gene_effect_slice"})).unwrap();
+        assert_eq!(missing["state"], "needs_input");
+        assert_eq!(missing["missing_fields"], json!(["gene"]));
     }
 
     #[test]
