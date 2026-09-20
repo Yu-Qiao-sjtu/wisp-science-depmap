@@ -4,6 +4,9 @@
 //! opens raw DepMap matrices and never starts a recomputation; a coverage gap
 //! must transition to the persisted Run path explicitly.
 
+use crate::depmap_remote_compute::{
+    is_coverage_status, new_analysis_proposal, ProjectDatasetInspector,
+};
 use crate::models;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
@@ -2077,7 +2080,7 @@ impl DepMapQueryTool {
                 ))
             }
         };
-        ToolResult::ok(pretty(json!({
+        let mut envelope = json!({
             "state": classify_result_state(&result),
             "provider": "local",
             "release": workspace.release,
@@ -2085,7 +2088,14 @@ impl DepMapQueryTool {
             "semantics": query_semantics(query),
             "result": result,
             "new_analysis_started": false
-        })))
+        });
+        attach_new_analysis_proposal(
+            &mut envelope,
+            query,
+            workspace.release.as_deref(),
+            &self.project_root,
+        );
+        ToolResult::ok(pretty(envelope))
     }
 
     async fn run_remote(
@@ -2106,20 +2116,44 @@ impl DepMapQueryTool {
         )
         .await
         {
-            Ok(result) => ToolResult::ok(pretty(json!({
-                "state": classify_result_state(&result),
-                "provider": "remote",
-                "release": workspace.release,
-                "query": query,
-                "semantics": query_semantics(query),
-                "result": result,
-                "new_analysis_started": false
-            }))),
+            Ok(result) => {
+                let mut envelope = json!({
+                    "state": classify_result_state(&result),
+                    "provider": "remote",
+                    "release": workspace.release,
+                    "query": query,
+                    "semantics": query_semantics(query),
+                    "result": result,
+                    "new_analysis_started": false
+                });
+                attach_new_analysis_proposal(
+                    &mut envelope,
+                    query,
+                    workspace.release.as_deref(),
+                    &self.project_root,
+                );
+                ToolResult::ok(pretty(envelope))
+            }
             Err(error) if error.contains("422 Unprocessable Entity") => {
                 ToolResult::fail(remote_contract_mismatch(query, error))
             }
             Err(error) => ToolResult::fail(blocked("remote_query_failed", error)),
         }
+    }
+}
+
+fn attach_new_analysis_proposal(
+    envelope: &mut Value,
+    query: &Value,
+    release: Option<&str>,
+    project_root: &Path,
+) {
+    let Some(result) = envelope.get("result") else {
+        return;
+    };
+    let inspector = ProjectDatasetInspector::new(project_root);
+    if let Some(proposal) = new_analysis_proposal(query, result, release, &inspector) {
+        envelope["next"] = proposal;
     }
 }
 
@@ -2602,6 +2636,9 @@ fn assemble_evidence(
             }
             if let Some(reason) = parsed.get("reason") {
                 entry["reason"] = reason.clone();
+            }
+            if let Some(next) = parsed.get("next") {
+                entry["next"] = next.clone();
             }
         } else {
             blocked_queries += 1;
@@ -3401,11 +3438,13 @@ async fn read_json_file(path: &Path) -> Result<Value, String> {
 }
 
 fn classify_result_state(result: &Value) -> &'static str {
-    match result.get("status").and_then(Value::as_str) {
-        Some(
-            "not_testable" | "NOT_RETAINED" | "INELIGIBLE" | "NOT_COMPUTED" | "MODULE_UNAVAILABLE",
-        ) => "coverage_gap",
-        _ => "precomputed_query",
+    let status = result.get("status").and_then(Value::as_str);
+    if matches!(status, Some("not_testable" | "NOT_RETAINED" | "INELIGIBLE"))
+        || is_coverage_status(status)
+    {
+        "coverage_gap"
+    } else {
+        "precomputed_query"
     }
 }
 
@@ -4776,6 +4815,35 @@ mod tests {
     }
 
     #[test]
+    fn coverage_gap_envelope_attaches_a_typed_unstarted_analysis_proposal() {
+        let root = std::env::temp_dir().join(format!(
+            "wisp-depmap-analysis-proposal-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data/CRISPRGeneEffect.csv"), b"ModelID\n").unwrap();
+        let query = json!({
+            "mode":"lineage_network",
+            "family":"effect_correlation",
+            "lineage":"Lung",
+            "source":"KRAS"
+        });
+        let mut envelope = json!({
+            "state":"coverage_gap",
+            "query":query,
+            "result":{"status":"NOT_COMPUTED"},
+            "new_analysis_started":false
+        });
+        attach_new_analysis_proposal(&mut envelope, &query, Some("26Q1"), &root);
+        assert_eq!(envelope["next"]["state"], "new_analysis_proposed");
+        assert_eq!(envelope["next"]["capability_id"], "co_dependency");
+        assert_eq!(envelope["next"]["input_status"], "preprocessing_required");
+        assert_eq!(envelope["next"]["requires_authorization"], true);
+        assert_eq!(envelope["next"]["new_analysis_started"], false);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn evidence_assembly_distinguishes_provider_failure_from_coverage_gap() {
         let workspace = KnowledgeWorkspace {
             provider: KnowledgeProvider::Remote {
@@ -4841,6 +4909,7 @@ mod tests {
             "NOT_RETAINED",
             "INELIGIBLE",
             "NOT_COMPUTED",
+            "COVERAGE_GAP",
             "MODULE_UNAVAILABLE",
         ] {
             assert_eq!(
