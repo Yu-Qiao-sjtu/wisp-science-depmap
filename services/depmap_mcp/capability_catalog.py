@@ -108,6 +108,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "mcp_tool": "depmap_model_gene_effect",
     },
     {
+        "intent": "cross_platform_dependency_validation",
+        "description": "Read completed Broad Chronos versus Sanger CRISPR and DEMETER2 RNAi validation for one exact gene.",
+        "required": ["gene"],
+        "optional": ["scope", "lineage"],
+        "examples_zh": ["这个基因的依赖在RNAi中能复现吗", "检查Sanger CRISPR一致性"],
+        "precise_prompt_template_zh": "查询{gene}在CRISPR、Sanger与RNAi平台间的预计算验证。",
+        "confusable_with": ["gene_pair_evidence", "pan_cancer_dependency_summary"],
+        "mcp_tool": "depmap_cross_platform_validation",
+    },
+    {
         "intent": "pan_cancer_dependency_summary",
         "description": "Summarize bounded precomputed lineage dependency rankings across every completed cancer lineage in one request.",
         "required": [],

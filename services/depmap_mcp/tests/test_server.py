@@ -178,8 +178,8 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         second = await self.service.status()
         evidence = first["evidence"]
 
-        self.assertEqual(evidence["query_contract_version"], 11)
-        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-11")
+        self.assertEqual(evidence["query_contract_version"], 12)
+        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-12")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
         self.assertEqual(
@@ -271,6 +271,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
                 "model_gene_effect_slice",
+                "cross_platform_dependency_validation",
                 "pan_cancer_dependency_summary",
                 "tf_activity_to_dependency",
                 "expression_biomarker_model",
@@ -628,6 +629,23 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(semantics["metric"], "chronos_gene_effect_model_score")
         self.assertEqual(semantics["entity_key"], "canonical_model_id")
 
+    async def test_cross_platform_validation_keeps_scope_and_metrics_distinct(self):
+        result = await self.service.cross_platform_validation(
+            "gpx4", "lineage", "髓系"
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "cross_platform_validation",
+                "gene": "GPX4",
+                "scope": "lineage",
+                "lineage": "Myeloid",
+            },
+        )
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["metric"], "platform_specific_gene_level_correlation")
+        self.assertIn("DEMETER2 RNAi", semantics["comparisons"][1])
+
     async def test_pan_cancer_dependency_forwards_exact_gene(self):
         result = await self.service.pan_cancer_dependencies("selective", 5, gene="fbxo7")
         self.assertEqual(self.queries[-1]["gene"], "FBXO7")
@@ -970,6 +988,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_lineage_catalog",
                         "depmap_lineage_dependencies",
                         "depmap_model_gene_effect",
+                        "depmap_cross_platform_validation",
                         "depmap_pan_cancer_dependencies",
                         "depmap_lineage_direction_discovery",
                         "depmap_gene_evidence",

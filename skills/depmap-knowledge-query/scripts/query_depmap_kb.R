@@ -179,6 +179,25 @@ if(a$mode=="model_gene_effect"){
   emit(evidence(status,reason,gene=gene,lineage=a$lineage,model_id=if(is.na(model_id))NULL else model_id,gene_effect_at_or_below=a$gene_effect_at_or_below,rows=page,returned_count=nrow(page),matched_row_count=matched,untested_model_count=untested,semantics=list(metric="chronos_gene_effect_model_score",units="Chronos Gene Effect score",direction="more_negative_is_stronger_dependency",threshold_policy=if(is.null(a$gene_effect_at_or_below))"no_threshold" else "explicit_less_than_or_equal")));quit(save="no")
 }
 
+if(a$mode=="cross_platform_validation"){
+  if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for cross-platform validation queries")
+  root<-file.path(full,"cross_platform_validation");manifest_path<-file.path(root,"manifest.json");gene<-clean(a$gene)
+  scope<-if(is.null(a$scope))if(is.null(a$lineage))"global" else "lineage" else tolower(trimws(a$scope));lineage<-a$lineage
+  evidence<-function(status,reason,...,manifest=NULL,provenance=character()){c(list(mode=a$mode,status=status,reason=reason),list(...),list(manifest=manifest,provenance=provenance))}
+  if(!dir.exists(root)){emit(evidence("MODULE_UNAVAILABLE","the precomputed cross-platform validation module is not installed",gene=gene,scope=scope,lineage=lineage,rows=list(),returned_count=0L,provenance=manifest_path));quit(save="no")}
+  manifest<-if(file.exists(manifest_path))fromJSON(manifest_path,simplifyVector=FALSE) else NULL
+  tables<-list.files(root,pattern="^(sanger|rnai)_.+\\.parquet$",full.names=TRUE);explicit_complete<-!is.null(manifest)&&identical(manifest$status,"complete")&&identical(manifest$qa_status,"PASS");legacy_complete<-!is.null(manifest)&&is.null(manifest$status)&&is.null(manifest$qa_status)&&length(tables)==31L&&file.exists(file.path(root,"sanger_all.parquet"))&&file.exists(file.path(root,"rnai_all.parquet"))
+  if(!explicit_complete&&!legacy_complete){emit(evidence("NOT_COMPUTED","cross-platform validation has neither a PASS manifest nor the typed 31-table legacy inventory",gene=gene,scope=scope,lineage=lineage,rows=list(),returned_count=0L,manifest=manifest,provenance=manifest_path));quit(save="no")}
+  manifest$completion_basis<-if(explicit_complete)"manifest" else "typed_legacy_31_table_inventory"
+  suffix<-if(scope=="global")"all" else gsub("^_+|_+$","",gsub("[^A-Za-z0-9]+","_",trimws(lineage)))
+  specs<-list(sanger=list(metric="broad_chronos_vs_sanger_ky_gene_effect_correlation",path=file.path(root,paste0("sanger_",suffix,".parquet"))),rnai=list(metric="broad_chronos_vs_demeter2_rnai_correlation",path=file.path(root,paste0("rnai_",suffix,".parquet"))))
+  rows<-list();provenance<-manifest_path
+  for(family in names(specs)){spec<-specs[[family]];if(!file.exists(spec$path))next;provenance<-c(provenance,spec$path);x<-as.data.table(arrow::read_parquet(spec$path));hit<-x[toupper(symbol)==gene];if(nrow(hit)){hit[,comparison:=family];hit[,metric:=spec$metric];rows[[length(rows)+1L]]<-hit}}
+  if(length(provenance)==1L){emit(evidence("NOT_COMPUTED","no completed platform tables match the requested scope",gene=gene,scope=scope,lineage=lineage,rows=list(),returned_count=0L,manifest=manifest,provenance=provenance));quit(save="no")}
+  result<-rbindlist(rows,fill=TRUE);status<-if(nrow(result))"FOUND" else "NOT_TESTED"
+  emit(evidence(status,if(nrow(result))"bounded exact-gene cross-platform validation rows" else "the exact gene is absent from the completed cross-platform catalogs",gene=gene,scope=scope,lineage=lineage,rows=result,returned_count=nrow(result),matched_row_count=nrow(result),semantics=list(metric_family="cross_platform_gene_level_correlation",comparisons_remain_distinct=TRUE,broad_metric="Chronos CRISPR Gene Effect",sanger_metric="Sanger KY CRISPR Gene Effect",rnai_metric="DEMETER2 RNAi dependency score",interpretation="Pearson and Spearman correlations across paired models; platforms are validation layers, not one merged dependency score"),manifest=manifest,provenance=provenance));quit(save="no")
+}
+
 sparse_modes<-c("lineage_catalog","lineage_dependency","pan_cancer_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
 if(a$mode%in%sparse_modes){
   if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for sparse lineage queries")

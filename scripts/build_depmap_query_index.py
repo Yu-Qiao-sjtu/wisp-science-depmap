@@ -19,7 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-CATALOG_SCHEMA_VERSION = "4"
+CATALOG_SCHEMA_VERSION = "5"
 FULL_HASH_MAX_BYTES = 8 * 1024 * 1024
 FULL_HASH_SUFFIXES = {".json", ".md", ".r", ".py", ".sh", ".ps1", ".toml", ".yaml", ".yml"}
 
@@ -287,6 +287,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     reader_rows = [
         ("core", "gene_evidence", "depmap-26q1-core", 0),
         ("model_gene_effect", "model_gene_effect_slice", "depmap-26q1-core", 0),
+        ("cross_platform_validation", "cross_platform_dependency_validation", "depmap-26q1-full", 0),
         ("lineage_catalog", "cancer_inventory", "depmap-26q1-full", 0),
         ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-full", 0),
         ("pan_cancer_dependency", "pan_cancer_dependency_summary", "depmap-26q1-core", 0),
@@ -329,6 +330,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             "gene_pair_evidence":"pair", "cancer_dependency_ranking":"lineage_dependency",
             "pan_cancer_dependency_summary":"pan_cancer_dependency",
             "model_gene_effect_slice":"model_gene_effect",
+            "cross_platform_dependency_validation":"cross_platform_validation",
             "tf_activity_to_dependency":"tf_dependency", "expression_biomarker_model":"biomarker_target",
             "true_love_gene_catalog":"true_love", "gene_evidence":"enrichment",
             "tcga_expression_survival":"tcga_expression_survival", "drug_gene_evidence":"drug",
