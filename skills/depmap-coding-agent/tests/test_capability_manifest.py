@@ -166,6 +166,48 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
         self.assertEqual(lineage["method"], "rank_sum")
         self.assertFalse(lineage["gsea_equivalent"])
 
+    def test_expression_threshold_contrast_is_a_distinct_authorized_operation(self):
+        manifest_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-coding-agent"
+            / "references"
+            / "capability-manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capability = next(
+            item
+            for item in manifest["capabilities"]
+            if item["id"] == "expression_threshold_dependency"
+        )
+        self.assertEqual(
+            capability["data_modality"],
+            "expression_group_vs_crispr_gene_effect",
+        )
+        operation = capability["operations"][0]
+        self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
+        self.assertEqual(
+            operation["supported_scopes"],
+            ["global_lineage_adjusted", "lineage"],
+        )
+        self.assertEqual(
+            operation["defaults"]["threshold_policy"],
+            "prespecified_quantile_tails",
+        )
+
+        intent_path = (
+            self.repo_root
+            / "analysis-modules"
+            / "表达基因-CRISPR基因依赖相关性分析"
+            / "module.intent.json"
+        )
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        query = intent["query_contract"]["expression_threshold_dependency_contrast"]
+        self.assertEqual(query["capability_id"], "expression_threshold_dependency")
+        self.assertEqual(query["required_entities"], ["expression_source_gene"])
+        route = intent["operation_routing"]["expression_threshold_dependency_contrast"]
+        self.assertIn("analysis_authorization", route["trigger_requires"])
+
 
 if __name__ == "__main__":
     unittest.main()
