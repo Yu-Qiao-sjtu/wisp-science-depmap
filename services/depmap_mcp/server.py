@@ -964,13 +964,6 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
-        rejected = limit_violation("pan_cancer_dependency", limit)
-        if rejected is not None:
-            return self._envelope(
-                tool="depmap_pan_cancer_dependencies",
-                request={"ranking": ranking, "limit": limit},
-                evidence=rejected,
-            )
         query = {
             "mode": "pan_cancer_dependency",
             "ranking": ranking,
@@ -980,6 +973,13 @@ class DepMapEvidenceService:
         }
         if gene:
             query["gene"] = gene.strip().upper()
+        rejected = limit_violation("pan_cancer_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_pan_cancer_dependencies",
+                request=query,
+                evidence=rejected,
+            )
         item = await self._execute(query)
         return self._envelope(
             tool="depmap_pan_cancer_dependencies", request=query, evidence=item
