@@ -898,12 +898,26 @@ class DepMapApiTests(unittest.TestCase):
                     "target": "BRAF",
                 },
             )
+            positive = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_network", "family": "effect_correlation", "lineage": "Lung", "source": "KRAS", "direction": "positive", "limit": 1},
+            )
+            negative = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_network", "family": "effect_correlation", "lineage": "Lung", "source": "KRAS", "direction": "negative", "limit": 1},
+            )
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.json()["status"], "FOUND")
         self.assertEqual(found.json()["rows"][0]["target_gene"], "RAF1")
         self.assertEqual(found.json()["manifest"]["lineage_sample_n"], 126)
         self.assertEqual(missing.status_code, 200)
         self.assertEqual(missing.json()["status"], "NOT_RETAINED")
+        self.assertEqual(positive.json()["status"], "FOUND")
+        self.assertEqual(positive.json()["direction"], "positive")
+        self.assertEqual(negative.json()["status"], "NOT_RETAINED")
+        self.assertEqual(negative.json()["direction"], "negative")
 
     def test_lineage_direction_discovery_selects_precomputed_significant_rows(self):
         root = (

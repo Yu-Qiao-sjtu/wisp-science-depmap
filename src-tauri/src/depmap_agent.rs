@@ -568,7 +568,7 @@ fn depmap_route_schema() -> Value {
                     "tf_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
-                    "gene_pair_evidence", "drug_gene_evidence",
+                    "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
                     "new_analysis", "report_generation"
@@ -590,6 +590,7 @@ fn depmap_route_schema() -> Value {
             "cohort": {"type":"string"},
             "layer": {"type":"string","enum":["exhaustive_high_confidence","lineage_adjusted"]},
             "scope": {"type":"string","enum":["global","lineage"]},
+            "direction": {"type":"string","enum":["positive","negative"]},
             "evidence_provider": {
                 "type":"string",
                 "enum":["auto","native","remote_mcp"],
@@ -612,7 +613,7 @@ fn depmap_route_schema() -> Value {
                     "tf_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
-                    "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
+                    "gene_evidence", "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
                     "literature_validation", "new_analysis", "report_generation"
@@ -675,6 +676,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let cohort = non_empty_arg(args, "cohort");
     let layer = non_empty_arg(args, "layer");
     let requested_scope = non_empty_arg(args, "scope");
+    let direction = non_empty_arg(args, "direction").unwrap_or_else(|| "positive".to_string());
     let evidence_provider =
         non_empty_arg(args, "evidence_provider").unwrap_or_else(|| "auto".to_string());
     let exclude_common_essential = args
@@ -716,7 +718,10 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("cancer");
             }
         }
-        "gene_evidence" | "model_gene_effect_slice" | "cross_platform_dependency_validation" => {
+        "gene_evidence"
+        | "codependency_evidence"
+        | "model_gene_effect_slice"
+        | "cross_platform_dependency_validation" => {
             if gene.is_none() {
                 missing.push("gene");
             }
@@ -878,7 +883,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Interpret only the current or recovered persisted evidence fields.",
                 vec![EVIDENCE_HISTORY_TOOL_NAME],
             ),
-            "gene_pair_evidence" | "drug_gene_evidence" => (
+            "codependency_evidence" | "gene_pair_evidence" | "drug_gene_evidence" => (
                 "L1_DIRECT",
                 false,
                 "Use one surgical pair or drug query against precomputed results.",
@@ -1192,6 +1197,18 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 }
             })
         }
+        ("codependency_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_codependency_evidence",
+            "transport": "remote_mcp",
+            "arguments": {
+                "gene": gene,
+                "lineage": canonical_lineage,
+                "direction": direction,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "positive co-dependency is similar CRISPR Gene Effect profile, not synthetic lethality"
+        }),
         ("expression_biomarker_model", _) if !requires_user_input => json!({
             "tool": "depmap_biomarker_model_evidence",
             "arguments": {"target_gene": target_gene},
@@ -3833,6 +3850,27 @@ mod tests {
 
     #[test]
     fn agent_route_schema_is_flat_and_closed() {
+        let route = depmap_route(&json!({
+            "intent":"codependency_evidence",
+            "gene":"KRAS",
+            "cancer":"肺癌"
+        }))
+        .unwrap();
+        assert_eq!(route["state"], "routed");
+        assert_eq!(
+            route["recommended_query"]["tool"],
+            "depmap_codependency_evidence"
+        );
+        assert_eq!(route["recommended_query"]["single_call"], true);
+        assert_eq!(
+            route["recommended_query"]["arguments"],
+            json!({"gene":"KRAS","lineage":"Lung","direction":"positive","limit":20})
+        );
+        assert!(route["recommended_query"]["interpretation"]
+            .as_str()
+            .unwrap()
+            .contains("not synthetic lethality"));
+
         let schema = depmap_route_schema();
         assert_eq!(schema["required"], json!(["intent"]));
         assert_eq!(schema["additionalProperties"], false);

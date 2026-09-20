@@ -104,7 +104,7 @@ MODE_OPTIONAL_FIELDS = {
     "analysis_catalog": {"module", "completion_state", "limit"},
     "mutation_anchor": {"gene", "event", "anchor_tier", "include_common_essential", "limit"},
     "lineage_mutation_dependency": {"source", "target", "event", "limit"},
-    "lineage_network": {"target", "limit", "reciprocal"},
+    "lineage_network": {"target", "limit", "reciprocal", "direction"},
     "lineage_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "model_gene_effect": {"lineage", "model_id", "gene_effect_at_or_below", "limit"},
     "cross_platform_validation": {"lineage", "scope"},
@@ -163,6 +163,7 @@ QUERY_FIELD_ORDER = (
     "layer",
     "cohort",
     "reciprocal",
+    "direction",
     "project",
     "endpoint",
     "catalog",
@@ -466,6 +467,7 @@ class QueryRequest(BaseModel):
     layer: Literal["exhaustive_high_confidence", "lineage_adjusted"] | None = None
     cohort: str | None = None
     reciprocal: bool | None = None
+    direction: Literal["positive", "negative"] | None = None
     project: str | None = None
     endpoint: str | None = None
     catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
@@ -479,7 +481,7 @@ class QueryRequest(BaseModel):
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
             "gene", "model_id", "gene_effect_at_or_below", "scope", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
-            "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
+            "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal", "direction",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage", "view", "scope",
         }
@@ -2311,6 +2313,13 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
                 (field("source_gene") == target) | (field("target_gene") == target)
             )
         rows = dataset.dataset(path, format="parquet").to_table(filter=expr).to_pylist()
+        direction = query.get("direction")
+        if direction:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("direction") or "").lower() == direction
+            ]
         rows = _bounded_rows(rows, "reciprocal_score", limit)
     else:
         order = lineage_root / "source_gene_order.csv"
@@ -2334,19 +2343,28 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
         if target:
             target = target.strip().upper()
             filters.append(("target_gene", "=", target))
-        rows = _bounded_rows(_read_filtered_parquet(path, filters), "correlation", limit)
+        rows = _read_filtered_parquet(path, filters)
+        direction = query.get("direction")
+        if direction:
+            rows = [
+                row
+                for row in rows
+                if (float(row.get("correlation") or 0.0) > 0)
+                == (direction == "positive")
+            ]
+        rows = _bounded_rows(rows, "correlation", limit)
     if not rows:
         return _evidence_response(
             "NOT_RETAINED", mode="lineage_network",
             reason="the eligible pair was tested but is absent from the retained sparse top-K output",
             family=family, lineage=lineage, source=source, target=target,
-            reciprocal=reciprocal, manifest=manifest,
+            reciprocal=reciprocal, direction=query.get("direction"), manifest=manifest,
             provenance=[str(lineage_root / "manifest.json"), str(path)],
         )
     return _evidence_response(
         "FOUND", mode="lineage_network", reason="bounded precomputed rows found",
         family=family, lineage=lineage, source=source, target=target,
-        reciprocal=reciprocal, rows=rows, manifest=manifest,
+        reciprocal=reciprocal, direction=query.get("direction"), rows=rows, manifest=manifest,
         provenance=[str(lineage_root / "manifest.json"), str(path)],
     )
 

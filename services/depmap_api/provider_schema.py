@@ -45,6 +45,7 @@ TOOL_LIMIT_MAX: dict[str, int] = {
     "depmap_pan_cancer_dependencies": 20,
     "depmap_lineage_direction_discovery": 50,
     "depmap_gene_evidence": 20,
+    "depmap_codependency_evidence": 100,
     "depmap_mutation_anchor_evidence": 20,
     "depmap_lineage_mutation_dependency": 100,
     "depmap_true_love_evidence": 100,
