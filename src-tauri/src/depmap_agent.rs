@@ -280,8 +280,8 @@ impl DepMapAgentRouteTool {
     }
 }
 
-pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 11;
-pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 11;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 12;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DepMapContractAssessment {
@@ -558,6 +558,7 @@ fn depmap_route_schema() -> Value {
                     "cancer_dependency_ranking",
                     "pan_cancer_dependency_summary",
                     "model_gene_effect_slice",
+                    "cross_platform_dependency_validation",
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
@@ -585,6 +586,7 @@ fn depmap_route_schema() -> Value {
             "family": {"type":"string"},
             "cohort": {"type":"string"},
             "layer": {"type":"string","enum":["exhaustive_high_confidence","lineage_adjusted"]},
+            "scope": {"type":"string","enum":["global","lineage"]},
             "evidence_provider": {
                 "type":"string",
                 "enum":["auto","native","remote_mcp"],
@@ -600,6 +602,7 @@ fn depmap_route_schema() -> Value {
                     "provider_status", "analysis_inventory", "lineage_resolution", "cancer_inventory",
                     "cancer_dependency_ranking", "pan_cancer_dependency_summary", "cancer_direction_discovery",
                     "model_gene_effect_slice",
+                    "cross_platform_dependency_validation",
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
                     "expression_biomarker_model",
@@ -668,6 +671,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let family = non_empty_arg(args, "family");
     let cohort = non_empty_arg(args, "cohort");
     let layer = non_empty_arg(args, "layer");
+    let requested_scope = non_empty_arg(args, "scope");
     let evidence_provider =
         non_empty_arg(args, "evidence_provider").unwrap_or_else(|| "auto".to_string());
     let exclude_common_essential = args
@@ -709,9 +713,15 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("cancer");
             }
         }
-        "gene_evidence" | "model_gene_effect_slice" => {
+        "gene_evidence" | "model_gene_effect_slice" | "cross_platform_dependency_validation" => {
             if gene.is_none() {
                 missing.push("gene");
+            }
+            if intent == "cross_platform_dependency_validation"
+                && requested_scope.as_deref() == Some("lineage")
+                && cancer.is_none()
+            {
+                missing.push("cancer");
             }
         }
         "gene_pair_evidence" => {
@@ -831,6 +841,16 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "L1_DIRECT",
                 false,
                 "Read bounded canonical ModelID Gene Effect rows for one exact gene; preserve missing measurements as NOT_TESTED.",
+                if evidence_provider == "remote_mcp" {
+                    vec!["search_mcp_tools", "use_mcp_tool"]
+                } else {
+                    vec![TOOL_NAME]
+                },
+            ),
+            "cross_platform_dependency_validation" => (
+                "L1_DIRECT",
+                false,
+                "Read completed Broad Chronos versus Sanger CRISPR and DEMETER2 RNAi validation for one exact gene; keep platform metrics distinct.",
                 if evidence_provider == "remote_mcp" {
                     vec!["search_mcp_tools", "use_mcp_tool"]
                 } else {
@@ -972,6 +992,19 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     }
 
     let canonical_lineage = cancer.as_deref().map(canonical_lineage_label);
+    let cross_platform_scope =
+        requested_scope
+            .as_deref()
+            .unwrap_or(if canonical_lineage.is_some() {
+                "lineage"
+            } else {
+                "global"
+            });
+    let cross_platform_lineage = if cross_platform_scope == "lineage" {
+        canonical_lineage.clone()
+    } else {
+        None
+    };
     let clarification_gene = gene
         .as_deref()
         .or(target_gene.as_deref())
@@ -1217,6 +1250,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                     "tool": TOOL_NAME,
                     "transport": "native",
                     "arguments": {"mode": "model_gene_effect", "gene": gene, "lineage": canonical_lineage, "limit": 20},
+                    "single_call": true
+                })
+            }
+        }
+        ("cross_platform_dependency_validation", _) if !requires_user_input => {
+            if remote_mcp_only {
+                json!({
+                    "tool": "depmap_cross_platform_validation",
+                    "transport": "remote_mcp",
+                    "arguments": {"gene": gene, "scope": cross_platform_scope, "lineage": cross_platform_lineage},
+                    "single_call": true
+                })
+            } else {
+                json!({
+                    "tool": TOOL_NAME,
+                    "transport": "native",
+                    "arguments": {"mode": "cross_platform_validation", "gene": gene, "scope": cross_platform_scope, "lineage": cross_platform_lineage},
                     "single_call": true
                 })
             }
@@ -2449,6 +2499,13 @@ fn query_semantics(query: &Value) -> Value {
             "not_equivalent_to":"dependency_probability_or_binary_essentiality",
             "interpretation":"one exact gene projected onto bounded canonical ACH ModelID rows; lineage uses the canonical vocabulary and display names are never used as identity or substring filters"
         }),
+        "cross_platform_validation" => json!({
+            "metric":"platform_specific_gene_level_correlation",
+            "comparisons":["Broad Chronos vs Sanger KY CRISPR","Broad Chronos vs DEMETER2 RNAi"],
+            "statistics":["pearson_cor","spearman_cor"],
+            "platform_metrics_remain_distinct":true,
+            "interpretation":"precomputed correlations across paired models; this is validation evidence and never one merged dependency score"
+        }),
         "lineage_dependency" => {
             let ranking = query
                 .get("ranking")
@@ -2748,7 +2805,7 @@ impl Tool for DepMapQueryTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             TOOL_NAME,
-            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, mode=model_gene_effect for bounded canonical ModelID rows for one exact gene, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
+            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, mode=model_gene_effect for bounded canonical ModelID rows for one exact gene, mode=cross_platform_validation for precomputed Broad/Sanger/RNAi validation of one exact gene, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
             depmap_query_schema(),
         )
     }
@@ -2789,13 +2846,14 @@ fn depmap_query_schema() -> Value {
         "description":"Flat model-compatible schema. Runtime validation enforces the fields required by each mode.",
         "properties": {
             "mode": {"type":"string","enum":[
-                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","model_gene_effect","core","pair","top",
+                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","model_gene_effect","cross_platform_validation","core","pair","top",
                 "lineage","pathway","drug","lineage_network","lineage_cnv",
                 "lineage_drug","enrichment","tcga_expression_survival"
             ]},
             "gene": {"type":"string"},
             "model_id": {"type":"string","description":"Optional exact canonical ACH-###### ModelID for model_gene_effect."},
             "gene_effect_at_or_below": {"type":"number","description":"Optional declared descriptive Chronos Gene Effect threshold for model_gene_effect; no cutoff is applied when omitted."},
+            "scope": {"type":"string","enum":["global","lineage"],"description":"For cross_platform_validation: global (default) or one canonical lineage."},
             "module": {"type":"string","enum":MATRIX_MODULES},
             "source": {"type":"string"},
             "target": {"type":"string"},
@@ -2827,7 +2885,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     let required: &[&str] = match mode.as_str() {
         "catalog" => &[],
         "lineage_catalog" | "lineage_dependency" | "lineage_directions" => &["lineage"],
-        "core" | "model_gene_effect" => &["gene"],
+        "core" | "model_gene_effect" | "cross_platform_validation" => &["gene"],
         "pair" => &["module", "source", "target"],
         "top" => &["module", "source"],
         "lineage" => &["event", "lineage", "source", "target"],
@@ -2926,6 +2984,37 @@ fn validated_query(args: &Value) -> Result<Value, String> {
                 return Err("gene_effect_at_or_below must be finite".into());
             }
             query.insert("gene_effect_at_or_below".into(), json!(threshold));
+        }
+    }
+    if mode == "cross_platform_validation" {
+        let lineage = args
+            .get("lineage")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let scope = args
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or(if lineage.is_some() {
+                "lineage"
+            } else {
+                "global"
+            });
+        if !["global", "lineage"].contains(&scope) {
+            return Err("scope must be global or lineage".into());
+        }
+        if scope == "lineage" && lineage.is_none() {
+            return Err("cross_platform_validation scope=lineage requires lineage".into());
+        }
+        if scope == "global" && lineage.is_some() {
+            return Err("cross_platform_validation scope=global does not take lineage".into());
+        }
+        query.insert("scope".into(), Value::String(scope.into()));
+        if let Some(lineage) = lineage {
+            query.insert(
+                "lineage".into(),
+                Value::String(canonical_lineage_label(lineage)),
+            );
         }
     }
     if mode == "lineage_drug" {
@@ -3704,6 +3793,48 @@ mod tests {
         assert!(intents.contains(&json!("coamplification_evidence")));
         assert!(intents.contains(&json!("three_d_evidence")));
         assert!(intents.contains(&json!("model_gene_effect_slice")));
+        assert!(intents.contains(&json!("cross_platform_dependency_validation")));
+    }
+
+    #[test]
+    fn agent_route_bridges_cross_platform_validation_for_native_and_remote_providers() {
+        let native = depmap_route(&json!({
+            "intent":"cross_platform_dependency_validation", "gene":"KRAS", "cancer":"Bowel"
+        }))
+        .unwrap();
+        assert_eq!(native["execution_level"], "L1_DIRECT");
+        assert_eq!(native["recommended_query"]["tool"], TOOL_NAME);
+        assert_eq!(
+            native["recommended_query"]["arguments"]["mode"],
+            "cross_platform_validation"
+        );
+        assert_eq!(native["recommended_query"]["arguments"]["scope"], "lineage");
+
+        let remote = depmap_route(&json!({
+            "intent":"cross_platform_dependency_validation", "gene":"KRAS", "evidence_provider":"remote_mcp"
+        })).unwrap();
+        assert_eq!(
+            remote["recommended_query"]["tool"],
+            "depmap_cross_platform_validation"
+        );
+        assert_eq!(remote["recommended_query"]["arguments"]["scope"], "global");
+
+        let explicit_global = depmap_route(&json!({
+            "intent":"cross_platform_dependency_validation", "gene":"KRAS",
+            "cancer":"Bowel", "scope":"global"
+        }))
+        .unwrap();
+        assert_eq!(
+            explicit_global["recommended_query"]["arguments"]["scope"],
+            "global"
+        );
+        assert!(explicit_global["recommended_query"]["arguments"]
+            .get("lineage")
+            .is_none());
+
+        let missing =
+            depmap_route(&json!({"intent":"cross_platform_dependency_validation"})).unwrap();
+        assert_eq!(missing["missing_fields"], json!(["gene"]));
     }
 
     #[test]
@@ -4017,7 +4148,7 @@ mod tests {
     fn depmap_contract_handshake_accepts_only_the_declared_range() {
         let compatible = evaluate_depmap_contract(&json!({
             "evidence": {
-                "query_contract_version": 11,
+                "query_contract_version": 12,
                 "server_build_identity": "build-abc",
                 "capability_catalog_digest": "sha256:capabilities",
                 "catalog_build_identity": "sha256:catalog"
@@ -4031,13 +4162,13 @@ mod tests {
         );
 
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 10}
+            "evidence": {"query_contract_version": 11}
         }));
         assert!(!stale.compatible);
         assert_eq!(stale.code, "STALE_CONTRACT");
 
         let future = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 12}
+            "evidence": {"query_contract_version": 13}
         }));
         assert!(!future.compatible);
         assert_eq!(future.code, "INCOMPATIBLE_PROVIDER");
@@ -4046,7 +4177,7 @@ mod tests {
         assert_eq!(missing.code, "STALE_CONTRACT");
 
         let identity_missing = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 11}
+            "evidence": {"query_contract_version": 12}
         }));
         assert!(!identity_missing.compatible);
         assert_eq!(identity_missing.code, "STALE_CONTRACT");
@@ -4062,7 +4193,7 @@ mod tests {
         for unusable_catalog_identity in ["", "   ", "catalog-missing", "catalog-unreadable"] {
             let unusable = evaluate_depmap_contract(&json!({
                 "evidence": {
-                    "query_contract_version": 11,
+                    "query_contract_version": 12,
                     "server_build_identity": "build-abc",
                     "capability_catalog_digest": "sha256:capabilities",
                     "catalog_build_identity": unusable_catalog_identity
@@ -4110,7 +4241,7 @@ mod tests {
     #[tokio::test]
     async fn stale_depmap_contract_blocks_before_any_scientific_call() {
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 10}
+            "evidence": {"query_contract_version": 11}
         }));
         let result =
             DepMapAgentRouteTool::with_contract(vec!["depmap_gene_evidence".into()], Some(stale))
@@ -4318,6 +4449,22 @@ mod tests {
         );
         assert!(validated_query(&json!({
             "mode":"model_gene_effect","gene":"KRAS","model_id":"A549"
+        }))
+        .is_err());
+        let cross_platform = validated_query(&json!({
+            "mode":"cross_platform_validation","gene":"KRAS",
+            "scope":"lineage","lineage":"colorectal cancer"
+        }))
+        .unwrap();
+        assert_eq!(cross_platform["lineage"], "Bowel");
+        assert_eq!(cross_platform["scope"], "lineage");
+        assert!(
+            query_semantics(&cross_platform)["platform_metrics_remain_distinct"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(validated_query(&json!({
+            "mode":"cross_platform_validation","gene":"KRAS","scope":"invalid"
         }))
         .is_err());
         let directions = validated_query(&json!({

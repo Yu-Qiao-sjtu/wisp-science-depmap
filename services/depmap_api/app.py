@@ -69,7 +69,7 @@ THREE_D_FAMILIES = {
     "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
-QUERY_CONTRACT_VERSION = 11
+QUERY_CONTRACT_VERSION = 12
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
@@ -78,6 +78,7 @@ MODE_REQUIRED_FIELDS = {
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
     "model_gene_effect": {"gene"},
+    "cross_platform_validation": {"gene"},
     "pan_cancer_dependency": set(),
     "lineage_directions": {"lineage"},
     "core": {"gene"},
@@ -106,6 +107,7 @@ MODE_OPTIONAL_FIELDS = {
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "model_gene_effect": {"lineage", "model_id", "gene_effect_at_or_below", "limit"},
+    "cross_platform_validation": {"lineage", "scope"},
     "pan_cancer_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
@@ -429,7 +431,7 @@ class QueryRequest(BaseModel):
         "analysis_catalog",
         "mutation_anchor",
         "lineage_mutation_dependency",
-        "catalog", "lineage_catalog", "lineage_dependency", "model_gene_effect", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
+        "catalog", "lineage_catalog", "lineage_dependency", "model_gene_effect", "cross_platform_validation", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
@@ -469,14 +471,14 @@ class QueryRequest(BaseModel):
     catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] | None = None
     coverage: Literal["all", "legacy", "quality"] | None = None
     view: Literal["universe", "ranking"] | None = None
-    scope: Literal["lineage", "pancancer"] | None = None
+    scope: Literal["global", "lineage", "pancancer"] | None = None
 
     @model_validator(mode="after")
     def validate_mode_contract(self) -> "QueryRequest":
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "model_id", "gene_effect_at_or_below", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
+            "gene", "model_id", "gene_effect_at_or_below", "scope", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage", "view", "scope",
@@ -534,6 +536,8 @@ class QueryRequest(BaseModel):
             raise ValueError("true_love coverage applies only to derived threshold or positive-reciprocal catalogs")
         if self.mode == "true_love":
             resolved_scope = self.scope or ("lineage" if self.lineage else "pancancer")
+            if resolved_scope not in {"lineage", "pancancer"}:
+                raise ValueError("true_love scope must be lineage or pancancer")
             if resolved_scope == "lineage" and self.lineage is None:
                 raise ValueError("true_love scope=lineage requires lineage")
             if resolved_scope == "pancancer" and self.lineage is not None:
@@ -550,6 +554,14 @@ class QueryRequest(BaseModel):
             raise ValueError("lineage_mutation_dependency requires source, target, or both")
         if self.model_id is not None and not re.fullmatch(r"ACH-\d{6}", self.model_id.strip().upper()):
             raise ValueError("model_id must be a canonical ACH-###### ModelID")
+        if self.mode == "cross_platform_validation":
+            scope = self.scope or ("lineage" if self.lineage else "global")
+            if scope not in {"global", "lineage"}:
+                raise ValueError("cross_platform_validation scope must be global or lineage")
+            if scope == "lineage" and self.lineage is None:
+                raise ValueError("cross_platform_validation scope=lineage requires lineage")
+            if scope == "global" and self.lineage is not None:
+                raise ValueError("cross_platform_validation scope=global does not take lineage")
         for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential", "gene_effect_at_or_below"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -564,6 +576,8 @@ class QueryRequest(BaseModel):
             result["lineage"] = _canonical_lineage_label(self.lineage)
         if self.model_id is not None:
             result["model_id"] = self.model_id.strip().upper()
+        if self.mode == "cross_platform_validation":
+            result["scope"] = self.scope or ("lineage" if self.lineage else "global")
         if self.project is not None:
             project = self.project.strip().upper()
             result["project"] = project if project.startswith("TCGA-") else f"TCGA-{project}"
@@ -823,6 +837,103 @@ def _run_model_gene_effect_query(
             ),
         },
         provenance=[str(effect_path), str(metadata_path)],
+    )
+
+
+def _run_cross_platform_validation_query(
+    settings: Settings, query: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PyArrow is required for validation queries")
+    root = settings.knowledge_root / "depmap-26q1-full" / "cross_platform_validation"
+    manifest = _load_manifest(root)
+    provenance = [str(root / "manifest.json")]
+    if not root.is_dir():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="cross_platform_validation",
+            reason="the precomputed cross-platform validation module is not installed",
+            rows=[], returned_count=0, provenance=provenance,
+        )
+    explicit_complete = bool(
+        manifest
+        and manifest.get("status") == "complete"
+        and manifest.get("qa_status") == "PASS"
+    )
+    legacy_tables = sorted(root.glob("*.parquet"))
+    legacy_complete = bool(
+        manifest is not None
+        and not manifest.get("status")
+        and not manifest.get("qa_status")
+        and len(legacy_tables) == 31
+        and (root / "sanger_all.parquet").is_file()
+        and (root / "rnai_all.parquet").is_file()
+        and all(path.name.startswith(("sanger_", "rnai_")) for path in legacy_tables)
+    )
+    if not explicit_complete and not legacy_complete:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="cross_platform_validation",
+            reason="cross-platform validation has neither a PASS manifest nor the typed 31-table legacy inventory",
+            rows=[], returned_count=0, manifest=manifest, provenance=provenance,
+        )
+    scope = query.get("scope") or ("lineage" if query.get("lineage") else "global")
+    lineage = query.get("lineage")
+    if lineage and lineage not in CANONICAL_LINEAGES:
+        return _evidence_response(
+            "INELIGIBLE", mode="cross_platform_validation", scope=scope, lineage=lineage,
+            reason="lineage did not resolve to the canonical DepMap lineage vocabulary",
+            rows=[], returned_count=0, manifest=manifest, provenance=provenance,
+        )
+    suffix = "all" if scope == "global" else _lineage_key(str(lineage))
+    gene = str(query["gene"]).strip().upper()
+    rows: list[dict[str, Any]] = []
+    for family, metric in (
+        ("sanger", "broad_chronos_vs_sanger_ky_gene_effect_correlation"),
+        ("rnai", "broad_chronos_vs_demeter2_rnai_correlation"),
+    ):
+        path = root / f"{family}_{suffix}.parquet"
+        if not path.is_file():
+            continue
+        provenance.append(str(path))
+        matches = parquet.read_table(path, filters=[("symbol", "=", gene)]).to_pylist()
+        for row in matches:
+            rows.append({
+                "symbol": gene,
+                "comparison": family,
+                "platform": row.get("platform"),
+                "lineage": row.get("lineage"),
+                "pearson_cor": row.get("pearson_cor"),
+                "pearson_p": row.get("pearson_p"),
+                "pearson_fdr": row.get("pearson_fdr"),
+                "spearman_cor": row.get("spearman_cor"),
+                "spearman_p": row.get("spearman_p"),
+                "spearman_fdr": row.get("spearman_fdr"),
+                "paired_model_count": row.get("n"),
+                "metric": metric,
+            })
+    if not provenance[1:]:
+        return _evidence_response(
+            "NOT_COMPUTED", mode="cross_platform_validation", scope=scope,
+            lineage=lineage, gene=gene,
+            reason="no completed platform tables match the requested scope",
+            rows=[], returned_count=0, manifest=manifest, provenance=provenance,
+        )
+    return _evidence_response(
+        "FOUND" if rows else "NOT_TESTED", mode="cross_platform_validation",
+        scope=scope, lineage=lineage, gene=gene,
+        reason=("bounded exact-gene cross-platform validation rows" if rows else
+                "the exact gene is absent from the completed cross-platform catalogs"),
+        rows=rows, returned_count=len(rows), matched_row_count=len(rows),
+        semantics={
+            "metric_family": "cross_platform_gene_level_correlation",
+            "comparisons_remain_distinct": True,
+            "broad_metric": "Chronos CRISPR Gene Effect",
+            "sanger_metric": "Sanger KY CRISPR Gene Effect",
+            "rnai_metric": "DEMETER2 RNAi dependency score",
+            "interpretation": "Pearson and Spearman correlations across paired models; platforms are validation layers, not one merged dependency score",
+        },
+        manifest={**manifest, "completion_basis": "manifest" if explicit_complete else "typed_legacy_31_table_inventory"}, provenance=provenance,
     )
 
 
@@ -3683,6 +3794,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_lineage_dependency_query, settings, query)
     if query["mode"] == "model_gene_effect":
         return await asyncio.to_thread(_run_model_gene_effect_query, settings, query)
+    if query["mode"] == "cross_platform_validation":
+        return await asyncio.to_thread(_run_cross_platform_validation_query, settings, query)
     if query["mode"] == "pan_cancer_dependency":
         return await asyncio.to_thread(_run_pan_cancer_dependency_query, settings, query)
     if query["mode"] == "core":

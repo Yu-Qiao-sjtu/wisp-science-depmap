@@ -151,6 +151,11 @@ expression-to-dependency association from gene names alone.
   must be the provider's canonical lineage, never a substring search over a
   disease label. Do not apply or imply a Gene Effect cutoff unless
   `gene_effect_at_or_below` is present in the request and metric semantics.
+- Use `depmap_cross_platform_validation` when the user asks whether one exact
+  gene's dependency replicates in Sanger CRISPR or DEMETER2 RNAi. Preserve the
+  named comparison and Pearson/Spearman statistic; RNAi and CRISPR scores are
+  distinct metrics and must not be merged into a generic dependency score.
+  Treat missing or non-PASS module QA as a coverage state, not a negative result.
 - A canonical DepMap lineage is a model-grouping proxy, not a clinical
   histology or patient cohort. Do not silently narrow `Liver` to HCC, add a
   neighboring control lineage, or name cell lines unless current model

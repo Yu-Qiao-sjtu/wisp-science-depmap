@@ -299,7 +299,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 11)
+        self.assertEqual(response.json()["query_contract_version"], 12)
         self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
         self.assertIn("NOT_OBSERVED", response.json()["evidence_statuses"])
         self.assertIn("COVERAGE_GAP", response.json()["evidence_statuses"])
@@ -1434,6 +1434,27 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
         ),
         root / "depmap-26q1-core" / "model_metadata.parquet",
     )
+    validation = root / "depmap-26q1-full" / "cross_platform_validation"
+    validation.mkdir(parents=True, exist_ok=True)
+    (validation / "manifest.json").write_text(
+        json.dumps({
+            "schema_version": 1, "release": "26Q1", "status": "complete",
+            "qa_status": "PASS", "methods": ["Pearson", "Spearman", "BH FDR"],
+        }),
+        encoding="utf-8",
+    )
+    for name, platform in (("sanger", "Sanger_KY"), ("rnai", "DEMETER2_Achilles")):
+        table = pa.table({
+            "symbol": ["KEEP"], "pearson_cor": [0.7], "pearson_p": [0.01],
+            "n": [20], "spearman_cor": [0.6], "spearman_p": [0.02],
+            "spearman_n": [20], "pearson_fdr": [0.03], "spearman_fdr": [0.04],
+            "platform": [platform], "lineage": ["ALL"],
+        })
+        pq.write_table(table, validation / f"{name}_all.parquet")
+        pq.write_table(
+            table.set_column(table.schema.get_field_index("lineage"), "lineage", pa.array(["Myeloid"])),
+            validation / f"{name}_Myeloid.parquet",
+        )
 
 
 class LineageMutationQueryTests(DepMapApiTests):
@@ -1700,6 +1721,60 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertEqual(bad_lineage.status_code, 200)
         self.assertEqual(bad_lineage.json()["status"], "INELIGIBLE")
         self.assertEqual(bad_model.status_code, 422)
+
+    def test_cross_platform_validation_preserves_platform_metrics(self):
+        payload = self._query(
+            {"mode": "cross_platform_validation", "gene": "keep"}
+        )
+        self.assertEqual(payload["status"], "FOUND")
+        self.assertEqual(payload["scope"], "global")
+        self.assertEqual(
+            {row["comparison"] for row in payload["rows"]}, {"sanger", "rnai"}
+        )
+        self.assertTrue(payload["semantics"]["comparisons_remain_distinct"])
+        absent = self._query(
+            {"mode": "cross_platform_validation", "gene": "ABSENT"}
+        )
+        self.assertEqual(absent["status"], "NOT_TESTED")
+
+    def test_cross_platform_validation_canonicalizes_lineage_and_fails_closed_on_qa(self):
+        payload = self._query({
+            "mode": "cross_platform_validation", "gene": "KEEP",
+            "scope": "lineage", "lineage": "髓系",
+        })
+        self.assertEqual(payload["status"], "FOUND")
+        self.assertEqual(payload["lineage"], "Myeloid")
+        with TestClient(create_app(self.settings)) as client:
+            invalid = client.post(
+                "/api/v1/query", headers=self.headers,
+                json={"mode": "cross_platform_validation", "gene": "KEEP", "scope": "invalid"},
+            )
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(invalid.json()["status"], "INELIGIBLE")
+        self.assertTrue(invalid.json()["schema_error"])
+        manifest_path = (
+            self.settings.knowledge_root / "depmap-26q1-full" /
+            "cross_platform_validation" / "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("qa_status")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        gated = self._query({"mode": "cross_platform_validation", "gene": "KEEP"})
+        self.assertEqual(gated["status"], "NOT_COMPUTED")
+
+        for index in range(27):
+            pq.write_table(
+                pa.table({"symbol": [], "pearson_cor": []}),
+                manifest_path.parent / f"sanger_legacy_{index:02d}.parquet",
+            )
+        manifest.pop("status")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        legacy = self._query({"mode": "cross_platform_validation", "gene": "KEEP"})
+        self.assertEqual(legacy["status"], "FOUND")
+        self.assertEqual(
+            legacy["manifest"]["completion_basis"],
+            "typed_legacy_31_table_inventory",
+        )
 
     def test_common_essential_filter_is_one_reader_join(self):
         unfiltered = self._query(

@@ -63,6 +63,7 @@ coverage condition and must never be interpreted as biological absence.
 - `depmap_lineage_catalog`
 - `depmap_lineage_dependencies`
 - `depmap_model_gene_effect`
+- `depmap_cross_platform_validation`
 - `depmap_pan_cancer_dependencies`
 - `depmap_lineage_direction_discovery`
 - `depmap_gene_evidence`
@@ -97,6 +98,12 @@ join display names only from the versioned model table. Optional lineage
 filters use the shared canonical lineage resolver, and a descriptive Gene
 Effect threshold is applied only when explicitly supplied; the tool never
 uses free-text disease substrings or an implicit `-0.5` cutoff.
+
+`depmap_cross_platform_validation` reads completed, QA-passed exact-gene
+correlations between Broad Chronos and Sanger KY CRISPR or DEMETER2 RNAi.
+Pearson and Spearman statistics remain labeled by comparison; they are never
+collapsed into one dependency score. Global and canonical-lineage scopes read
+precomputed artifacts only and never trigger a live matrix comparison.
 
 `depmap_pan_cancer_dependencies` performs the same bounded read across every
 completed lineage table in one call. `limit` is a display limit per lineage;

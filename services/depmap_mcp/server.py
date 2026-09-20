@@ -345,6 +345,12 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "entity_key": "canonical_model_id",
             "interpretation": "one exact gene projected onto bounded ACH ModelID rows; display names are secondary metadata and no disease substring filter is used",
         }
+    if mode == "cross_platform_validation":
+        return {
+            "metric": "platform_specific_gene_level_correlation",
+            "comparisons": ["Broad Chronos vs Sanger KY CRISPR", "Broad Chronos vs DEMETER2 RNAi"],
+            "interpretation": "Pearson and Spearman correlations across paired models; CRISPR and RNAi metrics remain distinct and are not merged into one dependency score",
+        }
     if mode == "lineage_catalog":
         return {
             "metric": "module_availability",
@@ -1032,6 +1038,26 @@ class DepMapEvidenceService:
         request = {key: value for key, value in normalized.items() if key != "mode"}
         return self._envelope(
             tool="depmap_model_gene_effect", request=request, evidence=item
+        )
+
+    async def cross_platform_validation(
+        self,
+        gene: str,
+        scope: str = "global",
+        lineage: str | None = None,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "cross_platform_validation",
+            "gene": gene.strip().upper(),
+            "scope": scope,
+        }
+        if lineage:
+            query["lineage"] = lineage
+        item = await self._execute(query)
+        normalized = item.get("query", query)
+        request = {key: value for key, value in normalized.items() if key != "mode"}
+        return self._envelope(
+            tool="depmap_cross_platform_validation", request=request, evidence=item
         )
 
     async def lineage_directions(self, lineage: str, limit: int = 20) -> dict[str, Any]:
@@ -1819,6 +1845,23 @@ def build_mcp_server(
         return await service.model_gene_effect(
             gene, lineage, model_id, gene_effect_at_or_below, limit
         )
+
+    @mcp.tool(
+        title="DepMap cross-platform dependency validation",
+        description=(
+            "Return completed exact-gene validation between Broad Chronos CRISPR "
+            "and Sanger KY CRISPR or DEMETER2 RNAi. Global or canonical-lineage "
+            "scope only; the platform metrics remain distinct and no live recompute runs."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_cross_platform_validation(
+        gene: str,
+        scope: Literal["global", "lineage"] = "global",
+        lineage: str | None = None,
+    ) -> dict[str, Any]:
+        return await service.cross_platform_validation(gene, scope, lineage)
 
     @mcp.tool(
         title="DepMap pan-cancer dependency summary",

@@ -17,6 +17,7 @@ MODE_ALIASES = {
     "catalog": "core",
     "core": "core",
     "model_gene_effect": "core",
+    "cross_platform_validation": "cross_platform_validation",
     "top": "core",
     "lineage": "core",
     "pathway": "core",
