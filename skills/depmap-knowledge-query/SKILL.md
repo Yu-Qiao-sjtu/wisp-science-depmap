@@ -140,6 +140,11 @@ expression-to-dependency association from gene names alone.
   and RNAi DEMETER2 are distinct metrics and must never be renamed or combined.
   A descriptive Gene Effect cutoff count is not produced by either ranking and
   may be presented only when an explicit derived field or query family declares it.
+- Preserve `dependency_confounder_qc` on dependency rows. `low_expression` and
+  `copy_number_effect` are same-gene, same-model-set QC annotations with their
+  release and threshold rule; they are warnings, not new p-values or causal
+  conclusions. When the status is `ANNOTATION_UNAVAILABLE`, do not infer either
+  condition from biological memory, and never claim the QC silently filtered rows.
 - A canonical DepMap lineage is a model-grouping proxy, not a clinical
   histology or patient cohort. Do not silently narrow `Liver` to HCC, add a
   neighboring control lineage, or name cell lines unless current model
