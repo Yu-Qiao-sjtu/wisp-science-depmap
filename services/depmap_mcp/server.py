@@ -1324,6 +1324,78 @@ class DepMapEvidenceService:
         }
         return self._envelope(tool="depmap_pair_evidence", request=request, evidence=evidence)
 
+    async def codependency_evidence(
+        self,
+        gene: str,
+        lineage: str | None = None,
+        direction: Literal["positive", "negative"] = "positive",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        symbol = gene.strip().upper()
+        if not symbol:
+            raise ValueError("gene must be non-empty")
+        request = {
+            "gene": symbol,
+            "lineage": lineage,
+            "direction": direction,
+            "limit": limit,
+        }
+        rejected = limit_violation("lineage_network", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_codependency_evidence", request=request, evidence=rejected
+            )
+        global_catalog = (
+            "positive_reciprocal_top20"
+            if direction == "positive"
+            else "stable_negative_rank1"
+        )
+        queries: list[dict[str, Any]] = [
+            {
+                "mode": "true_love",
+                "catalog": global_catalog,
+                "gene": symbol,
+                "scope": "pancancer",
+                "limit": limit,
+            }
+        ]
+        if direction == "positive":
+            queries[0]["coverage"] = "quality"
+        if lineage:
+            queries.append(
+                {
+                    "mode": "lineage_network",
+                    "family": "effect_correlation",
+                    "lineage": lineage,
+                    "source": symbol,
+                    "reciprocal": True,
+                    "direction": direction,
+                    "limit": limit,
+                }
+            )
+        items = await self._execute_many(queries)
+        evidence = {
+            "query_count": len(items),
+            "query_error_count": sum(
+                item.get("status") == "QUERY_ERROR" for item in items
+            ),
+            "sections": [
+                {"scope": "global", "evidence": items[0]},
+                *(
+                    [{"scope": "lineage", "evidence": items[1]}]
+                    if lineage else []
+                ),
+            ],
+            "interpretation": (
+                "positive co-dependency means similar CRISPR Gene Effect profiles; "
+                "positive co-dependency is not synthetic lethality, and neither "
+                "correlation direction proves a mechanism"
+            ),
+        }
+        return self._envelope(
+            tool="depmap_codependency_evidence", request=request, evidence=evidence
+        )
+
     async def tf_dependency_evidence(
         self,
         transcription_factor: str | None = None,
@@ -1962,6 +2034,24 @@ def build_mcp_server(
         lineage: str | None = None,
     ) -> dict[str, Any]:
         return await service.pair_evidence(source, target, lineage)
+
+    @mcp.tool(
+        title="DepMap target-oriented co-dependency evidence",
+        description=(
+            "Return bounded precomputed CRISPR Gene Effect co-dependency partners "
+            "for one exact gene, with separate global and optional lineage sections. "
+            "Positive co-dependency is the default and is not synthetic lethality."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_codependency_evidence(
+        gene: str,
+        lineage: str | None = None,
+        direction: Literal["positive", "negative"] = "positive",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.codependency_evidence(gene, lineage, direction, limit)
 
     @mcp.tool(
         title="DepMap TF activity to CRISPR dependency evidence",

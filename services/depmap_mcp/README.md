@@ -69,6 +69,7 @@ coverage condition and must never be interpreted as biological absence.
 - `depmap_gene_evidence`
 - `tcga_gene_expression_survival`
 - `depmap_pair_evidence`
+- `depmap_codependency_evidence`
 - `depmap_drug_evidence`
 - `depmap_subtype_evidence`
 - `depmap_coamplification_evidence`
@@ -104,6 +105,12 @@ correlations between Broad Chronos and Sanger KY CRISPR or DEMETER2 RNAi.
 Pearson and Spearman statistics remain labeled by comparison; they are never
 collapsed into one dependency score. Global and canonical-lineage scopes read
 precomputed artifacts only and never trigger a live matrix comparison.
+
+`depmap_codependency_evidence` is the target-oriented CRISPR Gene Effect
+co-dependency surface. One call returns a global reciprocal section and, when
+requested, a separate lineage section. Positive co-dependency is the default;
+direction is filtered before the display limit, and correlation is never
+reported as proof of synthetic lethality.
 
 `depmap_pan_cancer_dependencies` performs the same bounded read across every
 completed lineage table in one call. `limit` is a display limit per lineage;

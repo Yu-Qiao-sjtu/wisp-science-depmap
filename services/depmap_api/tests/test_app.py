@@ -299,7 +299,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 12)
+        self.assertEqual(response.json()["query_contract_version"], 13)
         self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
         self.assertIn("NOT_OBSERVED", response.json()["evidence_statuses"])
         self.assertIn("COVERAGE_GAP", response.json()["evidence_statuses"])
@@ -898,12 +898,26 @@ class DepMapApiTests(unittest.TestCase):
                     "target": "BRAF",
                 },
             )
+            positive = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_network", "family": "effect_correlation", "lineage": "Lung", "source": "KRAS", "direction": "positive", "limit": 1},
+            )
+            negative = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "lineage_network", "family": "effect_correlation", "lineage": "Lung", "source": "KRAS", "direction": "negative", "limit": 1},
+            )
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.json()["status"], "FOUND")
         self.assertEqual(found.json()["rows"][0]["target_gene"], "RAF1")
         self.assertEqual(found.json()["manifest"]["lineage_sample_n"], 126)
         self.assertEqual(missing.status_code, 200)
         self.assertEqual(missing.json()["status"], "NOT_RETAINED")
+        self.assertEqual(positive.json()["status"], "FOUND")
+        self.assertEqual(positive.json()["direction"], "positive")
+        self.assertEqual(negative.json()["status"], "NOT_RETAINED")
+        self.assertEqual(negative.json()["direction"], "negative")
 
     def test_lineage_direction_discovery_selects_precomputed_significant_rows(self):
         root = (

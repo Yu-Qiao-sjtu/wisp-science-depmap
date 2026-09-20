@@ -77,6 +77,17 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "mcp_tool": "depmap_synthetic_lethal_evidence",
     },
     {
+        "intent": "codependency_evidence",
+        "description": "Rank precomputed positive or negative CRISPR Gene Effect co-dependency partners for one exact target gene, globally and optionally within one lineage.",
+        "required": ["gene"],
+        "optional": ["lineage", "direction", "limit"],
+        "examples_zh": ["哪些基因和KRAS共依赖", "肺癌里谁与KRAS正共依赖"],
+        "precise_prompt_template_zh": "查询{gene}的{direction}CRISPR Gene Effect共依赖伙伴；正共依赖不是合成致死。",
+        "confusable_with": ["gene_pair_evidence", "true_love_gene_catalog"],
+        "mcp_tool": "depmap_codependency_evidence",
+        "inventory_patterns": ["*CRISPR基因-基因共依赖分析*"],
+    },
+    {
         "intent": "gene_pair_evidence",
         "description": "Compare coexpression, CRISPR codependency, and expression-to-dependency evidence for two genes.",
         "required": ["source_gene", "target_gene"],

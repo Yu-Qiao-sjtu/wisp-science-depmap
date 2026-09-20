@@ -337,12 +337,13 @@ if(a$mode%in%sparse_modes){
     root<-file.path(module_root,lineage_key(a$lineage));manifest<-manifest_at(root)
     if(is.null(manifest)){emit(evidence("NOT_COMPUTED",a$mode,"this lineage/family combination was not computed",family=a$family,lineage=a$lineage,provenance=module_root));quit(save="no")}
     if(!identical(manifest$status,"complete")){emit(evidence("INELIGIBLE",a$mode,paste("lineage manifest status is",manifest$status),family=a$family,lineage=a$lineage,manifest=manifest,provenance=file.path(root,"manifest.json")));quit(save="no")}
-    source<-clean(a$source);target<-if(is.null(a$target))NA_character_ else clean(a$target);reciprocal<-tolower(if(is.null(a$reciprocal))"false" else a$reciprocal)%in%c("true","1")
+    source<-clean(a$source);target<-if(is.null(a$target))NA_character_ else clean(a$target);reciprocal<-tolower(if(is.null(a$reciprocal))"false" else a$reciprocal)%in%c("true","1");direction<-if(is.null(a$direction))NA_character_ else tolower(trimws(a$direction))
     if(reciprocal){
       p<-file.path(root,"reciprocal_pairs.parquet")
       if(!file.exists(p)){emit(evidence("NOT_COMPUTED",a$mode,"reciprocal-pair output is absent",family=a$family,lineage=a$lineage,source=source,target=target,reciprocal=TRUE,manifest=manifest,provenance=file.path(root,"manifest.json")));quit(save="no")}
       rows<-read_parquet_dt(p)[clean(source_gene)==source|clean(target_gene)==source]
       if(!is.na(target))rows<-rows[(clean(source_gene)==target|clean(target_gene)==target)]
+      if(!is.na(direction))rows<-rows[tolower(direction)==..direction]
       rows<-bounded(rows,"reciprocal_score",limit)
     }else{
       index<-source_index(file.path(root,"source_gene_order.csv"),source);p<-source_block(root,index)
@@ -350,10 +351,11 @@ if(a$mode%in%sparse_modes){
       if(is.na(p)){emit(evidence("NOT_COMPUTED",a$mode,"the source gene block is absent",family=a$family,lineage=a$lineage,source=source,target=target,reciprocal=FALSE,manifest=manifest,provenance=file.path(root,"blocks")));quit(save="no")}
       rows<-read_parquet_dt(p)[clean(source_gene)==source]
       if(!is.na(target))rows<-rows[clean(target_gene)==target]
+      if(!is.na(direction))rows<-rows[(correlation>0)==(direction=="positive")]
       rows<-bounded(rows,"correlation",limit)
     }
     status<-if(nrow(rows))"FOUND" else "NOT_RETAINED";reason<-if(nrow(rows))"bounded precomputed rows found" else "the eligible pair was tested but is absent from the retained sparse top-K output"
-    emit(evidence(status,a$mode,reason,family=a$family,lineage=a$lineage,source=source,target=target,reciprocal=reciprocal,rows=rows,manifest=manifest,provenance=c(file.path(root,"manifest.json"),p)));quit(save="no")
+    emit(evidence(status,a$mode,reason,family=a$family,lineage=a$lineage,source=source,target=target,reciprocal=reciprocal,direction=direction,rows=rows,manifest=manifest,provenance=c(file.path(root,"manifest.json"),p)));quit(save="no")
   }
 
   if(a$mode=="lineage_cnv"){
