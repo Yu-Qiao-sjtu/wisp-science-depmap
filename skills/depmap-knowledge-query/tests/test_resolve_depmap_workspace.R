@@ -69,6 +69,48 @@ write_json(
 missing_endpoint <- run_resolver(root)
 stopifnot(identical(missing_endpoint$status, "blocked"))
 stopifnot("knowledge_endpoint_missing" %in% unlist(missing_endpoint$blocking_failures))
+stopifnot(identical(missing_endpoint$fallback$release, "26Q1"))
+stopifnot(identical(missing_endpoint$fallback$knowledge_query_status, "MODULE_UNAVAILABLE"))
+stopifnot(identical(missing_endpoint$fallback$state, "new_analysis_proposed"))
+stopifnot(identical(missing_endpoint$fallback$authorized_skills$acquisition, "public-data-access"))
+stopifnot(identical(missing_endpoint$fallback$authorized_skills$analysis, "depmap-coding-agent"))
+stopifnot(identical(missing_endpoint$fallback$provider_policy$live_portal_api_is_query_provider, FALSE))
+stopifnot(any(vapply(missing_endpoint$fallback$files, function(x) identical(x$path, "data/Model.csv"), logical(1L))))
+
+write_json(
+  list(schema_version = 2, knowledge = list(provider = "local")),
+  file.path(root, ".wisp", "depmap-agent.json"),
+  auto_unbox = TRUE,
+  pretty = TRUE
+)
+missing_knowledge <- run_resolver(root)
+stopifnot(identical(missing_knowledge$status, "blocked"))
+stopifnot("knowledge_root_missing" %in% unlist(missing_knowledge$blocking_failures))
+stopifnot(identical(missing_knowledge$fallback$knowledge_query_status, "MODULE_UNAVAILABLE"))
+stopifnot(identical(missing_knowledge$fallback$state, "new_analysis_proposed"))
+
+knowledge_root <- file.path(root, "knowledge-ready")
+dir.create(knowledge_root)
+write_json(
+  list(qa_status = "PASS", release = "26Q1"),
+  file.path(knowledge_root, "depmap-26q1-qa.json"),
+  auto_unbox = TRUE
+)
+write_json(
+  list(
+    schema_version = 2,
+    knowledge = list(provider = "local", root = knowledge_root),
+    analysis_root = knowledge_root
+  ),
+  file.path(root, ".wisp", "depmap-agent.json"),
+  auto_unbox = TRUE,
+  pretty = TRUE
+)
+unsafe_analysis_root <- run_resolver(root)
+stopifnot(identical(unsafe_analysis_root$status, "blocked"))
+stopifnot(identical(unsafe_analysis_root$knowledge$query_ready, TRUE))
+stopifnot("analysis_root_overlaps_read_only_source" %in% unlist(unsafe_analysis_root$blocking_failures))
+stopifnot(is.null(unsafe_analysis_root$fallback))
 
 unlink(root, recursive = TRUE)
 cat("test_resolve_depmap_workspace: ok\n")

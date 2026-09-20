@@ -8,6 +8,35 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[3]
 
+    def test_public_release_fallback_uses_the_same_26q1_raw_file_dictionary(self):
+        capability_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-coding-agent"
+            / "references"
+            / "capability-manifest.json"
+        )
+        fallback_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-knowledge-query"
+            / "references"
+            / "public-release-fallback.json"
+        )
+        capability = json.loads(capability_path.read_text(encoding="utf-8"))
+        fallback = json.loads(fallback_path.read_text(encoding="utf-8"))
+        expected = {
+            (item["id"], item["path"])
+            for item in capability["datasets"]
+            if item["kind"] == "raw"
+        }
+        actual = {(item["id"], item["path"]) for item in fallback["files"]}
+        self.assertEqual(fallback["release"], "26Q1")
+        self.assertEqual(actual, expected)
+        self.assertFalse(
+            fallback["provider_policy"]["live_portal_api_is_query_provider"]
+        )
+
     def test_tm00_expression_dependency_capabilities_have_modality_roles(self):
         path = (
             self.repo_root

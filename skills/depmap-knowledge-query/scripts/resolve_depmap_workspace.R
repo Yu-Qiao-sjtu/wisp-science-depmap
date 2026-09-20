@@ -35,6 +35,12 @@ coverage_arg <- arg_value(
   file.path(script_dir, "..", "references", "knowledge-coverage-manifest.json")
 )
 coverage_path <- resolve_path(coverage_arg, project_root, FALSE)
+fallback_path <- resolve_path(
+  file.path(script_dir, "..", "references", "public-release-fallback.json"),
+  project_root,
+  TRUE
+)
+fallback <- read_json(fallback_path, simplifyVector = FALSE)
 config <- list()
 warnings <- character()
 if (file.exists(config_path)) {
@@ -168,6 +174,13 @@ if (is.list(config$knowledge) && !is.null(config$knowledge$tunnel)) {
 }
 if (!write_boundary_pass) blocking <- c(blocking, "analysis_root_overlaps_read_only_source")
 
+provider_unavailable <- any(blocking %in% c(
+  "knowledge_root_missing",
+  "knowledge_qa_not_pass",
+  "knowledge_endpoint_missing",
+  "managed_tunnel_not_supported"
+))
+
 remote_needs_probe <- identical(provider, "remote") && !length(blocking)
 
 result <- list(
@@ -203,6 +216,7 @@ result <- list(
     available_query_families = as.list(available_families),
     coverage_checks = coverage_checks
   ),
+  fallback = if (provider_unavailable) fallback else NA,
   data = list(
     root = data_root,
     source = data_pick$source,

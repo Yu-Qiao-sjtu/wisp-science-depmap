@@ -2750,7 +2750,7 @@ impl Tool for DepMapEvidenceTool {
         };
         let workspace = match self.query.workspace().await {
             Ok(workspace) => workspace,
-            Err(error) => return ToolResult::fail(blocked("configuration_blocked", error)),
+            Err(error) => return ToolResult::fail(configuration_blocked(error)),
         };
         let status = self.query.run_status(&workspace).await;
         if !status.success {
@@ -2828,7 +2828,7 @@ impl Tool for DepMapQueryTool {
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
         let workspace = match self.workspace().await {
             Ok(workspace) => workspace,
-            Err(error) => return ToolResult::fail(blocked("configuration_blocked", error)),
+            Err(error) => return ToolResult::fail(configuration_blocked(error)),
         };
         if args.get("mode").and_then(Value::as_str) == Some("status") {
             self.run_status(&workspace).await
@@ -3414,6 +3414,24 @@ fn blocked(code: &str, message: impl Into<String>) -> String {
         "state": "blocked",
         "code": code,
         "message": message.into(),
+        "new_analysis_started": false
+    }))
+}
+
+fn public_release_fallback() -> Value {
+    serde_json::from_str(include_str!(
+        "../../skills/depmap-knowledge-query/references/public-release-fallback.json"
+    ))
+    .expect("bundled DepMap public-release fallback contract must be valid JSON")
+}
+
+fn configuration_blocked(message: impl Into<String>) -> String {
+    pretty(json!({
+        "state": "blocked",
+        "code": "configuration_blocked",
+        "message": message.into(),
+        "knowledge_query_status": "MODULE_UNAVAILABLE",
+        "fallback": public_release_fallback(),
         "new_analysis_started": false
     }))
 }
@@ -5011,6 +5029,31 @@ mod tests {
         .unwrap();
         assert!(resolve_workspace(&root).await.is_err());
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn configuration_blocked_exposes_typed_26q1_public_release_fallback() {
+        let response: Value = serde_json::from_str(&configuration_blocked(
+            "local knowledge root is unavailable",
+        ))
+        .unwrap();
+        assert_eq!(response["code"], "configuration_blocked");
+        assert_eq!(response["knowledge_query_status"], "MODULE_UNAVAILABLE");
+        assert_eq!(response["fallback"]["release"], "26Q1");
+        assert_eq!(response["fallback"]["state"], "new_analysis_proposed");
+        assert_eq!(
+            response["fallback"]["authorized_skills"]["acquisition"],
+            "public-data-access"
+        );
+        assert_eq!(
+            response["fallback"]["authorized_skills"]["analysis"],
+            "depmap-coding-agent"
+        );
+        assert_eq!(
+            response["fallback"]["provider_policy"]["live_portal_api_is_query_provider"],
+            false
+        );
+        assert_eq!(response["new_analysis_started"], false);
     }
 
     #[tokio::test]
