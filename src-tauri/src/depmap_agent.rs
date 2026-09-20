@@ -909,17 +909,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "arguments": {"limit": 100},
             "single_call": true
         }),
-        ("pan_cancer_dependency_summary", _) if !requires_user_input => json!({
-            "tool": "depmap_pan_cancer_dependencies",
-            "transport": "remote_mcp",
-            "arguments": {
+        ("pan_cancer_dependency_summary", _) if !requires_user_input => {
+            let mut arguments = json!({
                 "ranking": "selective",
                 "exclude_common_essential": exclude_common_essential,
                 "common_essential_source": "depmap_26q1",
                 "limit": 5
-            },
-            "single_call": true
-        }),
+            });
+            if let Some(gene) = gene.as_deref() {
+                arguments["gene"] = json!(gene);
+            }
+            json!({
+                "tool": "depmap_pan_cancer_dependencies",
+                "transport": "remote_mcp",
+                "arguments": arguments,
+                "single_call": true
+            })
+        }
         ("cancer_dependency_ranking", Some(lineage)) if !requires_user_input => {
             if evidence_provider == "remote_mcp" {
                 json!({
@@ -3223,6 +3229,15 @@ mod tests {
             pan_cancer["guardrails"]
                 ["do_not_read_or_grep_spilled_tool_output_to_reconstruct_structured_evidence"],
             true
+        );
+        let exact_pan_cancer = depmap_route(&json!({
+            "intent":"pan_cancer_dependency_summary",
+            "gene":"ESR1"
+        }))
+        .unwrap();
+        assert_eq!(
+            exact_pan_cancer["recommended_query"]["arguments"]["gene"],
+            "ESR1"
         );
 
         let directions = depmap_route(&json!({

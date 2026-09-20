@@ -92,12 +92,19 @@ a separate concept and are never inferred from gene names or model memory.
 
 `depmap_pan_cancer_dependencies` performs the same bounded read across every
 completed lineage table in one call. `limit` is a display limit per lineage;
+when `gene` is present, the Agent preserves it as an exact provider predicate
+rather than expanding the request into lineage-by-lineage exploration.
 the response reports tested/retained counts and computes gene recurrence from
 the complete retained sets before display truncation, so Top-N rows are never
 misrepresented as complete cross-cancer coverage. For descriptive
 `mean_dependency` displays, recurrence additionally requires lineage mean Gene
 Effect ≤ -0.5; merely tested genes are reported as assay coverage, not recurrent
 dependencies.
+
+Public MCP methods leave scientific bounds to the shared provider validator.
+An out-of-range `limit` therefore returns the normal evidence envelope with
+`schema_error`, `limit_max`, and a stable reason instead of an MCP protocol
+execution error.
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
 release, request, metric semantics, coverage states, and normalized provenance.

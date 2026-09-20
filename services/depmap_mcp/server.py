@@ -151,7 +151,6 @@ from services.depmap_api.app import (
     verify_installation,
 )
 from services.depmap_api.provider_schema import (
-    TOOL_LIMIT_MAX,
     limit_violation,
     tlg_scope_and_lineage,
     true_love_arg_violation,
@@ -1689,7 +1688,7 @@ def build_mcp_server(
         ranking: Literal["selective", "mean_dependency"] = "selective",
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
-        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_lineage_dependencies"])] = 10,
+        limit: int = 10,
         gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.lineage_dependencies(
@@ -1716,7 +1715,7 @@ def build_mcp_server(
         ranking: Literal["selective", "mean_dependency"] = "selective",
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
-        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_pan_cancer_dependencies"])] = 5,
+        limit: int = 5,
         gene: str | None = None,
     ) -> dict[str, Any]:
         return await service.pan_cancer_dependencies(
@@ -1739,7 +1738,7 @@ def build_mcp_server(
     )
     async def depmap_lineage_direction_discovery(
         lineage: str,
-        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_lineage_direction_discovery"])] = 20,
+        limit: int = 20,
     ) -> dict[str, Any]:
         return await service.lineage_directions(lineage, limit)
 
@@ -1757,7 +1756,7 @@ def build_mcp_server(
         gene: str,
         lineage: str | None = None,
         sections: list[Section] | None = None,
-        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_gene_evidence"])] = 5,
+        limit: int = 5,
     ) -> dict[str, Any]:
         return await service.gene_evidence(gene, lineage, sections, limit)
 
@@ -1911,7 +1910,7 @@ def build_mcp_server(
     async def depmap_true_love_evidence(
         gene: str | None = None,
         partner: str | None = None,
-        limit: Annotated[int, Field(ge=1, le=TOOL_LIMIT_MAX["depmap_true_love_evidence"])] = 20,
+        limit: int = 20,
         catalog: Literal["stable_negative_rank1", "negative_r_lt_minus_0_3", "positive_reciprocal_top20"] = "stable_negative_rank1",
         coverage: Annotated[
             Literal["all", "legacy", "quality"] | None,

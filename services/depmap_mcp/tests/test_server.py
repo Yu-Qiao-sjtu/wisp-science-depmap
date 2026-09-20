@@ -910,6 +910,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "installed"
                     ]
                 )
+                invalid = await session.call_tool(
+                    "depmap_lineage_dependencies",
+                    {"lineage": "Breast", "limit": 494},
+                )
+                self.assertFalse(invalid.isError)
+                self.assertTrue(
+                    invalid.structuredContent["evidence"]["schema_error"]
+                )
+                self.assertEqual(
+                    invalid.structuredContent["evidence"]["limit_max"], 100
+                )
 
 
 if __name__ == "__main__":
