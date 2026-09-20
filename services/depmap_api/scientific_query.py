@@ -176,6 +176,11 @@ def qc_annotations_for_row(row: dict[str, Any]) -> list[str]:
     joined = " ".join(str(row.get(key) or "") for key in ("dataset", "screen", "assay", "provider"))
     if "prism" in joined.casefold() or row.get("prism_z") is not None:
         flags.append("prism_noise")
+    confounder_qc = row.get("dependency_confounder_qc")
+    if isinstance(confounder_qc, dict) and confounder_qc.get("status") == "AVAILABLE":
+        for flag in confounder_qc.get("flags", []):
+            if flag in {"low_expression", "copy_number_effect"} and flag not in flags:
+                flags.append(flag)
     return flags
 
 

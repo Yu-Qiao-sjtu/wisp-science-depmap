@@ -2948,6 +2948,105 @@ def _common_essential_labels(settings: Settings, source: str) -> set[str] | None
     return labels
 
 
+def _dependency_confounder_sidecar(
+    settings: Settings,
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]] | None:
+    root = _lineage_dependency_root(settings)
+    table_path = root / "dependency_confounder_qc.csv"
+    manifest_path = root / "dependency_confounder_qc_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        manifest = None
+    if not table_path.is_file() or not isinstance(manifest, dict):
+        return None
+    if manifest.get("release") != settings.release:
+        return None
+    expression_floor = manifest.get("expression_floor_log2_tpm_plus_1")
+    copy_number_floor = manifest.get("copy_number_amplification_floor_log2")
+    if not isinstance(expression_floor, (int, float)) or not isinstance(
+        copy_number_floor, (int, float)
+    ):
+        return None
+    try:
+        rows = _read_csv_records(table_path)
+    except (OSError, UnicodeError, csv.Error):
+        return None
+    index = {
+        (
+            str(row.get("lineage") or "").strip().casefold(),
+            str(row.get("symbol") or "").strip().upper(),
+        ): row
+        for row in rows
+        if row.get("lineage") and row.get("symbol")
+    }
+    return index, {
+        "release": str(manifest.get("release") or settings.release),
+        "model_set": str(manifest.get("model_set") or "lineage_dependency_model_set"),
+        "expression_floor_log2_tpm_plus_1": float(expression_floor),
+        "copy_number_amplification_floor_log2": float(copy_number_floor),
+    }
+
+
+def _annotate_dependency_confounders(
+    rows: list[dict[str, Any]],
+    *,
+    lineage: str,
+    sidecar: tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    def optional_float(row: dict[str, Any], key: str) -> float | None:
+        value = row.get(key)
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    annotated: list[dict[str, Any]] = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        hit = sidecar[0].get((lineage.casefold(), symbol)) if sidecar else None
+        if hit is None:
+            annotation = {
+                "status": "ANNOTATION_UNAVAILABLE",
+                "flags": [],
+                "filter_applied": False,
+            }
+        else:
+            meta = sidecar[1]
+            expression = optional_float(hit, "expression_median_log2_tpm_plus_1")
+            copy_number = optional_float(hit, "copy_number_mean_log2")
+            flags = []
+            if expression is not None and expression <= meta["expression_floor_log2_tpm_plus_1"]:
+                flags.append("low_expression")
+            if copy_number is not None and copy_number >= meta["copy_number_amplification_floor_log2"]:
+                flags.append("copy_number_effect")
+            annotation = {
+                "status": "AVAILABLE",
+                "flags": flags,
+                "filter_applied": False,
+                "release": meta["release"],
+                "model_set": meta["model_set"],
+                "observed": {
+                    "expression_median_log2_tpm_plus_1": expression,
+                    "copy_number_mean_log2": copy_number,
+                },
+                "rules": {
+                    "low_expression": {
+                        "operator": "less_than_or_equal",
+                        "threshold": meta["expression_floor_log2_tpm_plus_1"],
+                    },
+                    "copy_number_effect": {
+                        "operator": "greater_than_or_equal",
+                        "threshold": meta["copy_number_amplification_floor_log2"],
+                    },
+                },
+            }
+        annotated.append({**row, "dependency_confounder_qc": annotation})
+    return annotated
+
+
 def _lineage_dependency_root(settings: Settings) -> Path:
     return settings.knowledge_root / "depmap-26q1-core" / "lineage_dependency_tests"
 
@@ -3033,6 +3132,7 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
     path = paths[0]
     table = _read_parquet_records(path)
     labels = _common_essential_labels(settings, source)
+    confounder_sidecar = _dependency_confounder_sidecar(settings)
     if gene:
         hits = filter_before_limit(
             table, lambda row: str(row.get("symbol") or "").upper() == gene
@@ -3054,6 +3154,9 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
         out, status, meta = _exact_lineage_gene_state(
             row, ranking=ranking, labels=labels, source=source, exclude=exclude
         )
+        out = _annotate_dependency_confounders(
+            [out], lineage=lineage, sidecar=confounder_sidecar
+        )[0]
         return _evidence_response(
             status, mode="lineage_dependency", lineage=lineage, ranking=ranking, gene=gene,
             reason="exact gene row from the completed lineage-vs-rest table",
@@ -3074,6 +3177,9 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
         and row.get("effect_mean_lineage") is not None
     ]
     candidates = [row for row in tested_rows if _selectivity_retained(row, ranking)]
+    candidates = _annotate_dependency_confounders(
+        candidates, lineage=lineage, sidecar=confounder_sidecar
+    )
     annotated, meta = annotate_common_essential(
         candidates, labels=labels, source=source, exclude=exclude
     )
@@ -3126,6 +3232,7 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
             reason="no completed lineage-vs-rest dependency tables are indexed",
         )
     labels = _common_essential_labels(settings, source)
+    confounder_sidecar = _dependency_confounder_sidecar(settings)
     manifest = _load_manifest(root)
     lineages: list[dict[str, Any]] = []
     for path in paths:
@@ -3146,6 +3253,9 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
             out, status, _meta = _exact_lineage_gene_state(
                 row, ranking=ranking, labels=labels, source=source, exclude=exclude
             )
+            out = _annotate_dependency_confounders(
+                [out], lineage=lineage, sidecar=confounder_sidecar
+            )[0]
             lineages.append({
                 "lineage": lineage or path.stem,
                 "association_status": status,
@@ -3157,6 +3267,9 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
             if str(row.get("test_status") or "").lower() == "tested"
         ]
         candidates = [row for row in tested_rows if _selectivity_retained(row, ranking)]
+        candidates = _annotate_dependency_confounders(
+            candidates, lineage=lineage, sidecar=confounder_sidecar
+        )
         annotated, meta = annotate_common_essential(
             candidates, labels=labels, source=source, exclude=exclude
         )
