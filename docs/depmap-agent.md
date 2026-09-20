@@ -97,6 +97,12 @@ identities. An old, missing, or future incompatible contract is a typed
 remains registered until the server is redeployed, its index rebuilt, and the
 service restarted.
 
+Every planned remote call is validated locally against the exact discovered
+MCP input schema before transport dispatch. Routes use canonical provider field
+names and omit absent optional selectors instead of serializing `null`. A stale
+or invented field returns `MCP_SCHEMA_MISMATCH` with `request not sent`; the
+Agent does not retry with guessed aliases.
+
 ## Starting a session
 
 Open **Settings → Specialists → DepMap Agent**, then choose **Start specialist
