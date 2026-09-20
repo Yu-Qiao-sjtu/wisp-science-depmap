@@ -12,6 +12,7 @@ import gzip
 import hmac
 import json
 import logging
+import math
 import os
 import csv
 import re
@@ -76,6 +77,7 @@ MODE_REQUIRED_FIELDS = {
     "catalog": set(),
     "lineage_catalog": {"lineage"},
     "lineage_dependency": {"lineage"},
+    "model_gene_effect": {"gene"},
     "pan_cancer_dependency": set(),
     "lineage_directions": {"lineage"},
     "core": {"gene"},
@@ -103,6 +105,7 @@ MODE_OPTIONAL_FIELDS = {
     "lineage_mutation_dependency": {"source", "target", "event", "limit"},
     "lineage_network": {"target", "limit", "reciprocal"},
     "lineage_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
+    "model_gene_effect": {"lineage", "model_id", "gene_effect_at_or_below", "limit"},
     "pan_cancer_dependency": {"gene", "ranking", "exclude_common_essential", "common_essential_source", "limit"},
     "lineage_directions": {"limit"},
     "lineage_cnv": {"target", "limit"},
@@ -136,6 +139,8 @@ OFFICIAL_MUTATION_DEPENDENCY = "depmap_official_gene_effect_v2"
 QUERY_FIELD_ORDER = (
     "mode",
     "gene",
+    "model_id",
+    "gene_effect_at_or_below",
     "module",
     "source",
     "target",
@@ -424,7 +429,7 @@ class QueryRequest(BaseModel):
         "analysis_catalog",
         "mutation_anchor",
         "lineage_mutation_dependency",
-        "catalog", "lineage_catalog", "lineage_dependency", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
+        "catalog", "lineage_catalog", "lineage_dependency", "model_gene_effect", "pan_cancer_dependency", "core", "pair", "top", "lineage", "pathway", "drug",
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
@@ -434,6 +439,8 @@ class QueryRequest(BaseModel):
         "biomarker_target",
     ]
     gene: str | None = None
+    model_id: str | None = None
+    gene_effect_at_or_below: float | None = Field(default=None, allow_inf_nan=False)
     module: str | None = None
     completion_state: Literal["COMPLETE", "UNVERIFIED"] | None = None
     anchor_tier: Literal["priority", "strict", "standard"] | None = None
@@ -469,7 +476,7 @@ class QueryRequest(BaseModel):
         required = MODE_REQUIRED_FIELDS[self.mode]
         allowed = required | MODE_OPTIONAL_FIELDS.get(self.mode, set())
         all_fields = {
-            "gene", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
+            "gene", "model_id", "gene_effect_at_or_below", "module", "completion_state", "anchor_tier", "include_common_essential", "exclude_common_essential", "common_essential_source", "source", "target", "limit", "event", "lineage",
             "pathway", "drug", "omic", "family", "ranking", "collection", "term", "reciprocal",
             "project", "endpoint", "contrast", "partner", "layer", "cohort",
             "catalog", "coverage", "view", "scope",
@@ -541,7 +548,9 @@ class QueryRequest(BaseModel):
             raise ValueError("tf_dependency universe view does not take a source")
         if self.mode == "lineage_mutation_dependency" and self.source is None and self.target is None:
             raise ValueError("lineage_mutation_dependency requires source, target, or both")
-        for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential"}):
+        if self.model_id is not None and not re.fullmatch(r"ACH-\d{6}", self.model_id.strip().upper()):
+            raise ValueError("model_id must be a canonical ACH-###### ModelID")
+        for name in (supplied - {"limit", "reciprocal", "include_common_essential", "exclude_common_essential", "gene_effect_at_or_below"}):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
@@ -553,6 +562,8 @@ class QueryRequest(BaseModel):
         result = self.model_dump(exclude_none=True)
         if self.lineage is not None:
             result["lineage"] = _canonical_lineage_label(self.lineage)
+        if self.model_id is not None:
+            result["model_id"] = self.model_id.strip().upper()
         if self.project is not None:
             project = self.project.strip().upper()
             result["project"] = project if project.startswith("TCGA-") else f"TCGA-{project}"
@@ -692,6 +703,127 @@ def _run_core_query(settings: Settings, gene: str) -> dict[str, Any]:
         "lineages": lineages,
         "provenance": provenance,
     }
+
+
+def _run_model_gene_effect_query(
+    settings: Settings, query: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PyArrow is required for model queries")
+    core = settings.knowledge_root / "depmap-26q1-core"
+    effect_path = core / "model_gene_effect.parquet"
+    metadata_path = core / "model_metadata.parquet"
+    if query.get("lineage") and query["lineage"] not in CANONICAL_LINEAGES:
+        return _evidence_response(
+            "INELIGIBLE",
+            mode="model_gene_effect",
+            reason="lineage did not resolve to the canonical DepMap lineage vocabulary",
+            lineage=query["lineage"],
+            rows=[],
+            returned_count=0,
+            matched_row_count=0,
+        )
+    if not effect_path.is_file() or not metadata_path.is_file():
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="model_gene_effect",
+            reason="the bounded per-model Gene Effect layer is not installed",
+            rows=[],
+            returned_count=0,
+            matched_row_count=0,
+            provenance=[str(effect_path), str(metadata_path)],
+        )
+    gene = str(query["gene"]).strip().upper()
+    effect_rows = parquet.read_table(
+        effect_path, filters=[("symbol", "=", gene)]
+    ).to_pylist()
+    if not effect_rows:
+        return _evidence_response(
+            "NOT_COMPUTED",
+            mode="model_gene_effect",
+            reason="the exact gene is absent from the installed per-model layer",
+            gene=gene,
+            rows=[],
+            returned_count=0,
+            matched_row_count=0,
+            provenance=[str(effect_path)],
+        )
+    metadata = {
+        str(row.get("model_id") or "").strip().upper(): row
+        for row in parquet.read_table(metadata_path).to_pylist()
+    }
+    rows = []
+    untested_model_count = 0
+    for effect in effect_rows:
+        model_id = str(effect.get("model_id") or "").strip().upper()
+        model = metadata.get(model_id)
+        if not model:
+            continue
+        lineage = str(model.get("lineage") or "")
+        if query.get("lineage") and lineage != query["lineage"]:
+            continue
+        if query.get("model_id") and model_id != query["model_id"]:
+            continue
+        value = effect.get("gene_effect")
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            untested_model_count += 1
+            continue
+        if not math.isfinite(numeric_value):
+            untested_model_count += 1
+            continue
+        threshold = query.get("gene_effect_at_or_below")
+        if threshold is not None and numeric_value > float(threshold):
+            continue
+        rows.append(
+            {
+                "model_id": model_id,
+                "cell_line_name": model.get("cell_line_name"),
+                "lineage": lineage,
+                "symbol": gene,
+                "gene_effect": numeric_value,
+            }
+        )
+    rows.sort(key=lambda row: (float(row["gene_effect"]), row["model_id"]))
+    matched = len(rows)
+    limit = min(int(query.get("limit") or 20), 100)
+    page = rows[:limit]
+    status = "FOUND" if page else "NOT_TESTED"
+    return _evidence_response(
+        status,
+        mode="model_gene_effect",
+        reason=(
+            "bounded exact-gene ModelID rows joined to versioned model metadata"
+            if page
+            else (
+                "matching models have no finite Gene Effect measurement"
+                if untested_model_count
+                else "no model matched the declared ModelID, lineage, and threshold predicates"
+            )
+        ),
+        gene=gene,
+        lineage=query.get("lineage"),
+        model_id=query.get("model_id"),
+        gene_effect_at_or_below=query.get("gene_effect_at_or_below"),
+        rows=page,
+        returned_count=len(page),
+        matched_row_count=matched,
+        untested_model_count=untested_model_count,
+        semantics={
+            "metric": "chronos_gene_effect_model_score",
+            "units": "Chronos Gene Effect score",
+            "direction": "more_negative_is_stronger_dependency",
+            "threshold_policy": (
+                "explicit_less_than_or_equal"
+                if query.get("gene_effect_at_or_below") is not None
+                else "no_threshold"
+            ),
+        },
+        provenance=[str(effect_path), str(metadata_path)],
+    )
 
 
 def _lineage_key(lineage: str) -> str:
@@ -3549,6 +3681,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_lineage_directions_query, settings, query)
     if query["mode"] == "lineage_dependency":
         return await asyncio.to_thread(_run_lineage_dependency_query, settings, query)
+    if query["mode"] == "model_gene_effect":
+        return await asyncio.to_thread(_run_model_gene_effect_query, settings, query)
     if query["mode"] == "pan_cancer_dependency":
         return await asyncio.to_thread(_run_pan_cancer_dependency_query, settings, query)
     if query["mode"] == "core":

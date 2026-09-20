@@ -1414,6 +1414,26 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
         ),
         tests / "02_Breast.parquet",
     )
+    pq.write_table(
+        pa.table(
+            {
+                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003", "ACH-000004", "ACH-000001"],
+                "symbol": ["KEEP", "KEEP", "KEEP", "KEEP", "OTHER"],
+                "gene_effect": [-1.2, -0.4, -0.8, None, -2.0],
+            }
+        ),
+        root / "depmap-26q1-core" / "model_gene_effect.parquet",
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "model_id": ["ACH-000001", "ACH-000002", "ACH-000003", "ACH-000004"],
+                "cell_line_name": ["Fixture A", "Fixture B", "Fixture C", "Fixture D"],
+                "lineage": ["Myeloid", "Breast", "Myeloid", "Myeloid"],
+            }
+        ),
+        root / "depmap-26q1-core" / "model_metadata.parquet",
+    )
 
 
 class LineageMutationQueryTests(DepMapApiTests):
@@ -1614,6 +1634,72 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         )
         self.assertEqual(payload["rows"][0]["symbol"], "DROPCE")
         self.assertEqual(payload["rows"][0]["effect_mean_lineage"], -1.5)
+
+    def test_model_gene_effect_is_bounded_exact_and_modelid_keyed(self):
+        payload = self._query(
+            {
+                "mode": "model_gene_effect",
+                "gene": "keep",
+                "lineage": "髓系",
+                "gene_effect_at_or_below": -0.9,
+                "limit": 1,
+            }
+        )
+        self.assertEqual(payload["status"], "FOUND")
+        self.assertEqual(payload["matched_row_count"], 1)
+        self.assertEqual(payload["rows"][0]["model_id"], "ACH-000001")
+        self.assertEqual(payload["rows"][0]["cell_line_name"], "Fixture A")
+        self.assertEqual(
+            payload["semantics"]["metric"], "chronos_gene_effect_model_score"
+        )
+        self.assertEqual(
+            payload["semantics"]["threshold_policy"],
+            "explicit_less_than_or_equal",
+        )
+
+        bounded = self._query(
+            {
+                "mode": "model_gene_effect",
+                "gene": "KEEP",
+                "lineage": "Myeloid",
+                "limit": 1,
+            }
+        )
+        self.assertEqual(bounded["returned_count"], 1)
+        self.assertEqual(bounded["matched_row_count"], 2)
+        self.assertEqual(bounded["semantics"]["threshold_policy"], "no_threshold")
+
+        exact = self._query(
+            {
+                "mode": "model_gene_effect",
+                "gene": "KEEP",
+                "model_id": "ach-000003",
+            }
+        )
+        self.assertEqual(exact["rows"][0]["model_id"], "ACH-000003")
+
+        untested = self._query(
+            {"mode": "model_gene_effect", "gene": "KEEP", "model_id": "ACH-000004"}
+        )
+        self.assertEqual(untested["status"], "NOT_TESTED")
+        self.assertEqual(untested["rows"], [])
+        self.assertEqual(untested["untested_model_count"], 1)
+
+    def test_model_gene_effect_rejects_invalid_lineage_and_modelid(self):
+        with TestClient(create_app(self.settings)) as client:
+            bad_lineage = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "model_gene_effect", "gene": "KEEP", "lineage": "not-a-lineage"},
+            )
+            bad_model = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "model_gene_effect", "gene": "KEEP", "model_id": "Fixture A"},
+            )
+        self.assertEqual(bad_lineage.status_code, 200)
+        self.assertEqual(bad_lineage.json()["status"], "INELIGIBLE")
+        self.assertEqual(bad_model.status_code, 422)
 
     def test_common_essential_filter_is_one_reader_join(self):
         unfiltered = self._query(

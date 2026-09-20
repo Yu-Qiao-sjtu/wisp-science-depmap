@@ -159,6 +159,26 @@ if(a$mode=="tf_dependency"){
   emit(list(mode=a$mode,status="FOUND",reason="exact pair retrieved from the completed full matrix",source=tf,target=target,rows=row,manifest=compact,provenance=c(manifest_path,p)));quit(save="no")
 }
 
+if(a$mode=="model_gene_effect"){
+  if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for model Gene Effect queries")
+  effect_path<-file.path(core,"model_gene_effect.parquet");metadata_path<-file.path(core,"model_metadata.parquet")
+  gene<-clean(a$gene);model_id<-if(is.null(a$model_id))NA_character_ else toupper(trimws(a$model_id));limit<-min(if(is.null(a$limit))20L else as.integer(a$limit),100L)
+  evidence<-function(status,reason,...){c(list(mode=a$mode,status=status,reason=reason),list(...),list(provenance=c(effect_path,metadata_path)))}
+  if(!file.exists(effect_path)||!file.exists(metadata_path)){emit(evidence("MODULE_UNAVAILABLE","the bounded per-model Gene Effect layer is not installed",gene=gene,rows=list(),returned_count=0L,matched_row_count=0L));quit(save="no")}
+  effects<-as.data.table(arrow::read_parquet(effect_path));effects<-effects[toupper(symbol)==gene]
+  if(!nrow(effects)){emit(evidence("NOT_COMPUTED","the exact gene is absent from the installed per-model layer",gene=gene,rows=list(),returned_count=0L,matched_row_count=0L));quit(save="no")}
+  metadata<-as.data.table(arrow::read_parquet(metadata_path));metadata[,model_id:=toupper(trimws(model_id))];effects[,model_id:=toupper(trimws(model_id))]
+  rows<-merge(effects,metadata,by="model_id",all=FALSE)
+  if(!is.null(a$lineage))rows<-rows[lineage==a$lineage]
+  if(!is.na(model_id))rows<-rows[model_id==..model_id]
+  untested<-sum(!is.finite(as.numeric(rows$gene_effect)));rows<-rows[is.finite(as.numeric(gene_effect))];rows[,gene_effect:=as.numeric(gene_effect)]
+  if(!is.null(a$gene_effect_at_or_below))rows<-rows[gene_effect<=as.numeric(a$gene_effect_at_or_below)]
+  setorder(rows,gene_effect,model_id);matched<-nrow(rows);page<-head(rows,limit)
+  status<-if(nrow(page))"FOUND" else "NOT_TESTED";reason<-if(nrow(page))"bounded exact-gene ModelID rows joined to versioned model metadata" else if(untested)"matching models have no finite Gene Effect measurement" else "no model matched the declared ModelID, lineage, and threshold predicates"
+  keep<-intersect(c("model_id","cell_line_name","lineage","symbol","gene_effect"),names(page));page<-page[,..keep]
+  emit(evidence(status,reason,gene=gene,lineage=a$lineage,model_id=if(is.na(model_id))NULL else model_id,gene_effect_at_or_below=a$gene_effect_at_or_below,rows=page,returned_count=nrow(page),matched_row_count=matched,untested_model_count=untested,semantics=list(metric="chronos_gene_effect_model_score",units="Chronos Gene Effect score",direction="more_negative_is_stronger_dependency",threshold_policy=if(is.null(a$gene_effect_at_or_below))"no_threshold" else "explicit_less_than_or_equal")));quit(save="no")
+}
+
 sparse_modes<-c("lineage_catalog","lineage_dependency","pan_cancer_dependency","lineage_network","lineage_cnv","lineage_drug","enrichment")
 if(a$mode%in%sparse_modes){
   if(!requireNamespace("arrow",quietly=TRUE))stop("arrow package required for sparse lineage queries")

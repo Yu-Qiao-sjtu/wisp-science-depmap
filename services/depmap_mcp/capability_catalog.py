@@ -98,6 +98,16 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "inventory_patterns": ["*lineage_dependency_tests*"],
     },
     {
+        "intent": "model_gene_effect_slice",
+        "description": "Return bounded ModelID-keyed Chronos Gene Effect rows for one exact gene.",
+        "required": ["gene"],
+        "optional": ["lineage", "model_id", "gene_effect_at_or_below", "limit"],
+        "examples_zh": ["哪些模型依赖GPX4", "髓系模型中TP53的Gene Effect"],
+        "precise_prompt_template_zh": "按canonical ModelID查询{gene}的逐模型Chronos Gene Effect。",
+        "confusable_with": ["cancer_dependency_ranking"],
+        "mcp_tool": "depmap_model_gene_effect",
+    },
+    {
         "intent": "pan_cancer_dependency_summary",
         "description": "Summarize bounded precomputed lineage dependency rankings across every completed cancer lineage in one request.",
         "required": [],
