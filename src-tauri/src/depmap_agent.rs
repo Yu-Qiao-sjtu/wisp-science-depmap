@@ -805,11 +805,15 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         strategy = "The user explicitly requested a registered Workflow; create only its approval-gated draft.";
         tools = vec!["start_workflow"];
     }
-    if evidence_provider == "remote_mcp"
-        && intent == "cancer_dependency_ranking"
-        && !requires_user_input
-    {
-        strategy = "Use the explicitly requested remote DepMap MCP lineage dependency tool; do not call the native local provider.";
+    let remote_mcp_only = evidence_provider == "remote_mcp";
+    if remote_mcp_only && !requires_user_input {
+        execution_level = "L1_DIRECT";
+        approval = false;
+        strategy = if matches!(intent.as_str(), "new_analysis" | "report_generation") {
+            "The selected remote DepMap MCP exposes bounded precomputed evidence only. Report COMPUTE_NOT_EXPOSED; do not start a Workflow, local/SSH Run, shell, filesystem inspection, or artifact write."
+        } else {
+            "Use only the explicitly selected remote DepMap MCP for this turn; do not call native providers, shell, local files, saved execution contexts, or SSH."
+        };
         tools = vec!["search_mcp_tools", "use_mcp_tool"];
     }
 
@@ -1081,14 +1085,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "entity_class": entity_class,
         "strategy": strategy,
         "recommended_query": recommended_query,
-        "artifact_requested": matches!(intent.as_str(), "report_generation" | "new_analysis"),
+        "artifact_requested": !remote_mcp_only && matches!(intent.as_str(), "report_generation" | "new_analysis"),
+        "provider_boundary": {
+            "mode": if remote_mcp_only { "mcp_only" } else { "workspace_and_configured_providers" },
+            "forbidden_fallbacks": if remote_mcp_only {
+                json!(["shell", "run_in_context", "list_remote_files", "local_filesystem", "local_config", "saved_ssh_hosts"])
+            } else {
+                json!([])
+            }
+        },
         "remote_compute": {
             "gateway": "non_exfiltrating",
             "live_ssh_forbidden": true,
             "matrix_export": false,
             "knowledge_context_miss": "MODULE_UNAVAILABLE",
             "mcp_dropout": "MODULE_UNAVAILABLE",
-            "new_compute": "gated_run"
+            "compute_status": if remote_mcp_only { "COMPUTE_NOT_EXPOSED" } else { "GATED_RUN_AVAILABLE" },
+            "new_compute": if remote_mcp_only { "not_exposed_by_selected_mcp" } else { "gated_run" }
         },
         "allowed_next_tools": tools,
         "evidence_budget": {
@@ -3585,7 +3598,8 @@ mod tests {
 
     #[tokio::test]
     async fn route_grants_only_exact_host_validated_remote_tools() {
-        let result = DepMapAgentRouteTool::new(vec!["depmap_safe_query".into()])
+        let tool = DepMapAgentRouteTool::new(vec!["depmap_safe_query".into()]);
+        let result = tool
             .run(
                 &json!({
                     "intent":"cancer_dependency_ranking",
@@ -3600,6 +3614,44 @@ mod tests {
         assert!(allowed.contains(&"search_mcp_tools".to_string()));
         assert!(!allowed.iter().any(|name| name.ends_with('*')));
         assert!(!allowed.contains(&"depmap_unrelated_write".to_string()));
+    }
+
+    #[tokio::test]
+    async fn remote_mcp_route_never_grants_workspace_or_compute_tools() {
+        let compute = DepMapAgentRouteTool::new(vec!["depmap_safe_query".into()])
+            .run(
+                &json!({
+                    "intent":"new_analysis",
+                    "evidence_provider":"remote_mcp",
+                    "explicit_workflow_request":true
+                }),
+                &RouteTestEnv,
+            )
+            .await;
+        assert!(compute.success);
+        let compute_route: Value = serde_json::from_str(&compute.content).unwrap();
+        assert_eq!(compute_route["execution_level"], "L1_DIRECT");
+        assert_eq!(compute_route["requires_approval"], false);
+        assert_eq!(compute_route["artifact_requested"], false);
+        assert_eq!(compute_route["provider_boundary"]["mode"], "mcp_only");
+        assert_eq!(
+            compute_route["remote_compute"]["compute_status"],
+            "COMPUTE_NOT_EXPOSED"
+        );
+        let allowed = compute.allowed_next_tools.unwrap();
+        for forbidden in [
+            "run_in_context",
+            "list_remote_files",
+            "shell",
+            "start_workflow",
+            "depmap_query",
+        ] {
+            assert!(!allowed.contains(&forbidden.to_string()));
+        }
+        assert!(allowed.contains(&"depmap_safe_query".to_string()));
+        assert!(allowed.contains(&"search_mcp_tools".to_string()));
+        assert!(allowed.contains(&"use_mcp_tool".to_string()));
+        assert!(allowed.contains(&"attempt_completion".to_string()));
     }
 
     #[test]
