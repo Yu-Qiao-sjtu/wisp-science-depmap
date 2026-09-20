@@ -222,8 +222,22 @@ impl Registry {
     /// Dispatch a tool call: enforce the approval policy, emit the call card,
     /// run `before`, then `run`.
     pub async fn run(&self, name: &str, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        self.run_scoped(name, args, env, None).await
+    }
+
+    /// Dispatch a tool call while restricting deferred MCP discovery to the
+    /// active route's capability grant. Direct dispatch remains protected by
+    /// the agent's turn gate; this scope prevents unrelated connector schemas
+    /// from leaking through `search_mcp_tools`.
+    pub async fn run_scoped(
+        &self,
+        name: &str,
+        args: &Value,
+        env: &dyn ToolEnv,
+        allowed_tool_names: Option<&[String]>,
+    ) -> ToolResult {
         if name == SEARCH_MCP_TOOLS {
-            return self.run_mcp_search(args, env).await;
+            return self.run_mcp_search(args, env, allowed_tool_names).await;
         }
         if name == USE_MCP_TOOL {
             let Some(tool_name) = args.get("tool_name").and_then(Value::as_str) else {
@@ -267,7 +281,12 @@ impl Registry {
         }
     }
 
-    async fn run_mcp_search(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+    async fn run_mcp_search(
+        &self,
+        args: &Value,
+        env: &dyn ToolEnv,
+        allowed_tool_names: Option<&[String]>,
+    ) -> ToolResult {
         let approval = env.approval_mode(SEARCH_MCP_TOOLS).await;
         if approval == env::Approval::Deny {
             return ToolResult::fail(format!(
@@ -293,12 +312,12 @@ impl Registry {
             return ToolResult::fail(format!("tool '{SEARCH_MCP_TOOLS}' was denied by the user"))
                 .stop_batch();
         }
-        let result = self.search_mcp_tools(args);
+        let result = self.search_mcp_tools(args, allowed_tool_names);
         env.emit(ToolEvent::Result { ok: result.success }).await;
         result
     }
 
-    fn search_mcp_tools(&self, args: &Value) -> ToolResult {
+    fn search_mcp_tools(&self, args: &Value, allowed_tool_names: Option<&[String]>) -> ToolResult {
         let Some(query) = args
             .get("query")
             .and_then(Value::as_str)
@@ -316,9 +335,20 @@ impl Registry {
         let query = query.to_lowercase();
         let browse = query == "*";
         let terms: Vec<_> = query.split_whitespace().collect();
-        let total_hidden_tools = self.tools.iter().filter(|tool| tool.defer_schema()).count();
+        let in_scope = |tool: &&Box<dyn Tool>| {
+            tool.defer_schema()
+                && allowed_tool_names.is_none_or(|allowed| {
+                    allowed.iter().any(|pattern| {
+                        pattern == tool.name()
+                            || pattern
+                                .strip_suffix('*')
+                                .is_some_and(|prefix| tool.name().starts_with(prefix))
+                    })
+                })
+        };
+        let total_hidden_tools = self.tools.iter().filter(in_scope).count();
         let mut matches = vec![];
-        for tool in self.tools.iter().filter(|tool| tool.defer_schema()) {
+        for tool in self.tools.iter().filter(in_scope) {
             let schema = tool.schema();
             let name = schema.function.name.to_lowercase();
             let description = schema.function.description.to_lowercase();
@@ -1157,6 +1187,38 @@ mod approval_tests {
             event,
             ToolEvent::Call { name, .. } if name == "mcp:pubmed_search_articles"
         )));
+    }
+
+    #[tokio::test]
+    async fn scoped_mcp_search_hides_tools_outside_the_active_route() {
+        let mut reg = Registry { tools: vec![] };
+        reg.add(Box::new(DeferredTool));
+        reg.add(Box::new(DeferredWriteTool));
+        let env = EventEnv {
+            root: PathBuf::from("."),
+            events: Mutex::new(vec![]),
+        };
+        let allowed = vec![
+            SEARCH_MCP_TOOLS.to_string(),
+            USE_MCP_TOOL.to_string(),
+            "pubmed_search_articles".to_string(),
+        ];
+
+        let found = reg
+            .run_scoped(
+                SEARCH_MCP_TOOLS,
+                &serde_json::json!({"query": "*", "limit": 10}),
+                &env,
+                Some(&allowed),
+            )
+            .await;
+
+        assert!(found.success, "search failed: {}", found.content);
+        let catalog: Value = serde_json::from_str(&found.content).unwrap();
+        assert_eq!(catalog["total_hidden_tools"], 1);
+        assert_eq!(catalog["matched_tools"], 1);
+        assert_eq!(catalog["results"][0]["tool_name"], "pubmed_search_articles");
+        assert!(!found.content.contains("zenodo_upload_record"));
     }
 
     #[test]

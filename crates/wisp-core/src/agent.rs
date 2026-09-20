@@ -607,7 +607,9 @@ async fn agent_loop_inner(
                 ))
                 .stop_batch()
             } else {
-                tools.run(&name, &args, &env).await
+                tools
+                    .run_scoped(&name, &args, &env, ctx.active_turn_allowed_tools())
+                    .await
             };
             if let Some(next) = result.allowed_next_tools.clone() {
                 ctx.set_active_turn_allowed_tools(next);
