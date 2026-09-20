@@ -76,3 +76,10 @@ analysis output defaults outside the knowledge directory.
 Never silently move from `precomputed_query` or `coverage_gap` to raw-data
 analysis. A follow-up that merely asks for more detail is not authorization to
 scan raw matrices when the detail is absent from the knowledge base.
+
+When the knowledge provider is unavailable, the resolver returns the typed
+[`public-release-fallback.json`](public-release-fallback.json) contract. It
+pins the release to 26Q1, delegates official-file acquisition to
+`public-data-access`, delegates proposed computation to `depmap-coding-agent`,
+and keeps that computation in `new_analysis_proposed` until a Run is explicitly
+authorized. The live DepMap Portal API is not a numerical query provider.

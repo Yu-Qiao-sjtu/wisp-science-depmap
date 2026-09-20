@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "release": "26Q1",
+  "state": "new_analysis_proposed",
+  "knowledge_query_status": "MODULE_UNAVAILABLE",
+  "authorized_skills": {
+    "acquisition": "public-data-access",
+    "analysis": "depmap-coding-agent"
+  },
+  "provider_policy": {
+    "metadata_discovery": "official_download_listings_only",
+    "numerical_claims": "local_release_files_or_knowledge_provider_required",
+    "live_portal_api_is_query_provider": false,
+    "requires_explicit_run_authorization": true
+  },
+  "files": [
+    {"id": "gene_effect_csv", "path": "data/CRISPRGeneEffect.csv"},
+    {"id": "gene_dependency_csv", "path": "data/CRISPRGeneDependency.csv"},
+    {"id": "expression_csv", "path": "data/OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv"},
+    {"id": "model_csv", "path": "data/Model.csv"},
+    {"id": "damaging_mutation_matrix_csv", "path": "data/OmicsSomaticMutationsMatrixDamaging.csv"},
+    {"id": "hotspot_mutation_matrix_csv", "path": "data/OmicsSomaticMutationsMatrixHotspot.csv"},
+    {"id": "somatic_mutations_csv", "path": "data/OmicsSomaticMutations.csv"},
+    {"id": "prism_auc_csv", "path": "data/PRISM_Repurposing_AUC_Matrix.csv"},
+    {"id": "prism_compounds_csv", "path": "data/PRISM_Repurposing_Compound_Conditions.csv"},
+    {"id": "copy_number_csv", "path": "data/OmicsCNGeneMC_WES.csv"},
+    {"id": "model_condition_csv", "path": "data/ModelCondition.csv"},
+    {"id": "screen_gene_effect_csv", "path": "data/ScreenGeneEffect.csv"},
+    {"id": "screen_sequence_map_csv", "path": "data/ScreenSequenceMap.csv"},
+    {"id": "demeter2_gene_dependency_csv", "path": "data/DEMETER2_Data_v6/D2_Achilles_gene_dep_scores.csv"}
+  ],
+  "forbidden_query_paths": ["depmap.org/portal/api", "/api/gene", "unversioned_figshare_url"]
+}

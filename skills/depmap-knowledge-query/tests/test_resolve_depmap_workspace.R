@@ -69,6 +69,25 @@ write_json(
 missing_endpoint <- run_resolver(root)
 stopifnot(identical(missing_endpoint$status, "blocked"))
 stopifnot("knowledge_endpoint_missing" %in% unlist(missing_endpoint$blocking_failures))
+stopifnot(identical(missing_endpoint$fallback$release, "26Q1"))
+stopifnot(identical(missing_endpoint$fallback$knowledge_query_status, "MODULE_UNAVAILABLE"))
+stopifnot(identical(missing_endpoint$fallback$state, "new_analysis_proposed"))
+stopifnot(identical(missing_endpoint$fallback$authorized_skills$acquisition, "public-data-access"))
+stopifnot(identical(missing_endpoint$fallback$authorized_skills$analysis, "depmap-coding-agent"))
+stopifnot(identical(missing_endpoint$fallback$provider_policy$live_portal_api_is_query_provider, FALSE))
+stopifnot(any(vapply(missing_endpoint$fallback$files, function(x) identical(x$path, "data/Model.csv"), logical(1L))))
+
+write_json(
+  list(schema_version = 2, knowledge = list(provider = "local")),
+  file.path(root, ".wisp", "depmap-agent.json"),
+  auto_unbox = TRUE,
+  pretty = TRUE
+)
+missing_knowledge <- run_resolver(root)
+stopifnot(identical(missing_knowledge$status, "blocked"))
+stopifnot("knowledge_root_missing" %in% unlist(missing_knowledge$blocking_failures))
+stopifnot(identical(missing_knowledge$fallback$knowledge_query_status, "MODULE_UNAVAILABLE"))
+stopifnot(identical(missing_knowledge$fallback$state, "new_analysis_proposed"))
 
 unlink(root, recursive = TRUE)
 cat("test_resolve_depmap_workspace: ok\n")

@@ -35,6 +35,12 @@ coverage_arg <- arg_value(
   file.path(script_dir, "..", "references", "knowledge-coverage-manifest.json")
 )
 coverage_path <- resolve_path(coverage_arg, project_root, FALSE)
+fallback_path <- resolve_path(
+  file.path(script_dir, "..", "references", "public-release-fallback.json"),
+  project_root,
+  TRUE
+)
+fallback <- read_json(fallback_path, simplifyVector = FALSE)
 config <- list()
 warnings <- character()
 if (file.exists(config_path)) {
@@ -203,6 +209,7 @@ result <- list(
     available_query_families = as.list(available_families),
     coverage_checks = coverage_checks
   ),
+  fallback = if (length(blocking)) fallback else NULL,
   data = list(
     root = data_root,
     source = data_pick$source,
