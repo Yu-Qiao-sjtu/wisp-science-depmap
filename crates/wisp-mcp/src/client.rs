@@ -27,7 +27,13 @@ const STDIO_SHUTDOWN_KILL_WAIT: std::time::Duration = std::time::Duration::from_
 const STDIO_SHUTDOWN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn validate_expected_tool_call(expected: &RemoteTool, args: &Value) -> Result<()> {
-    crate::tool::validate_tool_arguments(&expected.input_schema, args)
+    let mut schema = expected.input_schema.clone();
+    if (expected.name.starts_with("depmap_") || expected.name == "tcga_gene_expression_survival")
+        && schema.get("type").and_then(Value::as_str) == Some("object")
+    {
+        schema["additionalProperties"] = Value::Bool(false);
+    }
+    crate::tool::validate_tool_arguments(&schema, args)
         .map_err(|error| anyhow!("MCP_SCHEMA_MISMATCH: {error}; request not sent"))
 }
 
@@ -1231,19 +1237,21 @@ mod tests {
                     "transcription_factor": {"type": "string"},
                     "target": {"type": "string"}
                 },
-                "required": ["transcription_factor"],
-                "additionalProperties": false
+                "required": ["transcription_factor"]
             }),
             output_schema: None,
             meta: None,
             annotations: None,
         };
 
-        let error = validate_expected_tool_call(&tool, &json!({"gene": "STAT3", "target": null}))
-            .unwrap_err()
-            .to_string();
+        let error = validate_expected_tool_call(
+            &tool,
+            &json!({"transcription_factor": "STAT3", "gene": "STAT3"}),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("MCP_SCHEMA_MISMATCH"));
-        assert!(error.contains("transcription_factor"));
+        assert!(error.contains("unexpected property 'gene'"));
         assert!(error.contains("request not sent"));
     }
 
