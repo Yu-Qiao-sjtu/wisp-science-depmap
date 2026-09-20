@@ -178,7 +178,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         second = await self.service.status()
         evidence = first["evidence"]
 
-        self.assertEqual(evidence["query_contract_version"], 12)
+        self.assertEqual(evidence["query_contract_version"], 13)
         self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-12")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")

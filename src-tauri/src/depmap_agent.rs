@@ -283,8 +283,8 @@ impl DepMapAgentRouteTool {
     }
 }
 
-pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 12;
-pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 12;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 13;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 13;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DepMapContractAssessment {
@@ -4243,7 +4243,7 @@ mod tests {
     fn depmap_contract_handshake_accepts_only_the_declared_range() {
         let compatible = evaluate_depmap_contract(&json!({
             "evidence": {
-                "query_contract_version": 12,
+                "query_contract_version": 13,
                 "server_build_identity": "build-abc",
                 "capability_catalog_digest": "sha256:capabilities",
                 "catalog_build_identity": "sha256:catalog"
@@ -4257,13 +4257,13 @@ mod tests {
         );
 
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 11}
+            "evidence": {"query_contract_version": 12}
         }));
         assert!(!stale.compatible);
         assert_eq!(stale.code, "STALE_CONTRACT");
 
         let future = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 13}
+            "evidence": {"query_contract_version": 14}
         }));
         assert!(!future.compatible);
         assert_eq!(future.code, "INCOMPATIBLE_PROVIDER");
@@ -4272,7 +4272,7 @@ mod tests {
         assert_eq!(missing.code, "STALE_CONTRACT");
 
         let identity_missing = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 12}
+            "evidence": {"query_contract_version": 13}
         }));
         assert!(!identity_missing.compatible);
         assert_eq!(identity_missing.code, "STALE_CONTRACT");
@@ -4288,7 +4288,7 @@ mod tests {
         for unusable_catalog_identity in ["", "   ", "catalog-missing", "catalog-unreadable"] {
             let unusable = evaluate_depmap_contract(&json!({
                 "evidence": {
-                    "query_contract_version": 12,
+                    "query_contract_version": 13,
                     "server_build_identity": "build-abc",
                     "capability_catalog_digest": "sha256:capabilities",
                     "catalog_build_identity": unusable_catalog_identity
@@ -4336,7 +4336,7 @@ mod tests {
     #[tokio::test]
     async fn stale_depmap_contract_blocks_before_any_scientific_call() {
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 11}
+            "evidence": {"query_contract_version": 12}
         }));
         let result =
             DepMapAgentRouteTool::with_contract(vec!["depmap_gene_evidence".into()], Some(stale))
