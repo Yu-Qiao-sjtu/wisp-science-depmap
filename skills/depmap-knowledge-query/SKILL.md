@@ -131,9 +131,15 @@ expression-to-dependency association from gene names alone.
   separately. If a new or ambiguous synonym is not resolved, report the
   ambiguity instead of guessing a lineage.
 - In `lineage_dependency`, preserve the requested ranking contract.
-  `effect_mean_difference` is lineage mean Gene Effect minus the rest mean and
+  Read the typed `metric_semantics` card before describing a dependency row.
+  `effect_mean_difference` is lineage mean Chronos Gene Effect minus the rest mean and
   must never be renamed `logFC`; `mean_dependency` is descriptive and does not
   imply lineage selectivity.
+  Chronos Gene Effect (signed; more negative means stronger dependency),
+  CRISPRGeneDependency probability (0–1; higher means more likely dependent),
+  and RNAi DEMETER2 are distinct metrics and must never be renamed or combined.
+  A descriptive Gene Effect cutoff count is not produced by either ranking and
+  may be presented only when an explicit derived field or query family declares it.
 - A canonical DepMap lineage is a model-grouping proxy, not a clinical
   histology or patient cohort. Do not silently narrow `Liver` to HCC, add a
   neighboring control lineage, or name cell lines unless current model
