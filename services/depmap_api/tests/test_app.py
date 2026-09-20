@@ -1347,7 +1347,12 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
     tests = root / "depmap-26q1-core" / "lineage_dependency_tests"
     tests.mkdir(parents=True, exist_ok=True)
     (tests / "manifest.json").write_text(
-        json.dumps({"status": "complete", "release": "26Q1", "lineage_count": 2}),
+        json.dumps({
+            "status": "complete",
+            "release": "26Q1",
+            "lineage_count": 2,
+            "model_set_fingerprint": "lineage_dependency_fixture_models",
+        }),
         encoding="utf-8",
     )
     (root / "depmap-26q1-core" / "common_essential_genes.csv").write_text(
@@ -1675,6 +1680,14 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertFalse(qc["filter_applied"])
         self.assertIn("low_expression", flagged["rows"][0]["qc_annotations"])
         self.assertIn("copy_number_effect", flagged["rows"][0]["qc_annotations"])
+        self.assertTrue(any(
+            path.endswith("dependency_confounder_qc.csv")
+            for path in flagged["provenance"]
+        ))
+        self.assertTrue(any(
+            path.endswith("dependency_confounder_qc_manifest.json")
+            for path in flagged["provenance"]
+        ))
 
         unflagged = self._query(
             {
@@ -1725,6 +1738,26 @@ class LineageSelectivityQueryTests(DepMapApiTests):
             stale["rows"][0]["dependency_confounder_qc"]["status"],
             "ANNOTATION_UNAVAILABLE",
         )
+
+        manifest["release"] = "26Q1"
+        manifest["model_set"] = "different_fixture_models"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        mismatched = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "gene": "KEEP",
+                "ranking": "selective",
+            }
+        )
+        self.assertEqual(
+            mismatched["rows"][0]["dependency_confounder_qc"]["status"],
+            "ANNOTATION_UNAVAILABLE",
+        )
+        self.assertFalse(any(
+            path.endswith("dependency_confounder_qc.csv")
+            for path in mismatched["provenance"]
+        ))
 
     def test_cross_lineage_exact_gene_states(self):
         payload = self._query(

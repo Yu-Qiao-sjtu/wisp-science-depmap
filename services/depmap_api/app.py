@@ -2950,6 +2950,7 @@ def _common_essential_labels(settings: Settings, source: str) -> set[str] | None
 
 def _dependency_confounder_sidecar(
     settings: Settings,
+    dependency_manifest: dict[str, Any] | None,
 ) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]] | None:
     root = _lineage_dependency_root(settings)
     table_path = root / "dependency_confounder_qc.csv"
@@ -2961,6 +2962,19 @@ def _dependency_confounder_sidecar(
     if not table_path.is_file() or not isinstance(manifest, dict):
         return None
     if manifest.get("release") != settings.release:
+        return None
+    dependency_model_set = (
+        dependency_manifest.get("model_set_fingerprint")
+        if isinstance(dependency_manifest, dict)
+        else None
+    )
+    sidecar_model_set = manifest.get("model_set_fingerprint") or manifest.get("model_set")
+    if (
+        not isinstance(dependency_model_set, str)
+        or not dependency_model_set.strip()
+        or not isinstance(sidecar_model_set, str)
+        or sidecar_model_set.strip() != dependency_model_set.strip()
+    ):
         return None
     expression_floor = manifest.get("expression_floor_log2_tpm_plus_1")
     copy_number_floor = manifest.get("copy_number_amplification_floor_log2")
@@ -2982,10 +2996,17 @@ def _dependency_confounder_sidecar(
     }
     return index, {
         "release": str(manifest.get("release") or settings.release),
-        "model_set": str(manifest.get("model_set") or "lineage_dependency_model_set"),
+        "model_set": sidecar_model_set.strip(),
         "expression_floor_log2_tpm_plus_1": float(expression_floor),
         "copy_number_amplification_floor_log2": float(copy_number_floor),
+        "provenance": [str(manifest_path), str(table_path)],
     }
+
+
+def _dependency_confounder_provenance(
+    sidecar: tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]] | None,
+) -> list[str]:
+    return list(sidecar[1].get("provenance") or []) if sidecar else []
 
 
 def _annotate_dependency_confounders(
@@ -3132,7 +3153,7 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
     path = paths[0]
     table = _read_parquet_records(path)
     labels = _common_essential_labels(settings, source)
-    confounder_sidecar = _dependency_confounder_sidecar(settings)
+    confounder_sidecar = _dependency_confounder_sidecar(settings, manifest)
     if gene:
         hits = filter_before_limit(
             table, lambda row: str(row.get("symbol") or "").upper() == gene
@@ -3169,7 +3190,10 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
             common_essential_source=source,
             common_essential_annotation_status=meta["annotation_status"],
             housekeeping_filter_applied=False,
-            manifest=manifest, provenance=[str(manifest_path), str(path)],
+            manifest=manifest, provenance=[
+                str(manifest_path), str(path),
+                *_dependency_confounder_provenance(confounder_sidecar),
+            ],
         )
     tested_rows = [
         row for row in table
@@ -3209,7 +3233,10 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
             "eligible_before_common_essential_filter": meta["before_count"],
             "eligible_after_common_essential_filter": meta["after_count"],
         },
-        manifest=manifest, provenance=[str(manifest_path), str(path)],
+        manifest=manifest, provenance=[
+            str(manifest_path), str(path),
+            *_dependency_confounder_provenance(confounder_sidecar),
+        ],
     )
 
 
@@ -3232,8 +3259,8 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
             reason="no completed lineage-vs-rest dependency tables are indexed",
         )
     labels = _common_essential_labels(settings, source)
-    confounder_sidecar = _dependency_confounder_sidecar(settings)
     manifest = _load_manifest(root)
+    confounder_sidecar = _dependency_confounder_sidecar(settings, manifest)
     lineages: list[dict[str, Any]] = []
     for path in paths:
         table = _read_parquet_records(path)
@@ -3293,7 +3320,11 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
         exclude_common_essential_requested=exclude,
         common_essential_source=source,
         housekeeping_filter_applied=False,
-        manifest=manifest, provenance=[str(root / "manifest.json"), *[str(path) for path in paths]],
+        manifest=manifest, provenance=[
+            str(root / "manifest.json"),
+            *[str(path) for path in paths],
+            *_dependency_confounder_provenance(confounder_sidecar),
+        ],
     )
 
 
