@@ -145,6 +145,12 @@ expression-to-dependency association from gene names alone.
   release and threshold rule; they are warnings, not new p-values or causal
   conclusions. When the status is `ANNOTATION_UNAVAILABLE`, do not infer either
   condition from biological memory, and never claim the QC silently filtered rows.
+- Use `depmap_model_gene_effect` when the user asks which models depend on one
+  exact gene. Treat canonical `ACH-######` ModelID as the row identity and the
+  versioned model-table display name as secondary metadata. A lineage predicate
+  must be the provider's canonical lineage, never a substring search over a
+  disease label. Do not apply or imply a Gene Effect cutoff unless
+  `gene_effect_at_or_below` is present in the request and metric semantics.
 - A canonical DepMap lineage is a model-grouping proxy, not a clinical
   histology or patient cohort. Do not silently narrow `Liver` to HCC, add a
   neighboring control lineage, or name cell lines unless current model

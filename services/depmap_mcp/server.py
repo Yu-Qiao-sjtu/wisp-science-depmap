@@ -337,6 +337,14 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "metric": "descriptive_summary",
             "interpretation": "precomputed gene-level and lineage-level descriptive fields",
         }
+    if mode == "model_gene_effect":
+        return {
+            "metric": "chronos_gene_effect_model_score",
+            "units": "Chronos Gene Effect score",
+            "direction": "more_negative_is_stronger_dependency",
+            "entity_key": "canonical_model_id",
+            "interpretation": "one exact gene projected onto bounded ACH ModelID rows; display names are secondary metadata and no disease substring filter is used",
+        }
     if mode == "lineage_catalog":
         return {
             "metric": "module_availability",
@@ -993,6 +1001,37 @@ class DepMapEvidenceService:
             tool="depmap_lineage_dependencies",
             request=request,
             evidence=item,
+        )
+
+    async def model_gene_effect(
+        self,
+        gene: str,
+        lineage: str | None = None,
+        model_id: str | None = None,
+        gene_effect_at_or_below: float | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {
+            "mode": "model_gene_effect",
+            "gene": gene.strip().upper(),
+            "limit": limit,
+        }
+        if lineage:
+            query["lineage"] = lineage
+        if model_id:
+            query["model_id"] = model_id.strip().upper()
+        if gene_effect_at_or_below is not None:
+            query["gene_effect_at_or_below"] = gene_effect_at_or_below
+        rejected = limit_violation("model_gene_effect", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_model_gene_effect", request=query, evidence=rejected
+            )
+        item = await self._execute(query)
+        normalized = item.get("query", query)
+        request = {key: value for key, value in normalized.items() if key != "mode"}
+        return self._envelope(
+            tool="depmap_model_gene_effect", request=request, evidence=item
         )
 
     async def lineage_directions(self, lineage: str, limit: int = 20) -> dict[str, Any]:
@@ -1757,6 +1796,28 @@ def build_mcp_server(
             exclude_common_essential=exclude_common_essential,
             common_essential_source=common_essential_source,
             gene=gene,
+        )
+
+    @mcp.tool(
+        title="DepMap per-model CRISPR Gene Effect",
+        description=(
+            "Return a bounded exact-gene Chronos Gene Effect slice keyed by canonical "
+            "ACH ModelID and joined to versioned model metadata. Optional lineage uses "
+            "the canonical DepMap lineage resolver. An optional threshold is explicit; "
+            "no hidden -0.5 cutoff or free-text disease substring match is applied."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_model_gene_effect(
+        gene: str,
+        lineage: str | None = None,
+        model_id: str | None = None,
+        gene_effect_at_or_below: float | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.model_gene_effect(
+            gene, lineage, model_id, gene_effect_at_or_below, limit
         )
 
     @mcp.tool(

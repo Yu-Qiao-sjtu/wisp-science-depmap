@@ -270,6 +270,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "dependency_to_mutation",
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
+                "model_gene_effect_slice",
                 "pan_cancer_dependency_summary",
                 "tf_activity_to_dependency",
                 "expression_biomarker_model",
@@ -606,6 +607,26 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.queries[-1]["gene"], "MDM2")
         self.assertEqual(self.queries[-1]["lineage"], "Liver")
         self.assertEqual(result["request"]["gene"], "MDM2")
+
+    async def test_model_gene_effect_normalizes_modelid_and_declares_threshold(self):
+        result = await self.service.model_gene_effect(
+            "gpx4", "髓系", "ach-000001", -0.5, 10
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "model_gene_effect",
+                "gene": "GPX4",
+                "lineage": "Myeloid",
+                "model_id": "ACH-000001",
+                "gene_effect_at_or_below": -0.5,
+                "limit": 10,
+            },
+        )
+        self.assertEqual(result["request"]["model_id"], "ACH-000001")
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["metric"], "chronos_gene_effect_model_score")
+        self.assertEqual(semantics["entity_key"], "canonical_model_id")
 
     async def test_pan_cancer_dependency_forwards_exact_gene(self):
         result = await self.service.pan_cancer_dependencies("selective", 5, gene="fbxo7")
@@ -948,6 +969,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_resolve_lineage",
                         "depmap_lineage_catalog",
                         "depmap_lineage_dependencies",
+                        "depmap_model_gene_effect",
                         "depmap_pan_cancer_dependencies",
                         "depmap_lineage_direction_discovery",
                         "depmap_gene_evidence",

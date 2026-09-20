@@ -2407,6 +2407,19 @@ fn query_semantics(query: &Value) -> Value {
             "metric":"module_availability",
             "interpretation":"coverage inventory only; it contains no gene-level association"
         }),
+        "model_gene_effect" => json!({
+            "metric":"chronos_gene_effect_by_model",
+            "metric_family":"crispr_chronos_gene_effect",
+            "units":"Chronos Gene Effect score",
+            "direction":"more_negative_is_stronger_dependency",
+            "statistic":"gene_effect",
+            "selection_policy": if query.get("gene_effect_at_or_below").is_some() { "declared_descriptive_threshold" } else { "bounded_ordering_only" },
+            "descriptive_cutoff":query.get("gene_effect_at_or_below").cloned().unwrap_or(Value::String("not_applied".into())),
+            "row_identity":"canonical_ach_model_id",
+            "display_name_role":"secondary_versioned_model_metadata",
+            "not_equivalent_to":"dependency_probability_or_binary_essentiality",
+            "interpretation":"one exact gene projected onto bounded canonical ACH ModelID rows; lineage uses the canonical vocabulary and display names are never used as identity or substring filters"
+        }),
         "lineage_dependency" => {
             let ranking = query
                 .get("ranking")
@@ -2706,7 +2719,7 @@ impl Tool for DepMapQueryTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             TOOL_NAME,
-            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
+            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, mode=model_gene_effect for bounded canonical ModelID rows for one exact gene, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
             depmap_query_schema(),
         )
     }
@@ -2747,11 +2760,13 @@ fn depmap_query_schema() -> Value {
         "description":"Flat model-compatible schema. Runtime validation enforces the fields required by each mode.",
         "properties": {
             "mode": {"type":"string","enum":[
-                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","core","pair","top",
+                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","model_gene_effect","core","pair","top",
                 "lineage","pathway","drug","lineage_network","lineage_cnv",
                 "lineage_drug","enrichment","tcga_expression_survival"
             ]},
             "gene": {"type":"string"},
+            "model_id": {"type":"string","description":"Optional exact canonical ACH-###### ModelID for model_gene_effect."},
+            "gene_effect_at_or_below": {"type":"number","description":"Optional declared descriptive Chronos Gene Effect threshold for model_gene_effect; no cutoff is applied when omitted."},
             "module": {"type":"string","enum":MATRIX_MODULES},
             "source": {"type":"string"},
             "target": {"type":"string"},
@@ -2783,7 +2798,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
     let required: &[&str] = match mode.as_str() {
         "catalog" => &[],
         "lineage_catalog" | "lineage_dependency" | "lineage_directions" => &["lineage"],
-        "core" => &["gene"],
+        "core" | "model_gene_effect" => &["gene"],
         "pair" => &["module", "source", "target"],
         "top" => &["module", "source"],
         "lineage" => &["event", "lineage", "source", "target"],
@@ -2847,6 +2862,42 @@ fn validated_query(args: &Value) -> Result<Value, String> {
             "common_essential_source".into(),
             Value::String(source.to_string()),
         );
+    }
+    if mode == "model_gene_effect" {
+        if let Some(lineage) = args
+            .get("lineage")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            query.insert(
+                "lineage".into(),
+                Value::String(canonical_lineage_label(lineage)),
+            );
+        }
+        if let Some(model_id) = args
+            .get("model_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let canonical = model_id.to_ascii_uppercase();
+            let valid = canonical.len() == 10
+                && canonical.starts_with("ACH-")
+                && canonical[4..]
+                    .chars()
+                    .all(|character| character.is_ascii_digit());
+            if !valid {
+                return Err("model_id must be a canonical ACH-###### ModelID".into());
+            }
+            query.insert("model_id".into(), Value::String(canonical));
+        }
+        if let Some(threshold) = args.get("gene_effect_at_or_below").and_then(Value::as_f64) {
+            if !threshold.is_finite() {
+                return Err("gene_effect_at_or_below must be finite".into());
+            }
+            query.insert("gene_effect_at_or_below".into(), json!(threshold));
+        }
     }
     if mode == "lineage_drug" {
         require_allowed(&query, "omic", DRUG_OMICS)?;
@@ -2916,6 +2967,7 @@ fn validated_query(args: &Value) -> Result<Value, String> {
         mode.as_str(),
         "top"
             | "lineage_dependency"
+            | "model_gene_effect"
             | "lineage_directions"
             | "lineage_network"
             | "lineage_cnv"
@@ -4188,6 +4240,27 @@ mod tests {
             selective_semantics["metric"],
             "chronos_gene_effect_lineage_vs_rest_mean_difference"
         );
+        let model_slice = validated_query(&json!({
+            "mode":"model_gene_effect",
+            "gene":"KRAS",
+            "lineage":"colorectal cancer",
+            "model_id":"ach-000001",
+            "gene_effect_at_or_below":-0.5,
+            "limit":5
+        }))
+        .unwrap();
+        assert_eq!(model_slice["lineage"], "Bowel");
+        assert_eq!(model_slice["model_id"], "ACH-000001");
+        assert_eq!(model_slice["gene_effect_at_or_below"], -0.5);
+        assert_eq!(model_slice["limit"], 5);
+        assert_eq!(
+            query_semantics(&model_slice)["row_identity"],
+            "canonical_ach_model_id"
+        );
+        assert!(validated_query(&json!({
+            "mode":"model_gene_effect","gene":"KRAS","model_id":"A549"
+        }))
+        .is_err());
         let directions = validated_query(&json!({
             "mode":"lineage_directions",
             "lineage":"肝癌",
@@ -4241,6 +4314,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("lineage_dependency")));
+        assert!(schema["properties"]["mode"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("model_gene_effect")));
         assert!(schema["properties"]["mode"]["enum"]
             .as_array()
             .unwrap()

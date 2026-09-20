@@ -62,6 +62,7 @@ coverage condition and must never be interpreted as biological absence.
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
 - `depmap_lineage_dependencies`
+- `depmap_model_gene_effect`
 - `depmap_pan_cancer_dependencies`
 - `depmap_lineage_direction_discovery`
 - `depmap_gene_evidence`
@@ -89,6 +90,13 @@ row from the versioned DepMap 26Q1 common-essential asset, reports counts before
 and after filtering, and returns `ANNOTATION_UNAVAILABLE` without silently
 dropping rows when that asset is missing. Housekeeping-gene annotations remain
 a separate concept and are never inferred from gene names or model memory.
+
+`depmap_model_gene_effect` returns a bounded per-model Chronos Gene Effect
+slice for one exact gene. Rows are keyed by canonical `ACH-######` ModelID and
+join display names only from the versioned model table. Optional lineage
+filters use the shared canonical lineage resolver, and a descriptive Gene
+Effect threshold is applied only when explicitly supplied; the tool never
+uses free-text disease substrings or an implicit `-0.5` cutoff.
 
 `depmap_pan_cancer_dependencies` performs the same bounded read across every
 completed lineage table in one call. `limit` is a display limit per lineage;

@@ -16,6 +16,7 @@ Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 MODE_ALIASES = {
     "catalog": "core",
     "core": "core",
+    "model_gene_effect": "core",
     "top": "core",
     "lineage": "core",
     "pathway": "core",
