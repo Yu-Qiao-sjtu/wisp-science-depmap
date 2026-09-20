@@ -259,16 +259,133 @@ pub(crate) struct DepMapAgentRouteTool {
     /// assigned to this specialist and declared read-only by their MCP server.
     /// Route policy never grants an MCP name prefix.
     remote_read_only_tools: Vec<String>,
+    remote_contract: Option<DepMapContractAssessment>,
 }
 
 impl DepMapAgentRouteTool {
-    pub(crate) fn new(mut remote_read_only_tools: Vec<String>) -> Self {
+    pub(crate) fn new(remote_read_only_tools: Vec<String>) -> Self {
+        Self::with_contract(remote_read_only_tools, None)
+    }
+
+    pub(crate) fn with_contract(
+        mut remote_read_only_tools: Vec<String>,
+        remote_contract: Option<DepMapContractAssessment>,
+    ) -> Self {
         remote_read_only_tools.sort();
         remote_read_only_tools.dedup();
         Self {
             remote_read_only_tools,
+            remote_contract,
         }
     }
+}
+
+pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 11;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 11;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DepMapContractAssessment {
+    pub(crate) compatible: bool,
+    pub(crate) code: String,
+    pub(crate) server_version: Option<u64>,
+    pub(crate) server_build_identity: Option<String>,
+    pub(crate) capability_catalog_digest: Option<String>,
+    pub(crate) catalog_build_identity: Option<String>,
+    pub(crate) message: String,
+}
+
+impl DepMapContractAssessment {
+    pub(crate) fn stale(message: impl Into<String>) -> Self {
+        Self {
+            compatible: false,
+            code: "STALE_CONTRACT".into(),
+            server_version: None,
+            server_build_identity: None,
+            capability_catalog_digest: None,
+            catalog_build_identity: None,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn handshake_error(message: impl Into<String>) -> Self {
+        Self {
+            compatible: false,
+            code: "INCOMPATIBLE_PROVIDER".into(),
+            server_version: None,
+            server_build_identity: None,
+            capability_catalog_digest: None,
+            catalog_build_identity: None,
+            message: message.into(),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "compatible": self.compatible,
+            "code": self.code,
+            "server_version": self.server_version,
+            "supported_contract": {"minimum": DEPMAP_QUERY_CONTRACT_MIN, "maximum": DEPMAP_QUERY_CONTRACT_MAX},
+            "server_build_identity": self.server_build_identity,
+            "capability_catalog_digest": self.capability_catalog_digest,
+            "catalog_build_identity": self.catalog_build_identity,
+            "message": self.message,
+            "action": "Redeploy the DepMap MCP server, rebuild its query index, restart the service, and rerun depmap_status."
+        })
+    }
+}
+
+pub(crate) fn evaluate_depmap_contract(status: &Value) -> DepMapContractAssessment {
+    let evidence = status.get("evidence").unwrap_or(status);
+    let version = evidence
+        .get("query_contract_version")
+        .and_then(Value::as_u64);
+    let string = |key: &str| {
+        evidence
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let server_build_identity = string("server_build_identity");
+    let capability_catalog_digest = string("capability_catalog_digest");
+    let catalog_build_identity = string("catalog_build_identity");
+    let identities_present = server_build_identity.is_some()
+        && capability_catalog_digest.is_some()
+        && catalog_build_identity.is_some();
+    let compatible = identities_present
+        && version.is_some_and(|version| {
+            (DEPMAP_QUERY_CONTRACT_MIN..=DEPMAP_QUERY_CONTRACT_MAX).contains(&version)
+        });
+    let code = match version {
+        Some(version) if version > DEPMAP_QUERY_CONTRACT_MAX => "INCOMPATIBLE_PROVIDER",
+        Some(version)
+            if version >= DEPMAP_QUERY_CONTRACT_MIN
+                && version <= DEPMAP_QUERY_CONTRACT_MAX
+                && identities_present =>
+        {
+            "COMPATIBLE"
+        }
+        _ => "STALE_CONTRACT",
+    };
+    DepMapContractAssessment {
+        compatible,
+        code: code.into(),
+        server_version: version,
+        server_build_identity,
+        capability_catalog_digest,
+        catalog_build_identity,
+        message: if compatible {
+            "DepMap MCP query contract is compatible.".into()
+        } else {
+            "DepMap MCP query contract is missing or outside the client-supported range; scientific tools are disabled.".into()
+        },
+    }
+}
+
+pub(crate) fn depmap_tool_enabled_for_contract(
+    contract: &DepMapContractAssessment,
+    tool_name: &str,
+) -> bool {
+    contract.compatible || tool_name == "depmap_status"
 }
 
 pub(crate) fn validated_remote_depmap_tools(
@@ -1184,6 +1301,23 @@ impl Tool for DepMapAgentRouteTool {
     }
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        if args.get("evidence_provider").and_then(Value::as_str) == Some("remote_mcp") {
+            if let Some(contract) = self
+                .remote_contract
+                .as_ref()
+                .filter(|contract| !contract.compatible)
+            {
+                return ToolResult::fail(pretty(json!({
+                    "state": "blocked",
+                    "code": contract.code,
+                    "provider_boundary": {"mode": "mcp_only"},
+                    "provider_contract": contract.to_json(),
+                    "scientific_call_attempted": false
+                })))
+                .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                .stop_batch();
+            }
+        }
         match depmap_route(args) {
             Ok(route) if route["state"] == "routed" => {
                 let mut allowed = route["allowed_next_tools"]
@@ -3708,6 +3842,80 @@ mod tests {
             assert!(allowed.contains(&expected_tool.to_string()));
             assert!(!allowed.contains(&TOOL_NAME.to_string()));
         }
+    }
+
+    #[test]
+    fn depmap_contract_handshake_accepts_only_the_declared_range() {
+        let compatible = evaluate_depmap_contract(&json!({
+            "evidence": {
+                "query_contract_version": 11,
+                "server_build_identity": "build-abc",
+                "capability_catalog_digest": "sha256:capabilities",
+                "catalog_build_identity": "sha256:catalog"
+            }
+        }));
+        assert!(compatible.compatible);
+        assert_eq!(compatible.code, "COMPATIBLE");
+        assert_eq!(
+            compatible.server_build_identity.as_deref(),
+            Some("build-abc")
+        );
+
+        let stale = evaluate_depmap_contract(&json!({
+            "evidence": {"query_contract_version": 10}
+        }));
+        assert!(!stale.compatible);
+        assert_eq!(stale.code, "STALE_CONTRACT");
+
+        let future = evaluate_depmap_contract(&json!({
+            "evidence": {"query_contract_version": 12}
+        }));
+        assert!(!future.compatible);
+        assert_eq!(future.code, "INCOMPATIBLE_PROVIDER");
+
+        let missing = evaluate_depmap_contract(&json!({"evidence": {}}));
+        assert_eq!(missing.code, "STALE_CONTRACT");
+
+        let identity_missing = evaluate_depmap_contract(&json!({
+            "evidence": {"query_contract_version": 11}
+        }));
+        assert!(!identity_missing.compatible);
+        assert_eq!(identity_missing.code, "STALE_CONTRACT");
+        assert!(depmap_tool_enabled_for_contract(
+            &identity_missing,
+            "depmap_status"
+        ));
+        assert!(!depmap_tool_enabled_for_contract(
+            &identity_missing,
+            "depmap_gene_evidence"
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_depmap_contract_blocks_before_any_scientific_call() {
+        let stale = evaluate_depmap_contract(&json!({
+            "evidence": {"query_contract_version": 10}
+        }));
+        let result =
+            DepMapAgentRouteTool::with_contract(vec!["depmap_gene_evidence".into()], Some(stale))
+                .run(
+                    &json!({
+                        "intent": "gene_evidence",
+                        "gene": "TP53",
+                        "evidence_provider": "remote_mcp"
+                    }),
+                    &RouteTestEnv,
+                )
+                .await;
+
+        assert!(!result.success);
+        let payload: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(payload["code"], "STALE_CONTRACT");
+        assert_eq!(payload["scientific_call_attempted"], false);
+        assert_eq!(
+            result.allowed_next_tools,
+            Some(vec!["ask_user".into(), "attempt_completion".into()])
+        );
     }
 
     #[test]

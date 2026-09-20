@@ -451,6 +451,27 @@ class DepMapEvidenceService:
             },
         }
 
+    def _catalog_build_identity(self) -> str:
+        index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        if not index.is_file():
+            return "catalog-missing"
+        try:
+            with closing(
+                sqlite3.connect(
+                    f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                )
+            ) as db:
+                metadata = dict(
+                    db.execute(
+                        "SELECT key,value FROM metadata WHERE key IN "
+                        "('schema_version','counts','source_max_mtime_ns','built_at')"
+                    )
+                )
+        except (sqlite3.Error, OSError):
+            return "catalog-unreadable"
+        digest = hashlib.sha256(_canonical_json(metadata).encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+
     async def artifacts(
         self, module: str | None = None, kind: str | None = None,
         path_contains: str | None = None, limit: int = 50,
@@ -756,6 +777,10 @@ class DepMapEvidenceService:
         return list(await asyncio.gather(*(self._execute(query) for query in queries)))
 
     async def status(self) -> dict[str, Any]:
+        capabilities = await self.capabilities()
+        capability_digest = hashlib.sha256(
+            _canonical_json(capabilities["capabilities"]).encode("utf-8")
+        ).hexdigest()
         tcga_root = self.settings.knowledge_root / "depmap-26q1-tcga"
         tcga_qa_path = tcga_root / "qa.json"
         tcga_qa: dict[str, Any] | None = None
@@ -783,6 +808,12 @@ class DepMapEvidenceService:
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
             "query_contract_version": QUERY_CONTRACT_VERSION,
+            "server_build_identity": os.environ.get(
+                "DEPMAP_MCP_BUILD_ID",
+                f"wisp-depmap-mcp-contract-{QUERY_CONTRACT_VERSION}",
+            ),
+            "capability_catalog_digest": f"sha256:{capability_digest}",
+            "catalog_build_identity": self._catalog_build_identity(),
             "lineage_resolution_contract_version": 1,
             "coverage_manifest_version": 5,
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
