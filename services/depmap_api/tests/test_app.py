@@ -299,7 +299,7 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.json()["release"], "26Q1")
-        self.assertEqual(response.json()["query_contract_version"], 10)
+        self.assertEqual(response.json()["query_contract_version"], 11)
         self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
         self.assertIn("NOT_OBSERVED", response.json()["evidence_statuses"])
         self.assertIn("COVERAGE_GAP", response.json()["evidence_statuses"])

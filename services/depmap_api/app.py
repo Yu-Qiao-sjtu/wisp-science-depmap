@@ -68,7 +68,7 @@ THREE_D_FAMILIES = {
     "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
-QUERY_CONTRACT_VERSION = 10
+QUERY_CONTRACT_VERSION = 11
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},

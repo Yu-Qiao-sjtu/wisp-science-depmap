@@ -571,6 +571,29 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.queries[-1]["gene"], "FBXO7")
         self.assertEqual(result["request"]["gene"], "FBXO7")
 
+    async def test_pan_cancer_limit_rejection_preserves_normalized_request(self):
+        filtered = await self.service.pan_cancer_dependencies(
+            "selective", 25, exclude_common_essential=True, gene="fbxo7"
+        )
+        unfiltered = await self.service.pan_cancer_dependencies(
+            "selective", 25, exclude_common_essential=False, gene="mdm2"
+        )
+
+        self.assertEqual(
+            filtered["request"],
+            {
+                "mode": "pan_cancer_dependency",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "common_essential_source": "depmap_26q1",
+                "limit": 25,
+                "gene": "FBXO7",
+            },
+        )
+        self.assertTrue(filtered["evidence"]["schema_error"])
+        self.assertNotEqual(filtered["evidence_id"], unfiltered["evidence_id"])
+        self.assertEqual(self.queries, [])
+
     async def test_pan_cancer_dependency_summary_is_one_bounded_query(self):
         result = await self.service.pan_cancer_dependencies(
             "selective", 5, exclude_common_essential=True
@@ -909,6 +932,17 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                     called.structuredContent["evidence"]["data_sources"]["tcga"][
                         "installed"
                     ]
+                )
+                invalid = await session.call_tool(
+                    "depmap_lineage_dependencies",
+                    {"lineage": "Breast", "limit": 494},
+                )
+                self.assertFalse(invalid.isError)
+                self.assertTrue(
+                    invalid.structuredContent["evidence"]["schema_error"]
+                )
+                self.assertEqual(
+                    invalid.structuredContent["evidence"]["limit_max"], 100
                 )
 
 

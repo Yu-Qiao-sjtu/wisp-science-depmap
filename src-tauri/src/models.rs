@@ -2275,12 +2275,9 @@ mod tests {
 
     #[test]
     fn clamp_to_catalog_caps_over_declared_limits() {
-        let ceiling = crate::model_catalog::lookup(
-            "openai",
-            "https://api.kimi.com/coding/v1",
-            "k3-256k",
-        )
-        .expect("k3-256k must resolve under kimi-for-coding");
+        let ceiling =
+            crate::model_catalog::lookup("openai", "https://api.kimi.com/coding/v1", "k3-256k")
+                .expect("k3-256k must resolve under kimi-for-coding");
         let mut profile = kimi_coding_profile("k3-256k");
         profile.context_window = ceiling.c.saturating_add(1);
         profile.max_tokens = ceiling.o.saturating_add(1);
@@ -2307,12 +2304,9 @@ mod tests {
 
     #[test]
     fn effective_context_window_respects_catalog_ceiling() {
-        let ceiling = crate::model_catalog::lookup(
-            "openai",
-            "https://api.kimi.com/coding/v1",
-            "k3-256k",
-        )
-        .expect("k3-256k must resolve under kimi-for-coding");
+        let ceiling =
+            crate::model_catalog::lookup("openai", "https://api.kimi.com/coding/v1", "k3-256k")
+                .expect("k3-256k must resolve under kimi-for-coding");
         let mut over = kimi_coding_profile("k3-256k");
         over.context_window = ceiling.c.saturating_add(1);
         assert_eq!(effective_context_window(&over), ceiling.c);
