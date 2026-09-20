@@ -348,9 +348,17 @@ pub(crate) fn evaluate_depmap_contract(status: &Value) -> DepMapContractAssessme
     let server_build_identity = string("server_build_identity");
     let capability_catalog_digest = string("capability_catalog_digest");
     let catalog_build_identity = string("catalog_build_identity");
-    let identities_present = server_build_identity.is_some()
-        && capability_catalog_digest.is_some()
-        && catalog_build_identity.is_some();
+    let usable_identity = |identity: Option<&String>| {
+        identity.is_some_and(|identity| {
+            let identity = identity.trim();
+            !identity.is_empty()
+                && identity != "catalog-missing"
+                && identity != "catalog-unreadable"
+        })
+    };
+    let identities_present = usable_identity(server_build_identity.as_ref())
+        && usable_identity(capability_catalog_digest.as_ref())
+        && usable_identity(catalog_build_identity.as_ref());
     let compatible = identities_present
         && version.is_some_and(|version| {
             (DEPMAP_QUERY_CONTRACT_MIN..=DEPMAP_QUERY_CONTRACT_MAX).contains(&version)
@@ -3889,6 +3897,26 @@ mod tests {
             &identity_missing,
             "depmap_gene_evidence"
         ));
+
+        for unusable_catalog_identity in ["", "   ", "catalog-missing", "catalog-unreadable"] {
+            let unusable = evaluate_depmap_contract(&json!({
+                "evidence": {
+                    "query_contract_version": 11,
+                    "server_build_identity": "build-abc",
+                    "capability_catalog_digest": "sha256:capabilities",
+                    "catalog_build_identity": unusable_catalog_identity
+                }
+            }));
+            assert!(
+                !unusable.compatible,
+                "accepted {unusable_catalog_identity:?}"
+            );
+            assert_eq!(unusable.code, "STALE_CONTRACT");
+            assert!(!depmap_tool_enabled_for_contract(
+                &unusable,
+                "depmap_gene_evidence"
+            ));
+        }
     }
 
     #[tokio::test]
