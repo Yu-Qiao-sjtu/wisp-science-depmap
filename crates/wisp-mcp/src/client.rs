@@ -26,6 +26,11 @@ const STDIO_SHUTDOWN_TERM_GRACE: std::time::Duration = std::time::Duration::from
 const STDIO_SHUTDOWN_KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 const STDIO_SHUTDOWN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
+fn validate_expected_tool_call(expected: &RemoteTool, args: &Value) -> Result<()> {
+    crate::tool::validate_tool_arguments(&expected.input_schema, args)
+        .map_err(|error| anyhow!("MCP_SCHEMA_MISMATCH: {error}; request not sent"))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RemoteTool {
     pub name: String,
@@ -626,6 +631,7 @@ impl McpClient {
         args: &Value,
         generation: Option<u64>,
     ) -> Result<McpCallResult> {
+        validate_expected_tool_call(expected, args)?;
         if let Transport::Managed(m) = &self.transport {
             if generation.is_some() && !m.is_connected() {
                 return Err(anyhow!("stale-instance: reopen the MCP App"));
@@ -643,8 +649,6 @@ impl McpClient {
                 m.catalog_changed();
                 return Err(anyhow!("MCP tool catalog changed; reopen the tool/refresh the conversation before approval and retry. Nothing was sent."));
             }
-            crate::tool::validate_tool_arguments(&expected.input_schema, args)
-                .map_err(|e| anyhow!(e))?;
             return client
                 .tool_call_rich(&expected.name, args)
                 .instrument(m.span())
@@ -1214,6 +1218,34 @@ fn tools_into_remote(tools: Vec<Value>) -> Vec<RemoteTool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_planned_call_returns_typed_error_before_transport() {
+        let tool = RemoteTool {
+            name: "depmap_tf_dependency_evidence".into(),
+            title: None,
+            description: String::new(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "transcription_factor": {"type": "string"},
+                    "target": {"type": "string"}
+                },
+                "required": ["transcription_factor"],
+                "additionalProperties": false
+            }),
+            output_schema: None,
+            meta: None,
+            annotations: None,
+        };
+
+        let error = validate_expected_tool_call(&tool, &json!({"gene": "STAT3", "target": null}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("MCP_SCHEMA_MISMATCH"));
+        assert!(error.contains("transcription_factor"));
+        assert!(error.contains("request not sent"));
+    }
 
     #[test]
     fn sse_body_yields_matching_jsonrpc_result() {

@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import get_args
 
+from jsonschema.validators import validator_for
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -939,6 +940,45 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(
                     all(tool.annotations.readOnlyHint for tool in tools.tools)
                 )
+                schemas = {tool.name: tool.inputSchema for tool in tools.tools}
+                capability_result = await session.call_tool("depmap_capabilities", {})
+                self.assertFalse(capability_result.isError)
+                for capability in capability_result.structuredContent["capabilities"]:
+                    tool_name = capability["mcp_tool"]
+                    self.assertIn(tool_name, schemas, capability["intent"])
+                    schema = schemas[tool_name]
+                    representative = {}
+                    for field in schema.get("required", []):
+                        field_schema = schema["properties"][field]
+                        if field_schema.get("enum"):
+                            representative[field] = field_schema["enum"][0]
+                        elif field_schema.get("type") == "integer":
+                            representative[field] = field_schema.get("minimum", 1)
+                        elif field_schema.get("type") == "number":
+                            representative[field] = field_schema.get("minimum", 1.0)
+                        elif field_schema.get("type") == "boolean":
+                            representative[field] = False
+                        elif field_schema.get("type") == "array":
+                            representative[field] = ["fixture"] * field_schema.get(
+                                "minItems", 0
+                            )
+                        else:
+                            representative[field] = "fixture"
+                    self.assertFalse(
+                        any(value is None for value in representative.values()),
+                        capability["intent"],
+                    )
+                    self.assertTrue(
+                        set(schema.get("required", [])).issubset(representative),
+                        capability["intent"],
+                    )
+                    self.assertTrue(
+                        set(representative).issubset(schema.get("properties", {})),
+                        capability["intent"],
+                    )
+                    validator = validator_for(schema)
+                    validator.check_schema(schema)
+                    validator(schema).validate(representative)
                 called = await session.call_tool("depmap_status", {})
                 self.assertFalse(called.isError)
                 self.assertEqual(called.structuredContent["release"], "26Q1")

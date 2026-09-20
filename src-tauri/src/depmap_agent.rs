@@ -632,6 +632,23 @@ fn non_empty_arg(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn omit_null_object_fields(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.retain(|_, child| !child.is_null());
+            for child in object.values_mut() {
+                omit_null_object_fields(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                omit_null_object_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn depmap_route(args: &Value) -> Result<Value, String> {
     let intent = required_string(args, "intent")?;
     let gene = non_empty_arg(args, "gene");
@@ -1012,7 +1029,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             _ => Value::Null,
         }
     };
-    let recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
+    let mut recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
         ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => {
             if remote_mcp_only {
                 json!({
@@ -1192,6 +1209,9 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         }),
         _ => Value::Null,
     };
+    if let Some(arguments) = recommended_query.get_mut("arguments") {
+        omit_null_object_fields(arguments);
+    }
     let entity_class = match intent.as_str() {
         "tf_activity_to_dependency" => Some("tf_activity"),
         "gene_evidence" => Some("gene_crispr"),
@@ -3917,6 +3937,33 @@ mod tests {
                 "depmap_gene_evidence"
             ));
         }
+    }
+
+    #[test]
+    fn remote_route_uses_canonical_tf_field_and_omits_absent_optional_values() {
+        let tf = depmap_route(&json!({
+            "intent": "tf_activity_to_dependency",
+            "transcription_factor": "STAT3",
+            "evidence_provider": "remote_mcp"
+        }))
+        .unwrap();
+        let arguments = &tf["recommended_query"]["arguments"];
+        assert_eq!(arguments["transcription_factor"], "STAT3");
+        assert!(arguments.get("gene").is_none());
+        assert!(arguments.get("target").is_none());
+        assert!(!arguments.to_string().contains(":null"));
+
+        let tcga = depmap_route(&json!({
+            "intent": "tcga_expression_survival",
+            "gene": "TP53",
+            "evidence_provider": "remote_mcp"
+        }))
+        .unwrap();
+        let arguments = &tcga["recommended_query"]["arguments"];
+        assert_eq!(arguments["gene"], "TP53");
+        assert!(arguments.get("project").is_none());
+        assert!(arguments.get("lineage").is_none());
+        assert!(!arguments.to_string().contains(":null"));
     }
 
     #[tokio::test]
