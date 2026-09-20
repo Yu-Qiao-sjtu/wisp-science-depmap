@@ -1366,7 +1366,7 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
                 "test_status": ["tested"] * (n - 1) + ["untested"],
                 "lineage_n": [40] * n,
                 "rest_n": [200] * n,
-                "effect_mean_lineage": [-1.0] * n,
+                "effect_mean_lineage": [-0.5, -1.5] + [-1.0] * (n - 2),
                 "effect_mean_rest": [-0.2] * n,
                 "effect_mean_difference": delta,
                 "fdr_lineage_more_dependent": fdr,
@@ -1580,6 +1580,18 @@ class LineageSelectivityQueryTests(DepMapApiTests):
             }
         )
         self.assertEqual(missing["status"], "NOT_TESTED")
+
+    def test_mean_dependency_orders_by_lineage_mean_not_selective_rank(self):
+        payload = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Myeloid",
+                "ranking": "mean_dependency",
+                "limit": 1,
+            }
+        )
+        self.assertEqual(payload["rows"][0]["symbol"], "DROPCE")
+        self.assertEqual(payload["rows"][0]["effect_mean_lineage"], -1.5)
 
     def test_common_essential_filter_is_one_reader_join(self):
         unfiltered = self._query(

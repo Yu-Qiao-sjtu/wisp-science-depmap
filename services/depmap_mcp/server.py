@@ -343,12 +343,40 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "interpretation": "coverage and eligibility only; absence is not negative biological evidence",
         }
     if mode in {"lineage_dependency", "pan_cancer_dependency"}:
+        ranking = query.get("ranking") or "selective"
+        if ranking == "mean_dependency":
+            return {
+                "metric": "chronos_gene_effect_lineage_mean",
+                "metric_family": "crispr_chronos_gene_effect",
+                "units": "Chronos Gene Effect score",
+                "direction": "more_negative_is_stronger_dependency",
+                "statistic": "effect_mean_lineage",
+                "selection_policy": "descriptive_ordering_only",
+                "descriptive_cutoff": "not_computed",
+                "common_essential_role": "independent_sidecar_annotation",
+                "not_equivalent_to": "crispr_gene_dependency_probability_or_rnai_demeter2",
+                "interpretation": (
+                    "effect_mean_lineage is the descriptive mean Chronos Gene Effect "
+                    "within the lineage. It is not a dependency probability, an RNAi "
+                    "DEMETER2 score, an FDR-selective result, or a hidden count below "
+                    "an ad-hoc Gene Effect cutoff."
+                ),
+            }
         return {
-            "metric": "gene_effect_lineage_vs_rest",
+            "metric": "chronos_gene_effect_lineage_vs_rest_mean_difference",
+            "metric_family": "crispr_chronos_gene_effect",
+            "units": "Chronos Gene Effect score difference",
+            "direction": "more_negative_is_stronger_lineage_dependency",
+            "statistic": "effect_mean_difference",
+            "selection_policy": "one_sided_welch_bh_fdr_le_0_05_and_negative_difference",
+            "descriptive_cutoff": "not_computed",
+            "common_essential_role": "independent_sidecar_annotation",
+            "not_equivalent_to": "crispr_gene_dependency_probability_or_rnai_demeter2",
             "interpretation": (
                 "effect_mean_difference is lineage mean Gene Effect minus the rest "
                 "mean; negative means stronger lineage dependency. It is not logFC, "
-                "and selective does not imply a housekeeping/common-essential exclusion."
+                "dependency probability, RNAi DEMETER2, or a descriptive cutoff count. "
+                "Selective does not imply a housekeeping/common-essential exclusion."
             ),
         }
     if mode == "subtype":

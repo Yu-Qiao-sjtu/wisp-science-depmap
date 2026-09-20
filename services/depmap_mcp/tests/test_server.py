@@ -555,10 +555,36 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             result["evidence"]["metric_semantics"]["metric"],
-            "gene_effect_lineage_vs_rest",
+            "chronos_gene_effect_lineage_vs_rest_mean_difference",
         )
-        self.assertIn("not logFC", result["evidence"]["metric_semantics"]["interpretation"])
+        semantics = result["evidence"]["metric_semantics"]
+        self.assertEqual(semantics["units"], "Chronos Gene Effect score difference")
+        self.assertEqual(
+            semantics["direction"],
+            "more_negative_is_stronger_lineage_dependency",
+        )
+        self.assertEqual(semantics["descriptive_cutoff"], "not_computed")
+        self.assertEqual(
+            semantics["common_essential_role"],
+            "independent_sidecar_annotation",
+        )
+        self.assertIn("not logFC", semantics["interpretation"])
+        self.assertIn("dependency probability", semantics["interpretation"])
         self.assertFalse(result["new_analysis_started"])
+
+        descriptive = await self.service.lineage_dependencies(
+            "乳腺癌", "mean_dependency", 10
+        )
+        descriptive_semantics = descriptive["evidence"]["metric_semantics"]
+        self.assertEqual(
+            descriptive_semantics["metric"],
+            "chronos_gene_effect_lineage_mean",
+        )
+        self.assertEqual(
+            descriptive_semantics["selection_policy"],
+            "descriptive_ordering_only",
+        )
+        self.assertIn("not a dependency probability", descriptive_semantics["interpretation"])
 
         filtered = await self.service.lineage_dependencies(
             "乳腺癌", "selective", 10, exclude_common_essential=True
@@ -626,7 +652,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["request"], self.queries[-1])
         self.assertEqual(
             result["evidence"]["metric_semantics"]["metric"],
-            "gene_effect_lineage_vs_rest",
+            "chronos_gene_effect_lineage_vs_rest_mean_difference",
         )
 
     async def test_lineage_resolution_requires_confirmation_for_ambiguity(self):
