@@ -2750,7 +2750,7 @@ impl Tool for DepMapEvidenceTool {
         };
         let workspace = match self.query.workspace().await {
             Ok(workspace) => workspace,
-            Err(error) => return ToolResult::fail(blocked("configuration_blocked", error)),
+            Err(error) => return ToolResult::fail(configuration_blocked(error)),
         };
         let status = self.query.run_status(&workspace).await;
         if !status.success {
