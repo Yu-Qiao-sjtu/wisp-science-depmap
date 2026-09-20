@@ -4,7 +4,9 @@
 //! opens raw DepMap matrices and never starts a recomputation; a coverage gap
 //! must transition to the persisted Run path explicitly.
 
-use crate::depmap_remote_compute::{new_analysis_proposal, ProjectDatasetInspector};
+use crate::depmap_remote_compute::{
+    is_coverage_status, new_analysis_proposal, ProjectDatasetInspector,
+};
 use crate::models;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
@@ -2087,7 +2089,12 @@ impl DepMapQueryTool {
             "result": result,
             "new_analysis_started": false
         });
-        attach_new_analysis_proposal(&mut envelope, query, &self.project_root);
+        attach_new_analysis_proposal(
+            &mut envelope,
+            query,
+            workspace.release.as_deref(),
+            &self.project_root,
+        );
         ToolResult::ok(pretty(envelope))
     }
 
@@ -2119,7 +2126,12 @@ impl DepMapQueryTool {
                     "result": result,
                     "new_analysis_started": false
                 });
-                attach_new_analysis_proposal(&mut envelope, query, &self.project_root);
+                attach_new_analysis_proposal(
+                    &mut envelope,
+                    query,
+                    workspace.release.as_deref(),
+                    &self.project_root,
+                );
                 ToolResult::ok(pretty(envelope))
             }
             Err(error) if error.contains("422 Unprocessable Entity") => {
@@ -2130,12 +2142,17 @@ impl DepMapQueryTool {
     }
 }
 
-fn attach_new_analysis_proposal(envelope: &mut Value, query: &Value, project_root: &Path) {
+fn attach_new_analysis_proposal(
+    envelope: &mut Value,
+    query: &Value,
+    release: Option<&str>,
+    project_root: &Path,
+) {
     let Some(result) = envelope.get("result") else {
         return;
     };
     let inspector = ProjectDatasetInspector::new(project_root);
-    if let Some(proposal) = new_analysis_proposal(query, result, &inspector) {
+    if let Some(proposal) = new_analysis_proposal(query, result, release, &inspector) {
         envelope["next"] = proposal;
     }
 }
@@ -3421,11 +3438,13 @@ async fn read_json_file(path: &Path) -> Result<Value, String> {
 }
 
 fn classify_result_state(result: &Value) -> &'static str {
-    match result.get("status").and_then(Value::as_str) {
-        Some(
-            "not_testable" | "NOT_RETAINED" | "INELIGIBLE" | "NOT_COMPUTED" | "MODULE_UNAVAILABLE",
-        ) => "coverage_gap",
-        _ => "precomputed_query",
+    let status = result.get("status").and_then(Value::as_str);
+    if matches!(status, Some("not_testable" | "NOT_RETAINED" | "INELIGIBLE"))
+        || is_coverage_status(status)
+    {
+        "coverage_gap"
+    } else {
+        "precomputed_query"
     }
 }
 
@@ -4815,7 +4834,7 @@ mod tests {
             "result":{"status":"NOT_COMPUTED"},
             "new_analysis_started":false
         });
-        attach_new_analysis_proposal(&mut envelope, &query, &root);
+        attach_new_analysis_proposal(&mut envelope, &query, Some("26Q1"), &root);
         assert_eq!(envelope["next"]["state"], "new_analysis_proposed");
         assert_eq!(envelope["next"]["capability_id"], "co_dependency");
         assert_eq!(envelope["next"]["input_status"], "preprocessing_required");
@@ -4890,6 +4909,7 @@ mod tests {
             "NOT_RETAINED",
             "INELIGIBLE",
             "NOT_COMPUTED",
+            "COVERAGE_GAP",
             "MODULE_UNAVAILABLE",
         ] {
             assert_eq!(

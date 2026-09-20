@@ -13,8 +13,14 @@ const CAPABILITY_MANIFEST: &str =
 
 #[derive(Debug, Deserialize)]
 struct CapabilityManifest {
+    audit_basis: AuditBasis,
     datasets: Vec<Dataset>,
     capabilities: Vec<Capability>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditBasis {
+    release: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,7 +73,15 @@ impl ProjectDatasetInspector {
                     project_root.join(path)
                 }
             })
-            .unwrap_or_else(|| project_root.join("data"));
+            .unwrap_or_else(|| {
+                let legacy = project_root
+                    .parent()
+                    .map(|parent| parent.join("data"))
+                    .filter(|path| {
+                        project_root.join("depmap-26q1-qa.json").is_file() && path.is_dir()
+                    });
+                legacy.unwrap_or_else(|| project_root.join("data"))
+            });
         Self {
             project_root,
             data_root,
@@ -100,14 +114,13 @@ fn capability_for_query(query: &Value) -> Option<&'static str> {
             "hotspot_mutation_dependency" => Some("mutation_dependency_official_gene_effect_v2"),
             _ => None,
         },
-        "lineage_drug" => Some("prism_drug_sensitivity"),
         _ => None,
     }
 }
 
-fn is_coverage_gap(result: &Value) -> bool {
+pub(crate) fn is_coverage_status(status: Option<&str>) -> bool {
     matches!(
-        result.get("status").and_then(Value::as_str),
+        status,
         Some("NOT_COMPUTED" | "COVERAGE_GAP" | "MODULE_UNAVAILABLE")
     )
 }
@@ -115,14 +128,18 @@ fn is_coverage_gap(result: &Value) -> bool {
 pub(crate) fn new_analysis_proposal(
     query: &Value,
     result: &Value,
+    release: Option<&str>,
     inspector: &dyn DatasetInspector,
 ) -> Option<Value> {
-    if !is_coverage_gap(result) {
+    if !is_coverage_status(result.get("status").and_then(Value::as_str)) {
         return None;
     }
     let capability_id = capability_for_query(query)?;
     let manifest: CapabilityManifest = serde_json::from_str(CAPABILITY_MANIFEST)
         .expect("bundled DepMap capability manifest must be valid JSON");
+    if release != Some(manifest.audit_basis.release.as_str()) {
+        return None;
+    }
     let capability = manifest
         .capabilities
         .iter()
@@ -206,7 +223,7 @@ pub(crate) fn new_analysis_proposal(
         "authorization_policy": "A follow-up request for detail is not authorization; execute only after an explicit request matching this proposal.",
         "execution_skill": "depmap-coding-agent",
         "acquisition_skill": if input_status == "missing_inputs" { Value::String("public-data-access".into()) } else { Value::Null },
-        "release": "26Q1",
+        "release": manifest.audit_basis.release,
         "new_analysis_started": false,
         "query_process_read_raw_data": false,
         "portal_api_is_query_provider": false
@@ -381,6 +398,7 @@ mod tests {
         let proposal = new_analysis_proposal(
             &json!({"mode":"lineage_network","family":"effect_correlation"}),
             &json!({"status":"NOT_COMPUTED"}),
+            Some("26Q1"),
             &inspector,
         )
         .unwrap();
@@ -399,6 +417,7 @@ mod tests {
         let proposal = new_analysis_proposal(
             &json!({"mode":"top","module":"damaging_mutation_dependency"}),
             &json!({"status":"COVERAGE_GAP"}),
+            Some("26Q1"),
             &inspector,
         )
         .unwrap();
@@ -418,6 +437,28 @@ mod tests {
         assert!(new_analysis_proposal(
             &json!({"mode":"lineage_network","family":"effect_correlation"}),
             &json!({"status":"FOUND"}),
+            Some("26Q1"),
+            &inspector,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn proposal_is_suppressed_for_an_unaudited_release_or_unmapped_family() {
+        let inspector = FakeInspector {
+            existing: HashSet::new(),
+        };
+        assert!(new_analysis_proposal(
+            &json!({"mode":"lineage_network","family":"effect_correlation"}),
+            &json!({"status":"NOT_COMPUTED"}),
+            Some("25Q4"),
+            &inspector,
+        )
+        .is_none());
+        assert!(new_analysis_proposal(
+            &json!({"mode":"lineage_drug","omic":"effect"}),
+            &json!({"status":"COVERAGE_GAP"}),
+            Some("26Q1"),
             &inspector,
         )
         .is_none());
@@ -444,5 +485,21 @@ mod tests {
         let inspector = ProjectDatasetInspector::new(&root);
         assert!(inspector.exists("data/CRISPRGeneEffect.csv"));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn project_inspector_preserves_legacy_parent_data_lookup() {
+        let parent = std::env::temp_dir().join(format!(
+            "wisp-depmap-proposal-legacy-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let root = parent.join("knowledge");
+        std::fs::create_dir_all(parent.join("data")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("depmap-26q1-qa.json"), b"{}").unwrap();
+        std::fs::write(parent.join("data/CRISPRGeneEffect.csv"), b"ModelID\n").unwrap();
+        let inspector = ProjectDatasetInspector::new(&root);
+        assert!(inspector.exists("data/CRISPRGeneEffect.csv"));
+        std::fs::remove_dir_all(parent).ok();
     }
 }
