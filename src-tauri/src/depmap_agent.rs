@@ -2407,11 +2407,41 @@ fn query_semantics(query: &Value) -> Value {
             "metric":"module_availability",
             "interpretation":"coverage inventory only; it contains no gene-level association"
         }),
-        "lineage_dependency" => json!({
-            "metric":"gene_effect_lineage_vs_rest",
-            "ranking":query.get("ranking").and_then(Value::as_str).unwrap_or("selective"),
-            "interpretation":"effect_mean_difference is lineage mean Gene Effect minus the rest mean; negative means stronger dependency in the lineage. It is not log fold-change. The selective ranking uses the precomputed one-sided Welch test, within-lineage BH FDR, and rank_more_dependent; mean_dependency is descriptive and sorts the lineage Gene Effect mean. Selective does not imply that a validated housekeeping/common-essential filter was applied."
-        }),
+        "lineage_dependency" => {
+            let ranking = query
+                .get("ranking")
+                .and_then(Value::as_str)
+                .unwrap_or("selective");
+            if ranking == "mean_dependency" {
+                json!({
+                    "metric":"chronos_gene_effect_lineage_mean",
+                    "metric_family":"crispr_chronos_gene_effect",
+                    "units":"Chronos Gene Effect score",
+                    "direction":"more_negative_is_stronger_dependency",
+                    "statistic":"effect_mean_lineage",
+                    "selection_policy":"descriptive_ordering_only",
+                    "descriptive_cutoff":"not_computed",
+                    "common_essential_role":"independent_sidecar_annotation",
+                    "not_equivalent_to":"crispr_gene_dependency_probability_or_rnai_demeter2",
+                    "ranking":ranking,
+                    "interpretation":"effect_mean_lineage is the descriptive mean Chronos Gene Effect within the lineage. It is not a dependency probability, an RNAi DEMETER2 score, an FDR-selective result, or a hidden cutoff count."
+                })
+            } else {
+                json!({
+                    "metric":"chronos_gene_effect_lineage_vs_rest_mean_difference",
+                    "metric_family":"crispr_chronos_gene_effect",
+                    "units":"Chronos Gene Effect score difference",
+                    "direction":"more_negative_is_stronger_lineage_dependency",
+                    "statistic":"effect_mean_difference",
+                    "selection_policy":"one_sided_welch_bh_fdr_le_0_05_and_negative_difference",
+                    "descriptive_cutoff":"not_computed",
+                    "common_essential_role":"independent_sidecar_annotation",
+                    "not_equivalent_to":"crispr_gene_dependency_probability_or_rnai_demeter2",
+                    "ranking":ranking,
+                    "interpretation":"effect_mean_difference is lineage mean Chronos Gene Effect minus the rest mean; negative means stronger lineage dependency. It is not logFC, dependency probability, RNAi DEMETER2, or a descriptive cutoff count."
+                })
+            }
+        }
         "lineage_directions" => json!({
             "metric":"family_specific_shortlists",
             "interpretation":"fixed-filter selection over precomputed lineage network, expression-dependency, CNV, enrichment, and PRISM sparse rows. Each family keeps its own metric and rank; cross-family recurrence is not a combined significance score. Candidates are hypothesis-generating, not proof of novelty or causality."
@@ -4144,6 +4174,20 @@ mod tests {
         .unwrap();
         assert_eq!(descriptive_dependency["lineage"], "Bowel");
         assert_eq!(descriptive_dependency["ranking"], "mean_dependency");
+        let descriptive_semantics = query_semantics(&descriptive_dependency);
+        assert_eq!(
+            descriptive_semantics["metric"],
+            "chronos_gene_effect_lineage_mean"
+        );
+        assert_eq!(
+            descriptive_semantics["selection_policy"],
+            "descriptive_ordering_only"
+        );
+        let selective_semantics = query_semantics(&dependency);
+        assert_eq!(
+            selective_semantics["metric"],
+            "chronos_gene_effect_lineage_vs_rest_mean_difference"
+        );
         let directions = validated_query(&json!({
             "mode":"lineage_directions",
             "lineage":"肝癌",

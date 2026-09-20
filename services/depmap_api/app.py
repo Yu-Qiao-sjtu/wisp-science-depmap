@@ -2972,6 +2972,20 @@ def _selectivity_retained(row: dict[str, Any], ranking: str) -> bool:
     )
 
 
+def _lineage_dependency_sort_key(
+    row: dict[str, Any], ranking: str
+) -> tuple[float, float]:
+    if ranking == "mean_dependency":
+        return (
+            float(row.get("effect_mean_lineage") or 0),
+            float(row.get("rank_more_dependent") or 10**9),
+        )
+    return (
+        float(row.get("rank_more_dependent") or 10**9),
+        float(row.get("effect_mean_difference") or 0),
+    )
+
+
 def _exact_lineage_gene_state(
     row: dict[str, Any],
     *,
@@ -3070,10 +3084,7 @@ def _run_lineage_dependency_query(settings: Settings, query: dict[str, Any]) -> 
         meta = {**meta, "filter_applied": False}
     page, matched = bound_after_rank(
         annotated,
-        key=lambda row: (
-            float(row.get("rank_more_dependent") or 10**9),
-            float(row.get("effect_mean_difference") or 0),
-        ),
+        key=lambda row: _lineage_dependency_sort_key(row, ranking),
         limit=limit,
     )
     return _evidence_response(
@@ -3151,7 +3162,7 @@ def _run_pan_cancer_dependency_query(settings: Settings, query: dict[str, Any]) 
         )
         page, matched = bound_after_rank(
             annotated,
-            key=lambda row: float(row.get("rank_more_dependent") or 10**9),
+            key=lambda row: _lineage_dependency_sort_key(row, ranking),
             limit=limit,
         )
         lineages.append({
