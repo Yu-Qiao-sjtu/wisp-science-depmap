@@ -82,7 +82,9 @@ provider can serve the same bounded query.
 
 That selection is also a turn-scoped execution boundary. The Agent may use
 only bounded read-only tools from that MCP connection plus interpretation of
-their results. A coverage gap or request for a statistic that the MCP does not
+their results. Deferred-tool discovery is filtered by the active route grant,
+so schemas from unrelated MCP connections are not exposed in that turn. A
+coverage gap or request for a statistic that the MCP does not
 expose returns `COMPUTE_NOT_EXPOSED`; it never falls back to `run_in_context`,
 remote-file tools, shell, local configuration, or a saved SSH host. A future
 hosted computation capability must be an explicit authenticated MCP job API

@@ -888,15 +888,27 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         }
     };
     let recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
-        ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => json!({
-            "tool": TOOL_NAME,
-            "arguments": {
-                "mode": "lineage_directions",
-                "lineage": lineage,
-                "limit": 20
-            },
-            "single_call": true
-        }),
+        ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => {
+            if remote_mcp_only {
+                json!({
+                    "tool": "depmap_lineage_direction_discovery",
+                    "transport": "remote_mcp",
+                    "arguments": {"lineage": lineage, "limit": 20},
+                    "single_call": true
+                })
+            } else {
+                json!({
+                    "tool": TOOL_NAME,
+                    "transport": "native",
+                    "arguments": {
+                        "mode": "lineage_directions",
+                        "lineage": lineage,
+                        "limit": 20
+                    },
+                    "single_call": true
+                })
+            }
+        }
         ("mutation_anchor_discovery", Some(lineage)) if !requires_user_input => json!({
             "tool": "depmap_mutation_anchor_evidence",
             "arguments": {
@@ -960,23 +972,36 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 })
             }
         }
-        ("study_support_mapping", Some(lineage)) if !requires_user_input => json!({
-            "tool": TOOL_NAME,
-            "arguments": {
-                "mode": "lineage_catalog",
-                "lineage": lineage
-            },
-            "single_call": true,
-            "output_contract": {
-                "required_buckets": [
-                    "direct_precomputed_evidence",
-                    "new_computation_from_available_inputs",
-                    "missing_data_or_coverage",
-                    "literature_only_or_unverified_claims"
-                ],
-                "forbidden_shortcuts": ["shell", "run_in_context", "filesystem_inventory"]
-            }
-        }),
+        ("study_support_mapping", Some(lineage)) if !requires_user_input => {
+            let (tool, transport, arguments) = if remote_mcp_only {
+                (
+                    "depmap_lineage_catalog",
+                    "remote_mcp",
+                    json!({"lineage": lineage}),
+                )
+            } else {
+                (
+                    TOOL_NAME,
+                    "native",
+                    json!({"mode": "lineage_catalog", "lineage": lineage}),
+                )
+            };
+            json!({
+                "tool": tool,
+                "transport": transport,
+                "arguments": arguments,
+                "single_call": true,
+                "output_contract": {
+                    "required_buckets": [
+                        "direct_precomputed_evidence",
+                        "new_computation_from_available_inputs",
+                        "missing_data_or_coverage",
+                        "literature_only_or_unverified_claims"
+                    ],
+                    "forbidden_shortcuts": ["shell", "run_in_context", "filesystem_inventory"]
+                }
+            })
+        }
         ("expression_biomarker_model", _) if !requires_user_input => json!({
             "tool": "depmap_biomarker_model_evidence",
             "arguments": {"target_gene": target_gene},
@@ -3618,7 +3643,12 @@ mod tests {
 
     #[tokio::test]
     async fn remote_mcp_route_never_grants_workspace_or_compute_tools() {
-        let compute = DepMapAgentRouteTool::new(vec!["depmap_safe_query".into()])
+        let tool = DepMapAgentRouteTool::new(vec![
+            "depmap_safe_query".into(),
+            "depmap_lineage_direction_discovery".into(),
+            "depmap_lineage_catalog".into(),
+        ]);
+        let compute = tool
             .run(
                 &json!({
                     "intent":"new_analysis",
@@ -3652,6 +3682,32 @@ mod tests {
         assert!(allowed.contains(&"search_mcp_tools".to_string()));
         assert!(allowed.contains(&"use_mcp_tool".to_string()));
         assert!(allowed.contains(&"attempt_completion".to_string()));
+
+        for (intent, expected_tool) in [
+            (
+                "cancer_direction_discovery",
+                "depmap_lineage_direction_discovery",
+            ),
+            ("study_support_mapping", "depmap_lineage_catalog"),
+        ] {
+            let routed = tool
+                .run(
+                    &json!({
+                        "intent": intent,
+                        "cancer": "肝癌",
+                        "evidence_provider": "remote_mcp"
+                    }),
+                    &RouteTestEnv,
+                )
+                .await;
+            assert!(routed.success);
+            let route: Value = serde_json::from_str(&routed.content).unwrap();
+            assert_eq!(route["recommended_query"]["tool"], expected_tool);
+            assert_eq!(route["recommended_query"]["transport"], "remote_mcp");
+            let allowed = routed.allowed_next_tools.unwrap();
+            assert!(allowed.contains(&expected_tool.to_string()));
+            assert!(!allowed.contains(&TOOL_NAME.to_string()));
+        }
     }
 
     #[test]
