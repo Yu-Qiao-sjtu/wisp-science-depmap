@@ -184,11 +184,15 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
             capability["data_modality"],
             "expression_group_vs_crispr_gene_effect",
         )
-        operation = capability["operations"][0]
+        operation = capability["operations"]["run_expression_threshold_dependency_contrast"]
         self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
         self.assertEqual(
+            operation["executable_entrypoint"],
+            "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
+        )
+        self.assertEqual(
             operation["supported_scopes"],
-            ["global_lineage_adjusted", "lineage"],
+            ["global", "lineage"],
         )
         self.assertEqual(
             operation["defaults"]["threshold_policy"],
