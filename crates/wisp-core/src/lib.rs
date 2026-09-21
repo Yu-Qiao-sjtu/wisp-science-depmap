@@ -55,8 +55,9 @@ pub use orchestration::{
 pub use output::{NullOutput, Output, OutputFuture, StreamSinkAdapter, ToolEnvAdapter};
 pub use provenance::ProvenanceRecord;
 pub use scientific_intent::{
-    host_scientific_bridge, plan_scientific_intent, IntentCatalog, PlannerDecision, PlannerOutcome,
-    ScientificIntent, ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
+    host_scientific_bridge, install_scientific_intent_planner, plan_scientific_intent,
+    IntentCatalog, PlannerDecision, PlannerOutcome, ScientificIntent, ToolCatalog,
+    INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID, SCIENTIFIC_INTENT_PLAN_TOOL,
 };
 pub use subagent::ExploreTool;
 pub use system_prompt::SystemPrompt;

@@ -1028,10 +1028,6 @@ async fn main() -> Result<()> {
     );
     let compute = wisp_runs::cli_compute_section(&run_store).await;
     agent.seed_system_prompt(&skills, Some(compute));
-    let _scientific_bridge = wisp_core::host_scientific_bridge(
-        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
-    );
-    let _ = wisp_core::ToolCatalog::from_registry(&agent.tools);
 
     // Python is prepared on demand through local-env-setup.
     let app_data = root.join(".wisp");
@@ -1128,6 +1124,11 @@ async fn main() -> Result<()> {
             format_args!("Unknown native bio package: {bio_package}"),
         );
     }
+
+    let _scientific_bridge = wisp_core::host_scientific_bridge(
+        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    );
+    wisp_core::install_scientific_intent_planner(&mut agent.tools);
 
     let out = CliOutput;
     if command == CliCommand::Rpc {

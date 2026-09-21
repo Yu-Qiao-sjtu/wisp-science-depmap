@@ -835,6 +835,7 @@ pub(crate) async fn send_message_inner(
                 )
                 .with_tool_catalog(tool_catalog),
             ));
+            wisp_core::install_scientific_intent_planner(&mut agent.tools);
         }
         {
             let mut observed = state.plugin_runtime_errors.lock().unwrap();

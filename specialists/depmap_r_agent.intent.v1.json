@@ -167,10 +167,9 @@
         { "role": "target", "kind": "gene", "required": true }
       ],
       "arguments": [
-        { "from": "entity.source", "to": "source_gene", "optional": false },
-        { "from": "entity.target", "to": "target_gene", "optional": false },
-        { "from": "entity.lineage", "to": "lineage", "optional": true },
-        { "from": "constraint.limit", "to": "limit", "optional": true, "default": 20 }
+        { "from": "entity.source", "to": "source", "optional": false },
+        { "from": "entity.target", "to": "target", "optional": false },
+        { "from": "entity.lineage", "to": "lineage", "optional": true }
       ]
     },
     {
@@ -186,10 +185,9 @@
         { "role": "target", "kind": "gene", "required": true }
       ],
       "arguments": [
-        { "from": "entity.source", "to": "source_gene", "optional": false },
-        { "from": "entity.target", "to": "target_gene", "optional": false },
-        { "from": "entity.lineage", "to": "lineage", "optional": true },
-        { "from": "constraint.limit", "to": "limit", "optional": true, "default": 20 }
+        { "from": "entity.source", "to": "source", "optional": false },
+        { "from": "entity.target", "to": "target", "optional": false },
+        { "from": "entity.lineage", "to": "lineage", "optional": true }
       ]
     },
     {

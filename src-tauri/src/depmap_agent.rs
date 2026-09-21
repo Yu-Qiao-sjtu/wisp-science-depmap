@@ -1644,14 +1644,22 @@ impl Tool for DepMapAgentRouteTool {
                     &self.remote_read_only_tools,
                 );
                 if route["state"] == "routed" {
-                    let mut allowed = route["allowed_next_tools"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>();
-                    allowed.extend(self.remote_read_only_tools.iter().cloned());
+                    let mut allowed = if route["bridge"]["decision"]["kind"] == "execute" {
+                        route["bridge"]["decision"]["tool"]
+                            .as_str()
+                            .map(|tool| vec![tool.to_string()])
+                            .unwrap_or_default()
+                    } else {
+                        let mut allowed = route["allowed_next_tools"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>();
+                        allowed.extend(self.remote_read_only_tools.iter().cloned());
+                        allowed
+                    };
                     allowed.extend([
                         "search_mcp_tools".into(),
                         "ask_user".into(),
@@ -4427,7 +4435,10 @@ mod tests {
                 "additionalProperties": false
             }),
         );
-        let result = DepMapAgentRouteTool::new(vec!["depmap_codependency_evidence".into()])
+        let result = DepMapAgentRouteTool::new(vec![
+            "depmap_codependency_evidence".into(),
+            "depmap_pair_evidence".into(),
+        ])
             .with_tool_catalog(tools)
             .run(
                 &json!({
@@ -4451,6 +4462,16 @@ mod tests {
                 .unwrap()
                 .contains("null")
         );
+        let allowed = result.allowed_next_tools.unwrap();
+        assert_eq!(
+            allowed
+                .iter()
+                .filter(|name| name.as_str() == "depmap_codependency_evidence")
+                .count(),
+            1
+        );
+        assert!(!allowed.contains(&"depmap_pair_evidence".to_string()));
+        assert!(allowed.contains(&"ask_user".to_string()));
     }
 
     #[tokio::test]

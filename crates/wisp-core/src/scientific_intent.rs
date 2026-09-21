@@ -8,10 +8,14 @@
 use crate::specialist_manifest::{
     assemble, load_depmap_manifest, AssemblyError, HostPolicy, ResolvedSpecialistSnapshot,
 };
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use wisp_tools::Registry;
+use wisp_llm::ToolSchema;
+use wisp_tools::{Registry, Tool, ToolEnv, ToolResult};
+
+pub const SCIENTIFIC_INTENT_PLAN_TOOL: &str = "plan_scientific_intent";
 
 pub const INTENT_SCHEMA_VERSION: u32 = 1;
 pub const PLANNER_CONTRACT_ID: &str = "scientific_intent.bridge_planner.v1";
@@ -460,6 +464,7 @@ impl IntentCatalog {
             .entities
             .sort_by(|left, right| left.role.cmp(&right.role));
         intent.constraints.retain(|_, value| !value.is_null());
+        normalize_event_constraint(&mut intent);
         if let Some(capability) = intent.proposed_capability.as_mut() {
             let trimmed = capability.trim();
             if trimmed.is_empty() {
@@ -580,6 +585,134 @@ pub fn host_scientific_bridge(host: &HostPolicy) -> Result<HostScientificBridge,
         specialist: assemble(&load_depmap_manifest(), host)?,
         catalog: IntentCatalog::bundled_depmap(),
     })
+}
+
+/// Install the shared planner tool after the host registry (including MCP) is complete.
+pub fn install_scientific_intent_planner(registry: &mut Registry) {
+    let tools = ToolCatalog::from_registry(registry);
+    registry.add(Box::new(ScientificIntentPlanTool {
+        catalog: IntentCatalog::bundled_depmap(),
+        tools,
+    }));
+}
+
+pub struct ScientificIntentPlanTool {
+    catalog: IntentCatalog,
+    tools: ToolCatalog,
+}
+
+#[async_trait]
+impl Tool for ScientificIntentPlanTool {
+    fn name(&self) -> &str {
+        SCIENTIFIC_INTENT_PLAN_TOOL
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            SCIENTIFIC_INTENT_PLAN_TOOL,
+            "Convert a typed ScientificIntent into one host-validated capability. The model may propose an Intent; this tool decides execute, clarification, unsupported, or a typed boundary. Do not treat this result as scientific evidence.",
+            json!({
+                "type": "object",
+                "additionalProperties": true
+            }),
+        )
+    }
+
+    fn read_only(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, _args: &Value) -> String {
+        "plan scientific intent".into()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let proposed = match proposed_intent_from_tool_args(args) {
+            Ok(intent) => intent,
+            Err(reason) => {
+                return ToolResult::fail(reason)
+                    .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                    .stop_batch();
+            }
+        };
+        let outcome = plan_scientific_intent(
+            proposed,
+            &self.catalog,
+            &self.tools,
+            &PlannerHostPolicy::default(),
+        );
+        let body = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".into());
+        match &outcome.decision {
+            PlannerDecision::Execute { tool, .. } => ToolResult::ok(body).allow_next_tools(vec![
+                tool.clone(),
+                "ask_user".into(),
+                "attempt_completion".into(),
+            ]),
+            _ => ToolResult::fail(body)
+                .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                .stop_batch(),
+        }
+    }
+}
+
+fn proposed_intent_from_tool_args(args: &Value) -> Result<ScientificIntent, String> {
+    if let Some(intent) = args.get("intent") {
+        if intent.is_object() {
+            return serde_json::from_value(intent.clone())
+                .map_err(|error| format!("scientific intent: {error}"));
+        }
+        if let Some(relation) = intent.as_str() {
+            let mut proposed = ScientificIntent {
+                schema_version: INTENT_SCHEMA_VERSION,
+                relation: relation.into(),
+                ..ScientificIntent::default()
+            };
+            if let Some(entities) = args.get("entities") {
+                proposed.entities = serde_json::from_value(entities.clone()).unwrap_or_default();
+            }
+            proposed.data_modality = args
+                .get("data_modality")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            proposed.metric = args.get("metric").and_then(Value::as_str).map(str::to_string);
+            if let Some(scope) = args.get("scope").and_then(Value::as_str) {
+                proposed.scope = IntentScope::parse(scope).unwrap_or_default();
+            }
+            proposed.action = args
+                .get("action")
+                .and_then(Value::as_str)
+                .and_then(RequestedAction::parse)
+                .unwrap_or_default();
+            if let Some(constraints) = args.get("constraints").and_then(Value::as_object) {
+                proposed.constraints = constraints
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+            }
+            return Ok(proposed);
+        }
+    }
+    serde_json::from_value(args.clone()).map_err(|error| format!("scientific intent: {error}"))
+}
+
+fn normalize_event_constraint(intent: &mut ScientificIntent) {
+    let Some(raw) = intent
+        .constraints
+        .get("event")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mapped = match (intent.scope, raw.as_str()) {
+        (IntentScope::Global, "damaging") => "damaging_mutation",
+        (IntentScope::Global, "hotspot") => "hotspot_mutation",
+        (IntentScope::Global, "custom_missense") => "custom_missense_mutation",
+        _ => raw.as_str(),
+    };
+    intent
+        .constraints
+        .insert("event".into(), json!(mapped));
 }
 
 struct BridgePlanner<'a> {
@@ -1191,7 +1324,10 @@ mod tests {
                   "action": "retrieve_evidence",
                   "scopes": ["global"],
                   "entity_roles": [{"role": "source", "kind": "mutation_event", "required": true}],
-                  "arguments": [{"from": "entity.source", "to": "source", "optional": false}]
+                  "arguments": [
+                    {"from": "entity.source", "to": "source", "optional": false},
+                    {"from": "constraint.event", "to": "event", "optional": true}
+                  ]
                 },
                 {
                   "id": "recompute_codependency",
@@ -1242,7 +1378,10 @@ mod tests {
             "fake_mutation_tool",
             json!({
                 "type": "object",
-                "properties": {"source": {"type": "string"}},
+                "properties": {
+                    "source": {"type": "string"},
+                    "event": {"type": "string"}
+                },
                 "required": ["source"],
                 "additionalProperties": false
             }),
@@ -1552,5 +1691,98 @@ mod tests {
             .capabilities
             .iter()
             .any(|spec| spec.relation == "event_stratified_dependency"));
+    }
+
+    #[test]
+    fn global_mutation_events_use_the_pan_cancer_vocabulary() {
+        let mut intent = ScientificIntent {
+            schema_version: INTENT_SCHEMA_VERSION,
+            entities: vec![entity("source", "mutation_event", "GENEA")],
+            relation: "event_stratified_dependency".into(),
+            data_modality: Some("somatic_mutation_event_vs_crispr_dependency".into()),
+            metric: Some("delta_gene_effect".into()),
+            scope: IntentScope::Global,
+            direction: None,
+            action: RequestedAction::RetrieveEvidence,
+            release: None,
+            constraints: BTreeMap::from([("event".into(), json!("damaging"))]),
+            ambiguity: AmbiguityMetadata::default(),
+            proposed_capability: None,
+            proposed_coverage: None,
+        };
+        let outcome = plan(intent.clone());
+        match outcome.decision {
+            PlannerDecision::Execute { arguments, .. } => {
+                assert_eq!(arguments["event"], "damaging_mutation");
+            }
+            other => panic!("{other:?}"),
+        }
+        intent.scope = IntentScope::Lineage;
+        intent.entities.push(entity("lineage", "lineage", "ExampleLineage"));
+        let lineage = IntentCatalog::bundled_depmap().canonicalize(intent);
+        assert_eq!(lineage.constraints["event"], json!("damaging"));
+    }
+
+    #[test]
+    fn pair_capabilities_bind_discovered_mcp_parameters() {
+        let mut tools = ToolCatalog::default();
+        tools.insert(
+            "depmap_pair_evidence",
+            json!({
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "target": {"type": "string"},
+                    "lineage": {"type": "string"}
+                },
+                "required": ["source", "target"],
+                "additionalProperties": false
+            }),
+        );
+        let outcome = plan_scientific_intent(
+            ScientificIntent {
+                schema_version: INTENT_SCHEMA_VERSION,
+                entities: vec![
+                    entity("source", "gene", "GENEA"),
+                    entity("target", "gene", "GENEB"),
+                ],
+                relation: "coexpression".into(),
+                data_modality: Some("transcript_expression_log2_tpm_plus_1".into()),
+                metric: Some("expression_correlation".into()),
+                scope: IntentScope::Global,
+                direction: None,
+                action: RequestedAction::RetrieveEvidence,
+                release: None,
+                constraints: BTreeMap::from([("limit".into(), json!(20))]),
+                ambiguity: AmbiguityMetadata::default(),
+                proposed_capability: None,
+                proposed_coverage: None,
+            },
+            &IntentCatalog::bundled_depmap(),
+            &tools,
+            &PlannerHostPolicy::default(),
+        );
+        match outcome.decision {
+            PlannerDecision::Execute {
+                tool, arguments, ..
+            } => {
+                assert_eq!(tool, "depmap_pair_evidence");
+                assert_eq!(arguments["source"], "GENEA");
+                assert_eq!(arguments["target"], "GENEB");
+                assert!(arguments.get("source_gene").is_none());
+                assert!(arguments.get("limit").is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn planner_installs_into_a_host_registry_after_tools_exist() {
+        let mut registry = wisp_tools::Registry::builtins();
+        install_scientific_intent_planner(&mut registry);
+        assert!(registry
+            .names()
+            .iter()
+            .any(|name| *name == SCIENTIFIC_INTENT_PLAN_TOOL));
     }
 }
