@@ -706,7 +706,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         .unwrap_or(false);
 
     let mut missing = Vec::new();
-    let mut unsupported = Vec::new();
+    let unsupported: Vec<&str> = Vec::new();
     match intent.as_str() {
         "lineage_resolution"
         | "cancer_inventory"
