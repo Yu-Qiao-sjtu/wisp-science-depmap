@@ -1653,6 +1653,66 @@ class DepMapEvidenceService:
         )
         return self._envelope(tool="depmap_synthetic_lethal_evidence", request=request, evidence=item)
 
+    async def lineage_mutation_dependency_evidence(
+        self,
+        lineage: str,
+        source: str | None = None,
+        target: str | None = None,
+        event: Literal[
+            "damaging",
+            "hotspot",
+            "damaging_mutation",
+            "custom_missense_mutation",
+            "hotspot_mutation",
+        ]
+        | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        canonical_lineage = lineage.strip()
+        if not canonical_lineage:
+            raise ValueError("lineage is required")
+        if not source and not target:
+            raise ValueError("source, target, or both are required")
+        request = {
+            "lineage": canonical_lineage,
+            "source": source.strip().upper() if source else None,
+            "target": target.strip().upper() if target else None,
+            "event": event,
+            "limit": limit,
+            "provider": "lineage_official_gene_effect_v2",
+        }
+        rejected = limit_violation("lineage_mutation_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_lineage_mutation_dependency",
+                request=request,
+                evidence=rejected,
+            )
+        query: dict[str, Any] = {
+            "mode": "lineage_mutation_dependency",
+            "lineage": canonical_lineage,
+            "limit": limit,
+        }
+        if source:
+            query["source"] = source.strip().upper()
+        if target:
+            query["target"] = target.strip().upper()
+        if event:
+            query["event"] = event
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {
+            key: validated.get(key)
+            for key in ("lineage", "source", "target", "event")
+        }
+        request["limit"] = limit
+        request["provider"] = "lineage_official_gene_effect_v2"
+        return self._envelope(
+            tool="depmap_lineage_mutation_dependency",
+            request=request,
+            evidence=item,
+        )
+
     async def three_d_evidence(
         self,
         family: Literal["dependency_profiles", "differential_dependency", "codependency", "true_love_gene", "omics_dependency", "lineage_dependency_enrichment"],
@@ -2203,6 +2263,37 @@ def build_mcp_server(
         lineage: str | None = None,
     ) -> dict[str, Any]:
         return await service.synthetic_lethal_evidence(source, target, event, limit, lineage)
+
+    @mcp.tool(
+        title="DepMap lineage mutation-to-dependency evidence",
+        description=(
+            "Query the completed within-lineage mutation-positive versus "
+            "mutation-matrix-negative CRISPR Gene Effect contrast. Requires a "
+            "canonical lineage and at least one exact source mutation gene or "
+            "dependency target. Exact filters are applied before limit. Returned "
+            "associations are observational and must not be called causal "
+            "synthetic lethality."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_lineage_mutation_dependency(
+        lineage: str,
+        source: str | None = None,
+        target: str | None = None,
+        event: Literal[
+            "damaging",
+            "hotspot",
+            "damaging_mutation",
+            "custom_missense_mutation",
+            "hotspot_mutation",
+        ]
+        | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.lineage_mutation_dependency_evidence(
+            lineage, source, target, event, limit
+        )
 
     @mcp.tool(
         title="DepMap 3D screening evidence",

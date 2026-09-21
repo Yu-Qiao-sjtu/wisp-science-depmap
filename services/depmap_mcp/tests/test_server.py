@@ -306,6 +306,10 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             intents["mutation_anchor_discovery"]["mcp_tool"],
             "depmap_mutation_anchor_evidence",
         )
+        self.assertEqual(
+            intents["mutation_to_dependency"]["lineage_mcp_tool"],
+            "depmap_lineage_mutation_dependency",
+        )
 
     async def test_capability_catalog_skips_nullable_or_malformed_records(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
@@ -890,6 +894,32 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             lineage_scoped["evidence"]["metric_semantics"]["interpretation"],
         )
 
+    async def test_first_class_lineage_mutation_dependency_tool_preserves_exact_filters(self):
+        result = await self.service.lineage_mutation_dependency_evidence(
+            "肝癌", "tp53", "gpx4", "damaging", 7
+        )
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "lineage_mutation_dependency",
+                "lineage": "Liver",
+                "source": "TP53",
+                "target": "GPX4",
+                "event": "damaging",
+                "limit": 7,
+            },
+        )
+        self.assertEqual(result["tool"], "depmap_lineage_mutation_dependency")
+        self.assertEqual(result["request"]["source"], "TP53")
+        self.assertEqual(result["request"]["target"], "GPX4")
+        self.assertEqual(
+            result["request"]["provider"], "lineage_official_gene_effect_v2"
+        )
+        self.assertIn(
+            "not causal synthetic lethality",
+            result["evidence"]["metric_semantics"]["interpretation"],
+        )
+
     async def test_provider_schema_matches_runtime_and_returns_envelopes(self):
         catalog = await self.service.capabilities()
         tlg = next(
@@ -1017,6 +1047,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_coamplification_evidence",
                         "depmap_true_love_evidence",
                         "depmap_synthetic_lethal_evidence",
+                        "depmap_lineage_mutation_dependency",
                         "depmap_3d_evidence",
                     },
                 )
