@@ -29,7 +29,7 @@ class ExpressionThresholdDependencyContrastTests(unittest.TestCase):
 
         with effect.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["ModelID", "NEGATIVE (10)", "POSITIVE (11)", "NULL (12)"])
+            writer.writerow(["ModelID", "NEGATIVE (10)", "POSITIVE (11)", "NULL (12)", "CONFOUNDED (13)"])
             for index, model_id in enumerate(model_ids):
                 high = index >= 12
                 low = index < 6
@@ -39,6 +39,7 @@ class ExpressionThresholdDependencyContrastTests(unittest.TestCase):
                         (-2.0 if high else 0.0) + (index % 2) * 0.02,
                         (2.0 if high else 0.0) + (index % 2) * 0.02,
                         ((index * 7) % 5) / 10,
+                        index / 10 if (index < 6 and index % 2 == 0) or (index >= 12 and index % 2 == 1) else "",
                     ]
                 )
 
@@ -49,7 +50,7 @@ class ExpressionThresholdDependencyContrastTests(unittest.TestCase):
                 writer.writerow([model_id, "LineageA" if index % 2 == 0 else "LineageB"])
         return expression, effect, models
 
-    def run_analysis(self, root: Path, output_name: str, constant_expression=False):
+    def run_analysis(self, root: Path, output_name: str, constant_expression=False, min_group_n=5):
         expression, effect, models = self.write_inputs(root, constant_expression)
         output = root / output_name
         command = [
@@ -64,7 +65,7 @@ class ExpressionThresholdDependencyContrastTests(unittest.TestCase):
             "--scope=global",
             "--lower-quantile=0.3333333333333333",
             "--upper-quantile=0.6666666666666667",
-            "--min-group-n=5",
+            f"--min-group-n={min_group_n}",
             "--fdr-max=0.05",
         ]
         subprocess.run(command, check=True, capture_output=True, text=True)
@@ -91,6 +92,14 @@ class ExpressionThresholdDependencyContrastTests(unittest.TestCase):
             self.assertGreater(float(rows["POSITIVE"]["effect_size_high_minus_low"]), 1.5)
             self.assertEqual(rows["NEGATIVE"]["stronger_dependency_in_high"], "TRUE")
             self.assertEqual(rows["POSITIVE"]["stronger_dependency_in_high"], "FALSE")
+
+    def test_lineage_confounded_target_is_not_reported_as_found(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.run_analysis(Path(directory), "confounded", min_group_n=2)
+            with gzip.open(output / "all_targets.csv.gz", "rt", encoding="utf-8") as handle:
+                rows = {row["target_gene"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(rows["CONFOUNDED"]["status"], "INELIGIBLE")
+            self.assertEqual(rows["CONFOUNDED"]["effect_size_high_minus_low"], "")
 
     def test_constant_expression_is_typed_ineligible(self):
         with tempfile.TemporaryDirectory() as directory:
