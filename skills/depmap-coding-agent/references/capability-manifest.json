@@ -312,6 +312,53 @@
       }
     },
     {
+      "id": "expression_threshold_dependency",
+      "title": "Expression-threshold group to genome-wide dependency contrast",
+      "analysis_label": "expression_threshold_dependency_contrast",
+      "data_modality": "expression_group_vs_crispr_gene_effect",
+      "relation_type": "group_stratified_dependency_difference",
+      "module_id": "expression_threshold_dependency_contrast",
+      "entity_roles": {
+        "source": "expression_gene",
+        "target": "dependency_gene_universe",
+        "symmetric": false
+      },
+      "scripts": [
+        "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R"
+      ],
+      "inputs": [
+        "expression_csv",
+        "gene_effect_csv",
+        "model_csv"
+      ],
+      "operations": {
+        "run_expression_threshold_dependency_contrast": {
+          "execution_mode": "authorized_on_demand_cached",
+          "executable_entrypoint": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
+          "inputs": [
+            "expression_csv",
+            "gene_effect_csv",
+            "model_csv"
+          ],
+          "required_entities": [
+            "expression_source_gene"
+          ],
+          "supported_scopes": [
+            "global",
+            "lineage"
+          ],
+          "defaults": {
+            "threshold_policy": "prespecified_quantile_tails",
+            "lower_quantile": 0.3333333333333333,
+            "upper_quantile": 0.6666666666666667,
+            "middle_policy": "excluded",
+            "minimum_group_n": 10,
+            "multiple_testing": "BH within analysis"
+          }
+        }
+      }
+    },
+    {
       "id": "pathway_ml",
       "title": "Pathway machine learning",
       "scripts": [

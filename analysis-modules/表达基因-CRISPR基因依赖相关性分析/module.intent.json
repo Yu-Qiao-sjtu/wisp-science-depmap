@@ -50,6 +50,22 @@
         "feature_set": "all_expression_genes"
       }
     },
+    "expression_threshold_dependency_contrast": {
+      "capability_id": "expression_threshold_dependency",
+      "operation_id": "run_expression_threshold_dependency_contrast",
+      "execution_mode": "authorized_on_demand_cached",
+      "entrypoint": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
+      "required_entities": ["expression_source_gene"],
+      "supported_scopes": ["global_lineage_adjusted", "lineage"],
+      "default_parameters": {
+        "threshold_policy": "prespecified_quantile_tails",
+        "lower_quantile": 0.3333333333333333,
+        "upper_quantile": 0.6666666666666667,
+        "middle_policy": "excluded",
+        "minimum_group_n": 10,
+        "multiple_testing": "BH within analysis"
+      }
+    },
     "lineage_pathway_context": {
       "mode": "enrichment",
       "module": "lineage_gene_enrichment",
@@ -126,6 +142,14 @@
       "capability_id": "predictive_biomarkers",
       "operation_id": "train_expression_dependency_model",
       "cache_policy": "reuse_exact_release_target_feature_policy_folds_seed_match"
+    },
+    "expression_threshold_dependency_contrast": {
+      "intent": "which genome-wide dependencies differ between prespecified high and low expression groups",
+      "trigger_requires": ["expression_source_gene", "explicit_group_contrast_language", "analysis_authorization"],
+      "action": "execute_expression_threshold_dependency_contrast",
+      "capability_id": "expression_threshold_dependency",
+      "operation_id": "run_expression_threshold_dependency_contrast",
+      "cache_policy": "reuse_exact_release_source_scope_threshold_group_size_method_and_input_digest_match"
     }
   },
   "sign_interpretation": {

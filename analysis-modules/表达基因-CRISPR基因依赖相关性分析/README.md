@@ -32,6 +32,7 @@
 | `scripts/22_finalize_lineage_networks_server.R` | 服务器覆盖率与结构验收脚本 |
 | `scripts/query_expression_dependency_pair.R` | 从全局分块 RDS 查询一个“表达源—依赖靶”组合 |
 | `scripts/run_expression_dependency_gsea.R` | 按表达源基因读取一行完整相关性，执行预排序 GSEA 并缓存结果 |
+| `scripts/run_expression_threshold_dependency_contrast.R` | 按预先声明的表达分位数高/低组执行全基因 Gene Effect 差异；泛癌模式调整 lineage，癌种内模式独立检验 |
 | `scripts/脚本来源.md` | 原脚本位置和快照 SHA-256 |
 | `data/输入数据清单.md` | 输入矩阵、对齐规则与校验值 |
 | `results/结果数据索引.md` | 全局及癌种内结果的路径、规模和字段 |
@@ -48,3 +49,5 @@
 - 两部分合计约 6.269 GiB，占 182.073 GiB 主知识库约 3.4%。
 
 单变量相关性、TM00 04 的 LASSO/随机森林建模、GSEA、PROGENy 和 TF 活性是不同结果实体。预测性 biomarker 现在按依赖靶基因按需训练，使用嵌套交叉验证和留一癌种验证，避免旧脚本先用全数据筛 Top50 造成的信息泄漏。GSEA 仍作为按需能力执行：用户提出一个表达源基因和富集意图时读取完整相关性行，生成并缓存独立的可审查结果包。
+
+表达阈值差异同样是独立结果实体。它不能由连续 Pearson 相关或 ER+/TNBC 等注释标签替代。脚本仅在授权 Run 中执行，默认比较预先声明的上下三分位、排除中间组，并在组大小不足、表达常量或目标完整病例不足时写出 typed `INELIGIBLE` 结果。成功结果包含完整目标宇宙、保留表、`run_manifest.json`、`result.json`、`qc.json` 和 `coverage.json`；查询路径不得直接启动该脚本。
