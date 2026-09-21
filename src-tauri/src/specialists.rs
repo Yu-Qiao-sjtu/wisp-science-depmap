@@ -760,6 +760,52 @@ mod tests {
     }
 
     #[test]
+    fn depmap_specialist_assembles_from_the_versioned_manifest() {
+        use crate::specialist_assembly::{
+            assemble, load_depmap_manifest, AssemblyError, HostPolicy,
+        };
+        use std::collections::BTreeSet;
+
+        let manifest = load_depmap_manifest();
+        assert_eq!(manifest.id, DEPMAP_SPECIALIST_ID);
+        assert_eq!(
+            manifest.required_skills,
+            DEPMAP_REQUIRED_SKILLS
+                .iter()
+                .map(|skill| (*skill).to_string())
+                .collect::<Vec<_>>()
+        );
+        let host = HostPolicy {
+            available_skills: BTreeSet::from([
+                "depmap-knowledge-query".into(),
+                "depmap-coding-agent".into(),
+            ]),
+            available_connectors: BTreeSet::from(["depmap_mcp".into()]),
+            available_tool_sets: BTreeSet::from(["scientific_query".into(), "runs".into()]),
+        };
+        let snapshot = assemble(&manifest, &host, DEPMAP_R_AGENT_RUBRIC).unwrap();
+        assert_eq!(snapshot.id, "depmap_r_agent");
+        assert_eq!(snapshot.manifest_version, "1.0.0");
+        assert_eq!(snapshot.instructions_digest.len(), 64);
+
+        let mut reduced = host.clone();
+        reduced.available_skills.remove("depmap-coding-agent");
+        match assemble(&manifest, &reduced, DEPMAP_R_AGENT_RUBRIC) {
+            Err(AssemblyError::MissingSkill { skill }) => {
+                assert_eq!(skill, "depmap-coding-agent")
+            }
+            other => panic!("expected missing skill, got {other:?}"),
+        }
+
+        let mut incompatible = manifest.clone();
+        incompatible.schema_version = 99;
+        assert!(matches!(
+            assemble(&incompatible, &host, DEPMAP_R_AGENT_RUBRIC),
+            Err(AssemblyError::IncompatibleSchema { found: 99 })
+        ));
+    }
+
+    #[test]
     fn depmap_manifest_is_closed_safe_and_covers_the_audited_scripts() {
         use std::collections::HashSet;
 
