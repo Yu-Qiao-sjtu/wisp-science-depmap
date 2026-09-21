@@ -193,6 +193,7 @@ pub(crate) async fn run_native_agent(
     system: String,
     prompt: String,
     cancel: &AtomicBool,
+    parent_trace: Option<&AgentTrace>,
 ) -> anyhow::Result<NativeAgentRun> {
     let confirmer =
         crate::workflow_approval::for_node(store, project_id, child_frame_id, &request.spec.name)
@@ -210,6 +211,7 @@ pub(crate) async fn run_native_agent(
         prompt,
         cancel,
         confirmer,
+        parent_trace,
     )
     .await
 }
@@ -228,6 +230,7 @@ pub(crate) async fn run_native_agent_with_approval(
     prompt: String,
     cancel: &AtomicBool,
     confirmer: Option<Arc<dyn crate::workflow_approval::WorkflowConfirmer>>,
+    parent_trace: Option<&AgentTrace>,
 ) -> anyhow::Result<NativeAgentRun> {
     let provenance_scope = conversation_scope(store, child_frame_id).await;
     let (message_tx, mut message_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -301,11 +304,14 @@ pub(crate) async fn run_native_agent_with_approval(
         confirmer,
         cancel,
         tool_errors: Mutex::new(vec![]),
-        agent_trace: host_agent_observability(
-            HostObservabilityConfig::for_host(ObservabilityHost::Delegated, project_root)
-                .with_session(child_frame_id)
-                .with_turn(request.request_id.clone()),
-        ),
+        agent_trace: match parent_trace {
+            Some(parent) => parent.delegate_session(child_frame_id),
+            None => host_agent_observability(
+                HostObservabilityConfig::for_host(ObservabilityHost::Delegated, project_root)
+                    .with_session(child_frame_id)
+                    .with_turn(request.request_id.clone()),
+            ),
+        },
     };
     let usage = Arc::new(UsageTracker::default());
     let vision_provider = vision_provider.map(|inner| BudgetedProvider {
@@ -618,6 +624,7 @@ mod tests {
             "Test system prompt".into(),
             "Test user prompt".into(),
             &AtomicBool::new(false),
+            None,
         )
         .await
         .unwrap()
@@ -961,6 +968,7 @@ mod tests {
             "Test system prompt".into(),
             "Test user prompt".into(),
             cancel.as_ref(),
+            None,
         );
         let stop = async {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1049,6 +1057,7 @@ mod tests {
                 "test".into(),
                 &AtomicBool::new(false),
                 Some(confirmer.clone()),
+                None,
             )
             .await
             .unwrap();

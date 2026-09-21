@@ -22,7 +22,7 @@ use wisp_core::{
     DelegationExecutionObserver, DelegationExecutionStatus, DelegationExecutor,
     DelegationHostPolicy, DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy,
     HostObservabilityConfig, ModelProfilePolicy, ObservabilityHost, Output, PermissionSet,
-    ValidatedAgentDelegationRequest,
+    SpanKind, ValidatedAgentDelegationRequest,
 };
 use wisp_dto::WorkflowTemplate;
 use wisp_llm::{Message, Provider, ProviderConfig, Role, ToolSchema};
@@ -376,7 +376,7 @@ impl WorkflowHost {
         let (approvals, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<NodeApproval>();
         let delegator = Arc::new(CliDelegator {
             factory: self.factory.clone(),
-            root,
+            root: root.clone(),
             directory: directory.clone(),
             store: self.store.clone(),
             manager: self.manager.clone(),
@@ -384,6 +384,10 @@ impl WorkflowHost {
             max_context: self.max_context,
             max_iter: self.max_iter,
             approvals,
+            parent_trace: host_agent_observability(HostObservabilityConfig::for_host(
+                ObservabilityHost::Cli,
+                &root,
+            )),
         });
         let executor = DelegationExecutor::new(delegator)
             .with_dynamic_policy(self.registry.clone(), self.policy.clone())
@@ -553,6 +557,7 @@ struct CliDelegator {
     max_context: usize,
     max_iter: usize,
     approvals: tokio::sync::mpsc::UnboundedSender<NodeApproval>,
+    parent_trace: AgentTrace,
 }
 
 /// The CLI Workflow host currently grants only synchronous local Runs. The
@@ -608,11 +613,12 @@ impl AgentDelegator for CliDelegator {
             usage: Mutex::new(AgentUsage::default()),
             failures: Mutex::new(vec![]),
             approvals: self.approvals.clone(),
-            agent_trace: host_agent_observability(
-                HostObservabilityConfig::for_host(ObservabilityHost::Delegated, &self.root)
-                    .with_session(&request.step_id)
-                    .with_turn(request.request_id.clone()),
-            ),
+            agent_trace: {
+                let _dispatch = self
+                    .parent_trace
+                    .start_span(SpanKind::Delegation, "agent.delegate");
+                self.parent_trace.delegate_session(&request.step_id)
+            },
         };
         let mut ctx = ContextManager::new(
             request

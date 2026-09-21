@@ -726,6 +726,8 @@ struct ScenarioResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trajectory_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    observability_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failed_workspace: Option<String>,
 }
 
@@ -1393,6 +1395,14 @@ async fn run_case(
     } else {
         None
     };
+    let observability_path = persist_eval_trace(
+        options.artifacts.as_deref(),
+        &case,
+        repetition,
+        &model,
+        workspace.path(),
+        &output,
+    )?;
     let failed_workspace = if !failures.is_empty() && options.keep_failed_workspace {
         let artifacts = options
             .artifacts
@@ -1438,6 +1448,7 @@ async fn run_case(
         completion: captured.completion,
         agent_error,
         trajectory_path: trajectory_path.map(|path| path.to_string_lossy().into_owned()),
+        observability_path: observability_path.map(|path| path.to_string_lossy().into_owned()),
         failed_workspace,
     })
 }
@@ -2026,6 +2037,56 @@ fn write_trajectory(
     }
     std::fs::write(&path, lines)?;
     Ok(path)
+}
+
+fn persist_eval_trace(
+    artifacts: Option<&Path>,
+    case: &EvalCase,
+    repetition: usize,
+    model: &str,
+    workspace: &Path,
+    output: &EvalOutput,
+) -> Result<Option<PathBuf>> {
+    let Some(artifacts) = artifacts else {
+        return Ok(None);
+    };
+    let dir = artifacts.join("traces");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "{}-{}-{repetition}.json",
+        safe_name(model),
+        safe_name(&case.id)
+    ));
+    if let Some(memory) = output.trace.memory() {
+        std::fs::write(&path, serde_json::to_vec_pretty(&memory.document())?)?;
+    }
+    let src = workspace.join(".wisp").join("traces");
+    if src.is_dir() {
+        let copy = dir.join(format!(
+            "{}-{}-{repetition}-jsonl",
+            safe_name(model),
+            safe_name(&case.id)
+        ));
+        copy_dir_if_present(&src, &copy)?;
+    }
+    Ok(Some(path))
+}
+
+fn copy_dir_if_present(src: &Path, dest: &Path) -> Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_if_present(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn summarize(results: &[ScenarioResult]) -> ReportSummary {

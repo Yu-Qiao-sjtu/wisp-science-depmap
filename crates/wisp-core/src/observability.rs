@@ -532,10 +532,7 @@ impl MemoryExporter {
 
 impl SpanExporter for MemoryExporter {
     fn export_header(&self, header: &TraceHeader) {
-        let mut slot = self.header.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_none() {
-            *slot = Some(header.clone());
-        }
+        *self.header.lock().unwrap_or_else(|p| p.into_inner()) = Some(header.clone());
     }
 
     fn export_span(&self, span: &Span) {
@@ -810,7 +807,7 @@ struct TraceInner {
     capture: CapturePolicy,
     host: ObservabilityHost,
     memory: Option<Arc<MemoryExporter>>,
-    header_written: Mutex<bool>,
+    header_written_for: Mutex<Option<String>>,
 }
 
 impl AgentTrace {
@@ -828,7 +825,7 @@ impl AgentTrace {
                 capture,
                 host,
                 memory,
-                header_written: Mutex::new(false),
+                header_written_for: Mutex::new(None),
             }),
         }
     }
@@ -932,28 +929,28 @@ impl AgentTrace {
     }
 
     fn write_header(&self) {
+        let ctx = self.context();
         let mut written = self
             .inner
-            .header_written
+            .header_written_for
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        if *written {
+        if written.as_deref() == Some(ctx.trace_id.as_str()) {
             return;
         }
-        let ctx = self.context();
         self.inner.exporter.export_header(&TraceHeader {
             record_type: "trace".into(),
             format: TRACE_FORMAT.into(),
             format_version: TRACE_FORMAT_VERSION,
             contract: OBSERVABILITY_CONTRACT_ID.into(),
-            trace_id: ctx.trace_id,
+            trace_id: ctx.trace_id.clone(),
             run_id: ctx.run_id,
             turn_id: ctx.turn_id,
             session_id: ctx.session_id,
             sensitive_capture: self.inner.capture.include_sensitive,
             retention: self.inner.capture.retention(),
         });
-        *written = true;
+        *written = Some(ctx.trace_id);
     }
 
     fn open_span(&self, ctx: &TraceContext, kind: SpanKind, name: String) -> SpanGuard {
@@ -1129,12 +1126,15 @@ impl SpanGuard {
     }
 
     pub fn set_error_class(&self, class: ErrorClass) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .span
-            .attributes
-            .error_class = Some(class);
+        let mut open = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if matches!(
+            open.span.attributes.error_class,
+            Some(ErrorClass::RetryExhausted)
+        ) && class != ErrorClass::Cancelled
+        {
+            return;
+        }
+        open.span.attributes.error_class = Some(class);
     }
 
     pub fn mark_blocked(&self) {
@@ -1872,5 +1872,43 @@ mod tests {
         assert_eq!(slo.completion_rate, 1.0);
         assert!(slo.blocked_rate > 0.0);
         assert_eq!(slo.error_rate, 0.0);
+    }
+
+    #[test]
+    fn rotating_trace_ids_emit_a_header_per_trace() {
+        let trace = AgentTrace::in_memory();
+        let first = trace.start_turn(TurnIdentity::default());
+        let first_id = first.trace_id();
+        first.end(SpanStatus::Ok);
+        let second = trace.start_turn(TurnIdentity::default());
+        let second_id = second.trace_id();
+        second.end(SpanStatus::Ok);
+        assert_ne!(first_id, second_id);
+        assert_eq!(
+            trace.memory().unwrap().document().header.trace_id,
+            second_id
+        );
+    }
+
+    #[test]
+    fn retry_exhausted_is_not_overwritten_by_a_generic_provider_class() {
+        let trace = AgentTrace::in_memory();
+        let turn = trace.start_turn(TurnIdentity::default());
+        let model = turn.child(SpanKind::Model, "agent.model");
+        model.set_error_class(ErrorClass::RetryExhausted);
+        model.set_error_class(ErrorClass::Provider);
+        model.end(SpanStatus::Error);
+        turn.end(SpanStatus::Error);
+        let recorded = trace
+            .memory()
+            .unwrap()
+            .spans()
+            .into_iter()
+            .find(|span| span.kind == SpanKind::Model)
+            .unwrap();
+        assert_eq!(
+            recorded.attributes.error_class,
+            Some(ErrorClass::RetryExhausted)
+        );
     }
 }

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use wisp_core::{Agent, Output, OutputFuture};
+use wisp_core::{Agent, AgentTrace, Output, OutputFuture};
 use wisp_llm::{Message, ToolCall};
 use wisp_tools::{Approval, ConfirmDecision};
 
@@ -44,10 +44,11 @@ struct RpcOutput<W> {
     pending_calls: Mutex<VecDeque<ToolCall>>,
     active_call_ids: Mutex<VecDeque<String>>,
     approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<ConfirmDecision>>>,
+    trace: AgentTrace,
 }
 
 impl<W: Write + Send> RpcOutput<W> {
-    fn new(writer: W) -> Self {
+    fn new(writer: W, trace: AgentTrace) -> Self {
         Self {
             writer: Mutex::new(writer),
             sequence: AtomicU64::new(0),
@@ -56,6 +57,7 @@ impl<W: Write + Send> RpcOutput<W> {
             pending_calls: Mutex::new(VecDeque::new()),
             active_call_ids: Mutex::new(VecDeque::new()),
             approvals: Mutex::new(HashMap::new()),
+            trace,
         }
     }
 
@@ -298,10 +300,14 @@ impl<W: Write + Send> Output for RpcOutput<W> {
             "tool_calls": message.tool_calls,
         }));
     }
+
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.trace)
+    }
 }
 
-pub async fn serve(mut agent: Agent) -> Result<()> {
-    let output = Arc::new(RpcOutput::new(std::io::stdout()));
+pub async fn serve(mut agent: Agent, trace: AgentTrace) -> Result<()> {
+    let output = Arc::new(RpcOutput::new(std::io::stdout(), trace));
     output.emit(json!({
         "type": "ready",
         "protocol": RPC_SCHEMA,
@@ -461,7 +467,7 @@ pub async fn serve(mut agent: Agent) -> Result<()> {
 }
 
 pub fn startup_error(error: &anyhow::Error) {
-    RpcOutput::new(std::io::stdout()).emit(json!({
+    RpcOutput::new(std::io::stdout(), AgentTrace::in_memory()).emit(json!({
         "type": "startup_error",
         "message": error.to_string(),
     }));
@@ -505,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn approval_responses_are_correlated() {
-        let output = Arc::new(RpcOutput::new(Vec::new()));
+        let output = Arc::new(RpcOutput::new(Vec::new(), AgentTrace::in_memory()));
         let waiting = {
             let output = output.clone();
             tokio::spawn(async move { output.confirm_decision_async("write file?").await })

@@ -245,6 +245,9 @@ impl CliOutput {
             )),
         }
     }
+    fn tracer(&self) -> AgentTrace {
+        self.trace.clone()
+    }
     fn dim(&self) -> &'static str {
         if std::io::stdout().is_terminal() {
             "\x1b[2m"
@@ -1166,7 +1169,7 @@ async fn main() -> Result<()> {
 
     let out = CliOutput::new(&root);
     if command == CliCommand::Rpc {
-        let result = rpc::serve(agent).await;
+        let result = rpc::serve(agent, out.tracer()).await;
         runtime_manager.shutdown_all().await;
         return result;
     }
