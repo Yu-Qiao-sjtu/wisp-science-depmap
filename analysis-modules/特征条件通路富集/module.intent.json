@@ -1,0 +1,23 @@
+{
+  "schema_version": 3,
+  "module_id": "feature_conditioned_pathway_enrichment",
+  "analysis_label": "feature_conditioned_pathway_enrichment",
+  "display_name_zh": "特征条件通路富集与 crosstalk",
+  "data_modality": "feature_contrast_ranked_universe_vs_pathway_collection",
+  "relation_type": "feature_conditioned_pathway_enrichment",
+  "entity_roles": {
+    "source": "upstream_feature_contrast",
+    "target": "pathway",
+    "symmetric": false
+  },
+  "query_contract": {
+    "feature_conditioned_pathway_enrichment": {
+      "capability_id": "feature_conditioned_pathway_enrichment",
+      "operation_id": "run_feature_conditioned_pathway_enrichment",
+      "execution_mode": "authorized_on_demand_cached",
+      "required_entities": ["upstream_feature_contrast_artifact"],
+      "reader_mcp": "validated artifacts only; never launch computation from the query path",
+      "do_not_substitute": ["progeny_activity_association"]
+    }
+  }
+}

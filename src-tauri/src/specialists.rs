@@ -771,7 +771,7 @@ mod tests {
 
         let datasets = manifest["datasets"].as_array().unwrap();
         let capabilities = manifest["capabilities"].as_array().unwrap();
-        assert_eq!(capabilities.len(), 26);
+        assert_eq!(capabilities.len(), 27);
         let dataset_ids: HashSet<&str> = datasets
             .iter()
             .map(|dataset| dataset["id"].as_str().unwrap())
@@ -852,6 +852,7 @@ mod tests {
             "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py",
             "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
             "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py",
+            "analysis-modules/特征条件通路富集/scripts/run_feature_conditioned_pathway_enrichment.py",
         ]
         .into_iter()
         .collect();

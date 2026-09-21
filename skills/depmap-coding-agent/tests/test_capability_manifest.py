@@ -293,6 +293,33 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
             ["upstream_event_contrast_artifact"],
         )
 
+    def test_feature_conditioned_pathway_enrichment_is_authorized(self):
+        manifest_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-coding-agent"
+            / "references"
+            / "capability-manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capability = next(
+            item
+            for item in manifest["capabilities"]
+            if item["id"] == "feature_conditioned_pathway_enrichment"
+        )
+        operation = capability["operations"]["run_feature_conditioned_pathway_enrichment"]
+        self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
+        intent = json.loads(
+            (
+                self.repo_root
+                / "analysis-modules"
+                / "特征条件通路富集"
+                / "module.intent.json"
+            ).read_text(encoding="utf-8")
+        )
+        query = intent["query_contract"]["feature_conditioned_pathway_enrichment"]
+        self.assertEqual(query["capability_id"], "feature_conditioned_pathway_enrichment")
+
 
 if __name__ == "__main__":
     unittest.main()

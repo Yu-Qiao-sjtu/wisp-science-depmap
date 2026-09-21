@@ -175,6 +175,16 @@
       ]
     },
     {
+      "id": "feature_contrast_ranked_universe_tsv",
+      "kind": "user_input",
+      "path": "runs/feature-contrast/ranked_universe.tsv"
+    },
+    {
+      "id": "pathway_collection_gmt",
+      "kind": "user_input",
+      "path": "runs/feature-contrast/pathways.gmt"
+    },
+    {
       "id": "event_contrast_artifact_json",
       "kind": "user_input",
       "path": "runs/event-contrast/result-contract.json"
@@ -731,6 +741,47 @@
             "variance_model": "pooled",
             "effect_scale": "gene_effect_delta",
             "direction": "two_sided"
+          }
+        }
+      }
+    },
+    {
+      "id": "feature_conditioned_pathway_enrichment",
+      "title": "Feature-conditioned pathway enrichment and crosstalk",
+      "analysis_label": "feature_conditioned_pathway_enrichment",
+      "data_modality": "feature_contrast_ranked_universe_vs_pathway_collection",
+      "relation_type": "feature_conditioned_pathway_enrichment",
+      "module_id": "feature_conditioned_pathway_enrichment",
+      "entity_roles": {
+        "source": "upstream_feature_contrast",
+        "target": "pathway",
+        "symmetric": false
+      },
+      "scripts": [
+        "analysis-modules/特征条件通路富集/scripts/run_feature_conditioned_pathway_enrichment.py"
+      ],
+      "inputs": [
+        "event_contrast_artifact_json",
+        "feature_contrast_ranked_universe_tsv",
+        "pathway_collection_gmt"
+      ],
+      "operations": {
+        "run_feature_conditioned_pathway_enrichment": {
+          "execution_mode": "authorized_on_demand_cached",
+          "executable_entrypoint": "analysis-modules/特征条件通路富集/scripts/run_feature_conditioned_pathway_enrichment.py",
+          "inputs": [
+            "event_contrast_artifact_json",
+            "feature_contrast_ranked_universe_tsv",
+            "pathway_collection_gmt"
+          ],
+          "required_entities": [
+            "upstream_feature_contrast_artifact"
+          ],
+          "defaults": {
+            "min_set_size": 15,
+            "max_set_size": 500,
+            "method": "preranked_running_enrichment_score",
+            "multiple_testing": "BH within hypothesis family"
           }
         }
       }
