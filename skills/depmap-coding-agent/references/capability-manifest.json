@@ -335,6 +335,11 @@
         "run_expression_threshold_dependency_contrast": {
           "execution_mode": "authorized_on_demand_cached",
           "executable_entrypoint": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
+          "inputs": [
+            "expression_csv",
+            "gene_effect_csv",
+            "model_csv"
+          ],
           "required_entities": [
             "expression_source_gene"
           ],
