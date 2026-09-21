@@ -65,6 +65,7 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "precise_prompt_template_zh": "在{lineage}范围内固定{source_gene}的{event}突变，查询相关的CRISPR dependency靶基因；无癌种时使用泛癌观察性合成致死目录。",
         "confusable_with": ["dependency_to_mutation"],
         "mcp_tool": "depmap_synthetic_lethal_evidence",
+        "lineage_mcp_tool": "depmap_lineage_mutation_dependency",
     },
     {
         "intent": "dependency_to_mutation",

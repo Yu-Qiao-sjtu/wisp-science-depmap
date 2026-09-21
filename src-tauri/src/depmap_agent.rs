@@ -706,7 +706,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         .unwrap_or(false);
 
     let mut missing = Vec::new();
-    let mut unsupported = Vec::new();
+    let unsupported: Vec<&str> = Vec::new();
     match intent.as_str() {
         "lineage_resolution"
         | "cancer_inventory"
@@ -799,13 +799,6 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         | "new_analysis"
         | "report_generation" => {}
         _ => return Err(format!("unsupported DepMap intent '{intent}'")),
-    }
-    if matches!(
-        intent.as_str(),
-        "mutation_to_dependency" | "dependency_to_mutation"
-    ) && cancer.is_some()
-    {
-        unsupported.push("cancer_lineage_for_pan_cancer_mutation_query");
     }
 
     let (mut execution_level, mut approval, mut strategy, mut tools): (
@@ -904,7 +897,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "mutation_to_dependency" | "dependency_to_mutation" => (
                 "L1_DIRECT",
                 false,
-                "Use the bounded pan-cancer mutation/dependency MCP evidence tool. This capability does not support lineage filtering.",
+                "Use one bounded mutation/dependency MCP query. A named cancer routes to the completed within-lineage mutation-positive versus matrix-negative Gene Effect provider; otherwise use the separate pan-cancer observational provider.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
             ),
             "expression_biomarker_model" => (
@@ -1082,6 +1075,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             _ => Value::Null,
         }
     };
+    let pan_cancer_mutation_event = event.as_deref().map(|value| match value {
+        "damaging" => "damaging_mutation",
+        "hotspot" => "hotspot_mutation",
+        other => other,
+    });
     let mut recommended_query = match (intent.as_str(), canonical_lineage.as_deref()) {
         ("cancer_direction_discovery", Some(lineage)) if !requires_user_input => {
             if remote_mcp_only {
@@ -1208,6 +1206,56 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             },
             "single_call": true,
             "interpretation": "positive co-dependency is similar CRISPR Gene Effect profile, not synthetic lethality"
+        }),
+        ("mutation_to_dependency", Some(lineage)) if !requires_user_input => json!({
+            "tool": "depmap_lineage_mutation_dependency",
+            "transport": "remote_mcp",
+            "arguments": {
+                "lineage": lineage,
+                "source": source_gene,
+                "target": target_gene,
+                "event": event,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "negative delta Gene Effect means stronger dependency in mutation-positive models; this is observational, not causal synthetic lethality"
+        }),
+        ("dependency_to_mutation", Some(lineage)) if !requires_user_input => json!({
+            "tool": "depmap_lineage_mutation_dependency",
+            "transport": "remote_mcp",
+            "arguments": {
+                "lineage": lineage,
+                "source": source_gene,
+                "target": target_gene,
+                "event": event,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "negative delta Gene Effect means stronger dependency in mutation-positive models; this is observational, not causal synthetic lethality"
+        }),
+        ("mutation_to_dependency", None) if !requires_user_input => json!({
+            "tool": "depmap_synthetic_lethal_evidence",
+            "transport": "remote_mcp",
+            "arguments": {
+                "source": source_gene,
+                "target": target_gene,
+                "event": pan_cancer_mutation_event,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "pan-cancer retained observational candidates; absence is not proof of biological absence"
+        }),
+        ("dependency_to_mutation", None) if !requires_user_input => json!({
+            "tool": "depmap_synthetic_lethal_evidence",
+            "transport": "remote_mcp",
+            "arguments": {
+                "source": source_gene,
+                "target": target_gene,
+                "event": pan_cancer_mutation_event,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "pan-cancer retained observational candidates; absence is not proof of biological absence"
         }),
         ("expression_biomarker_model", _) if !requires_user_input => json!({
             "tool": "depmap_biomarker_model_evidence",
@@ -3827,24 +3875,45 @@ mod tests {
         assert_eq!(explicit["requires_approval"], true);
         assert_eq!(explicit["allowed_next_tools"], json!(["start_workflow"]));
 
-        let unsupported_lineage = depmap_route(&json!({
+        let lineage_mutation = depmap_route(&json!({
             "intent":"mutation_to_dependency",
             "source_gene":"TP53",
+            "target_gene":"GPX4",
+            "event":"damaging",
             "cancer":"肺癌"
         }))
         .unwrap();
-        assert_eq!(unsupported_lineage["state"], "needs_input");
-        assert_eq!(unsupported_lineage["decision"], "clarify_unsupported_scope");
+        assert_eq!(lineage_mutation["state"], "routed");
+        assert_eq!(lineage_mutation["decision"], "execute");
         assert_eq!(
-            unsupported_lineage["unsupported_fields"],
-            json!(["cancer_lineage_for_pan_cancer_mutation_query"])
+            lineage_mutation["recommended_query"]["tool"],
+            "depmap_lineage_mutation_dependency"
         );
         assert_eq!(
-            unsupported_lineage["clarification_card"]["options"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
+            lineage_mutation["recommended_query"]["arguments"],
+            json!({
+                "lineage":"Lung",
+                "source":"TP53",
+                "target":"GPX4",
+                "event":"damaging",
+                "limit":20
+            })
+        );
+        assert_eq!(lineage_mutation["recommended_query"]["single_call"], true);
+        assert_eq!(lineage_mutation["unsupported_fields"], json!([]));
+        let pan_cancer_mutation = depmap_route(&json!({
+            "intent":"mutation_to_dependency",
+            "source_gene":"KRAS",
+            "event":"hotspot"
+        }))
+        .unwrap();
+        assert_eq!(
+            pan_cancer_mutation["recommended_query"]["tool"],
+            "depmap_synthetic_lethal_evidence"
+        );
+        assert_eq!(
+            pan_cancer_mutation["recommended_query"]["arguments"],
+            json!({"source":"KRAS","event":"hotspot_mutation","limit":20})
         );
     }
 
