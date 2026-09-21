@@ -598,6 +598,25 @@ fn frame_key(frame_id: &str) -> String {
     format!("frame_specialist:{frame_id}")
 }
 
+fn snapshot_key(frame_id: &str) -> String {
+    format!("frame_specialist_snapshot:{frame_id}")
+}
+
+async fn persist_depmap_snapshot(store: &Store, frame_id: &str) -> Result<(), String> {
+    let snapshot = wisp_core::specialist_manifest::assemble(
+        &wisp_core::specialist_manifest::load_depmap_manifest(),
+        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    )
+    .map_err(|error| error.to_string())?;
+    store
+        .set_setting(
+            &snapshot_key(frame_id),
+            &serde_json::to_string(&snapshot).map_err(|error| error.to_string())?,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
 pub async fn set_frame_specialist(store: &Store, frame_id: &str, id: &str) -> Result<(), String> {
     store
         .set_setting(&frame_key(frame_id), id)
@@ -646,6 +665,9 @@ pub async fn inherit_project_default_specialist(
     frame_id: &str,
 ) -> Result<(), String> {
     if let Some(id) = project_default_specialist_id(store, project_id).await {
+        if id == DEPMAP_SPECIALIST_ID {
+            persist_depmap_snapshot(store, frame_id).await?;
+        }
         set_frame_specialist(store, frame_id, &id).await?;
     }
     Ok(())
@@ -674,6 +696,9 @@ pub async fn set_session_specialist(
     }
     if !id.is_empty() && get(&state.store, &id).await.is_none() {
         return Err(format!("Unknown specialist '{id}'."));
+    }
+    if id == DEPMAP_SPECIALIST_ID {
+        persist_depmap_snapshot(&state.store, &frame_id).await?;
     }
     set_frame_specialist(&state.store, &frame_id, &id).await
 }
@@ -757,6 +782,44 @@ mod tests {
         assert!(rubric.contains("screen-derived candidate"));
         assert!(rubric.contains("continuous expression-dependency correlation is not"));
         assert!(rubric.contains("must be labeled new computation"));
+    }
+
+    #[test]
+    fn depmap_specialist_assembles_from_the_versioned_manifest() {
+        use wisp_core::specialist_manifest::{
+            assemble, load_depmap_manifest, AssemblyError, HostPolicy,
+        };
+
+        let manifest = load_depmap_manifest();
+        assert_eq!(manifest.id, DEPMAP_SPECIALIST_ID);
+        assert_eq!(
+            manifest.required_skills,
+            DEPMAP_REQUIRED_SKILLS
+                .iter()
+                .map(|skill| (*skill).to_string())
+                .collect::<Vec<_>>()
+        );
+        let host = HostPolicy::bundled_depmap();
+        let snapshot = assemble(&manifest, &host).unwrap();
+        assert_eq!(snapshot.id, "depmap_r_agent");
+        assert_eq!(snapshot.manifest_version, "1.0.0");
+        assert_eq!(snapshot.instructions_digest.len(), 64);
+
+        let mut reduced = host.clone();
+        reduced.available_skills.remove("depmap-coding-agent");
+        match assemble(&manifest, &reduced) {
+            Err(AssemblyError::MissingSkill { skill }) => {
+                assert_eq!(skill, "depmap-coding-agent")
+            }
+            other => panic!("expected missing skill, got {other:?}"),
+        }
+
+        let mut incompatible = manifest.clone();
+        incompatible.schema_version = 99;
+        assert!(matches!(
+            assemble(&incompatible, &host),
+            Err(AssemblyError::IncompatibleSchema { found: 99 })
+        ));
     }
 
     #[test]
@@ -1086,6 +1149,16 @@ mod tests {
         // Clearing works.
         set_frame_specialist(&store, "f1", "").await.unwrap();
         assert!(session_specialist(&store, "f1").await.is_none());
+        persist_depmap_snapshot(&store, "f-depmap").await.unwrap();
+        let raw = store
+            .get_setting("frame_specialist_snapshot:f-depmap")
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot: wisp_core::specialist_manifest::ResolvedSpecialistSnapshot =
+            serde_json::from_str(&raw).unwrap();
+        assert_eq!(snapshot.id, DEPMAP_SPECIALIST_ID);
+        assert_eq!(snapshot.manifest_version, "1.0.0");
         let _ = std::fs::remove_file(&tmp);
     }
 

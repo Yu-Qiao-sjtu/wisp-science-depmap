@@ -33,6 +33,14 @@ precomputed evidence or a new R analysis, monitor the Run, enforce QA, load
 stage-specific Skills, and preserve provenance. The knowledge base is an
 evidence backend and cache; it is not the Agent itself.
 
+A versioned `specialists/depmap_r_agent.v1.json` describes that Specialist's
+identity, required Skills, connector capabilities, native tool sets, and output
+contracts. Desktop, CLI, and eval must assemble it through
+`wisp_core::specialist_manifest`: host capabilities and user policy can only reduce what
+the manifest names. The manifest is not an MCP server and cannot embed
+credentials or executable plugins. Existing conversations keep a frozen
+identity plus `manifest_version`; a newer file does not rewrite them.
+
 ## Project layout
 
 The writable research project, read-only knowledge base, and read-only raw data

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "manifest_version": "1.0.0",
+  "id": "depmap_r_agent",
+  "display_name": "DepMap Agent",
+  "instructions_resource": "compiled:DEPMAP_R_AGENT_RUBRIC",
+  "required_skills": [
+    "depmap-knowledge-query",
+    "depmap-coding-agent"
+  ],
+  "optional_skills": [],
+  "native_tool_sets": [
+    "scientific_query",
+    "runs"
+  ],
+  "connector_capabilities": [
+    "depmap_mcp"
+  ],
+  "supported_output_contracts": [
+    "run_manifest.json",
+    "result.json",
+    "qc.json"
+  ],
+  "evaluation_suites": [
+    "skills/depmap-coding-agent/tests/"
+  ]
+}
