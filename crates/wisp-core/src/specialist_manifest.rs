@@ -1,7 +1,7 @@
-//! Versioned Specialist/Agent manifest assembly (#100).
+//! Versioned Specialist/Agent manifest assembly.
 //!
-//! The manifest describes identity and required Skills. Host capabilities and
-//! user policy always restrict it; the manifest cannot grant authority.
+//! Host capabilities and user policy always restrict the manifest; the
+//! manifest cannot grant authority, credentials, or plugins.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -36,7 +36,23 @@ pub struct HostPolicy {
     pub available_tool_sets: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl HostPolicy {
+    pub fn bundled_depmap() -> Self {
+        Self {
+            available_skills: ["depmap-knowledge-query", "depmap-coding-agent"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            available_connectors: ["depmap_mcp".to_string()].into_iter().collect(),
+            available_tool_sets: ["scientific_query", "runs"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedSpecialistSnapshot {
     pub id: String,
     pub manifest_version: String,
@@ -61,16 +77,25 @@ impl std::fmt::Display for AssemblyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IncompatibleSchema { found } => {
-                write!(f, "specialist manifest schema {found} is incompatible with runtime {MANIFEST_SCHEMA_VERSION}")
+                write!(
+                    f,
+                    "specialist manifest schema {found} is incompatible with runtime {MANIFEST_SCHEMA_VERSION}"
+                )
             }
             Self::MissingSkill { skill } => {
                 write!(f, "required skill `{skill}` is not available on this host")
             }
             Self::MissingConnector { connector } => {
-                write!(f, "required connector `{connector}` is not available on this host")
+                write!(
+                    f,
+                    "required connector `{connector}` is not available on this host"
+                )
             }
             Self::MissingToolSet { tool_set } => {
-                write!(f, "required native tool set `{tool_set}` is not available on this host")
+                write!(
+                    f,
+                    "required native tool set `{tool_set}` is not available on this host"
+                )
             }
             Self::AmbiguousConnector { connector } => {
                 write!(f, "connector `{connector}` has an ambiguous host binding")
@@ -80,20 +105,23 @@ impl std::fmt::Display for AssemblyError {
 }
 
 pub fn load_depmap_manifest() -> SpecialistManifest {
-    serde_json::from_str(include_str!("../../specialists/depmap_r_agent.v1.json"))
+    serde_json::from_str(include_str!("../../../specialists/depmap_r_agent.v1.json"))
         .expect("compiled DepMap specialist manifest must be valid JSON")
 }
 
-pub fn instructions_digest(instructions: &str) -> String {
+pub fn identity_digest(manifest: &SpecialistManifest) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(instructions.as_bytes());
+    hasher.update(manifest.id.as_bytes());
+    hasher.update(b"@");
+    hasher.update(manifest.manifest_version.as_bytes());
+    hasher.update(b":");
+    hasher.update(manifest.instructions_resource.as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
 pub fn assemble(
     manifest: &SpecialistManifest,
     host: &HostPolicy,
-    instructions: &str,
 ) -> Result<ResolvedSpecialistSnapshot, AssemblyError> {
     if manifest.schema_version != MANIFEST_SCHEMA_VERSION {
         return Err(AssemblyError::IncompatibleSchema {
@@ -140,10 +168,39 @@ pub fn assemble(
         id: manifest.id.clone(),
         manifest_version: manifest.manifest_version.clone(),
         display_name: manifest.display_name.clone(),
-        instructions_digest: instructions_digest(instructions),
+        instructions_digest: identity_digest(manifest),
         required_skills: manifest.required_skills.clone(),
         connectors,
         native_tool_sets: tool_sets,
         output_contracts: manifest.supported_output_contracts.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_host_assembles_the_depmap_manifest() {
+        let snapshot = assemble(&load_depmap_manifest(), &HostPolicy::bundled_depmap()).unwrap();
+        assert_eq!(snapshot.id, "depmap_r_agent");
+        assert_eq!(snapshot.manifest_version, "1.0.0");
+        assert_eq!(snapshot.instructions_digest.len(), 64);
+        assert_eq!(
+            snapshot.required_skills,
+            vec!["depmap-knowledge-query", "depmap-coding-agent"]
+        );
+    }
+
+    #[test]
+    fn reduced_host_cannot_gain_authority_from_the_manifest() {
+        let mut host = HostPolicy::bundled_depmap();
+        host.available_skills.remove("depmap-coding-agent");
+        match assemble(&load_depmap_manifest(), &host) {
+            Err(AssemblyError::MissingSkill { skill }) => {
+                assert_eq!(skill, "depmap-coding-agent")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }

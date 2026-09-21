@@ -1490,6 +1490,13 @@ fn build_agent(
 ) -> Result<Agent> {
     let skill_paths = vec![root.join(".wisp").join("skills")];
     let skills = Arc::new(SkillIndex::load(&skill_paths));
+    if case.tags.iter().any(|tag| tag == "depmap") {
+        wisp_core::specialist_manifest::assemble(
+            &wisp_core::specialist_manifest::load_depmap_manifest(),
+            &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    }
     let memory = Arc::new(MemoryManager::new(root));
     let mut registry = wisp_core::build_registry(skills.clone(), memory, case.memory_enabled);
     registry.add(Box::new(wisp_tools::ask_user::AskUserTool));

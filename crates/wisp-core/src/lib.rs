@@ -13,6 +13,7 @@ pub mod orchestration;
 pub mod output;
 pub mod provenance;
 pub mod session_locks;
+pub mod specialist_manifest;
 pub mod subagent;
 pub mod system_prompt;
 pub mod workflow_conversion;

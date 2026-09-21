@@ -598,6 +598,25 @@ fn frame_key(frame_id: &str) -> String {
     format!("frame_specialist:{frame_id}")
 }
 
+fn snapshot_key(frame_id: &str) -> String {
+    format!("frame_specialist_snapshot:{frame_id}")
+}
+
+async fn persist_depmap_snapshot(store: &Store, frame_id: &str) -> Result<(), String> {
+    let snapshot = wisp_core::specialist_manifest::assemble(
+        &wisp_core::specialist_manifest::load_depmap_manifest(),
+        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    )
+    .map_err(|error| error.to_string())?;
+    store
+        .set_setting(
+            &snapshot_key(frame_id),
+            &serde_json::to_string(&snapshot).map_err(|error| error.to_string())?,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
 pub async fn set_frame_specialist(store: &Store, frame_id: &str, id: &str) -> Result<(), String> {
     store
         .set_setting(&frame_key(frame_id), id)
@@ -646,6 +665,9 @@ pub async fn inherit_project_default_specialist(
     frame_id: &str,
 ) -> Result<(), String> {
     if let Some(id) = project_default_specialist_id(store, project_id).await {
+        if id == DEPMAP_SPECIALIST_ID {
+            persist_depmap_snapshot(store, frame_id).await?;
+        }
         set_frame_specialist(store, frame_id, &id).await?;
     }
     Ok(())
@@ -674,6 +696,9 @@ pub async fn set_session_specialist(
     }
     if !id.is_empty() && get(&state.store, &id).await.is_none() {
         return Err(format!("Unknown specialist '{id}'."));
+    }
+    if id == DEPMAP_SPECIALIST_ID {
+        persist_depmap_snapshot(&state.store, &frame_id).await?;
     }
     set_frame_specialist(&state.store, &frame_id, &id).await
 }
@@ -761,10 +786,9 @@ mod tests {
 
     #[test]
     fn depmap_specialist_assembles_from_the_versioned_manifest() {
-        use crate::specialist_assembly::{
+        use wisp_core::specialist_manifest::{
             assemble, load_depmap_manifest, AssemblyError, HostPolicy,
         };
-        use std::collections::BTreeSet;
 
         let manifest = load_depmap_manifest();
         assert_eq!(manifest.id, DEPMAP_SPECIALIST_ID);
@@ -775,22 +799,15 @@ mod tests {
                 .map(|skill| (*skill).to_string())
                 .collect::<Vec<_>>()
         );
-        let host = HostPolicy {
-            available_skills: BTreeSet::from([
-                "depmap-knowledge-query".into(),
-                "depmap-coding-agent".into(),
-            ]),
-            available_connectors: BTreeSet::from(["depmap_mcp".into()]),
-            available_tool_sets: BTreeSet::from(["scientific_query".into(), "runs".into()]),
-        };
-        let snapshot = assemble(&manifest, &host, DEPMAP_R_AGENT_RUBRIC).unwrap();
+        let host = HostPolicy::bundled_depmap();
+        let snapshot = assemble(&manifest, &host).unwrap();
         assert_eq!(snapshot.id, "depmap_r_agent");
         assert_eq!(snapshot.manifest_version, "1.0.0");
         assert_eq!(snapshot.instructions_digest.len(), 64);
 
         let mut reduced = host.clone();
         reduced.available_skills.remove("depmap-coding-agent");
-        match assemble(&manifest, &reduced, DEPMAP_R_AGENT_RUBRIC) {
+        match assemble(&manifest, &reduced) {
             Err(AssemblyError::MissingSkill { skill }) => {
                 assert_eq!(skill, "depmap-coding-agent")
             }
@@ -800,7 +817,7 @@ mod tests {
         let mut incompatible = manifest.clone();
         incompatible.schema_version = 99;
         assert!(matches!(
-            assemble(&incompatible, &host, DEPMAP_R_AGENT_RUBRIC),
+            assemble(&incompatible, &host),
             Err(AssemblyError::IncompatibleSchema { found: 99 })
         ));
     }
@@ -1132,6 +1149,16 @@ mod tests {
         // Clearing works.
         set_frame_specialist(&store, "f1", "").await.unwrap();
         assert!(session_specialist(&store, "f1").await.is_none());
+        persist_depmap_snapshot(&store, "f-depmap").await.unwrap();
+        let raw = store
+            .get_setting("frame_specialist_snapshot:f-depmap")
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot: wisp_core::specialist_manifest::ResolvedSpecialistSnapshot =
+            serde_json::from_str(&raw).unwrap();
+        assert_eq!(snapshot.id, DEPMAP_SPECIALIST_ID);
+        assert_eq!(snapshot.manifest_version, "1.0.0");
         let _ = std::fs::remove_file(&tmp);
     }
 
