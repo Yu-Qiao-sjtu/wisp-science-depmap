@@ -129,17 +129,16 @@ def load_gmt(path: Path) -> dict[str, set[str]]:
     return sets
 
 
-def running_enrichment_score(ranked_genes: list[str], gene_set: set[str]) -> tuple[float, list[str]]:
+def running_enrichment_score(ranked_genes: list[str], gene_set: set[str]) -> tuple[float, list[str]] | None:
     n = len(ranked_genes)
     hits = [1 if gene in gene_set else 0 for gene in ranked_genes]
     nh = sum(hits)
-    if nh == 0:
-        return 0.0, []
+    if nh == 0 or nh == n:
+        return None
     miss_weight = 1.0 / (n - nh)
     hit_weight = 1.0 / nh
     running = 0.0
     best = 0.0
-    best_i = 0
     leading: list[str] = []
     current_lead: list[str] = []
     for i, gene in enumerate(ranked_genes):
@@ -148,28 +147,27 @@ def running_enrichment_score(ranked_genes: list[str], gene_set: set[str]) -> tup
             current_lead.append(gene)
         else:
             running -= miss_weight
-        if abs(running) > abs(best):
+        if running > best:
             best = running
-            best_i = i
             leading = list(current_lead)
-    if best < 0:
-        leading = [g for g in ranked_genes[best_i:] if g in gene_set]
     return best, leading
 
 
 def permutation_p(observed: float, ranked_genes: list[str], gene_set: set[str], permutations: int, seed: int) -> float:
     rng = random.Random(seed)
-    n = len(ranked_genes)
     labels = list(ranked_genes)
     extreme = 0
     size = len(gene_set & set(ranked_genes))
-    if size == 0:
+    if size == 0 or size == len(ranked_genes):
         return 1.0
-    for i in range(permutations):
+    for _ in range(permutations):
         rng.shuffle(labels)
         fake_set = set(labels[:size])
-        score, _ = running_enrichment_score(ranked_genes, fake_set)
-        if abs(score) >= abs(observed) - 1e-15:
+        scored = running_enrichment_score(ranked_genes, fake_set)
+        if scored is None:
+            continue
+        score, _ = scored
+        if score >= observed - 1e-15:
             extreme += 1
     return (extreme + 1) / (permutations + 1)
 
@@ -253,9 +251,28 @@ def main() -> int:
     if expected_n is not None and int(expected_n) != len(rows):
         emit_run(output_dir, blocked("WRONG_UNIVERSE", "ranked universe size does not match the pinned universe"))
         return 2
+    universe_digest = sha256_file(universe_path)
+    config_digest = config.get("ranked_universe_digest")
+    upstream_universe_digest = upstream.get("ranked_universe_digest")
+    if config_digest and upstream_universe_digest and config_digest != upstream_universe_digest:
+        emit_run(output_dir, blocked("UNIVERSE_DIGEST_MISMATCH", "config and upstream ranked-universe digests disagree"))
+        return 2
+    pinned_universe = config_digest or upstream_universe_digest
+    if not pinned_universe:
+        emit_run(
+            output_dir,
+            blocked("UNIVERSE_DIGEST_MISSING", "ranked universe must be pinned by digest to the upstream contrast"),
+        )
+        return 2
+    if pinned_universe != universe_digest:
+        emit_run(
+            output_dir,
+            blocked("UNIVERSE_DIGEST_MISMATCH", "ranked universe checksum does not match the pinned contrast"),
+        )
+        return 2
 
-    min_size = int(config.get("min_set_size") or 5)
-    max_size = int(config.get("max_set_size") or 500)
+    min_size = int(config["min_set_size"]) if "min_set_size" in config else 15
+    max_size = int(config["max_set_size"]) if "max_set_size" in config else 500
     permutations = int(config.get("permutations") or 200)
     seed = int(config.get("seed") or 1)
     collection = str(config.get("collection") or gmt_path.name)
@@ -275,9 +292,12 @@ def main() -> int:
             if len(overlap) < min_size:
                 too_small += 1
                 continue
-            if len(overlap) > max_size:
+            if len(overlap) > max_size or len(overlap) == len(universe):
                 continue
-            score, leading = running_enrichment_score(ranked, overlap)
+            scored = running_enrichment_score(ranked, overlap)
+            if scored is None:
+                continue
+            score, leading = scored
             p_value = permutation_p(
                 score,
                 ranked,

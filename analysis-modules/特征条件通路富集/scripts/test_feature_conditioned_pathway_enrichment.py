@@ -30,7 +30,8 @@ def write_gmt(path: Path) -> None:
     path.write_text(
         "SEEDED_STRONGER\tdesc\tG1\tG2\tG3\tG4\tG5\n"
         "SEEDED_WEAKER\tdesc\tG16\tG17\tG18\tG19\tG20\n"
-        "TINY\tdesc\tG1\tG2\n",
+        "TINY\tdesc\tG1\tG2\n"
+        "ALL\tdesc\tG1\tG2\tG3\tG4\tG5\tG6\tG7\tG8\tG9\tG10\tG11\tG12\tG13\tG14\tG15\tG16\tG17\tG18\tG19\tG20\n",
         encoding="utf-8",
     )
 
@@ -54,6 +55,8 @@ def run_job(workdir: Path, *, upstream: dict, universe_rows: list[tuple[str, flo
         "upstream_digest": digest_file(upstream_path),
         **config,
     }
+    if "ranked_universe_digest" not in config:
+        config["ranked_universe_digest"] = digest_file(universe_path)
     config_path.write_text(json.dumps(config), encoding="utf-8")
     subprocess.run(
         [
@@ -110,6 +113,13 @@ class FeaturePathwayTests(unittest.TestCase):
         self.assertLess(float(weaker[0]["p_value"]), 0.2)
         self.assertGreater(float(stronger[0]["score"]), 0)
         self.assertGreater(float(weaker[0]["score"]), 0)
+        stronger_on_weaker = [
+            row
+            for row in table
+            if row["pathway"] == "SEEDED_STRONGER" and row["hypothesis"] == "weaker_dependency"
+        ]
+        self.assertEqual(len(stronger_on_weaker), 1)
+        self.assertGreater(float(stronger_on_weaker[0]["p_value"]), float(stronger[0]["p_value"]))
 
     def test_deterministic_for_fixed_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,6 +158,34 @@ class FeaturePathwayTests(unittest.TestCase):
         self.assertEqual(stale["status"], "STALE_UPSTREAM_DIGEST")
         self.assertEqual(dup["status"], "DUPLICATE_MAPPINGS")
         self.assertEqual(tiny["status"], "SET_TOO_SMALL")
+
+    def test_universe_digest_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = run_job(
+                Path(tmp) / "m",
+                upstream={"status": "COMPLETE"},
+                universe_rows=seeded_universe(),
+                config={"ranked_universe_digest": ""},
+            )
+            wrong = run_job(
+                Path(tmp) / "w",
+                upstream={"status": "COMPLETE"},
+                universe_rows=seeded_universe(),
+                config={"ranked_universe_digest": "0" * 64},
+            )
+        self.assertEqual(missing["status"], "UNIVERSE_DIGEST_MISSING")
+        self.assertEqual(wrong["status"], "UNIVERSE_DIGEST_MISMATCH")
+
+    def test_full_overlap_set_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            genes = seeded_universe()
+            result = run_job(
+                Path(tmp),
+                upstream={"status": "COMPLETE"},
+                universe_rows=genes,
+                config={"min_set_size": 5, "max_set_size": 20},
+            )
+        self.assertEqual(result["status"], "COMPLETE")
 
     def test_wrong_universe_size(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
