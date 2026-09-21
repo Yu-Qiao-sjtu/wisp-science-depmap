@@ -489,6 +489,12 @@
         "run_allele_specific_mutation_dependency": {
           "execution_mode": "authorized_on_demand_cached",
           "executable_entrypoint": "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py",
+          "inputs": [
+            "somatic_mutations_csv",
+            "gene_effect_csv",
+            "model_csv",
+            "damaging_mutation_matrix_csv"
+          ],
           "required_entities": [
             "mutation_gene",
             "protein_change"

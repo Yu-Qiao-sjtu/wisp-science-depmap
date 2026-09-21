@@ -233,6 +233,15 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
         operation = capability["operations"]["run_allele_specific_mutation_dependency"]
         self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
         self.assertEqual(operation["defaults"]["min_case_n"], 5)
+        self.assertEqual(
+            operation["inputs"],
+            [
+                "somatic_mutations_csv",
+                "gene_effect_csv",
+                "model_csv",
+                "damaging_mutation_matrix_csv",
+            ],
+        )
 
         intent_path = (
             self.repo_root
