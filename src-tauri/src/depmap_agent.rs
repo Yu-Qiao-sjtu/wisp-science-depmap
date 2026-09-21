@@ -283,8 +283,8 @@ impl DepMapAgentRouteTool {
     }
 }
 
-pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 12;
-pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 12;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 13;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 13;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DepMapContractAssessment {
@@ -568,7 +568,7 @@ fn depmap_route_schema() -> Value {
                     "tf_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
-                    "gene_pair_evidence", "drug_gene_evidence",
+                    "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
                     "new_analysis", "report_generation"
@@ -590,6 +590,7 @@ fn depmap_route_schema() -> Value {
             "cohort": {"type":"string"},
             "layer": {"type":"string","enum":["exhaustive_high_confidence","lineage_adjusted"]},
             "scope": {"type":"string","enum":["global","lineage"]},
+            "direction": {"type":"string","enum":["positive","negative"]},
             "evidence_provider": {
                 "type":"string",
                 "enum":["auto","native","remote_mcp"],
@@ -612,7 +613,7 @@ fn depmap_route_schema() -> Value {
                     "tf_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
-                    "gene_evidence", "gene_pair_evidence", "drug_gene_evidence",
+                    "gene_evidence", "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
                     "literature_validation", "new_analysis", "report_generation"
@@ -675,6 +676,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let cohort = non_empty_arg(args, "cohort");
     let layer = non_empty_arg(args, "layer");
     let requested_scope = non_empty_arg(args, "scope");
+    let direction = non_empty_arg(args, "direction").unwrap_or_else(|| "positive".to_string());
     let evidence_provider =
         non_empty_arg(args, "evidence_provider").unwrap_or_else(|| "auto".to_string());
     let exclude_common_essential = args
@@ -716,7 +718,10 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 missing.push("cancer");
             }
         }
-        "gene_evidence" | "model_gene_effect_slice" | "cross_platform_dependency_validation" => {
+        "gene_evidence"
+        | "codependency_evidence"
+        | "model_gene_effect_slice"
+        | "cross_platform_dependency_validation" => {
             if gene.is_none() {
                 missing.push("gene");
             }
@@ -878,7 +883,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Interpret only the current or recovered persisted evidence fields.",
                 vec![EVIDENCE_HISTORY_TOOL_NAME],
             ),
-            "gene_pair_evidence" | "drug_gene_evidence" => (
+            "codependency_evidence" | "gene_pair_evidence" | "drug_gene_evidence" => (
                 "L1_DIRECT",
                 false,
                 "Use one surgical pair or drug query against precomputed results.",
@@ -1192,6 +1197,18 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 }
             })
         }
+        ("codependency_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_codependency_evidence",
+            "transport": "remote_mcp",
+            "arguments": {
+                "gene": gene,
+                "lineage": canonical_lineage,
+                "direction": direction,
+                "limit": 20
+            },
+            "single_call": true,
+            "interpretation": "positive co-dependency is similar CRISPR Gene Effect profile, not synthetic lethality"
+        }),
         ("expression_biomarker_model", _) if !requires_user_input => json!({
             "tool": "depmap_biomarker_model_evidence",
             "arguments": {"target_gene": target_gene},
@@ -3833,6 +3850,27 @@ mod tests {
 
     #[test]
     fn agent_route_schema_is_flat_and_closed() {
+        let route = depmap_route(&json!({
+            "intent":"codependency_evidence",
+            "gene":"KRAS",
+            "cancer":"肺癌"
+        }))
+        .unwrap();
+        assert_eq!(route["state"], "routed");
+        assert_eq!(
+            route["recommended_query"]["tool"],
+            "depmap_codependency_evidence"
+        );
+        assert_eq!(route["recommended_query"]["single_call"], true);
+        assert_eq!(
+            route["recommended_query"]["arguments"],
+            json!({"gene":"KRAS","lineage":"Lung","direction":"positive","limit":20})
+        );
+        assert!(route["recommended_query"]["interpretation"]
+            .as_str()
+            .unwrap()
+            .contains("not synthetic lethality"));
+
         let schema = depmap_route_schema();
         assert_eq!(schema["required"], json!(["intent"]));
         assert_eq!(schema["additionalProperties"], false);
@@ -4205,7 +4243,7 @@ mod tests {
     fn depmap_contract_handshake_accepts_only_the_declared_range() {
         let compatible = evaluate_depmap_contract(&json!({
             "evidence": {
-                "query_contract_version": 12,
+                "query_contract_version": 13,
                 "server_build_identity": "build-abc",
                 "capability_catalog_digest": "sha256:capabilities",
                 "catalog_build_identity": "sha256:catalog"
@@ -4219,13 +4257,13 @@ mod tests {
         );
 
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 11}
+            "evidence": {"query_contract_version": 12}
         }));
         assert!(!stale.compatible);
         assert_eq!(stale.code, "STALE_CONTRACT");
 
         let future = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 13}
+            "evidence": {"query_contract_version": 14}
         }));
         assert!(!future.compatible);
         assert_eq!(future.code, "INCOMPATIBLE_PROVIDER");
@@ -4234,7 +4272,7 @@ mod tests {
         assert_eq!(missing.code, "STALE_CONTRACT");
 
         let identity_missing = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 12}
+            "evidence": {"query_contract_version": 13}
         }));
         assert!(!identity_missing.compatible);
         assert_eq!(identity_missing.code, "STALE_CONTRACT");
@@ -4250,7 +4288,7 @@ mod tests {
         for unusable_catalog_identity in ["", "   ", "catalog-missing", "catalog-unreadable"] {
             let unusable = evaluate_depmap_contract(&json!({
                 "evidence": {
-                    "query_contract_version": 12,
+                    "query_contract_version": 13,
                     "server_build_identity": "build-abc",
                     "capability_catalog_digest": "sha256:capabilities",
                     "catalog_build_identity": unusable_catalog_identity
@@ -4298,7 +4336,7 @@ mod tests {
     #[tokio::test]
     async fn stale_depmap_contract_blocks_before_any_scientific_call() {
         let stale = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 11}
+            "evidence": {"query_contract_version": 12}
         }));
         let result =
             DepMapAgentRouteTool::with_contract(vec!["depmap_gene_evidence".into()], Some(stale))

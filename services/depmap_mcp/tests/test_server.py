@@ -178,7 +178,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         second = await self.service.status()
         evidence = first["evidence"]
 
-        self.assertEqual(evidence["query_contract_version"], 12)
+        self.assertEqual(evidence["query_contract_version"], 13)
         self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-12")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
@@ -268,6 +268,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "mutation_anchor_discovery",
                 "mutation_to_dependency",
                 "dependency_to_mutation",
+                "codependency_evidence",
                 "gene_pair_evidence",
                 "cancer_dependency_ranking",
                 "model_gene_effect_slice",
@@ -753,6 +754,20 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_tf_activity_dependency_query_preserves_direction_and_fdr_scope(self):
+        result = await self.service.codependency_evidence(
+            "kras", lineage="Lung", direction="positive", limit=7
+        )
+        self.assertEqual(
+            self.queries,
+            [
+                {"mode": "true_love", "catalog": "positive_reciprocal_top20", "gene": "KRAS", "scope": "pancancer", "limit": 7, "coverage": "quality"},
+                {"mode": "lineage_network", "family": "effect_correlation", "lineage": "Lung", "source": "KRAS", "reciprocal": True, "direction": "positive", "limit": 7},
+            ],
+        )
+        self.assertEqual([section["scope"] for section in result["evidence"]["sections"]], ["global", "lineage"])
+        self.assertIn("not synthetic lethality", result["evidence"]["interpretation"])
+        self.queries.clear()
+
         result = await self.service.tf_dependency_evidence("stat3", "gpx4", 12)
         self.assertEqual(
             self.queries[-1],
@@ -994,6 +1009,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_gene_evidence",
                         "tcga_gene_expression_survival",
                         "depmap_pair_evidence",
+                        "depmap_codependency_evidence",
                         "depmap_tf_dependency_evidence",
                         "depmap_biomarker_model_evidence",
                         "depmap_drug_evidence",
