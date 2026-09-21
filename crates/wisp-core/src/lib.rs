@@ -12,6 +12,7 @@ pub mod method_search;
 pub mod orchestration;
 pub mod output;
 pub mod provenance;
+pub mod scientific_intent;
 pub mod session_locks;
 pub mod specialist_manifest;
 pub mod subagent;
@@ -53,6 +54,10 @@ pub use orchestration::{
 };
 pub use output::{NullOutput, Output, OutputFuture, StreamSinkAdapter, ToolEnvAdapter};
 pub use provenance::ProvenanceRecord;
+pub use scientific_intent::{
+    host_scientific_bridge, plan_scientific_intent, IntentCatalog, PlannerDecision, PlannerOutcome,
+    ScientificIntent, ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
+};
 pub use subagent::ExploreTool;
 pub use system_prompt::SystemPrompt;
 

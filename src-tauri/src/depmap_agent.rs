@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 use url::{Host, Url};
+use wisp_core::scientific_intent::{
+    plan_scientific_intent, AmbiguityMetadata, IntentCatalog, IntentDirection, IntentEntity,
+    IntentScope, PlannerDecision, PlannerHostPolicy, RequestedAction, ScientificIntent,
+    ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
+};
 use wisp_llm::ToolSchema;
 use wisp_tools::{Tool, ToolEnv, ToolResult};
 
@@ -263,6 +268,7 @@ pub(crate) struct DepMapAgentRouteTool {
     /// Route policy never grants an MCP name prefix.
     remote_read_only_tools: Vec<String>,
     remote_contract: Option<DepMapContractAssessment>,
+    tool_catalog: ToolCatalog,
 }
 
 impl DepMapAgentRouteTool {
@@ -279,7 +285,13 @@ impl DepMapAgentRouteTool {
         Self {
             remote_read_only_tools,
             remote_contract,
+            tool_catalog: ToolCatalog::default(),
         }
+    }
+
+    pub(crate) fn with_tool_catalog(mut self, tool_catalog: ToolCatalog) -> Self {
+        self.tool_catalog = tool_catalog;
+        self
     }
 }
 
@@ -1450,6 +1462,136 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     }))
 }
 
+fn route_entity(route: &Value, key: &str) -> Option<String> {
+    route
+        .get("entities")
+        .and_then(|entities| entities.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn intent_entity(role: &str, kind: &str, identifier: String) -> IntentEntity {
+    IntentEntity {
+        role: role.into(),
+        kind: kind.into(),
+        identifier,
+        aliases: Vec::new(),
+    }
+}
+
+fn scientific_intent_from_route(args: &Value, route: &Value) -> Option<ScientificIntent> {
+    let intent = route.get("intent").and_then(Value::as_str)?;
+    let (relation, data_modality, metric, source_kind) = match intent {
+        "codependency_evidence" => (
+            "codependency",
+            Some("crispr_gene_effect"),
+            Some("gene_effect_correlation"),
+            "gene",
+        ),
+        "mutation_to_dependency" | "dependency_to_mutation" => (
+            "event_stratified_dependency",
+            Some("somatic_mutation_event_vs_crispr_dependency"),
+            Some("delta_gene_effect"),
+            "mutation_event",
+        ),
+        _ => return None,
+    };
+    let mut entities = Vec::new();
+    if intent == "codependency_evidence" {
+        if let Some(gene) = route_entity(route, "gene") {
+            entities.push(intent_entity("gene", "gene", gene));
+        }
+    } else {
+        if let Some(source) = route_entity(route, "source_gene") {
+            entities.push(intent_entity("source", source_kind, source));
+        }
+        if let Some(target) = route_entity(route, "target_gene") {
+            entities.push(intent_entity("target", "gene", target));
+        }
+    }
+    if let Some(lineage) = route_entity(route, "canonical_lineage") {
+        entities.push(intent_entity("lineage", "lineage", lineage));
+    }
+    let mut constraints = BTreeMap::new();
+    if let Some(event) = route_entity(route, "event") {
+        constraints.insert("event".into(), json!(event));
+    }
+    let direction = non_empty_arg(args, "direction").and_then(|value| match value.as_str() {
+        "positive" => Some(IntentDirection::Positive),
+        "negative" => Some(IntentDirection::Negative),
+        _ => None,
+    });
+    Some(ScientificIntent {
+        schema_version: INTENT_SCHEMA_VERSION,
+        entities,
+        relation: relation.into(),
+        data_modality: data_modality.map(str::to_string),
+        metric: metric.map(str::to_string),
+        scope: if route_entity(route, "canonical_lineage").is_some() {
+            IntentScope::Lineage
+        } else {
+            IntentScope::Global
+        },
+        direction,
+        action: RequestedAction::RetrieveEvidence,
+        release: None,
+        constraints,
+        ambiguity: AmbiguityMetadata::default(),
+        proposed_capability: None,
+        proposed_coverage: None,
+    })
+}
+
+fn apply_bridge_plan(args: &Value, route: &mut Value, tools: &ToolCatalog, extra_names: &[String]) {
+    let Some(proposed) = scientific_intent_from_route(args, route) else {
+        return;
+    };
+    let mut catalog = tools.clone();
+    for name in extra_names {
+        catalog.ensure_available(name);
+    }
+    let outcome = plan_scientific_intent(
+        proposed,
+        &IntentCatalog::bundled_depmap(),
+        &catalog,
+        &PlannerHostPolicy::default(),
+    );
+    debug_assert_eq!(outcome.contract, PLANNER_CONTRACT_ID);
+    route["bridge"] = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+    if route.get("state").and_then(Value::as_str) != Some("routed") {
+        return;
+    }
+    match &outcome.decision {
+        PlannerDecision::Execute { .. } => {}
+        PlannerDecision::ClarificationRequired { .. } => {
+            route["decision"] = json!("clarification_required");
+            route["state"] = json!("needs_input");
+        }
+        PlannerDecision::UnsupportedIntent { .. } => {
+            route["decision"] = json!("unsupported_intent");
+            route["state"] = json!("blocked");
+        }
+        PlannerDecision::BridgeUnavailable { .. } => {
+            route["decision"] = json!("bridge_unavailable");
+            route["state"] = json!("blocked");
+        }
+        PlannerDecision::CoverageGap { .. } => {
+            route["decision"] = json!("coverage_gap");
+            route["state"] = json!("blocked");
+        }
+        PlannerDecision::ProviderUnavailable { .. } => {
+            route["decision"] = json!("provider_unavailable");
+            route["state"] = json!("blocked");
+        }
+        PlannerDecision::PolicyBlocked { .. } => {
+            route["decision"] = json!("policy_blocked");
+            route["state"] = json!("blocked");
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Tool for DepMapAgentRouteTool {
     fn name(&self) -> &str {
@@ -1494,25 +1636,34 @@ impl Tool for DepMapAgentRouteTool {
             }
         }
         match depmap_route(args) {
-            Ok(route) if route["state"] == "routed" => {
-                let mut allowed = route["allowed_next_tools"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                allowed.extend(self.remote_read_only_tools.iter().cloned());
-                allowed.extend([
-                    "search_mcp_tools".into(),
-                    "ask_user".into(),
-                    "attempt_completion".into(),
-                ]);
-                ToolResult::ok(pretty(route)).allow_next_tools(allowed)
+            Ok(mut route) => {
+                apply_bridge_plan(
+                    args,
+                    &mut route,
+                    &self.tool_catalog,
+                    &self.remote_read_only_tools,
+                );
+                if route["state"] == "routed" {
+                    let mut allowed = route["allowed_next_tools"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    allowed.extend(self.remote_read_only_tools.iter().cloned());
+                    allowed.extend([
+                        "search_mcp_tools".into(),
+                        "ask_user".into(),
+                        "attempt_completion".into(),
+                    ]);
+                    ToolResult::ok(pretty(route)).allow_next_tools(allowed)
+                } else {
+                    ToolResult::fail(pretty(route))
+                        .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                        .stop_batch()
+                }
             }
-            Ok(route) => ToolResult::fail(pretty(route))
-                .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
-                .stop_batch(),
             Err(error) => ToolResult::fail(blocked("invalid_agent_route", error)),
         }
     }
@@ -4237,6 +4388,69 @@ mod tests {
         assert!(allowed.contains(&"search_mcp_tools".to_string()));
         assert!(!allowed.iter().any(|name| name.ends_with('*')));
         assert!(!allowed.contains(&"depmap_unrelated_write".to_string()));
+    }
+
+    #[tokio::test]
+    async fn missing_declared_capability_tool_is_bridge_unavailable() {
+        let result = DepMapAgentRouteTool::new(Vec::new())
+            .run(
+                &json!({
+                    "intent":"codependency_evidence",
+                    "gene":"GENEA"
+                }),
+                &RouteTestEnv,
+            )
+            .await;
+        assert!(!result.success);
+        let body: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(body["decision"], "bridge_unavailable");
+        assert_eq!(body["bridge"]["contract"], PLANNER_CONTRACT_ID);
+        assert_eq!(body["bridge"]["decision"]["kind"], "bridge_unavailable");
+        assert_ne!(body["decision"], "NOT_COMPUTED");
+        assert!(!result.content.contains("NOT_COMPUTED"));
+    }
+
+    #[tokio::test]
+    async fn planner_executes_codependency_when_the_tool_is_registered() {
+        let mut tools = ToolCatalog::default();
+        tools.insert(
+            "depmap_codependency_evidence",
+            json!({
+                "type": "object",
+                "properties": {
+                    "gene": {"type": "string"},
+                    "lineage": {"type": "string"},
+                    "direction": {"type": "string"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["gene"],
+                "additionalProperties": false
+            }),
+        );
+        let result = DepMapAgentRouteTool::new(vec!["depmap_codependency_evidence".into()])
+            .with_tool_catalog(tools)
+            .run(
+                &json!({
+                    "intent":"codependency_evidence",
+                    "gene":"GENEA"
+                }),
+                &RouteTestEnv,
+            )
+            .await;
+        assert!(result.success, "{}", result.content);
+        let body: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(body["decision"], "execute");
+        assert_eq!(body["bridge"]["decision"]["kind"], "execute");
+        assert!(body["bridge"]["decision"]["arguments"]
+            .as_object()
+            .unwrap()
+            .get("lineage")
+            .is_none());
+        assert!(
+            !serde_json::to_string(&body["bridge"]["decision"]["arguments"])
+                .unwrap()
+                .contains("null")
+        );
     }
 
     #[tokio::test]

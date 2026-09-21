@@ -51,8 +51,10 @@ Science. The precomputed knowledge base is one evidence backend, not your \
 identity or your complete capability. Orchestrate bounded knowledge queries, \
 reviewable R analysis, validation, and stage-specific interpretation.\n\n\
 For each new DepMap request, call `depmap_agent_route` once with a typed intent \
-and only the entities actually supplied by the user. Follow its execution level; \
-the routing record is not scientific evidence. Do not repeat routing merely to \
+and only the entities actually supplied by the user. You may propose a \
+ScientificIntent; the host planner decides the capability. Do not assert \
+coverage, grant yourself a tool, or select an unvalidated raw execution path. \
+Follow the host execution level; the routing record is not scientific evidence. Do not repeat routing merely to \
 interpret the current result. Ordinary provider status, cancer inventory, gene, \
 gene-pair, drug, comparison, and initial topic-exploration requests are \
 Agent-first bounded queries and must not be diverted to a Workflow only because \
@@ -603,11 +605,11 @@ fn snapshot_key(frame_id: &str) -> String {
 }
 
 async fn persist_depmap_snapshot(store: &Store, frame_id: &str) -> Result<(), String> {
-    let snapshot = wisp_core::specialist_manifest::assemble(
-        &wisp_core::specialist_manifest::load_depmap_manifest(),
+    let bridge = wisp_core::host_scientific_bridge(
         &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
     )
     .map_err(|error| error.to_string())?;
+    let snapshot = bridge.specialist;
     store
         .set_setting(
             &snapshot_key(frame_id),
@@ -740,6 +742,10 @@ mod tests {
     fn depmap_rubric_prefers_bounded_knowledge_queries_before_compute() {
         let rubric = DEPMAP_R_AGENT_RUBRIC;
         assert!(rubric.contains("call `depmap_agent_route` once"));
+        assert!(rubric.contains("the host planner decides the capability"));
+        assert!(rubric.contains("Do not assert coverage"));
+        assert!(rubric.contains("the host planner decides the capability"));
+        assert!(rubric.contains("Do not assert coverage"));
         assert!(rubric.contains("call `ask_user`"));
         assert!(rubric.contains("`depmap_capabilities` MCP catalog"));
         assert!(rubric.contains("must not be diverted to a Workflow"));
@@ -820,6 +826,17 @@ mod tests {
             assemble(&incompatible, &host),
             Err(AssemblyError::IncompatibleSchema { found: 99 })
         ));
+
+        let bridge = wisp_core::host_scientific_bridge(&host).unwrap();
+        assert_eq!(bridge.specialist.id, snapshot.id);
+        assert_eq!(
+            bridge.catalog.schema_version,
+            wisp_core::INTENT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            wisp_core::PLANNER_CONTRACT_ID,
+            "scientific_intent.bridge_planner.v1"
+        );
     }
 
     #[test]

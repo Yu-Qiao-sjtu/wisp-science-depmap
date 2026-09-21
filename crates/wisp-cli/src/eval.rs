@@ -1491,8 +1491,7 @@ fn build_agent(
     let skill_paths = vec![root.join(".wisp").join("skills")];
     let skills = Arc::new(SkillIndex::load(&skill_paths));
     if case.tags.iter().any(|tag| tag == "depmap") {
-        wisp_core::specialist_manifest::assemble(
-            &wisp_core::specialist_manifest::load_depmap_manifest(),
+        wisp_core::host_scientific_bridge(
             &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
         )
         .map_err(|error| anyhow::anyhow!("{error}"))?;
