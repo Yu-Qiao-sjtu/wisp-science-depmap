@@ -109,7 +109,6 @@ mod skill_portfolio;
 mod skill_store;
 pub(crate) use wisp_runs::snapshot_store;
 mod specialist_tool;
-mod specialist_assembly;
 mod specialists;
 pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
