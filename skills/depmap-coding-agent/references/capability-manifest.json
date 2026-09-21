@@ -465,6 +465,54 @@
       ]
     },
     {
+      "id": "allele_specific_mutation_dependency",
+      "title": "Allele-specific mutation to genome-wide dependency contrast",
+      "analysis_label": "allele_specific_mutation_dependency",
+      "data_modality": "protein_change_vs_crispr_gene_effect",
+      "relation_type": "allele_stratified_dependency_difference",
+      "module_id": "mutation_dependency",
+      "entity_roles": {
+        "source": "protein_change_allele",
+        "target": "dependency_gene_universe",
+        "symmetric": false
+      },
+      "scripts": [
+        "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py"
+      ],
+      "inputs": [
+        "somatic_mutations_csv",
+        "gene_effect_csv",
+        "model_csv",
+        "damaging_mutation_matrix_csv"
+      ],
+      "operations": {
+        "run_allele_specific_mutation_dependency": {
+          "execution_mode": "authorized_on_demand_cached",
+          "executable_entrypoint": "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py",
+          "inputs": [
+            "somatic_mutations_csv",
+            "gene_effect_csv",
+            "model_csv",
+            "damaging_mutation_matrix_csv"
+          ],
+          "required_entities": [
+            "mutation_gene",
+            "protein_change"
+          ],
+          "supported_scopes": [
+            "global",
+            "lineage"
+          ],
+          "defaults": {
+            "min_case_n": 5,
+            "min_control_n": 5,
+            "multiple_testing": "BH within scope family",
+            "control_policy": "gene_mutation_negative_excluding_other_and_multi_allelic"
+          }
+        }
+      }
+    },
+    {
       "id": "damaging_mutation_dependency",
       "title": "Damaging mutation-stratified dependency",
       "analysis_label": "mutation_dependency_association",
