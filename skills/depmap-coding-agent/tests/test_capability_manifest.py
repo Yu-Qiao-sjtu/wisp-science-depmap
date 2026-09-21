@@ -212,6 +212,39 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
         route = intent["operation_routing"]["expression_threshold_dependency_contrast"]
         self.assertIn("analysis_authorization", route["trigger_requires"])
 
+    def test_allele_specific_mutation_is_a_distinct_authorized_operation(self):
+        manifest_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-coding-agent"
+            / "references"
+            / "capability-manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capability = next(
+            item
+            for item in manifest["capabilities"]
+            if item["id"] == "allele_specific_mutation_dependency"
+        )
+        self.assertEqual(
+            capability["data_modality"],
+            "protein_change_vs_crispr_gene_effect",
+        )
+        operation = capability["operations"]["run_allele_specific_mutation_dependency"]
+        self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
+        self.assertEqual(operation["defaults"]["min_case_n"], 5)
+
+        intent_path = (
+            self.repo_root
+            / "analysis-modules"
+            / "癌种内突变锚定基因选择"
+            / "module.intent.json"
+        )
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        query = intent["query_contract"]["allele_specific_mutation_dependency"]
+        self.assertEqual(query["capability_id"], "allele_specific_mutation_dependency")
+        self.assertEqual(query["required_entities"], ["mutation_gene", "protein_change"])
+
 
 if __name__ == "__main__":
     unittest.main()

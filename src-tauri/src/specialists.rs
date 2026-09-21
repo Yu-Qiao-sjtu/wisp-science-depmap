@@ -849,6 +849,7 @@ mod tests {
             "17_bipolar_dependency_ASB7_as_example.R",
             "18_DrugAUC_and_DepMap_MTAPasExample.R",
             "analysis-modules/癌种内突变锚定基因选择/scripts/depmap_official_mutation_engine.py",
+            "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py",
             "analysis-modules/表达基因-CRISPR基因依赖相关性分析/scripts/run_expression_threshold_dependency_contrast.R",
         ]
         .into_iter()

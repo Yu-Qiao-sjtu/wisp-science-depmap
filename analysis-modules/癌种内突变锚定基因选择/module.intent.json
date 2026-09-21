@@ -101,6 +101,15 @@
         "target"
       ]
     },
+    "allele_specific_mutation_dependency": {
+      "capability_id": "allele_specific_mutation_dependency",
+      "operation_id": "run_allele_specific_mutation_dependency",
+      "execution_mode": "authorized_on_demand_cached",
+      "entrypoint": "analysis-modules/癌种内突变锚定基因选择/scripts/run_allele_specific_mutation_dependency.py",
+      "required_entities": ["mutation_gene", "protein_change"],
+      "supported_scopes": ["global", "lineage"],
+      "do_not_merge_with": ["Damaging", "Hotspot"]
+    },
     "semantic_aliases": {
       "patient_in_depmap_context": "When a user says patients while asking a DepMap mutation-dependency question, interpret this as the corresponding DepMap cell-line cohort and state that mapping; use clinical cohorts only when TCGA, survival, clinical response, or patient-level data are explicitly requested.",
       "generic_tsg_mutation": "Default to Damaging for a tumor suppressor; report Hotspot separately only when explicitly requested or retained as a mechanism-review event.",
@@ -182,7 +191,16 @@
     "pan_cancer_confounding": "Report within-lineage results or a lineage-adjusted model in addition to unadjusted pan-cancer comparisons.",
     "legacy_score": "Scores from scripts 09-11 and the probability-continuous v1 results are exploratory historical outputs, not the primary significance result."
   },
-  "interpretation": "The two directions are row and column queries of one directed mutation-event by dependency-target association matrix. Results are observational candidates, not causal or experimentally validated synthetic lethality.",
+  "interpretation": "The two directions are row and column queries of one directed mutation-event by dependency-target association matrix. Results are observational candidates, not causal or experimentally validated synthetic lethality. Allele-specific ProteinChange contrasts are a separate event family from Damaging and Hotspot.",
+  "operation_routing": {
+    "allele_specific_mutation_dependency": {
+      "intent": "which genome-wide dependencies differ between one protein-change allele and gene-mutation-negative models",
+      "trigger_requires": ["mutation_gene", "protein_change", "analysis_authorization"],
+      "action": "execute_allele_specific_mutation_dependency",
+      "capability_id": "allele_specific_mutation_dependency",
+      "operation_id": "run_allele_specific_mutation_dependency"
+    }
+  },
   "tm00_references": [
     "01",
     "06",
