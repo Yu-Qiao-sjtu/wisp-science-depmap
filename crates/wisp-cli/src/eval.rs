@@ -8,7 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use wisp_core::{Agent, ContextManager, ExploreTool, GuidanceQueue, MemoryManager, Output};
+use wisp_core::{
+    host_agent_observability, Agent, AgentTrace, ContextManager, ExploreTool, GuidanceQueue,
+    HostObservabilityConfig, MemoryManager, ObservabilityHost, Output,
+};
 use wisp_llm::{
     Message, Provider, ProviderConfig, Role, ScriptedCompletion, ScriptedProvider,
     ScriptedProviderSnapshot, ToolSchema,
@@ -419,10 +422,11 @@ struct EvalOutput {
     approval_modes: BTreeMap<String, Approval>,
     decisions: Mutex<std::collections::VecDeque<bool>>,
     plan_mode: bool,
+    trace: AgentTrace,
 }
 
 impl EvalOutput {
-    fn new(approval: &EvalApproval, plan_mode: bool) -> Result<Self> {
+    fn new(approval: &EvalApproval, plan_mode: bool, root: &Path) -> Result<Self> {
         let approval_modes = approval
             .modes
             .iter()
@@ -444,6 +448,10 @@ impl EvalOutput {
             approval_modes,
             decisions: Mutex::new(approval.decisions.iter().copied().collect()),
             plan_mode,
+            trace: host_agent_observability(HostObservabilityConfig::for_host(
+                ObservabilityHost::Eval,
+                root,
+            )),
         })
     }
 
@@ -684,6 +692,10 @@ impl Output for EvalOutput {
                 Some(json!({"content": message.content})),
             ),
         }
+    }
+
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.trace)
     }
 }
 
@@ -1243,7 +1255,11 @@ async fn run_case(
     let mut workspace = TempWorkspace::new(&case.id, repetition)?;
     setup_workspace(&case, workspace.path())?;
     let before = snapshot_workspace(workspace.path())?;
-    let output = Arc::new(EvalOutput::new(&case.approval, case.plan_mode)?);
+    let output = Arc::new(EvalOutput::new(
+        &case.approval,
+        case.plan_mode,
+        workspace.path(),
+    )?);
     let session_id = uuid::Uuid::new_v4().to_string();
     let provider_source = match options.mode {
         EvalMode::Offline => ProviderSource::Offline(ScriptedProvider::new(

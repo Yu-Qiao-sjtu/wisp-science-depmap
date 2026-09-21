@@ -3132,6 +3132,7 @@ struct TauriOutput {
     /// IM turns force Ask on mutating tools and skip Full Permission
     /// auto-approval so an unattended Feishu/WeChat message cannot write/shell.
     force_ask_mutations: bool,
+    agent_trace: wisp_core::AgentTrace,
 }
 
 fn live_agent_event(mut event: AgentEvent) -> AgentEvent {
@@ -3602,6 +3603,9 @@ impl Output for TauriOutput {
     }
     fn project_id(&self) -> Option<&str> {
         Some(self.project_id.as_str())
+    }
+    fn agent_trace(&self) -> Option<&wisp_core::AgentTrace> {
+        Some(&self.agent_trace)
     }
     fn preflight_local_execution(&self, source: &str) -> Result<(), String> {
         match &self.exploration_isolation {

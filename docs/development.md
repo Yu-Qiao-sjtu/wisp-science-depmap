@@ -239,6 +239,8 @@ Eval and the long-lived JSONL RPC protocol:
 | `WISP_KERNEL_WORKER` | Override path to `kernel_worker.py` (bundled by default)      |
 | `WISP_MCP_COMMAND`   | Launch an arbitrary stdio MCP server (full command line)      |
 | `WISP_MCP_PKG`       | Select a native bio package, e.g. `mcp_pubmed`          |
+| `WISP_TRACE_SENSITIVE` | `1` to opt in to local sensitive-content traces (prompts/args/output). Default off; never uploaded. See [agent observability](agent-observability.md). |
+| `WISP_TRACE_OTEL_JSON` | Optional local path for OpenTelemetry-shaped JSON. No collector; do not upload. |
 
 Desktop stores API keys in the OS keyring and model profiles in
 `.wisp/wisp.sqlite`. Custom credentials map a display name to an environment

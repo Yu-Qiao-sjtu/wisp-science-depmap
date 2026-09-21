@@ -17,11 +17,12 @@ use std::{
 };
 use wisp_core::workflow_conversion::{self, WorkflowSource};
 use wisp_core::{
-    agent_loop, AgentDelegationResponse, AgentDelegator, AgentLoopOutcome, AgentUsage,
-    CapabilityRegistry, ContextManager, ContextPolicy, DelegationExecutionObserver,
-    DelegationExecutionStatus, DelegationExecutor, DelegationHostPolicy, DelegationPlan,
-    DelegationStatus, ExecutorFeature, ExecutorProfilePolicy, ModelProfilePolicy, Output,
-    PermissionSet, ValidatedAgentDelegationRequest,
+    agent_loop, host_agent_observability, AgentDelegationResponse, AgentDelegator,
+    AgentLoopOutcome, AgentTrace, AgentUsage, CapabilityRegistry, ContextManager, ContextPolicy,
+    DelegationExecutionObserver, DelegationExecutionStatus, DelegationExecutor,
+    DelegationHostPolicy, DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy,
+    HostObservabilityConfig, ModelProfilePolicy, ObservabilityHost, Output, PermissionSet,
+    ValidatedAgentDelegationRequest,
 };
 use wisp_dto::WorkflowTemplate;
 use wisp_llm::{Message, Provider, ProviderConfig, Role, ToolSchema};
@@ -607,6 +608,11 @@ impl AgentDelegator for CliDelegator {
             usage: Mutex::new(AgentUsage::default()),
             failures: Mutex::new(vec![]),
             approvals: self.approvals.clone(),
+            agent_trace: host_agent_observability(
+                HostObservabilityConfig::for_host(ObservabilityHost::Delegated, &self.root)
+                    .with_session(&request.step_id)
+                    .with_turn(request.request_id.clone()),
+            ),
         };
         let mut ctx = ContextManager::new(
             request
@@ -757,6 +763,7 @@ struct NodeOutput {
     usage: Mutex<AgentUsage>,
     failures: Mutex<Vec<String>>,
     approvals: tokio::sync::mpsc::UnboundedSender<NodeApproval>,
+    agent_trace: AgentTrace,
 }
 impl Output for NodeOutput {
     fn restrict_read_paths_to_project(&self) -> bool {
@@ -844,6 +851,9 @@ impl Output for NodeOutput {
         let mut usage = self.usage.lock().unwrap();
         usage.input_tokens += input;
         usage.output_tokens += output;
+    }
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.agent_trace)
     }
 }
 
