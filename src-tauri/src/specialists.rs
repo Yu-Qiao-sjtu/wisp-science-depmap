@@ -771,7 +771,7 @@ mod tests {
 
         let datasets = manifest["datasets"].as_array().unwrap();
         let capabilities = manifest["capabilities"].as_array().unwrap();
-        assert_eq!(capabilities.len(), 24);
+        assert_eq!(capabilities.len(), 25);
         let dataset_ids: HashSet<&str> = datasets
             .iter()
             .map(|dataset| dataset["id"].as_str().unwrap())
