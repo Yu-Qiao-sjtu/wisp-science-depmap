@@ -4439,15 +4439,15 @@ mod tests {
             "depmap_codependency_evidence".into(),
             "depmap_pair_evidence".into(),
         ])
-            .with_tool_catalog(tools)
-            .run(
-                &json!({
-                    "intent":"codependency_evidence",
-                    "gene":"GENEA"
-                }),
-                &RouteTestEnv,
-            )
-            .await;
+        .with_tool_catalog(tools)
+        .run(
+            &json!({
+                "intent":"codependency_evidence",
+                "gene":"GENEA"
+            }),
+            &RouteTestEnv,
+        )
+        .await;
         assert!(result.success, "{}", result.content);
         let body: Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(body["decision"], "execute");
