@@ -1,0 +1,23 @@
+{
+  "schema_version": 3,
+  "module_id": "event_contrast_power",
+  "analysis_label": "event_contrast_power_sidecar",
+  "display_name_zh": "事件对照功效与可检测效应 sidecar",
+  "data_modality": "completed_event_contrast_artifact",
+  "relation_type": "design_minimum_detectable_effect",
+  "entity_roles": {
+    "source": "upstream_event_contrast",
+    "target": "gene_effect_delta",
+    "symmetric": false
+  },
+  "query_contract": {
+    "event_contrast_power": {
+      "capability_id": "event_contrast_power",
+      "operation_id": "run_event_contrast_power_sidecar",
+      "execution_mode": "authorized_on_demand_cached",
+      "required_entities": ["upstream_event_contrast_artifact"],
+      "reader_mcp": "validated artifacts only; never launch computation from the query path",
+      "do_not_treat_as": ["biological_significance", "evidence_of_no_effect"]
+    }
+  }
+}

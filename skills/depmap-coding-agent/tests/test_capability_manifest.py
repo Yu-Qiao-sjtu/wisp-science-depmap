@@ -254,6 +254,45 @@ class ExpressionDependencyCapabilityTests(unittest.TestCase):
         self.assertEqual(query["capability_id"], "allele_specific_mutation_dependency")
         self.assertEqual(query["required_entities"], ["mutation_gene", "protein_change"])
 
+    def test_event_contrast_power_is_an_authorized_sidecar(self):
+        manifest_path = (
+            self.repo_root
+            / "skills"
+            / "depmap-coding-agent"
+            / "references"
+            / "capability-manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capability = next(
+            item
+            for item in manifest["capabilities"]
+            if item["id"] == "event_contrast_power"
+        )
+        self.assertEqual(
+            capability["data_modality"],
+            "completed_event_contrast_artifact",
+        )
+        operation = capability["operations"]["run_event_contrast_power_sidecar"]
+        self.assertEqual(operation["execution_mode"], "authorized_on_demand_cached")
+        self.assertEqual(
+            operation["executable_entrypoint"],
+            "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py",
+        )
+        intent = json.loads(
+            (
+                self.repo_root
+                / "analysis-modules"
+                / "事件对照功效分析"
+                / "module.intent.json"
+            ).read_text(encoding="utf-8")
+        )
+        query = intent["query_contract"]["event_contrast_power"]
+        self.assertEqual(query["capability_id"], "event_contrast_power")
+        self.assertEqual(
+            query["required_entities"],
+            ["upstream_event_contrast_artifact"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
