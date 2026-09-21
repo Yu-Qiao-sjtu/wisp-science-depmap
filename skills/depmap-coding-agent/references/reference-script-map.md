@@ -34,6 +34,7 @@ review rather than defaults to copy.
 | `negative_dependency_expression` | `16_Dependency_nagative_correlation.R` | Negative/bipolar dependency analysis with expression context | Gene Effect, expression, cell-info RDS |
 | `bipolar_dependency` | `17_bipolar_dependency_ASB7_as_example.R` | Recursive bipolar dependency searches and paired visualization | Gene Effect |
 | `drug_auc_cross_validation` | `18_DrugAUC_and_DepMap_MTAPasExample.R` | CRISPR/RNAi/CNV/expression/drug cross-validation | AMG193 AUC, Gene Effect, `cellinfor.rds`, DEMETER2, CNV, ModelCondition, expression |
+| `event_contrast_power` | `run_event_contrast_power_sidecar.py` | Design-time minimum detectable effect for a completed event-contrast artifact; never reruns the biological contrast | Upstream event-contrast result-contract JSON |
 
 ## Routing examples
 

@@ -175,6 +175,11 @@
       ]
     },
     {
+      "id": "event_contrast_artifact_json",
+      "kind": "user_input",
+      "path": "runs/event-contrast/result-contract.json"
+    },
+    {
       "id": "expression_dependency_matrix_root",
       "kind": "derived",
       "path": "analysis-modules/表达基因-CRISPR基因依赖相关性分析/results/expression_dependency",
@@ -691,6 +696,44 @@
         "model_condition_csv",
         "expression_csv"
       ]
+    },
+    {
+      "id": "event_contrast_power",
+      "title": "Event-contrast design power and minimum detectable effect sidecar",
+      "analysis_label": "event_contrast_power_sidecar",
+      "data_modality": "completed_event_contrast_artifact",
+      "relation_type": "design_minimum_detectable_effect",
+      "module_id": "event_contrast_power",
+      "entity_roles": {
+        "source": "upstream_event_contrast",
+        "target": "gene_effect_delta",
+        "symmetric": false
+      },
+      "scripts": [
+        "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py"
+      ],
+      "inputs": [
+        "event_contrast_artifact_json"
+      ],
+      "operations": {
+        "run_event_contrast_power_sidecar": {
+          "execution_mode": "authorized_on_demand_cached",
+          "executable_entrypoint": "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py",
+          "inputs": [
+            "event_contrast_artifact_json"
+          ],
+          "required_entities": [
+            "upstream_event_contrast_artifact"
+          ],
+          "defaults": {
+            "desired_power": 0.8,
+            "alpha": 0.05,
+            "variance_model": "pooled",
+            "effect_scale": "gene_effect_delta",
+            "direction": "two_sided"
+          }
+        }
+      }
     }
   ]
 }
