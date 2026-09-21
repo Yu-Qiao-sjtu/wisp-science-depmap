@@ -37,7 +37,21 @@ A versioned `specialists/depmap_r_agent.v1.json` describes that Specialist's
 identity, required Skills, connector capabilities, native tool sets, and output
 contracts. Desktop, CLI, and eval must assemble it through
 `wisp_core::specialist_manifest`: host capabilities and user policy can only reduce what
-the manifest names. The manifest is not an MCP server and cannot embed
+the manifest names. The companion `specialists/depmap_r_agent.intent.v1.json`
+catalog is the typed semantic bridge: the model may propose a `ScientificIntent`,
+and the deterministic `BridgePlanner` in `wisp-core` decides whether that
+canonical meaning maps to exactly one capability, needs clarification, is
+unsupported, or hits a coverage, provider, policy, or missing-tool boundary.
+Desktop, CLI, eval, delegated, and resumed paths call the same
+`plan_scientific_intent` contract and install the `plan_scientific_intent`
+tool after MCP/native tools are registered. An execute grant is the planned
+capability only. Global mutation events `damaging`/`hotspot` canonicalize to
+`damaging_mutation`/`hotspot_mutation` before schema validation. Pair-backed
+capabilities bind MCP `source`/`target` and omit unsupported `limit`. The planner does not grant the model
+authority, does not treat a proposed coverage claim as data, and does not
+select an unvalidated raw execution path. Planned calls are checked against
+the discovered MCP input schema and omit absent optional fields instead of
+sending `null`. The manifest is not an MCP server and cannot embed
 credentials or executable plugins. Existing conversations keep a frozen
 identity plus `manifest_version`; a newer file does not rewrite them.
 

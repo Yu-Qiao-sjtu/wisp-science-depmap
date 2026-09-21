@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "id": "depmap_r_agent.intent",
+  "manifest_version": "1.0.0",
+  "relation_aliases": {
+    "codependency": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "co_dependency": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "co-dependency": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "共依赖": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "knockout_dependency_correlation": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "crispr_gene_effect_correlation": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "gene_effect_correlation": {
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation"
+    },
+    "coexpression": {
+      "relation": "coexpression",
+      "data_modality": "transcript_expression_log2_tpm_plus_1",
+      "metric": "expression_correlation"
+    },
+    "co_expression": {
+      "relation": "coexpression",
+      "data_modality": "transcript_expression_log2_tpm_plus_1",
+      "metric": "expression_correlation"
+    },
+    "共表达": {
+      "relation": "coexpression",
+      "data_modality": "transcript_expression_log2_tpm_plus_1",
+      "metric": "expression_correlation"
+    },
+    "expression_correlation": {
+      "relation": "coexpression",
+      "data_modality": "transcript_expression_log2_tpm_plus_1",
+      "metric": "expression_correlation"
+    },
+    "expression_dependency": {
+      "relation": "predictive_association",
+      "data_modality": "expression_vs_crispr_gene_effect",
+      "metric": "expression_dependency_association"
+    },
+    "expression_vs_dependency": {
+      "relation": "predictive_association",
+      "data_modality": "expression_vs_crispr_gene_effect",
+      "metric": "expression_dependency_association"
+    },
+    "event_stratified_dependency": {
+      "relation": "event_stratified_dependency",
+      "data_modality": "somatic_mutation_event_vs_crispr_dependency",
+      "metric": "delta_gene_effect"
+    },
+    "mutation_to_dependency": {
+      "relation": "event_stratified_dependency",
+      "data_modality": "somatic_mutation_event_vs_crispr_dependency",
+      "metric": "delta_gene_effect"
+    }
+  },
+  "modality_aliases": {
+    "crispr_gene_effect": "crispr_gene_effect",
+    "gene_effect": "crispr_gene_effect",
+    "ceres": "crispr_gene_effect",
+    "chronos": "crispr_gene_effect",
+    "transcript_expression_log2_tpm_plus_1": "transcript_expression_log2_tpm_plus_1",
+    "expression": "transcript_expression_log2_tpm_plus_1",
+    "rna": "transcript_expression_log2_tpm_plus_1",
+    "tpm": "transcript_expression_log2_tpm_plus_1",
+    "expression_vs_crispr_gene_effect": "expression_vs_crispr_gene_effect",
+    "somatic_mutation_event_vs_crispr_dependency": "somatic_mutation_event_vs_crispr_dependency"
+  },
+  "metric_aliases": {
+    "gene_effect_correlation": "gene_effect_correlation",
+    "expression_correlation": "expression_correlation",
+    "expression_dependency_association": "expression_dependency_association",
+    "delta_gene_effect": "delta_gene_effect"
+  },
+  "action_aliases": {
+    "retrieve_evidence": "retrieve_evidence",
+    "retrieve": "retrieve_evidence",
+    "query": "retrieve_evidence",
+    "lookup": "retrieve_evidence",
+    "show": "retrieve_evidence",
+    "detail": "retrieve_evidence",
+    "details": "retrieve_evidence",
+    "interpret": "interpret",
+    "explain": "interpret",
+    "inventory": "inventory",
+    "compare": "compare",
+    "compute": "compute",
+    "run": "compute",
+    "recompute": "compute",
+    "new_analysis": "compute"
+  },
+  "scope_aliases": {
+    "global": "global",
+    "pancancer": "global",
+    "pan_cancer": "global",
+    "all_models": "global",
+    "lineage": "lineage",
+    "cancer": "lineage",
+    "tissue": "lineage"
+  },
+  "direction_aliases": {
+    "positive": "positive",
+    "similar": "positive",
+    "negative": "negative",
+    "opposite": "negative"
+  },
+  "ambiguous_relations": [
+    {
+      "aliases": ["related", "association", "associated", "有什么关系", "是否相关"],
+      "competing_capability_ids": ["codependency_evidence", "coexpression_evidence"]
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "codependency_evidence",
+      "tool": "depmap_codependency_evidence",
+      "relation": "codependency",
+      "data_modality": "crispr_gene_effect",
+      "metric": "gene_effect_correlation",
+      "action": "retrieve_evidence",
+      "scopes": ["global", "lineage"],
+      "entity_roles": [
+        { "role": "gene", "kind": "gene", "required": true }
+      ],
+      "arguments": [
+        { "from": "entity.gene", "to": "gene", "optional": false },
+        { "from": "entity.lineage", "to": "lineage", "optional": true },
+        { "from": "direction", "to": "direction", "optional": true },
+        { "from": "constraint.limit", "to": "limit", "optional": true, "default": 20 }
+      ]
+    },
+    {
+      "id": "coexpression_evidence",
+      "tool": "depmap_pair_evidence",
+      "relation": "coexpression",
+      "data_modality": "transcript_expression_log2_tpm_plus_1",
+      "metric": "expression_correlation",
+      "action": "retrieve_evidence",
+      "scopes": ["global", "lineage"],
+      "entity_roles": [
+        { "role": "source", "kind": "gene", "required": true },
+        { "role": "target", "kind": "gene", "required": true }
+      ],
+      "arguments": [
+        { "from": "entity.source", "to": "source", "optional": false },
+        { "from": "entity.target", "to": "target", "optional": false },
+        { "from": "entity.lineage", "to": "lineage", "optional": true }
+      ]
+    },
+    {
+      "id": "expression_dependency_evidence",
+      "tool": "depmap_pair_evidence",
+      "relation": "predictive_association",
+      "data_modality": "expression_vs_crispr_gene_effect",
+      "metric": "expression_dependency_association",
+      "action": "retrieve_evidence",
+      "scopes": ["global", "lineage"],
+      "entity_roles": [
+        { "role": "source", "kind": "gene", "required": true },
+        { "role": "target", "kind": "gene", "required": true }
+      ],
+      "arguments": [
+        { "from": "entity.source", "to": "source", "optional": false },
+        { "from": "entity.target", "to": "target", "optional": false },
+        { "from": "entity.lineage", "to": "lineage", "optional": true }
+      ]
+    },
+    {
+      "id": "mutation_dependency_global",
+      "tool": "depmap_synthetic_lethal_evidence",
+      "relation": "event_stratified_dependency",
+      "data_modality": "somatic_mutation_event_vs_crispr_dependency",
+      "metric": "delta_gene_effect",
+      "action": "retrieve_evidence",
+      "scopes": ["global"],
+      "entity_roles": [
+        { "role": "source", "kind": "mutation_event", "required": false },
+        { "role": "target", "kind": "gene", "required": false }
+      ],
+      "require_any_roles": ["source", "target"],
+      "arguments": [
+        { "from": "entity.source", "to": "source", "optional": true },
+        { "from": "entity.target", "to": "target", "optional": true },
+        { "from": "constraint.event", "to": "event", "optional": true },
+        { "from": "constraint.limit", "to": "limit", "optional": true, "default": 20 }
+      ]
+    },
+    {
+      "id": "mutation_dependency_lineage",
+      "tool": "depmap_lineage_mutation_dependency",
+      "relation": "event_stratified_dependency",
+      "data_modality": "somatic_mutation_event_vs_crispr_dependency",
+      "metric": "delta_gene_effect",
+      "action": "retrieve_evidence",
+      "scopes": ["lineage"],
+      "entity_roles": [
+        { "role": "lineage", "kind": "lineage", "required": true },
+        { "role": "source", "kind": "mutation_event", "required": false },
+        { "role": "target", "kind": "gene", "required": false }
+      ],
+      "require_any_roles": ["source", "target"],
+      "arguments": [
+        { "from": "entity.lineage", "to": "lineage", "optional": false },
+        { "from": "entity.source", "to": "source", "optional": true },
+        { "from": "entity.target", "to": "target", "optional": true },
+        { "from": "constraint.event", "to": "event", "optional": true },
+        { "from": "constraint.limit", "to": "limit", "optional": true, "default": 20 }
+      ]
+    }
+  ]
+}

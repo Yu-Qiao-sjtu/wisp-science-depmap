@@ -109,6 +109,10 @@ pub fn load_depmap_manifest() -> SpecialistManifest {
         .expect("compiled DepMap specialist manifest must be valid JSON")
 }
 
+pub fn load_depmap_intent_catalog() -> crate::scientific_intent::IntentCatalog {
+    crate::scientific_intent::IntentCatalog::bundled_depmap()
+}
+
 pub fn identity_digest(manifest: &SpecialistManifest) -> String {
     let mut hasher = Sha256::new();
     hasher.update(manifest.id.as_bytes());
@@ -190,6 +194,20 @@ mod tests {
             snapshot.required_skills,
             vec!["depmap-knowledge-query", "depmap-coding-agent"]
         );
+    }
+
+    #[test]
+    fn bundled_host_loads_the_versioned_intent_catalog() {
+        let catalog = load_depmap_intent_catalog();
+        assert_eq!(
+            catalog.schema_version,
+            crate::scientific_intent::INTENT_SCHEMA_VERSION
+        );
+        assert_eq!(catalog.id, "depmap_r_agent.intent");
+        assert!(catalog
+            .capabilities
+            .iter()
+            .any(|spec| spec.id == "codependency_evidence"));
     }
 
     #[test]

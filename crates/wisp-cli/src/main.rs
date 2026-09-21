@@ -1125,6 +1125,11 @@ async fn main() -> Result<()> {
         );
     }
 
+    let _scientific_bridge = wisp_core::host_scientific_bridge(
+        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    );
+    wisp_core::install_scientific_intent_planner(&mut agent.tools);
+
     let out = CliOutput;
     if command == CliCommand::Rpc {
         let result = rpc::serve(agent).await;
