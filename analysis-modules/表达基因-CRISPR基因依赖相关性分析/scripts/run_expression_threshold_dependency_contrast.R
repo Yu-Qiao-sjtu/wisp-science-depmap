@@ -249,8 +249,8 @@ selected_effect <- effect[selected, , drop = FALSE]
 selected_group <- factor(group[selected], levels = c("low", "high"))
 target_low_n <- colSums(is.finite(selected_effect[selected_group == "low", , drop = FALSE]))
 target_high_n <- colSums(is.finite(selected_effect[selected_group == "high", , drop = FALSE]))
-eligible <- target_low_n >= min_group_n & target_high_n >= min_group_n
-if (!any(eligible)) {
+count_eligible <- target_low_n >= min_group_n & target_high_n >= min_group_n
+if (!any(count_eligible)) {
   write_terminal("INELIGIBLE", "no Gene Effect target has enough complete cases in both expression groups",
                  list(list(name = "eligible_target_universe", status = "fail", detail = "0 targets")),
                  cohort = list(requested = if (scope == "lineage") lineage_requested else "all", n_before = cohort_before, n_after = sum(selected), low_n = low_n, high_n = high_n,
@@ -266,10 +266,21 @@ if (scope == "global") {
 colnames(design)[seq_len(2)] <- c("low", "high")
 if (qr(design)$rank < ncol(design)) stop("analysis design is rank deficient")
 
-fit <- lmFit(t(selected_effect[, eligible, drop = FALSE]), design)
+fit_index <- which(count_eligible)
+fit <- lmFit(t(selected_effect[, count_eligible, drop = FALSE]), design)
 fit <- contrasts.fit(fit, makeContrasts(high - low, levels = design))
 fit <- eBayes(fit, robust = TRUE)
 stats <- topTable(fit, number = Inf, sort.by = "none")
+estimable_fit <- is.finite(stats$logFC) & is.finite(stats$t) & is.finite(stats$P.Value)
+eligible <- rep(FALSE, length(effect_genes))
+eligible[fit_index[estimable_fit]] <- TRUE
+if (!any(eligible)) {
+  write_terminal("INELIGIBLE", "no Gene Effect target has an estimable adjusted high-minus-low contrast",
+                 list(list(name = "estimable_target_universe", status = "fail", detail = "0 targets")),
+                 cohort = list(requested = if (scope == "lineage") lineage_requested else "all", n_before = cohort_before, n_after = sum(selected), low_n = low_n, high_n = high_n,
+                               lower_cutpoint = cuts[[1]], upper_cutpoint = cuts[[2]]))
+}
+estimable_stats <- stats[estimable_fit, , drop = FALSE]
 
 out <- data.table(
   target_gene = effect_genes,
@@ -289,10 +300,10 @@ out <- data.table(
 eligible_index <- which(eligible)
 out[eligible_index, low_mean_gene_effect := colMeans(selected_effect[selected_group == "low", eligible, drop = FALSE], na.rm = TRUE)]
 out[eligible_index, high_mean_gene_effect := colMeans(selected_effect[selected_group == "high", eligible, drop = FALSE], na.rm = TRUE)]
-out[eligible_index, effect_size_high_minus_low := stats$logFC]
-out[eligible_index, moderated_t := stats$t]
-out[eligible_index, p_value := stats$P.Value]
-out[eligible_index, fdr := p.adjust(stats$P.Value, method = "BH")]
+out[eligible_index, effect_size_high_minus_low := estimable_stats$logFC]
+out[eligible_index, moderated_t := estimable_stats$t]
+out[eligible_index, p_value := estimable_stats$P.Value]
+out[eligible_index, fdr := p.adjust(estimable_stats$P.Value, method = "BH")]
 out[, stronger_dependency_in_high := status == "FOUND" & effect_size_high_minus_low < 0]
 out[, passes_retention := status == "FOUND" & is.finite(fdr) & fdr <= fdr_max & abs(effect_size_high_minus_low) >= min_abs_effect]
 setorder(out, -passes_retention, fdr, effect_size_high_minus_low, target_gene)
