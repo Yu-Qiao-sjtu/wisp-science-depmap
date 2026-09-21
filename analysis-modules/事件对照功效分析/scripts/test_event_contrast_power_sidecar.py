@@ -47,7 +47,7 @@ def run_sidecar(workdir: Path, upstream: dict, config: dict) -> tuple[int, dict]
         capture_output=True,
         text=True,
     )
-    result = json.loads((out / "result-contract.json").read_text(encoding="utf-8"))
+    result = json.loads((out / "result.json").read_text(encoding="utf-8"))
     return completed.returncode, result
 
 
@@ -127,7 +127,7 @@ class EventContrastPowerTests(unittest.TestCase):
                 ],
                 check=False,
             ).returncode
-            result = json.loads((out / "result-contract.json").read_text(encoding="utf-8"))
+            result = json.loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertNotEqual(code, 0)
         self.assertEqual(result["status"], "UPSTREAM_MISSING")
 
@@ -185,6 +185,37 @@ class EventContrastPowerTests(unittest.TestCase):
             upstream["methods"]["variance_model"] = "welch"
             _, result = run_sidecar(Path(tmp), upstream, {"desired_power": 0.8, "alpha": 0.05})
         self.assertEqual(result["status"], "UNEQUAL_VARIANCE_POLICY_UNSUPPORTED")
+
+    def test_standard_run_filenames_and_no_bh_mde(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "run"
+            code, result = run_sidecar(work, complete_upstream(), {"desired_power": 0.8, "alpha": 0.05})
+            out = work / "out"
+            self.assertEqual(code, 0)
+            self.assertTrue((out / "result.json").is_file())
+            self.assertTrue((out / "qc.json").is_file())
+            self.assertTrue((out / "run_manifest.json").is_file())
+            self.assertNotIn("bh_complete_null_mde", result["observations"])
+
+    def test_one_sided_direction_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result = run_sidecar(
+                Path(tmp),
+                complete_upstream(),
+                {"desired_power": 0.8, "alpha": 0.05, "direction": "one_sided"},
+            )
+        self.assertEqual(result["status"], "UNSUPPORTED_DIRECTION")
+
+    def test_median_power_does_not_recurse(self) -> None:
+        self.assertEqual(t_quantile(0.5, 38.0), 0.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, result = run_sidecar(
+                Path(tmp),
+                complete_upstream(),
+                {"desired_power": 0.5, "alpha": 0.05},
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "COMPLETE")
 
 
 if __name__ == "__main__":

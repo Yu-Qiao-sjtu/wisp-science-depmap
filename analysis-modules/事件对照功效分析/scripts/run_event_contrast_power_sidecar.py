@@ -62,7 +62,9 @@ def two_sided_t_p(t_stat: float, df: float) -> float:
 
 def t_quantile(probability: float, df: float) -> float:
     """Central Student-t quantile via bisection on the two-sided p mapping."""
-    if probability <= 0.5:
+    if abs(probability - 0.5) < 1e-15:
+        return 0.0
+    if probability < 0.5:
         return -t_quantile(1.0 - probability, df)
     target_two_sided = 2.0 * (1.0 - probability)
     lo, hi = 0.0, 1.0
@@ -113,6 +115,66 @@ def write_tsv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
             writer.writerow(row)
 
 
+def emit_run(
+    output_dir: Path,
+    result: dict,
+    *,
+    config_path: Path | None = None,
+    upstream_path: Path | None = None,
+    extra_outputs: list[str] | None = None,
+) -> None:
+    created = result.get("created_at") or datetime.now(timezone.utc).isoformat()
+    result.setdefault("created_at", created)
+    write_json(output_dir / "result.json", result)
+    failed = bool(result.get("blocked"))
+    write_json(
+        output_dir / "qc.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "status": "fail" if failed else "pass",
+            "checks": [
+                {
+                    "name": "typed_status",
+                    "status": "fail" if failed else "pass",
+                    "detail": result.get("status"),
+                }
+            ],
+            "blocking_failures": [result.get("status")] if failed else [],
+            "warnings": result.get("warnings") or [],
+        },
+    )
+    outputs = ["run_manifest.json", "result.json", "qc.json"]
+    if extra_outputs:
+        outputs.extend(extra_outputs)
+    write_json(
+        output_dir / "run_manifest.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "analysis_id": CAPABILITY_ID,
+            "created_at": created,
+            "language": "Python",
+            "entrypoint": "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py",
+            "reference_scripts": [],
+            "inputs": [
+                item
+                for item in [
+                    {"path": str(upstream_path), "role": "upstream_event_contrast"}
+                    if upstream_path
+                    else None,
+                    {"path": str(config_path), "role": "config"} if config_path else None,
+                ]
+                if item
+            ],
+            "parameters": {
+                "operation_id": OPERATION_ID,
+                "status": result.get("status"),
+            },
+            "software": {"python": "stdlib"},
+            "outputs": outputs,
+        },
+    )
+
+
 def blocked(status: str, reason: str, extra: dict | None = None) -> dict:
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -157,25 +219,25 @@ def main() -> int:
     args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result_path = output_dir / "result-contract.json"
-    qa_path = output_dir / "qa.json"
     table_path = output_dir / "tables" / "minimum_detectable_effect.tsv"
     config_path = Path(args.config_json)
     upstream_path = Path(args.upstream_artifact)
 
-    if not config_path.is_file():
-        write_json(result_path, blocked("CONFIG_MISSING", "config json is required"))
+    def fail(payload: dict) -> int:
+        emit_run(output_dir, payload, config_path=config_path if config_path.is_file() else None, upstream_path=upstream_path if upstream_path.is_file() else None)
         return 2
+
+    if not config_path.is_file():
+        return fail(blocked("CONFIG_MISSING", "config json is required"))
     config = load_json(config_path)
 
     if not upstream_path.is_file():
-        payload = blocked(
-            "UPSTREAM_MISSING",
-            "event-contrast artifact is required; sidecar does not run the biological contrast",
+        return fail(
+            blocked(
+                "UPSTREAM_MISSING",
+                "event-contrast artifact is required; sidecar does not run the biological contrast",
+            )
         )
-        write_json(result_path, payload)
-        write_json(qa_path, {"status": payload["status"]})
-        return 2
 
     upstream = load_json(upstream_path)
     expected_digest = config.get("upstream_digest")
@@ -183,25 +245,23 @@ def main() -> int:
     extra = {"upstream_path": str(upstream_path), "upstream_digest": actual_digest}
 
     if expected_digest and expected_digest != actual_digest:
-        payload = blocked(
-            "STALE_UPSTREAM_DIGEST",
-            "pinned upstream digest does not match the supplied artifact",
-            extra,
+        return fail(
+            blocked(
+                "STALE_UPSTREAM_DIGEST",
+                "pinned upstream digest does not match the supplied artifact",
+                extra,
+            )
         )
-        write_json(result_path, payload)
-        write_json(qa_path, {"status": payload["status"], "expected_digest": expected_digest})
-        return 2
 
     upstream_status = str(upstream.get("status", "")).upper()
     if upstream_status not in {"COMPLETE", "OK", "SUCCESS"}:
-        payload = blocked(
-            "UPSTREAM_INELIGIBLE",
-            "upstream contrast is not a completed eligible event-contrast artifact",
-            extra | {"upstream_status": upstream_status or "MISSING"},
+        return fail(
+            blocked(
+                "UPSTREAM_INELIGIBLE",
+                "upstream contrast is not a completed eligible event-contrast artifact",
+                extra | {"upstream_status": upstream_status or "MISSING"},
+            )
         )
-        write_json(result_path, payload)
-        write_json(qa_path, {"status": payload["status"]})
-        return 2
 
     cohort = upstream.get("cohort") or {}
     methods = upstream.get("methods") or {}
@@ -226,54 +286,56 @@ def main() -> int:
         desired_power = 0.8
     fdr_policy = str(config.get("fdr_policy") or methods.get("fdr_policy") or "BH")
     effect_scale = str(config.get("effect_scale") or "gene_effect_delta")
-    direction = str(config.get("direction") or "two_sided")
+    direction = str(config.get("direction") or methods.get("direction") or "two_sided")
 
+    if direction != "two_sided":
+        return fail(
+            blocked(
+                "UNSUPPORTED_DIRECTION",
+                "sidecar computes two-sided pooled-t MDE only",
+                extra | {"direction": direction},
+            )
+        )
     if variance_model.lower() not in {"pooled", "pooled-variance", "equal_variance"}:
-        payload = blocked(
-            "UNEQUAL_VARIANCE_POLICY_UNSUPPORTED",
-            "sidecar computes pooled-variance design MDE only",
-            extra | {"variance_model": variance_model},
+        return fail(
+            blocked(
+                "UNEQUAL_VARIANCE_POLICY_UNSUPPORTED",
+                "sidecar computes pooled-variance design MDE only",
+                extra | {"variance_model": variance_model},
+            )
         )
-        write_json(result_path, payload)
-        return 2
     if n_case < 2 or n_control < 2:
-        payload = blocked(
-            "TINY_GROUPS",
-            "case and control counts must each be at least 2 for a two-sample t design",
-            extra | {"n_case": n_case, "n_control": n_control},
+        return fail(
+            blocked(
+                "TINY_GROUPS",
+                "case and control counts must each be at least 2 for a two-sample t design",
+                extra | {"n_case": n_case, "n_control": n_control},
+            )
         )
-        write_json(result_path, payload)
-        return 2
     if not (0.0 < alpha < 1.0):
-        payload = blocked("INVALID_ALPHA", "alpha must be in (0, 1)", extra)
-        write_json(result_path, payload)
-        return 2
+        return fail(blocked("INVALID_ALPHA", "alpha must be in (0, 1)", extra))
     if not (0.0 < desired_power < 1.0):
-        payload = blocked("INVALID_POWER", "desired_power must be in (0, 1)", extra)
-        write_json(result_path, payload)
-        return 2
+        return fail(blocked("INVALID_POWER", "desired_power must be in (0, 1)", extra))
     if sigma <= 0.0:
-        payload = blocked(
-            "ZERO_VARIANCE",
-            "an empirical or declared positive sigma is required; zero variance cannot yield an MDE",
-            extra,
+        return fail(
+            blocked(
+                "ZERO_VARIANCE",
+                "an empirical or declared positive sigma is required; zero variance cannot yield an MDE",
+                extra,
+            )
         )
-        write_json(result_path, payload)
-        return 2
     if tested_target_count < 1:
-        payload = blocked(
-            "INVALID_TARGET_COUNT",
-            "tested_target_count must be a positive integer",
-            extra,
+        return fail(
+            blocked(
+                "INVALID_TARGET_COUNT",
+                "tested_target_count must be a positive integer",
+                extra,
+            )
         )
-        write_json(result_path, payload)
-        return 2
 
     unadjusted = mde(n_case, n_control, sigma, alpha, desired_power)
     bonferroni_alpha = alpha / tested_target_count
     bonferroni = mde(n_case, n_control, sigma, bonferroni_alpha, desired_power)
-    # BH under the complete-null is conservative at alpha; report as a named scenario.
-    bh_complete_null = mde(n_case, n_control, sigma, alpha, desired_power)
 
     observed = (upstream.get("observations") or {}).get("observed_effect")
     rows = [
@@ -294,15 +356,6 @@ def main() -> int:
             "mde": f"{bonferroni['minimum_detectable_effect']:.12g}",
             "df": bonferroni["df"],
             "multiplicity": "Bonferroni",
-        },
-        {
-            "scenario": "bh_complete_null",
-            "kind": "prospective_design",
-            "alpha": f"{alpha:.12g}",
-            "power": f"{desired_power:.12g}",
-            "mde": f"{bh_complete_null['minimum_detectable_effect']:.12g}",
-            "df": bh_complete_null["df"],
-            "multiplicity": "BH_complete_null",
         },
     ]
     if observed is not None:
@@ -331,6 +384,7 @@ def main() -> int:
         "status": "COMPLETE",
         "blocked": False,
         "question": "What gene-effect delta is detectable at the declared power for this completed event contrast?",
+        "targets": [],
         "cohort": {
             "n_case": n_case,
             "n_control": n_control,
@@ -341,23 +395,24 @@ def main() -> int:
             "degrees_of_freedom": unadjusted["df"],
             "alpha": alpha,
             "desired_power": desired_power,
-            "fdr_policy": fdr_policy,
+            "upstream_fdr_policy": fdr_policy,
+            "multiplicity_for_mde": "Bonferroni for family-wide design; BH has no fixed per-target alpha",
             "effect_scale": effect_scale,
-            "direction": direction,
+            "direction": "two_sided",
             "approximation": unadjusted["approximation"],
             "empirical_sigma": sigma,
         },
         "observations": {
             "unadjusted_mde": unadjusted["minimum_detectable_effect"],
             "bonferroni_mde": bonferroni["minimum_detectable_effect"],
-            "bh_complete_null_mde": bh_complete_null["minimum_detectable_effect"],
             "observed_effect": observed,
             "observed_effect_is_not_power": True,
         },
         "tables": [{"path": "tables/minimum_detectable_effect.tsv"}],
+        "figures": [],
         "warnings": [
             "This sidecar is not biological significance and is not evidence of no effect.",
-            "BH complete-null MDE uses the unadjusted alpha; Bonferroni is the multiplicity-adjusted design scenario.",
+            "BH does not yield a single per-target design alpha; Bonferroni is the multiplicity-adjusted MDE scenario.",
         ],
         "upstream_digest": actual_digest,
         "biological_significance": False,
@@ -370,38 +425,17 @@ def main() -> int:
             "methods": result["methods"],
             "observations": {
                 k: result["observations"][k]
-                for k in ("unadjusted_mde", "bonferroni_mde", "bh_complete_null_mde")
+                for k in ("unadjusted_mde", "bonferroni_mde")
             },
             "upstream_digest": actual_digest,
         }
     )
-    write_json(result_path, result)
-    write_json(
-        qa_path,
-        {
-            "status": "COMPLETE",
-            "digest": result["digest"],
-            "upstream_digest": actual_digest,
-            "n_case": n_case,
-            "n_control": n_control,
-        },
-    )
-    write_json(
-        output_dir / "manifest.json",
-        {
-            "capability_id": CAPABILITY_ID,
-            "operation_id": OPERATION_ID,
-            "entrypoint": "analysis-modules/事件对照功效分析/scripts/run_event_contrast_power_sidecar.py",
-            "inputs": {
-                "upstream_artifact": str(upstream_path),
-                "config": str(config_path),
-            },
-            "outputs": [
-                "result-contract.json",
-                "qa.json",
-                "tables/minimum_detectable_effect.tsv",
-            ],
-        },
+    emit_run(
+        output_dir,
+        result,
+        config_path=config_path,
+        upstream_path=upstream_path,
+        extra_outputs=["tables/minimum_detectable_effect.tsv"],
     )
     return 0
 
