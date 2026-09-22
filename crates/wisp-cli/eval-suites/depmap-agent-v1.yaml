@@ -35,6 +35,15 @@ cases:
       completion_contains: [26Q1, "169.7565", "17", "14"]
       completion_not_contains: ["1.9 TB"]
       request_contains: ["<!-- wisp:depmap-agent-assembly:v1:begin -->"]
+      assembly_contract: wisp.agent-assembly.v1
+      assembly_specialist: depmap_r_agent
+      assembly_tools: [attempt_completion, depmap_query, plan_scientific_intent]
+      assembly_skills: [depmap-knowledge-query, depmap-coding-agent]
+      assembly_plan_mode: false
+      assembly_approval_tools: [attempt_completion, depmap_query, plan_scientific_intent]
+      assembly_auto_compact: true
+      assembly_max_context_tokens: 128000
+      assembly_max_rounds: 6
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [shell, read, write, edit, run_in_context]
       tool_order: [depmap_query, attempt_completion]

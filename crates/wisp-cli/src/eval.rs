@@ -300,6 +300,26 @@ struct EvalExpectation {
     #[serde(default)]
     semantic_claims: Vec<SemanticClaimExpectation>,
     #[serde(default)]
+    assembly_contract: Option<String>,
+    #[serde(default)]
+    assembly_specialist: Option<String>,
+    #[serde(default)]
+    assembly_tools: Vec<String>,
+    #[serde(default)]
+    assembly_mcp_tools: Vec<String>,
+    #[serde(default)]
+    assembly_skills: Vec<String>,
+    #[serde(default)]
+    assembly_plan_mode: Option<bool>,
+    #[serde(default)]
+    assembly_approval_tools: Vec<String>,
+    #[serde(default)]
+    assembly_auto_compact: Option<bool>,
+    #[serde(default)]
+    assembly_max_context_tokens: Option<usize>,
+    #[serde(default)]
+    assembly_max_rounds: Option<usize>,
+    #[serde(default)]
     expected_files: BTreeMap<String, String>,
     #[serde(default)]
     file_contains: BTreeMap<String, Vec<String>>,
@@ -352,6 +372,16 @@ impl Default for EvalExpectation {
             completion_contains: Vec::new(),
             completion_not_contains: Vec::new(),
             semantic_claims: Vec::new(),
+            assembly_contract: None,
+            assembly_specialist: None,
+            assembly_tools: Vec::new(),
+            assembly_mcp_tools: Vec::new(),
+            assembly_skills: Vec::new(),
+            assembly_plan_mode: None,
+            assembly_approval_tools: Vec::new(),
+            assembly_auto_compact: None,
+            assembly_max_context_tokens: None,
+            assembly_max_rounds: None,
             expected_files: BTreeMap::new(),
             file_contains: BTreeMap::new(),
             deleted_files: Vec::new(),
@@ -749,6 +779,8 @@ struct ScenarioResult {
     model_quality_checks: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_quality_score_percent: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_assembly: Option<wisp_core::AgentAssemblySurface>,
     duration_ms: u64,
     rounds: usize,
     tool_calls: Vec<ToolCallRecord>,
@@ -1341,7 +1373,7 @@ async fn run_case(
     let max_rounds = limits.max_rounds.unwrap_or(DEFAULT_MAX_ROUNDS);
     let run_store = open_project_store(workspace.path(), "eval", &case.id).await?;
     let run_manager = RunManager::new();
-    let mut agent = build_agent(
+    let (mut agent, agent_assembly) = build_agent(
         &case,
         workspace.path(),
         &provider_source,
@@ -1418,6 +1450,7 @@ async fn run_case(
         &before,
         &after,
         &captured,
+        agent_assembly.as_ref(),
         agent_error.as_deref(),
         provider_source.offline_snapshot().as_ref(),
     );
@@ -1428,8 +1461,8 @@ async fn run_case(
         cost_microusd,
         &mut contract_failures,
     );
-    let model_quality_failures = verify_semantic_quality(&case.expect, &captured);
-    let model_quality_checks = case.expect.semantic_claims.len();
+    let (model_quality_failures, model_quality_checks) =
+        grade_semantic_quality(&case.expect, &captured, &contract_failures);
     let model_quality_score_percent = (model_quality_checks > 0).then(|| {
         let passed = model_quality_checks.saturating_sub(model_quality_failures.len());
         (passed as u64 * 100) / model_quality_checks as u64
@@ -1500,6 +1533,7 @@ async fn run_case(
         model_quality_failures,
         model_quality_checks,
         model_quality_score_percent,
+        agent_assembly,
         duration_ms,
         rounds: captured.rounds,
         tool_calls: captured.tool_calls,
@@ -1580,7 +1614,7 @@ fn build_agent(
     max_rounds: usize,
     run_store: Store,
     run_manager: RunManager,
-) -> Result<Agent> {
+) -> Result<(Agent, Option<wisp_core::AgentAssemblySurface>)> {
     let skill_paths = vec![root.join(".wisp").join("skills")];
     let skills = Arc::new(SkillIndex::load(&skill_paths));
     if case.tags.iter().any(|tag| tag == "depmap") {
@@ -1644,21 +1678,25 @@ fn build_agent(
     agent
         .ctx
         .set_claim_catalog(Some(wisp_core::ClaimGroundingCatalog::default()));
-    if case.tags.iter().any(|tag| tag == "depmap") {
-        let surface = wisp_core::assemble_depmap_agent_surface(
-            &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
-            &agent.tools,
-            wisp_core::AgentContextPolicy {
-                max_context_tokens: max_context,
-                max_rounds,
-                auto_compact: case.auto_compact.unwrap_or(true),
-            },
-            case.plan_mode,
+    let assembly = if case.tags.iter().any(|tag| tag == "depmap") {
+        Some(
+            wisp_core::assemble_and_apply_depmap_agent(
+                &mut agent.ctx,
+                &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+                &agent.tools,
+                wisp_core::AgentContextPolicy {
+                    max_context_tokens: max_context,
+                    max_rounds,
+                    auto_compact: case.auto_compact.unwrap_or(true),
+                },
+                case.plan_mode,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
         )
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-        wisp_core::apply_agent_assembly(&mut agent.ctx, &surface);
-    }
-    Ok(agent)
+    } else {
+        None
+    };
+    Ok((agent, assembly))
 }
 
 fn seed_context(ctx: &mut ContextManager, seeds: &[SeedMessage]) -> Result<()> {
@@ -1770,7 +1808,8 @@ async fn run_actions(
                     max_rounds,
                     run_store.clone(),
                     run_manager.clone(),
-                )?;
+                )?
+                .0;
                 if let Some(enabled) = case.auto_compact {
                     agent.set_auto_compact(enabled);
                 }
@@ -1786,6 +1825,7 @@ fn verify_case(
     before: &BTreeMap<String, Vec<u8>>,
     after: &BTreeMap<String, Vec<u8>>,
     captured: &Captured,
+    assembly: Option<&wisp_core::AgentAssemblySurface>,
     agent_error: Option<&str>,
     provider: Option<&ScriptedProviderSnapshot>,
 ) -> Vec<String> {
@@ -1825,6 +1865,7 @@ fn verify_case(
             failures.push(format!("completion unexpectedly contained '{fragment}'"));
         }
     }
+    verify_assembly_expectations(&case.expect, assembly, &mut failures);
     for tool in &case.expect.required_tools {
         if !captured.tool_calls.iter().any(|call| &call.name == tool) {
             failures.push(format!("required tool '{tool}' was not called"));
@@ -2038,6 +2079,133 @@ fn verify_case(
         ));
     }
     failures
+}
+
+fn verify_assembly_expectations(
+    expect: &EvalExpectation,
+    assembly: Option<&wisp_core::AgentAssemblySurface>,
+    failures: &mut Vec<String>,
+) {
+    let required = expect.assembly_contract.is_some()
+        || expect.assembly_specialist.is_some()
+        || !expect.assembly_tools.is_empty()
+        || !expect.assembly_mcp_tools.is_empty()
+        || !expect.assembly_skills.is_empty()
+        || expect.assembly_plan_mode.is_some()
+        || !expect.assembly_approval_tools.is_empty()
+        || expect.assembly_auto_compact.is_some()
+        || expect.assembly_max_context_tokens.is_some()
+        || expect.assembly_max_rounds.is_some();
+    if !required {
+        return;
+    }
+    let Some(assembly) = assembly else {
+        failures.push("expected a recorded production Agent assembly surface".into());
+        return;
+    };
+    if expect
+        .assembly_contract
+        .as_ref()
+        .is_some_and(|value| value != &assembly.contract)
+    {
+        failures.push(format!(
+            "expected assembly contract {:?}, observed '{}'",
+            expect.assembly_contract, assembly.contract
+        ));
+    }
+    if expect
+        .assembly_specialist
+        .as_ref()
+        .is_some_and(|value| value != &assembly.specialist.id)
+    {
+        failures.push(format!(
+            "expected assembly specialist {:?}, observed '{}'",
+            expect.assembly_specialist, assembly.specialist.id
+        ));
+    }
+    for tool in &expect.assembly_tools {
+        if !assembly.tool_schemas.contains_key(tool) {
+            failures.push(format!(
+                "expected assembly to expose eager tool schema '{tool}'"
+            ));
+        }
+    }
+    for tool in &expect.assembly_mcp_tools {
+        if !assembly.mcp_projection.iter().any(|value| value == tool)
+            || !assembly.mcp_tool_schemas.contains_key(tool)
+        {
+            failures.push(format!(
+                "expected assembly to expose deferred MCP schema '{tool}'"
+            ));
+        }
+    }
+    for skill in &expect.assembly_skills {
+        if !assembly.enabled_skills.iter().any(|value| value == skill) {
+            failures.push(format!("expected assembly to enable Skill '{skill}'"));
+        }
+    }
+    if expect
+        .assembly_plan_mode
+        .is_some_and(|value| value != assembly.approvals.plan_mode)
+    {
+        failures.push(format!(
+            "expected assembly plan_mode {:?}, observed {}",
+            expect.assembly_plan_mode, assembly.approvals.plan_mode
+        ));
+    }
+    for tool in &expect.assembly_approval_tools {
+        if !assembly
+            .approvals
+            .approval_tools
+            .iter()
+            .any(|value| value == tool)
+        {
+            failures.push(format!(
+                "expected assembly approval surface to include '{tool}'"
+            ));
+        }
+    }
+    if expect
+        .assembly_auto_compact
+        .is_some_and(|value| value != assembly.context.auto_compact)
+    {
+        failures.push(format!(
+            "expected assembly auto_compact {:?}, observed {}",
+            expect.assembly_auto_compact, assembly.context.auto_compact
+        ));
+    }
+    if expect
+        .assembly_max_context_tokens
+        .is_some_and(|value| value != assembly.context.max_context_tokens)
+    {
+        failures.push(format!(
+            "expected assembly max_context_tokens {:?}, observed {}",
+            expect.assembly_max_context_tokens, assembly.context.max_context_tokens
+        ));
+    }
+    if expect
+        .assembly_max_rounds
+        .is_some_and(|value| value != assembly.context.max_rounds)
+    {
+        failures.push(format!(
+            "expected assembly max_rounds {:?}, observed {}",
+            expect.assembly_max_rounds, assembly.context.max_rounds
+        ));
+    }
+}
+
+fn grade_semantic_quality(
+    expect: &EvalExpectation,
+    captured: &Captured,
+    contract_failures: &[String],
+) -> (Vec<String>, usize) {
+    if captured.completion.is_none() || !contract_failures.is_empty() {
+        return (Vec::new(), 0);
+    }
+    (
+        verify_semantic_quality(expect, captured),
+        expect.semantic_claims.len(),
+    )
 }
 
 fn verify_semantic_quality(expect: &EvalExpectation, captured: &Captured) -> Vec<String> {
@@ -3297,6 +3465,7 @@ mod tests {
             &BTreeMap::new(),
             &captured,
             None,
+            None,
             Some(&provider)
         )
         .is_empty());
@@ -3390,5 +3559,20 @@ mod tests {
             ..Captured::default()
         };
         assert!(verify_semantic_quality(&expect, &captured).is_empty());
+    }
+
+    #[test]
+    fn semantic_grader_leaves_missing_completions_unscored() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured::default();
+        let (failures, checks) = grade_semantic_quality(&expect, &captured, &[]);
+        assert!(failures.is_empty());
+        assert_eq!(checks, 0);
     }
 }

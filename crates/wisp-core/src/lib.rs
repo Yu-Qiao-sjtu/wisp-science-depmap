@@ -28,9 +28,9 @@ pub use agent::{
     agent_loop, agent_loop_continue, bound_tool_results_in_history, AgentLoopOutcome, GuidanceQueue,
 };
 pub use agent_assembly::{
-    apply_agent_assembly, assemble_depmap_agent_surface, AgentApprovalPolicy, AgentAssemblySurface,
-    AgentContextPolicy, AGENT_ASSEMBLY_CONTRACT, DEPMAP_ASSEMBLY_SECTION_MARKER,
-    DEPMAP_PRODUCTION_INSTRUCTIONS,
+    apply_agent_assembly, assemble_and_apply_depmap_agent, assemble_depmap_agent_surface,
+    AgentApprovalPolicy, AgentAssemblySurface, AgentContextPolicy, AGENT_ASSEMBLY_CONTRACT,
+    DEPMAP_ASSEMBLY_SECTION_MARKER, DEPMAP_PRODUCTION_INSTRUCTIONS,
 };
 pub use bridge_checkpoint::{
     checkpoint_for_outcome, checkpoint_resume_injection, latest_pending_checkpoint,

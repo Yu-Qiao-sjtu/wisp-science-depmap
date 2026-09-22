@@ -120,6 +120,21 @@ pub fn assemble_depmap_agent_surface(
     })
 }
 
+/// Assemble and apply the DepMap Agent through one entry point shared by the
+/// desktop host and evaluator. Returning the complete surface lets hosts audit
+/// or persist every parity-relevant field instead of checking prompt text only.
+pub fn assemble_and_apply_depmap_agent(
+    ctx: &mut ContextManager,
+    host: &HostPolicy,
+    registry: &Registry,
+    context: AgentContextPolicy,
+    plan_mode: bool,
+) -> Result<AgentAssemblySurface, AssemblyError> {
+    let surface = assemble_depmap_agent_surface(host, registry, context, plan_mode)?;
+    apply_agent_assembly(ctx, &surface);
+    Ok(surface)
+}
+
 /// Apply the shared Specialist contract exactly once to the first system
 /// message. Both production desktop turns and the evaluator call this helper.
 pub fn apply_agent_assembly(ctx: &mut ContextManager, surface: &AgentAssemblySurface) {

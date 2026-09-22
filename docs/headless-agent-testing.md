@@ -23,6 +23,10 @@ identity and shared instruction contract, captures the eager tool schemas and
 deferred MCP projection, and records approval/context policy before execution.
 The evaluator therefore cannot silently drift to a different prompt or schema
 surface while still exercising the production Agent loop.
+Each DepMap scenario persists that complete surface as `agent_assembly`.
+`expect.assembly_*` can pin its contract, Specialist, eager/deferred schemas,
+Skills, approval tool set, and context policy; the checked-in status fixture
+asserts all of those production-parity dimensions.
 
 ## Independent Workflow conversion (CLI)
 
@@ -149,7 +153,9 @@ tool results, approvals, compaction events, and usage. The JSON summary uses
 `wisp.agent-eval-report.v1`. Reports keep `contract_failures` separate from
 `model_quality_failures`; the latter also has an explicit check count and score.
 This prevents a model-quality change from being mistaken for a broken runtime
-contract.
+contract. Semantic checks are left unscored when no completion exists or the
+deterministic contract path already failed, so provider/runtime failures do not
+also count as model-quality failures.
 
 ### Budgets and baselines
 
