@@ -2334,6 +2334,61 @@ fn verify_semantic_quality(expect: &EvalExpectation, captured: &Captured) -> Vec
         .collect()
 }
 
+fn semantic_segment_has_predicate(segment: &str) -> bool {
+    let padded = format!(" {} ", segment.trim().to_lowercase());
+    [
+        " is ",
+        " are ",
+        " was ",
+        " were ",
+        " remains ",
+        " remain ",
+        " has ",
+        " have ",
+        " does ",
+        " do ",
+        " can ",
+        " cannot ",
+        " supports ",
+        " supported ",
+        " establishes ",
+        " established ",
+        " shows ",
+        " showed ",
+        " indicates ",
+        " indicated ",
+        " confirms ",
+        " confirmed ",
+        " validates ",
+        " validated ",
+        " detects ",
+        " detected ",
+        " observes ",
+        " observed ",
+    ]
+    .iter()
+    .any(|predicate| padded.contains(predicate))
+        || [
+            "显著",
+            "成立",
+            "支持",
+            "证明",
+            "表明",
+            "显示",
+            "确认",
+            "验证",
+            "观察到",
+            "检测到",
+            "存在",
+            "属于",
+            "返回",
+            "是",
+            "为",
+        ]
+        .iter()
+        .any(|predicate| segment.contains(predicate))
+}
+
 /// Return one boolean per sentence-level phrase occurrence: true means a
 /// nearby negation scopes over the phrase. This deliberately grades meaning,
 /// not the raw presence/absence of a scientifically loaded substring.
@@ -2361,89 +2416,66 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     " however ",
                     " although ",
                     " though ",
+                    " while ",
+                    " whereas ",
                     "但是",
                     "然而",
                     "不过",
-                    "但",
                     "却",
-                ];
-                // Predicate coordinators are also scope boundaries. Without
-                // them, an unrelated later predicate such as "causality was
-                // not established" can negate an earlier affirmative claim.
-                let predicate_boundaries = [
                     ",",
                     "，",
-                    " while ",
-                    " whereas ",
-                    "以及",
-                    "并且",
-                    "且",
-                    "同时",
-                    "而",
-                    "、",
                 ];
-                let coordinator_boundaries = [" and ", " or ", "和"];
-                let following = sentence[end..].trim_start();
-                // A coordinator starts a new predicate only when the target
-                // phrase is followed by one. Otherwise the coordinated terms
-                // share the earlier predicate and its negation.
-                let target_starts_predicate = [
-                    "is ",
-                    "are ",
-                    "was ",
-                    "were ",
-                    "remains ",
-                    "remain ",
-                    "has ",
-                    "have ",
-                    "does ",
-                    "do ",
-                    "can ",
-                    "cannot ",
-                    "supports ",
-                    "establishes ",
-                    "shows ",
-                    "indicates ",
-                    "显著",
-                    "成立",
-                    "支持",
-                    "证明",
-                    "表明",
-                    "是",
-                    "并非",
-                    "不是",
-                    "没有",
-                    "尚未",
-                ]
-                .iter()
-                .any(|predicate| following.starts_with(predicate));
+                let coordinator_boundaries = [
+                    " and ", " or ", "以及", "并且", "且", "同时", "而", "和", "、",
+                ];
                 let clause_start = boundaries
                     .iter()
-                    .chain(predicate_boundaries.iter())
                     .filter_map(|boundary| {
                         prefix.rfind(boundary).map(|index| index + boundary.len())
                     })
                     .max()
                     .unwrap_or(0);
-                let clause_start = if target_starts_predicate {
-                    coordinator_boundaries
-                        .iter()
-                        .filter_map(|boundary| {
-                            prefix.rfind(boundary).map(|index| index + boundary.len())
-                        })
-                        .max()
-                        .unwrap_or(0)
-                        .max(clause_start)
-                } else {
-                    clause_start
-                };
-                let clause_end = boundaries
+                let base_clause_end = boundaries
                     .iter()
-                    .chain(predicate_boundaries.iter())
-                    .chain(coordinator_boundaries.iter())
                     .filter_map(|boundary| sentence[end..].find(boundary).map(|index| end + index))
                     .min()
                     .unwrap_or(sentence.len());
+                // A coordinator starts a new target-side assertion only when
+                // the target has its own predicate. Coordinated objects share
+                // the predicate (and negation) on their left.
+                let clause_start =
+                    if semantic_segment_has_predicate(&sentence[end..base_clause_end]) {
+                        coordinator_boundaries
+                            .iter()
+                            .filter_map(|boundary| {
+                                prefix.rfind(boundary).map(|index| index + boundary.len())
+                            })
+                            .max()
+                            .unwrap_or(0)
+                            .max(clause_start)
+                    } else {
+                        clause_start
+                    };
+                // Likewise, end the target-side assertion at a coordinator
+                // only when both sides contain predicates. Coordinated
+                // subjects share the predicate (and negation) on their right.
+                let clause_end = coordinator_boundaries
+                    .iter()
+                    .filter_map(|boundary| {
+                        sentence[end..base_clause_end]
+                            .find(boundary)
+                            .and_then(|relative| {
+                                let index = end + relative;
+                                let right = index + boundary.len();
+                                (semantic_segment_has_predicate(&sentence[end..index])
+                                    && semantic_segment_has_predicate(
+                                        &sentence[right..base_clause_end],
+                                    ))
+                                .then_some(index)
+                            })
+                    })
+                    .min()
+                    .unwrap_or(base_clause_end);
                 let window_start = prefix
                     .char_indices()
                     .rev()
@@ -2459,8 +2491,8 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let nearby = &sentence[window_start..window_end];
                 let before = &sentence[window_start..start];
                 let after = &sentence[end..window_end];
-                // `不仅` / `not only` are additive affirmative constructions,
-                // not negations of the nearby scientific predicate.
+                // Additive affirmative constructions are not negations of the
+                // nearby scientific predicate.
                 let negation_window = nearby.replace("不仅", "").replace("not only", "");
                 let negated = [
                     " not ",
@@ -2471,19 +2503,29 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     " cannot ",
                     " can't ",
                     " without ",
-                    "不",
-                    "未",
                     "不能",
                     "并未",
                     "没有",
                     "尚未",
                     "并非",
                     "绝非",
+                    "不证明",
+                    "不支持",
+                    "不成立",
+                    "不显著",
+                    "不是",
+                    "不存在",
+                    "无法",
+                    "无证据",
+                    "未建立",
+                    "未证实",
                 ]
                 .iter()
                 .any(|cue| format!(" {negation_window}").contains(cue))
-                    || before.ends_with('非')
-                    || (after.starts_with('非') && !after.starts_with("非常"));
+                    || after.starts_with("非显著")
+                    || after.starts_with("非因果")
+                    || before.ends_with("并非")
+                    || before.ends_with("绝非");
                 offset = start + phrase.len();
                 Some(negated)
             })
@@ -3733,6 +3775,12 @@ mod tests {
             ..Captured::default()
         };
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
+            completion: Some("Synthetic lethality or causality is not established.".into()),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
     }
 
     #[test]
@@ -3806,6 +3854,12 @@ mod tests {
         };
         let captured = Captured {
             completion: Some("合成致死不仅显著，而且稳健。".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
+            completion: Some("合成致死不可忽视。".into()),
             ..Captured::default()
         };
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
