@@ -17,11 +17,12 @@ use std::{
 };
 use wisp_core::workflow_conversion::{self, WorkflowSource};
 use wisp_core::{
-    agent_loop, AgentDelegationResponse, AgentDelegator, AgentLoopOutcome, AgentUsage,
-    CapabilityRegistry, ContextManager, ContextPolicy, DelegationExecutionObserver,
-    DelegationExecutionStatus, DelegationExecutor, DelegationHostPolicy, DelegationPlan,
-    DelegationStatus, ExecutorFeature, ExecutorProfilePolicy, ModelProfilePolicy, Output,
-    PermissionSet, ValidatedAgentDelegationRequest,
+    agent_loop, host_agent_observability, AgentDelegationResponse, AgentDelegator,
+    AgentLoopOutcome, AgentTrace, AgentUsage, CapabilityRegistry, ContextManager, ContextPolicy,
+    DelegationExecutionObserver, DelegationExecutionStatus, DelegationExecutor,
+    DelegationHostPolicy, DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy,
+    HostObservabilityConfig, ModelProfilePolicy, ObservabilityHost, Output, PermissionSet,
+    SpanKind, ValidatedAgentDelegationRequest,
 };
 use wisp_dto::WorkflowTemplate;
 use wisp_llm::{Message, Provider, ProviderConfig, Role, ToolSchema};
@@ -375,7 +376,7 @@ impl WorkflowHost {
         let (approvals, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<NodeApproval>();
         let delegator = Arc::new(CliDelegator {
             factory: self.factory.clone(),
-            root,
+            root: root.clone(),
             directory: directory.clone(),
             store: self.store.clone(),
             manager: self.manager.clone(),
@@ -383,6 +384,10 @@ impl WorkflowHost {
             max_context: self.max_context,
             max_iter: self.max_iter,
             approvals,
+            parent_trace: host_agent_observability(HostObservabilityConfig::for_host(
+                ObservabilityHost::Cli,
+                &root,
+            )),
         });
         let executor = DelegationExecutor::new(delegator)
             .with_dynamic_policy(self.registry.clone(), self.policy.clone())
@@ -552,6 +557,7 @@ struct CliDelegator {
     max_context: usize,
     max_iter: usize,
     approvals: tokio::sync::mpsc::UnboundedSender<NodeApproval>,
+    parent_trace: AgentTrace,
 }
 
 /// The CLI Workflow host currently grants only synchronous local Runs. The
@@ -607,6 +613,12 @@ impl AgentDelegator for CliDelegator {
             usage: Mutex::new(AgentUsage::default()),
             failures: Mutex::new(vec![]),
             approvals: self.approvals.clone(),
+            agent_trace: {
+                let _dispatch = self
+                    .parent_trace
+                    .start_span(SpanKind::Delegation, "agent.delegate");
+                self.parent_trace.delegate_session(&request.step_id)
+            },
         };
         let mut ctx = ContextManager::new(
             request
@@ -757,6 +769,7 @@ struct NodeOutput {
     usage: Mutex<AgentUsage>,
     failures: Mutex<Vec<String>>,
     approvals: tokio::sync::mpsc::UnboundedSender<NodeApproval>,
+    agent_trace: AgentTrace,
 }
 impl Output for NodeOutput {
     fn restrict_read_paths_to_project(&self) -> bool {
@@ -844,6 +857,9 @@ impl Output for NodeOutput {
         let mut usage = self.usage.lock().unwrap();
         usage.input_tokens += input;
         usage.output_tokens += output;
+    }
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.agent_trace)
     }
 }
 

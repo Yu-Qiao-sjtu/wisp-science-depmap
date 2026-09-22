@@ -8,7 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use wisp_core::{Agent, ContextManager, ExploreTool, GuidanceQueue, MemoryManager, Output};
+use wisp_core::{
+    host_agent_observability, Agent, AgentTrace, ContextManager, ExploreTool, GuidanceQueue,
+    HostObservabilityConfig, MemoryManager, ObservabilityHost, Output,
+};
 use wisp_llm::{
     Message, Provider, ProviderConfig, Role, ScriptedCompletion, ScriptedProvider,
     ScriptedProviderSnapshot, ToolSchema,
@@ -419,10 +422,11 @@ struct EvalOutput {
     approval_modes: BTreeMap<String, Approval>,
     decisions: Mutex<std::collections::VecDeque<bool>>,
     plan_mode: bool,
+    trace: AgentTrace,
 }
 
 impl EvalOutput {
-    fn new(approval: &EvalApproval, plan_mode: bool) -> Result<Self> {
+    fn new(approval: &EvalApproval, plan_mode: bool, root: &Path) -> Result<Self> {
         let approval_modes = approval
             .modes
             .iter()
@@ -444,6 +448,10 @@ impl EvalOutput {
             approval_modes,
             decisions: Mutex::new(approval.decisions.iter().copied().collect()),
             plan_mode,
+            trace: host_agent_observability(HostObservabilityConfig::for_host(
+                ObservabilityHost::Eval,
+                root,
+            )),
         })
     }
 
@@ -685,6 +693,10 @@ impl Output for EvalOutput {
             ),
         }
     }
+
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.trace)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -713,6 +725,8 @@ struct ScenarioResult {
     agent_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trajectory_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observability_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failed_workspace: Option<String>,
 }
@@ -1243,7 +1257,11 @@ async fn run_case(
     let mut workspace = TempWorkspace::new(&case.id, repetition)?;
     setup_workspace(&case, workspace.path())?;
     let before = snapshot_workspace(workspace.path())?;
-    let output = Arc::new(EvalOutput::new(&case.approval, case.plan_mode)?);
+    let output = Arc::new(EvalOutput::new(
+        &case.approval,
+        case.plan_mode,
+        workspace.path(),
+    )?);
     let session_id = uuid::Uuid::new_v4().to_string();
     let provider_source = match options.mode {
         EvalMode::Offline => ProviderSource::Offline(ScriptedProvider::new(
@@ -1377,6 +1395,14 @@ async fn run_case(
     } else {
         None
     };
+    let observability_path = persist_eval_trace(
+        options.artifacts.as_deref(),
+        &case,
+        repetition,
+        &model,
+        workspace.path(),
+        &output,
+    )?;
     let failed_workspace = if !failures.is_empty() && options.keep_failed_workspace {
         let artifacts = options
             .artifacts
@@ -1422,6 +1448,7 @@ async fn run_case(
         completion: captured.completion,
         agent_error,
         trajectory_path: trajectory_path.map(|path| path.to_string_lossy().into_owned()),
+        observability_path: observability_path.map(|path| path.to_string_lossy().into_owned()),
         failed_workspace,
     })
 }
@@ -2010,6 +2037,56 @@ fn write_trajectory(
     }
     std::fs::write(&path, lines)?;
     Ok(path)
+}
+
+fn persist_eval_trace(
+    artifacts: Option<&Path>,
+    case: &EvalCase,
+    repetition: usize,
+    model: &str,
+    workspace: &Path,
+    output: &EvalOutput,
+) -> Result<Option<PathBuf>> {
+    let Some(artifacts) = artifacts else {
+        return Ok(None);
+    };
+    let dir = artifacts.join("traces");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "{}-{}-{repetition}.json",
+        safe_name(model),
+        safe_name(&case.id)
+    ));
+    if let Some(memory) = output.trace.memory() {
+        std::fs::write(&path, serde_json::to_vec_pretty(&memory.document())?)?;
+    }
+    let src = workspace.join(".wisp").join("traces");
+    if src.is_dir() {
+        let copy = dir.join(format!(
+            "{}-{}-{repetition}-jsonl",
+            safe_name(model),
+            safe_name(&case.id)
+        ));
+        copy_dir_if_present(&src, &copy)?;
+    }
+    Ok(Some(path))
+}
+
+fn copy_dir_if_present(src: &Path, dest: &Path) -> Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_if_present(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn summarize(results: &[ScenarioResult]) -> ReportSummary {

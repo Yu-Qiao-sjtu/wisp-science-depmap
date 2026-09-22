@@ -117,6 +117,8 @@ The suite covers reads and exact edits, shell execution, persisted local Runs
 Python and R runtime cells, approval denial, skills, deferred MCP discovery,
 read-only subagent delegation, resume without tool replay, session restart,
 queued guidance, cancellation, vision fallback, manual compaction, plan-mode
+refusals, and the shared agent observability contract (local JSONL traces under
+`.wisp/traces/`; see [agent observability](agent-observability.md)).
 gating, and project path containment.
 
 Useful selection and stress controls:

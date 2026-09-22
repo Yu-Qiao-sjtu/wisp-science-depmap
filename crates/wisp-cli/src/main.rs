@@ -10,7 +10,10 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use wisp_core::{Agent, MemoryManager, Output};
+use wisp_core::{
+    host_agent_observability, Agent, AgentTrace, HostObservabilityConfig, MemoryManager,
+    ObservabilityHost, Output,
+};
 use wisp_llm::{Message, ProviderConfig, ToolCall};
 use wisp_skills::SkillIndex;
 
@@ -230,8 +233,21 @@ fn parse_percent(option: &str, value: &str) -> Result<u64> {
     parse_u64(option, value.trim_end_matches('%'))
 }
 
-struct CliOutput;
+struct CliOutput {
+    trace: AgentTrace,
+}
 impl CliOutput {
+    fn new(root: &std::path::Path) -> Self {
+        Self {
+            trace: host_agent_observability(HostObservabilityConfig::for_host(
+                ObservabilityHost::Cli,
+                root,
+            )),
+        }
+    }
+    fn tracer(&self) -> AgentTrace {
+        self.trace.clone()
+    }
     fn dim(&self) -> &'static str {
         if std::io::stdout().is_terminal() {
             "\x1b[2m"
@@ -424,6 +440,9 @@ impl Output for CliOutput {
         std::io::stdin().read_line(&mut line).ok();
         matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
     }
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.trace)
+    }
 }
 
 struct JsonlOutput<W> {
@@ -433,17 +452,31 @@ struct JsonlOutput<W> {
     turn_id: String,
     pending_calls: Mutex<VecDeque<ToolCall>>,
     active_call_ids: Mutex<VecDeque<String>>,
+    trace: AgentTrace,
 }
 
 impl<W: Write + Send> JsonlOutput<W> {
     fn new(writer: W) -> Self {
+        Self::with_root(writer, None)
+    }
+
+    fn with_root(writer: W, root: Option<&std::path::Path>) -> Self {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let mut config = match root {
+            Some(root) => HostObservabilityConfig::for_host(ObservabilityHost::Cli, root),
+            None => HostObservabilityConfig::memory(ObservabilityHost::Cli),
+        };
+        config.identity.session_id = Some(session_id.clone());
+        config.identity.turn_id = Some(turn_id.clone());
         Self {
             writer: Mutex::new(writer),
             sequence: AtomicU64::new(0),
-            session_id: uuid::Uuid::new_v4().to_string(),
-            turn_id: uuid::Uuid::new_v4().to_string(),
+            session_id,
+            turn_id,
             pending_calls: Mutex::new(VecDeque::new()),
             active_call_ids: Mutex::new(VecDeque::new()),
+            trace: host_agent_observability(config),
         }
     }
 
@@ -645,6 +678,10 @@ impl<W: Write + Send> Output for JsonlOutput<W> {
             "tool_name": message.tool_name,
             "tool_calls": message.tool_calls,
         }));
+    }
+
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.trace)
     }
 }
 
@@ -1130,9 +1167,9 @@ async fn main() -> Result<()> {
     );
     wisp_core::install_scientific_intent_planner(&mut agent.tools);
 
-    let out = CliOutput;
+    let out = CliOutput::new(&root);
     if command == CliCommand::Rpc {
-        let result = rpc::serve(agent).await;
+        let result = rpc::serve(agent, out.tracer()).await;
         runtime_manager.shutdown_all().await;
         return result;
     }
@@ -1144,7 +1181,7 @@ async fn main() -> Result<()> {
                 result
             }
             OutputFormat::Jsonl => {
-                let jsonl_out = JsonlOutput::new(std::io::stdout());
+                let jsonl_out = JsonlOutput::with_root(std::io::stdout(), Some(&root));
                 jsonl_out.start(&prompt, agent.provider.model(), &root);
                 let result = run_prompt(&mut agent, &prompt, &jsonl_out).await;
                 match &result {

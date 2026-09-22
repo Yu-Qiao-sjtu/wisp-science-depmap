@@ -18,14 +18,14 @@ use wisp_acp::{
     AcpUsageUpdate,
 };
 use wisp_core::{
-    AgentArtifact, AgentBackend, AgentBudget, AgentDelegationLineage, AgentDelegationRequest,
-    AgentDelegationResponse, AgentDelegator, AgentEvidence, AgentExecutorRef, AgentOrigin,
-    AgentOutputSchemaSource, AgentRole, AgentSessionPolicy, AgentSpec, AgentUsage,
-    CapabilityRegistry, ContextPolicy, DelegationExecutionObserver, DelegationExecutionResult,
-    DelegationExecutionStatus, DelegationExecutor, DelegationHostPolicy, DelegationMode,
-    DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy, ModelFeature,
-    ModelProfilePolicy, PermissionSet, ValidatedAgentDelegationRequest,
-    DYNAMIC_DELEGATION_SCHEMA_VERSION,
+    host_agent_observability, AgentArtifact, AgentBackend, AgentBudget, AgentDelegationLineage,
+    AgentDelegationRequest, AgentDelegationResponse, AgentDelegator, AgentEvidence, AgentExecutorRef,
+    AgentOrigin, AgentOutputSchemaSource, AgentRole, AgentSessionPolicy, AgentSpec, AgentTrace,
+    AgentUsage, CapabilityRegistry, ContextPolicy, DelegationExecutionObserver,
+    DelegationExecutionResult, DelegationExecutionStatus, DelegationExecutor, DelegationHostPolicy,
+    DelegationMode, DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy,
+    HostObservabilityConfig, ModelFeature, ModelProfilePolicy, ObservabilityHost, PermissionSet,
+    SpanKind, ValidatedAgentDelegationRequest, DYNAMIC_DELEGATION_SCHEMA_VERSION,
 };
 use wisp_llm::Message;
 use wisp_store::{
@@ -2105,6 +2105,10 @@ impl TauriDelegator {
                 browser_bridge,
                 active: Arc::new(StdMutex::new(HashMap::new())),
                 provenance: Arc::new(Mutex::new(HashMap::new())),
+                trace: host_agent_observability(HostObservabilityConfig::for_host(
+                    ObservabilityHost::Desktop,
+                    &project.root,
+                )),
             },
             acp: AcpDelegator {
                 store,
@@ -2144,6 +2148,7 @@ impl TauriDelegator {
                     browser_bridge: self.native.browser_bridge.clone(),
                     active: self.native.active.clone(),
                     provenance: self.native.provenance.clone(),
+                    trace: self.native.trace.clone(),
                 }
                 .delegate_validated(request)
                 .await
@@ -2579,6 +2584,7 @@ struct NativeDelegator {
     browser_bridge: Option<Arc<crate::browser_bridge::BrowserBridge>>,
     active: Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>,
     provenance: Arc<Mutex<HashMap<String, String>>>,
+    trace: AgentTrace,
 }
 
 fn add_browser_research_tools(
@@ -2898,6 +2904,7 @@ impl AgentDelegator for NativeDelegator {
             .lock()
             .unwrap()
             .insert(request.request_id.clone(), cancel.clone());
+        let _dispatch = self.trace.start_span(SpanKind::Delegation, "agent.delegate");
         let run = crate::native_delegation::run_native_agent(
             llm.as_ref(),
             request
@@ -2915,6 +2922,7 @@ impl AgentDelegator for NativeDelegator {
             system,
             prompt,
             &cancel,
+            Some(&self.trace),
         )
         .await;
         self.active.lock().unwrap().remove(&request.request_id);

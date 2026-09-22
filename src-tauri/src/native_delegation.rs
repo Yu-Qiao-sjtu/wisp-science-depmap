@@ -5,7 +5,8 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 use wisp_core::{
-    agent_loop, AgentBudget, AgentDelegationRequest, AgentUsage, ContextManager, Output,
+    agent_loop, host_agent_observability, AgentBudget, AgentDelegationRequest, AgentTrace,
+    AgentUsage, ContextManager, HostObservabilityConfig, ObservabilityHost, Output,
 };
 use wisp_llm::{Completion, LlmError, Message, Provider, StreamSink, ToolSchema};
 use wisp_store::{ExecLog, Store};
@@ -92,6 +93,7 @@ struct NativeOutput<'a> {
     confirmer: Option<Arc<dyn crate::workflow_approval::WorkflowConfirmer>>,
     cancel: &'a AtomicBool,
     tool_errors: Mutex<Vec<String>>,
+    agent_trace: AgentTrace,
 }
 
 impl Output for NativeOutput<'_> {
@@ -159,6 +161,10 @@ impl Output for NativeOutput<'_> {
     fn preflight_shell(&self, _cmd: &str) -> Result<(), String> {
         Err("direct shell is not available to Native delegated Agents".into())
     }
+
+    fn agent_trace(&self) -> Option<&AgentTrace> {
+        Some(&self.agent_trace)
+    }
 }
 
 /// Provenance scope of a conversation tree: its root frame id. A parent turn,
@@ -187,6 +193,7 @@ pub(crate) async fn run_native_agent(
     system: String,
     prompt: String,
     cancel: &AtomicBool,
+    parent_trace: Option<&AgentTrace>,
 ) -> anyhow::Result<NativeAgentRun> {
     let confirmer =
         crate::workflow_approval::for_node(store, project_id, child_frame_id, &request.spec.name)
@@ -204,6 +211,7 @@ pub(crate) async fn run_native_agent(
         prompt,
         cancel,
         confirmer,
+        parent_trace,
     )
     .await
 }
@@ -222,6 +230,7 @@ pub(crate) async fn run_native_agent_with_approval(
     prompt: String,
     cancel: &AtomicBool,
     confirmer: Option<Arc<dyn crate::workflow_approval::WorkflowConfirmer>>,
+    parent_trace: Option<&AgentTrace>,
 ) -> anyhow::Result<NativeAgentRun> {
     let provenance_scope = conversation_scope(store, child_frame_id).await;
     let (message_tx, mut message_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -295,6 +304,14 @@ pub(crate) async fn run_native_agent_with_approval(
         confirmer,
         cancel,
         tool_errors: Mutex::new(vec![]),
+        agent_trace: match parent_trace {
+            Some(parent) => parent.delegate_session(child_frame_id),
+            None => host_agent_observability(
+                HostObservabilityConfig::for_host(ObservabilityHost::Delegated, project_root)
+                    .with_session(child_frame_id)
+                    .with_turn(request.request_id.clone()),
+            ),
+        },
     };
     let usage = Arc::new(UsageTracker::default());
     let vision_provider = vision_provider.map(|inner| BudgetedProvider {
@@ -607,6 +624,7 @@ mod tests {
             "Test system prompt".into(),
             "Test user prompt".into(),
             &AtomicBool::new(false),
+            None,
         )
         .await
         .unwrap()
@@ -950,6 +968,7 @@ mod tests {
             "Test system prompt".into(),
             "Test user prompt".into(),
             cancel.as_ref(),
+            None,
         );
         let stop = async {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1038,6 +1057,7 @@ mod tests {
                 "test".into(),
                 &AtomicBool::new(false),
                 Some(confirmer.clone()),
+                None,
             )
             .await
             .unwrap();

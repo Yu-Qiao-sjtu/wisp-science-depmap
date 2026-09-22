@@ -4,6 +4,10 @@
 
 use crate::archive::{prune_dir, ArchiveRetention};
 use crate::context::{image_content, ContextManager};
+use crate::observability::{
+    finish_turn_span, mcp_capability_id, plan_tool_spans, ErrorClass, SpanGuard, SpanKind,
+    SpanStatus, TurnIdentity,
+};
 use crate::output::{StreamSinkAdapter, ToolEnvAdapter};
 use crate::provenance;
 use crate::Output;
@@ -359,6 +363,57 @@ async fn agent_loop_inner(
             None => adapter,
         }
     };
+    let turn_span = output.agent_trace().map(|trace| {
+        trace.start_turn(TurnIdentity {
+            session_id: output.frame_id().map(str::to_string),
+            turn_id: output.turn_id().map(str::to_string),
+            provider_id: Some(provider.name().to_string()),
+            model_id: Some(provider.model().to_string()),
+            parent: output.agent_trace().and_then(|trace| {
+                let ctx = trace.context();
+                if ctx.parent_span_id.is_some() && !ctx.trace_id.is_empty() {
+                    Some(ctx)
+                } else {
+                    None
+                }
+            }),
+            ..TurnIdentity::default()
+        })
+    });
+    let result = agent_loop_execute(
+        ctx,
+        provider,
+        vision_provider,
+        tools,
+        root,
+        output,
+        max_iter,
+        cancel,
+        guidance,
+        &env,
+        turn_span.as_ref(),
+    )
+    .await;
+    if let Some(span) = &turn_span {
+        finish_turn_span(span, &result);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn agent_loop_execute(
+    ctx: &mut ContextManager,
+    provider: &dyn Provider,
+    vision_provider: Option<&dyn Provider>,
+    tools: &Registry,
+    root: &Path,
+    output: &dyn Output,
+    max_iter: usize,
+    cancel: Option<&AtomicBool>,
+    guidance: Option<&GuidanceQueue>,
+    env: &ToolEnvAdapter<'_>,
+    turn_span: Option<&SpanGuard>,
+) -> Result<AgentLoopOutcome> {
     let mut iteration = 0usize;
     let mut auto_continues = 0usize;
     let mut recent_observations: VecDeque<[u8; 32]> = VecDeque::with_capacity(STUCK_WINDOW);
@@ -386,6 +441,11 @@ async fn agent_loop_inner(
         if ctx.needs_auto_compact_with_reserve(fixed_request_tokens) {
             let (archive, archive_reference) = context_archive(root);
             output.compaction_started("auto");
+            let compact_span =
+                turn_span.map(|span| span.child(SpanKind::Compaction, "agent.compact"));
+            if let Some(span) = &compact_span {
+                span.set_str("compaction_strategy", "auto");
+            }
             match ctx
                 .compact_with_reserve_reference(
                     provider,
@@ -395,8 +455,19 @@ async fn agent_loop_inner(
                 )
                 .await
             {
-                Ok((before, after)) => output.compaction(before, after, "auto"),
+                Ok((before, after)) => {
+                    if let Some(span) = &compact_span {
+                        span.set_str("context_tokens_before", &before.to_string());
+                        span.set_str("context_tokens_after", &after.to_string());
+                        span.end(SpanStatus::Ok);
+                    }
+                    output.compaction(before, after, "auto");
+                }
                 Err(error) => {
+                    if let Some(span) = &compact_span {
+                        span.set_error_class(ErrorClass::Compaction);
+                        span.end(SpanStatus::Error);
+                    }
                     // Identical input fails identically: suppress automatic
                     // retries until the context has grown past this level.
                     ctx.note_auto_compact_failure(fixed_request_tokens);
@@ -421,13 +492,57 @@ async fn agent_loop_inner(
                 ctx.note_request_boundary(fixed_request_tokens);
             }
             let messages = ctx.prepare_for_api_with_tools(output, &schemas);
-            match stream_with_retry(provider, &messages, &schemas, &mut sink, cancel).await {
-                Ok(comp) => break comp,
-                Err(LlmError::Incomplete) => anyhow::bail!(STREAM_CUT_MESSAGE),
+            let model_span = turn_span.map(|span| {
+                let child = span.child(SpanKind::Model, "agent.model");
+                child.set_provider(provider.name());
+                child.set_model(provider.model());
+                child
+            });
+            match stream_with_retry(
+                provider,
+                &messages,
+                &schemas,
+                &mut sink,
+                cancel,
+                model_span.as_ref(),
+            )
+            .await
+            {
+                Ok(comp) => {
+                    if let Some(span) = &model_span {
+                        span.set_tokens(
+                            comp.usage.input_tokens,
+                            comp.usage.output_tokens,
+                            comp.usage.reasoning_tokens,
+                            comp.usage.cached_input_tokens,
+                        );
+                        if let Some(reason) = &comp.finish_reason {
+                            span.set_str("finish_reason", reason);
+                        }
+                        span.end(SpanStatus::Ok);
+                    }
+                    break comp;
+                }
+                Err(LlmError::Incomplete) => {
+                    if let Some(span) = &model_span {
+                        span.set_error_class(ErrorClass::Provider);
+                        span.end(SpanStatus::Error);
+                    }
+                    anyhow::bail!(STREAM_CUT_MESSAGE);
+                }
                 Err(error) if error.is_context_overflow() && !overflow_recovery_used => {
+                    if let Some(span) = &model_span {
+                        span.set_error_class(ErrorClass::Compaction);
+                        span.end(SpanStatus::Error);
+                    }
                     overflow_recovery_used = true;
                     let (archive, archive_reference) = context_archive(root);
                     output.compaction_started("overflow");
+                    let compact_span =
+                        turn_span.map(|span| span.child(SpanKind::Compaction, "agent.compact"));
+                    if let Some(span) = &compact_span {
+                        span.set_str("compaction_strategy", "overflow");
+                    }
                     match ctx
                         .compact_with_reserve_reference(
                             provider,
@@ -437,8 +552,19 @@ async fn agent_loop_inner(
                         )
                         .await
                     {
-                        Ok((before, after)) => output.compaction(before, after, "overflow"),
+                        Ok((before, after)) => {
+                            if let Some(span) = &compact_span {
+                                span.set_str("context_tokens_before", &before.to_string());
+                                span.set_str("context_tokens_after", &after.to_string());
+                                span.end(SpanStatus::Ok);
+                            }
+                            output.compaction(before, after, "overflow");
+                        }
                         Err(compact_error) => {
+                            if let Some(span) = &compact_span {
+                                span.set_error_class(ErrorClass::Compaction);
+                                span.end(SpanStatus::Error);
+                            }
                             anyhow::bail!(
                                 "context overflow recovery failed: {compact_error} (original: {error})"
                             );
@@ -446,7 +572,19 @@ async fn agent_loop_inner(
                     }
                     continue;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    if let Some(span) = &model_span {
+                        let text = error.to_string();
+                        if text.contains(STOPPED_BY_USER) {
+                            span.set_error_class(ErrorClass::Cancelled);
+                            span.end(SpanStatus::Cancelled);
+                        } else {
+                            span.set_error_class(ErrorClass::Provider);
+                            span.end(SpanStatus::Error);
+                        }
+                    }
+                    return Err(error.into());
+                }
             }
         };
         if comp.usage.input_tokens > 0 {
@@ -533,6 +671,10 @@ async fn agent_loop_inner(
         );
 
         if comp.tool_calls.is_empty() && !env.guidance_pending() {
+            if let Some(span) = turn_span {
+                span.child(SpanKind::Completion, "agent.completion")
+                    .end(SpanStatus::Ok);
+            }
             return Ok(AgentLoopOutcome::Completed);
         }
 
@@ -565,6 +707,24 @@ async fn agent_loop_inner(
                     .unwrap_or(&name)
             } else {
                 &name
+            };
+            let event_name = tools.event_name(&name, &args);
+            let (span_kind, is_mcp) = plan_tool_spans(&name, &event_name);
+            let tool_span = turn_span.map(|span| {
+                let child = span.child(span_kind, format!("agent.{}", span_kind.as_str()));
+                child.set_str("tool_id", requested_name);
+                child
+            });
+            env.set_span(tool_span.clone());
+            let mcp_span = if is_mcp {
+                tool_span.as_ref().map(|span| {
+                    let child = span.child(SpanKind::Mcp, "agent.mcp");
+                    child.set_str("tool_id", &mcp_capability_id(&event_name));
+                    child.set_str("capability_id", &mcp_capability_id(&event_name));
+                    child
+                })
+            } else {
+                None
             };
             let producing = provenance::is_producing(&name);
             let root = producing.then(|| env.project_root().to_path_buf());
@@ -608,9 +768,36 @@ async fn agent_loop_inner(
                 .stop_batch()
             } else {
                 tools
-                    .run_scoped(&name, &args, &env, ctx.active_turn_allowed_tools())
+                    .run_scoped(&name, &args, env, ctx.active_turn_allowed_tools())
                     .await
             };
+            let tool_status = if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                SpanStatus::Cancelled
+            } else if result.success {
+                SpanStatus::Ok
+            } else if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                SpanStatus::Cancelled
+            } else {
+                SpanStatus::Error
+            };
+            if let Some(span) = mcp_span {
+                if tool_status == SpanStatus::Cancelled {
+                    span.set_error_class(ErrorClass::Cancelled);
+                    span.end(SpanStatus::Uncertain);
+                } else if tool_status == SpanStatus::Error {
+                    span.set_error_class(ErrorClass::Unknown);
+                    span.end(SpanStatus::Error);
+                } else {
+                    span.end(SpanStatus::Ok);
+                }
+            }
+            if let Some(span) = &tool_span {
+                if tool_status == SpanStatus::Cancelled {
+                    span.set_error_class(ErrorClass::Cancelled);
+                }
+                span.end(tool_status);
+            }
+            env.set_span(None);
             if let Some(next) = result.allowed_next_tools.clone() {
                 ctx.set_active_turn_allowed_tools(next);
             }
@@ -702,6 +889,10 @@ async fn agent_loop_inner(
             }
         }
         if batch_control == ToolControl::StopTurn {
+            if let Some(span) = turn_span {
+                span.child(SpanKind::Completion, "agent.completion")
+                    .end(SpanStatus::Ok);
+            }
             return Ok(AgentLoopOutcome::Completed);
         }
         // Stuck-loop guard: compare completed tool-call/result observations,
@@ -716,6 +907,9 @@ async fn agent_loop_inner(
             recent_observations.pop_front();
         }
         if has_repeated_suffix_cycle(&recent_observations, STUCK_REPEAT_LIMIT) {
+            if let Some(span) = turn_span {
+                span.set_str("repeated_call", "true");
+            }
             anyhow::bail!(STUCK_LOOP_MESSAGE);
         }
         if iteration_limit_reached(iteration, max_iter) {
@@ -841,7 +1035,7 @@ async fn summarize_at_iteration_limit(
         let mut overflow_recovery_used = false;
         let comp = loop {
             let messages = ctx.prepare_for_api_with_tools(output, &[]);
-            match stream_with_retry(provider, &messages, &[], &mut sink, cancel).await {
+            match stream_with_retry(provider, &messages, &[], &mut sink, cancel, None).await {
                 Ok(comp) => break comp,
                 Err(LlmError::Incomplete) => anyhow::bail!(STREAM_CUT_MESSAGE),
                 Err(error) if error.is_context_overflow() && !overflow_recovery_used => {
@@ -1008,24 +1202,73 @@ async fn stream_with_retry(
     schemas: &[ToolSchema],
     sink: &mut StreamSinkAdapter<'_>,
     cancel: Option<&AtomicBool>,
+    model_span: Option<&SpanGuard>,
 ) -> Result<Completion, LlmError> {
     let mut last = None;
     for attempt in 0..=RETRY_DELAYS.len() {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            if let Some(span) = model_span {
+                span.set_error_class(ErrorClass::Cancelled);
+            }
             return Err(cancelled_stream_error());
         }
         match stream_or_cancel(provider, messages, schemas, sink, cancel).await {
-            Ok(c) => return Ok(c),
+            Ok(c) => {
+                if let Some(span) = model_span {
+                    span.set_retry_count(attempt as u32);
+                }
+                return Ok(c);
+            }
             Err(e) => {
                 if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                    if let Some(parent) = model_span {
+                        let retry = parent.child(SpanKind::Retry, "agent.model.retry");
+                        retry.set_retry_count(attempt as u32 + 1);
+                        retry.set_error_class(ErrorClass::Cancelled);
+                        retry.end(SpanStatus::Cancelled);
+                        parent.set_error_class(ErrorClass::Cancelled);
+                    }
                     return Err(cancelled_stream_error());
                 }
                 if !is_retriable(&e) || attempt == RETRY_DELAYS.len() {
+                    if let Some(parent) = model_span {
+                        if attempt > 0 {
+                            let retry = parent.child(SpanKind::Retry, "agent.model.retry");
+                            retry.set_retry_count(attempt as u32);
+                            retry.set_error_class(ErrorClass::RetryExhausted);
+                            retry.end(SpanStatus::Error);
+                            parent.set_retry_count(attempt as u32);
+                            parent.set_error_class(ErrorClass::RetryExhausted);
+                        } else {
+                            parent.set_error_class(ErrorClass::Provider);
+                        }
+                    }
                     return Err(e);
+                }
+                if let Some(parent) = model_span {
+                    let retry = parent.child(SpanKind::Retry, "agent.model.retry");
+                    retry.set_retry_count(attempt as u32 + 1);
+                    retry.set_error_class(ErrorClass::Provider);
+                    retry.end(SpanStatus::Error);
+                    parent.set_retry_count(attempt as u32 + 1);
                 }
                 tracing::warn!("LLM stream failed (attempt {}), retrying: {e}", attempt + 1);
                 last = Some(e);
-                retry_delay_or_cancel(Duration::from_millis(RETRY_DELAYS[attempt]), cancel).await?;
+                match retry_delay_or_cancel(Duration::from_millis(RETRY_DELAYS[attempt]), cancel)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error) => {
+                        if let Some(parent) = model_span {
+                            let retry = parent.child(SpanKind::Retry, "agent.model.retry");
+                            retry.set_retry_count(attempt as u32 + 1);
+                            retry.set_error_class(ErrorClass::Cancelled);
+                            retry.end(SpanStatus::Cancelled);
+                            parent.set_error_class(ErrorClass::Cancelled);
+                        }
+                        return Err(error);
+                    }
+                }
             }
         }
     }
@@ -1584,7 +1827,7 @@ mod tests {
 
         let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
             tokio::join!(
-                stream_with_retry(&provider, &[], &[], &mut sink, Some(&cancel)),
+                stream_with_retry(&provider, &[], &[], &mut sink, Some(&cancel), None),
                 async {
                     provider.started.notified().await;
                     cancel.store(true, Ordering::SeqCst);
@@ -1612,7 +1855,7 @@ mod tests {
 
         let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
             tokio::join!(
-                stream_with_retry(&provider, &[], &[], &mut sink, Some(&cancel)),
+                stream_with_retry(&provider, &[], &[], &mut sink, Some(&cancel), None),
                 async {
                     provider.started.notified().await;
                     tokio::time::sleep(Duration::from_millis(10)).await;

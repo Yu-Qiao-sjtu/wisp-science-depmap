@@ -674,7 +674,10 @@ fn proposed_intent_from_tool_args(args: &Value) -> Result<ScientificIntent, Stri
                 .get("data_modality")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            proposed.metric = args.get("metric").and_then(Value::as_str).map(str::to_string);
+            proposed.metric = args
+                .get("metric")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             if let Some(scope) = args.get("scope").and_then(Value::as_str) {
                 proposed.scope = IntentScope::parse(scope).unwrap_or_default();
             }
@@ -710,9 +713,7 @@ fn normalize_event_constraint(intent: &mut ScientificIntent) {
         (IntentScope::Global, "custom_missense") => "custom_missense_mutation",
         _ => raw.as_str(),
     };
-    intent
-        .constraints
-        .insert("event".into(), json!(mapped));
+    intent.constraints.insert("event".into(), json!(mapped));
 }
 
 struct BridgePlanner<'a> {
@@ -1718,7 +1719,9 @@ mod tests {
             other => panic!("{other:?}"),
         }
         intent.scope = IntentScope::Lineage;
-        intent.entities.push(entity("lineage", "lineage", "ExampleLineage"));
+        intent
+            .entities
+            .push(entity("lineage", "lineage", "ExampleLineage"));
         let lineage = IntentCatalog::bundled_depmap().canonicalize(intent);
         assert_eq!(lineage.constraints["event"], json!("damaging"));
     }

@@ -9,6 +9,7 @@ pub mod delegation_policy;
 pub mod execution;
 pub mod memory;
 pub mod method_search;
+pub mod observability;
 pub mod orchestration;
 pub mod output;
 pub mod provenance;
@@ -47,6 +48,12 @@ pub use execution::{
 };
 pub use memory::{
     MemoryManager, MemorySearchQuery, MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
+};
+pub use observability::{
+    host_agent_observability, slo_from_document, AgentSloSnapshot, AgentTrace, CapturePolicy,
+    ErrorClass, HostObservabilityConfig, ObservabilityHost, RetentionPolicy, Span, SpanGuard,
+    SpanKind, SpanStatus, TraceContext, TraceDocument, TurnIdentity, OBSERVABILITY_CONTRACT_ID,
+    TRACE_FORMAT, TRACE_FORMAT_VERSION,
 };
 pub use orchestration::{
     DelegationMode, DelegationPlan, DelegationPlanStep, RunActivitySpec, WorkflowTaskKind,

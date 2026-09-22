@@ -145,6 +145,12 @@ pub trait Output: Send + Sync {
     fn project_id(&self) -> Option<&str> {
         None
     }
+    /// Shared observability handle. CLI, desktop, and eval attach the tracer
+    /// built by [`crate::host_agent_observability`]. Default `None` keeps
+    /// existing tests silent.
+    fn agent_trace(&self) -> Option<&crate::observability::AgentTrace> {
+        None
+    }
     /// Hard host-owned boundary checked before free-form source reaches a
     /// local shell or language runtime.
     fn preflight_local_execution(&self, _source: &str) -> Result<(), String> {
@@ -178,6 +184,8 @@ pub struct ToolEnvAdapter<'a> {
     /// drained unconditionally after every tool call so a stale report can
     /// never leak into the next call's record.
     reported_writes: std::sync::Mutex<Vec<String>>,
+    /// Open tool span so approval waits become child spans of that call.
+    current_span: std::sync::Mutex<Option<crate::observability::SpanGuard>>,
 }
 
 impl<'a> ToolEnvAdapter<'a> {
@@ -188,6 +196,7 @@ impl<'a> ToolEnvAdapter<'a> {
             cancel: None,
             guidance: None,
             reported_writes: std::sync::Mutex::new(Vec::new()),
+            current_span: std::sync::Mutex::new(None),
         }
     }
     /// Like `new`, but tools can poll `is_cancelled()` to stop mid-execution.
@@ -202,6 +211,38 @@ impl<'a> ToolEnvAdapter<'a> {
             cancel: Some(cancel),
             guidance: None,
             reported_writes: std::sync::Mutex::new(Vec::new()),
+            current_span: std::sync::Mutex::new(None),
+        }
+    }
+    pub(crate) fn set_span(&self, span: Option<crate::observability::SpanGuard>) {
+        *self
+            .current_span
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = span;
+    }
+    fn approval_span(&self) -> Option<crate::observability::SpanGuard> {
+        let current = self
+            .current_span
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let parent = current.as_ref()?;
+        let span = parent.child(crate::observability::SpanKind::Approval, "agent.approval");
+        span.mark_blocked();
+        Some(span)
+    }
+    fn finish_approval(&self, span: crate::observability::SpanGuard, approved: bool) {
+        use crate::observability::{ErrorClass, SpanStatus};
+        if self
+            .cancel
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            span.set_error_class(ErrorClass::Cancelled);
+            span.end(SpanStatus::Cancelled);
+        } else if approved {
+            span.end(SpanStatus::Ok);
+        } else {
+            span.set_error_class(ErrorClass::ApprovalDenied);
+            span.end(SpanStatus::Error);
         }
     }
     /// Drain kernel-reported writes accumulated during the current tool call.
@@ -234,10 +275,20 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
         self.out.project_id()
     }
     async fn confirm(&self, message: &str) -> bool {
-        self.out.confirm_async(message).await
+        let approval = self.approval_span();
+        let approved = self.out.confirm_async(message).await;
+        if let Some(span) = approval {
+            self.finish_approval(span, approved);
+        }
+        approved
     }
     async fn confirm_decision(&self, message: &str) -> wisp_tools::ConfirmDecision {
-        self.out.confirm_decision_async(message).await
+        let approval = self.approval_span();
+        let decision = self.out.confirm_decision_async(message).await;
+        if let Some(span) = approval {
+            self.finish_approval(span, decision.approved());
+        }
+        decision
     }
     async fn approval_mode(&self, tool: &str) -> wisp_tools::Approval {
         self.out.approval_mode(tool)

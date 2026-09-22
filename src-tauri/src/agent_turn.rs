@@ -1230,6 +1230,14 @@ pub(crate) async fn send_message_inner(
         provenance_scope,
         turn_id: browser_turn_id.clone(),
         force_ask_mutations: origin.force_ask_mutations(),
+        agent_trace: wisp_core::host_agent_observability(
+            wisp_core::HostObservabilityConfig::for_host(
+                wisp_core::ObservabilityHost::Desktop,
+                &ap.root,
+            )
+            .with_session(&frame_id)
+            .with_turn(&browser_turn_id),
+        ),
     };
 
     let turn_start = agent.ctx.messages.len();
