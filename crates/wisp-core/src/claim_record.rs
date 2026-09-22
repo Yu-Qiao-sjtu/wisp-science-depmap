@@ -21,11 +21,7 @@ pub enum ClaimKind {
     Hypothesis,
 }
 
-impl ClaimKind {
-    pub fn requires_numeric_grounding(self) -> bool {
-        matches!(self, Self::MeasuredFact | Self::DerivedResult)
-    }
-}
+impl ClaimKind {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +132,8 @@ pub struct ClaimGroundingCatalog {
     pub papers: Vec<GroundedPaper>,
 }
 
+pub type ClaimPersistHook = std::sync::Arc<dyn Fn(&[ClaimRecord]) + Send + Sync>;
+
 impl ClaimGroundingCatalog {
     pub fn evidence(&self, id: &str) -> Option<&GroundedEvidence> {
         self.evidence.iter().find(|row| row.evidence_id == id)
@@ -151,6 +149,32 @@ impl ClaimGroundingCatalog {
 
     pub fn paper(&self, id: &str) -> Option<&GroundedPaper> {
         self.papers.iter().find(|row| row.paper_id == id)
+    }
+
+    pub fn push_ledger_evidence(
+        &mut self,
+        evidence_id: impl Into<String>,
+        evidence_state: impl Into<String>,
+        provider_version: Option<String>,
+        semantics_json: &str,
+        compact_payload_json: &str,
+    ) {
+        let semantics: Value = serde_json::from_str(semantics_json).unwrap_or(Value::Null);
+        self.evidence.push(GroundedEvidence {
+            evidence_id: evidence_id.into(),
+            evidence_state: evidence_state.into(),
+            source_version: source_digest(compact_payload_json),
+            provider_version,
+            subject: string_field(&semantics, &["subject", "entity", "gene"]),
+            scope: string_field(&semantics, &["scope", "lineage"]),
+            metric: string_field(&semantics, &["metric"]),
+            value: number_field(&semantics, &["value", "effect"]),
+            unit: string_field(&semantics, &["unit"]),
+            direction: string_field(&semantics, &["direction"]),
+            p_value: number_field(&semantics, &["p_value", "pvalue"]),
+            sample_count: number_field(&semantics, &["sample_count", "n"])
+                .and_then(|n| (n >= 0.0).then_some(n as u64)),
+        });
     }
 }
 
@@ -231,14 +255,25 @@ impl ClaimValidationReport {
     }
 }
 
-pub fn claims_from_output(output: &Value) -> Vec<ClaimRecord> {
-    let Some(array) = output.get("claims").and_then(Value::as_array) else {
-        return Vec::new();
+pub fn claims_from_output(output: &Value) -> Result<Vec<ClaimRecord>, String> {
+    let Some(claims) = output.get("claims") else {
+        return Ok(Vec::new());
     };
-    array
-        .iter()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
-        .collect()
+    let Some(array) = claims.as_array() else {
+        return Err("claim grounding failed: claims_not_array".into());
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for (index, value) in array.iter().enumerate() {
+        match serde_json::from_value::<ClaimRecord>(value.clone()) {
+            Ok(claim) => out.push(claim),
+            Err(error) => {
+                return Err(format!(
+                    "claim grounding failed: malformed_claim:{index}:{error}"
+                ));
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub fn validate_claims(
@@ -388,20 +423,11 @@ fn validate_one(claim: &ClaimRecord, catalog: &ClaimGroundingCatalog) -> ClaimCh
                 }
             }
             ClaimSourceKind::Paper => {
-                let Some(row) = catalog.paper(&source.id) else {
-                    return fail(
-                        claim,
-                        ClaimCheckCode::SourceMissing,
-                        "referenced paper is absent",
-                    );
-                };
-                if row.source_version != source.source_version {
-                    return fail(
-                        claim,
-                        ClaimCheckCode::SourceVersionDetached,
-                        "claim source_version does not match the current paper digest",
-                    );
-                }
+                return fail(
+                    claim,
+                    ClaimCheckCode::MissingSource,
+                    "measured or derived claims cannot cite Paper records",
+                );
             }
         }
     }
@@ -483,40 +509,80 @@ fn compare_identity(claim: &ClaimRecord, row: &GroundedEvidence) -> Option<Claim
 }
 
 fn compare_numerics(claim: &ClaimRecord, row: &GroundedEvidence) -> Option<ClaimCheck> {
-    if let (Some(claimed), Some(actual)) = (claim.value, row.value) {
-        if !approx_eq(claimed, actual) {
-            return Some(fail(
-                claim,
-                ClaimCheckCode::ValueMismatch,
-                "claim value does not match the referenced record",
-            ));
+    if let Some(claimed) = claim.value {
+        match row.value {
+            Some(actual) if approx_eq(claimed, actual) => {}
+            Some(_) => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::ValueMismatch,
+                    "claim value does not match the referenced record",
+                ));
+            }
+            None => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::ValueMismatch,
+                    "referenced evidence has no value for the claimed numeric field",
+                ));
+            }
         }
     }
-    if let (Some(claimed), Some(actual)) = (claim.p_value, row.p_value) {
-        if !approx_eq(claimed, actual) {
-            return Some(fail(
-                claim,
-                ClaimCheckCode::ValueMismatch,
-                "claim p-value does not match the referenced record",
-            ));
+    if let Some(claimed) = claim.p_value {
+        match row.p_value {
+            Some(actual) if approx_eq(claimed, actual) => {}
+            Some(_) => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::ValueMismatch,
+                    "claim p-value does not match the referenced record",
+                ));
+            }
+            None => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::ValueMismatch,
+                    "referenced evidence has no p-value for the claimed numeric field",
+                ));
+            }
         }
     }
-    if let (Some(claimed), Some(actual)) = (claim.direction.as_ref(), row.direction.as_ref()) {
-        if normalize_direction(claimed) != normalize_direction(actual) {
-            return Some(fail(
-                claim,
-                ClaimCheckCode::DirectionMismatch,
-                "claim direction does not match the referenced record",
-            ));
+    if let Some(claimed) = claim.direction.as_ref() {
+        match row.direction.as_ref() {
+            Some(actual) if normalize_direction(claimed) == normalize_direction(actual) => {}
+            Some(_) => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::DirectionMismatch,
+                    "claim direction does not match the referenced record",
+                ));
+            }
+            None => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::DirectionMismatch,
+                    "referenced evidence has no direction for the claimed field",
+                ));
+            }
         }
     }
-    if let (Some(claimed), Some(actual)) = (claim.sample_count, row.sample_count) {
-        if claimed != actual {
-            return Some(fail(
-                claim,
-                ClaimCheckCode::SampleCountMismatch,
-                "claim sample_count does not match the referenced record",
-            ));
+    if let Some(claimed) = claim.sample_count {
+        match row.sample_count {
+            Some(actual) if claimed == actual => {}
+            Some(_) => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::SampleCountMismatch,
+                    "claim sample_count does not match the referenced record",
+                ));
+            }
+            None => {
+                return Some(fail(
+                    claim,
+                    ClaimCheckCode::SampleCountMismatch,
+                    "referenced evidence has no sample_count for the claimed field",
+                ));
+            }
         }
     }
     if let (Some(claimed), Some(actual)) = (claim.unit.as_ref(), row.unit.as_ref()) {
@@ -609,6 +675,27 @@ fn fail(claim: &ClaimRecord, code: ClaimCheckCode, reason: &str) -> ClaimCheck {
         code,
         reason: reason.into(),
     }
+}
+
+fn source_digest(payload: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(payload.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(|text| text.to_string())
+    })
+}
+
+fn number_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
 }
 
 #[cfg(test)]
@@ -714,7 +801,8 @@ mod tests {
         claim.p_value = None;
         claim.coverage_status = Some("NOT_RETAINED".into());
         claim.predicate = Some("is_dependency".into());
-        claim.direction = Some("negative".into());
+        claim.direction = None;
+        claim.text = Some("this is a negative essential hit".into());
         let report = validate_claims(&[claim], &rows);
         assert!(report
             .typed_reason()
@@ -767,6 +855,34 @@ mod tests {
     #[test]
     fn prose_without_claims_is_not_checked() {
         let output = serde_json::json!({"answer": "hello"});
-        assert!(claims_from_output(&output).is_empty());
+        assert!(claims_from_output(&output).unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_claim_entries_are_rejected() {
+        let output = serde_json::json!({"claims": [{"kind": "measured_fact"}]});
+        let err = claims_from_output(&output).unwrap_err();
+        assert!(err.contains("malformed_claim"), "{err}");
+    }
+
+    #[test]
+    fn claimed_numeric_without_evidence_field_fails() {
+        let mut rows = catalog();
+        rows.evidence[0].p_value = None;
+        let report = validate_claims(&[measured()], &rows);
+        assert!(report.typed_reason().unwrap().contains("value_mismatch"));
+    }
+
+    #[test]
+    fn measured_claims_cannot_cite_only_a_paper() {
+        let mut claim = ClaimRecord::new("c-paper", ClaimKind::MeasuredFact);
+        claim.p_value = Some(0.001);
+        claim.sources = vec![ClaimSourceRef {
+            kind: ClaimSourceKind::Paper,
+            id: "paper-1".into(),
+            source_version: "paper-digest".into(),
+        }];
+        let report = validate_claims(&[claim], &catalog());
+        assert!(report.typed_reason().unwrap().contains("missing_source"));
     }
 }

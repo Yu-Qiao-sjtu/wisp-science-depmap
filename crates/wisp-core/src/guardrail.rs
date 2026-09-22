@@ -387,7 +387,15 @@ impl Guardrail for ClaimGroundingRail {
         let Some(output) = &ctx.output else {
             return GuardrailDecision::Allow;
         };
-        let claims = claims_from_output(output);
+        let claims = match claims_from_output(output) {
+            Ok(claims) => claims,
+            Err(reason) => {
+                return GuardrailDecision::Reject {
+                    severity: GuardrailSeverity::Terminal,
+                    reason,
+                };
+            }
+        };
         if claims.is_empty() {
             return GuardrailDecision::Allow;
         }

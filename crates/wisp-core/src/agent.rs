@@ -674,6 +674,77 @@ async fn agent_loop_execute(
             anyhow::bail!(EMPTY_RESPONSE_MESSAGE);
         }
 
+        if comp.tool_calls.is_empty() && !env.guidance_pending() {
+            let completion_span =
+                turn_span.map(|span| span.child(SpanKind::Completion, "agent.completion"));
+            let parsed = serde_json::from_str(comp.content.trim()).ok();
+            let output_value = parsed.or_else(|| {
+                let text = comp.content.trim();
+                (!text.is_empty()).then(|| serde_json::Value::String(comp.content.clone()))
+            });
+            let outcome = evaluate_final_output(
+                &GuardrailChain::production(),
+                GuardrailContext {
+                    path: DispatchPath::Direct,
+                    tool: String::new(),
+                    arguments: serde_json::Value::Null,
+                    schema: None,
+                    allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                    approval_required: false,
+                    approval_granted: false,
+                    stale_approval: false,
+                    output: output_value.clone(),
+                    output_contract: ctx.output_contract().cloned(),
+                    claim_catalog: ctx.claim_catalog().cloned(),
+                },
+                completion_span.as_ref(),
+            );
+            match outcome.decision {
+                GuardrailDecision::Reject { reason, .. } => {
+                    sink.discard_assistant_text();
+                    if let Some(span) = completion_span {
+                        span.end(SpanStatus::Error);
+                    }
+                    anyhow::bail!(reason);
+                }
+                _ => {
+                    if let Some(output) = &output_value {
+                        if let Ok(claims) = crate::claim_record::claims_from_output(output) {
+                            if let Some(persist) = ctx.claim_persist() {
+                                persist(&claims);
+                            }
+                        }
+                    }
+                    sink.flush_assistant_text();
+                    ctx.append_assistant(
+                        comp.content.clone(),
+                        comp.tool_calls.clone(),
+                        comp.reasoning.clone(),
+                    );
+                    if let Some(m) = ctx.messages.last() {
+                        output.on_message(m);
+                    }
+                    if let Some(span) = completion_span {
+                        span.end(SpanStatus::Ok);
+                    }
+                    let context_usage = ctx.context_usage(&schemas, &schema_origins);
+                    let context_tokens = context_usage.total();
+                    output.usage(
+                        iteration,
+                        comp.usage.input_tokens,
+                        comp.usage.output_tokens,
+                        comp.usage.reasoning_tokens,
+                        comp.usage.cached_input_tokens,
+                        context_tokens,
+                        ctx.max_context,
+                        context_usage,
+                    );
+                    return Ok(AgentLoopOutcome::Completed);
+                }
+            }
+        }
+
+        sink.flush_assistant_text();
         ctx.append_assistant(
             comp.content.clone(),
             comp.tool_calls.clone(),
@@ -698,47 +769,6 @@ async fn agent_loop_execute(
             ctx.max_context,
             context_usage,
         );
-
-        if comp.tool_calls.is_empty() && !env.guidance_pending() {
-            let completion_span =
-                turn_span.map(|span| span.child(SpanKind::Completion, "agent.completion"));
-            let parsed = serde_json::from_str(comp.content.trim()).ok();
-            let output_value = parsed.or_else(|| {
-                let text = comp.content.trim();
-                (!text.is_empty()).then(|| serde_json::Value::String(comp.content.clone()))
-            });
-            let outcome = evaluate_final_output(
-                &GuardrailChain::production(),
-                GuardrailContext {
-                    path: DispatchPath::Direct,
-                    tool: String::new(),
-                    arguments: serde_json::Value::Null,
-                    schema: None,
-                    allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
-                    approval_required: false,
-                    approval_granted: false,
-                    stale_approval: false,
-                    output: output_value,
-                    output_contract: ctx.output_contract().cloned(),
-                    claim_catalog: ctx.claim_catalog().cloned(),
-                },
-                completion_span.as_ref(),
-            );
-            match outcome.decision {
-                GuardrailDecision::Reject { reason, .. } => {
-                    if let Some(span) = completion_span {
-                        span.end(SpanStatus::Error);
-                    }
-                    anyhow::bail!(reason);
-                }
-                _ => {
-                    if let Some(span) = completion_span {
-                        span.end(SpanStatus::Ok);
-                    }
-                    return Ok(AgentLoopOutcome::Completed);
-                }
-            }
-        }
 
         let mut batch_control = ToolControl::Continue;
         let mut observation = Sha256::new();
@@ -1187,9 +1217,11 @@ async fn summarize_at_iteration_limit(
             anyhow::bail!(ABNORMAL_FINISH_MESSAGE);
         }
         if comp.content.trim().is_empty() || !comp.tool_calls.is_empty() {
+            sink.discard_assistant_text();
             anyhow::bail!(ITERATION_LIMIT_SUMMARY_FAILURE);
         }
 
+        sink.flush_assistant_text();
         ctx.append_assistant(comp.content, vec![], comp.reasoning);
         if let Some(message) = ctx.messages.last() {
             output.on_message(message);
@@ -1318,6 +1350,7 @@ async fn stream_with_retry(
 ) -> Result<Completion, LlmError> {
     let mut last = None;
     for attempt in 0..=RETRY_DELAYS.len() {
+        sink.clear_buffered_text();
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             if let Some(span) = model_span {
                 span.set_error_class(ErrorClass::Cancelled);
@@ -2372,6 +2405,12 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("final output"), "{error}");
+        assert!(
+            ctx.messages
+                .iter()
+                .all(|message| message.role != wisp_llm::Role::Assistant),
+            "rejected completions must not persist assistant bytes"
+        );
     }
 
     #[tokio::test]

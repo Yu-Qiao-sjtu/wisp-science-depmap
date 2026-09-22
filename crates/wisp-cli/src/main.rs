@@ -1,3 +1,4 @@
+mod claim_catalog;
 mod eval;
 mod rpc;
 mod runs;
@@ -1166,6 +1167,13 @@ async fn main() -> Result<()> {
         &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
     );
     wisp_core::install_scientific_intent_planner_in(&mut agent.tools, "workspace", "cli");
+    claim_catalog::install_session_claim_grounding(
+        &mut agent.ctx,
+        &run_store,
+        runs::CLI_PROJECT_ID,
+        "cli",
+    )
+    .await;
     if let Some(pending) = wisp_core::latest_pending_checkpoint(&root) {
         agent
             .ctx

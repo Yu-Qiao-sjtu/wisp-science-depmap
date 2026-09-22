@@ -1575,6 +1575,9 @@ fn build_agent(
         agent.ctx.supports_vision = false;
     }
     agent.seed_system_prompt(&skills, Some(wisp_runs::runs_guidance()));
+    agent
+        .ctx
+        .set_claim_catalog(Some(wisp_core::ClaimGroundingCatalog::default()));
     Ok(agent)
 }
 

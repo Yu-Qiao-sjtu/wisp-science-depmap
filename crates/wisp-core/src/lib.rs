@@ -34,9 +34,9 @@ pub use bridge_checkpoint::{
 };
 pub use claim_record::{
     claims_from_output, rewrite_unsupported_claims, validate_claims, ClaimCheck, ClaimCheckCode,
-    ClaimGroundingCatalog, ClaimKind, ClaimRecord, ClaimSourceKind, ClaimSourceRef,
-    ClaimValidationReport, GroundedArtifact, GroundedEvidence, GroundedPaper, GroundedRun,
-    CLAIM_RECORD_CONTRACT, CLAIM_RECORD_SCHEMA_VERSION,
+    ClaimGroundingCatalog, ClaimKind, ClaimPersistHook, ClaimRecord, ClaimSourceKind,
+    ClaimSourceRef, ClaimValidationReport, GroundedArtifact, GroundedEvidence, GroundedPaper,
+    GroundedRun, CLAIM_RECORD_CONTRACT, CLAIM_RECORD_SCHEMA_VERSION,
 };
 pub use context::{
     repair_unpaired_tool_calls, tool_call_pairing, unpaired_tool_call_ids, ContextManager,
