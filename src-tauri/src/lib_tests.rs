@@ -22,6 +22,21 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 
 #[test]
+fn discovered_depmap_provider_maps_to_canonical_manifest_capability() {
+    let mut local = wisp_core::specialist_manifest::HostPolicy::default();
+    super::agent_turn::map_discovered_depmap_provider_capability(&mut local, true, false);
+    assert!(local.available_connectors.contains("depmap_mcp"));
+
+    let mut remote = wisp_core::specialist_manifest::HostPolicy::default();
+    super::agent_turn::map_discovered_depmap_provider_capability(&mut remote, false, true);
+    assert!(remote.available_connectors.contains("depmap_mcp"));
+
+    let mut unavailable = wisp_core::specialist_manifest::HostPolicy::default();
+    super::agent_turn::map_discovered_depmap_provider_capability(&mut unavailable, false, false);
+    assert!(unavailable.available_connectors.is_empty());
+}
+
+#[test]
 fn model_request_scope_survives_rebuilds_and_standalone_calls_are_isolated() {
     let config = |session_id| {
         super::build_provider_config(

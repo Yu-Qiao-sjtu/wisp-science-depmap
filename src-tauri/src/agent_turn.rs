@@ -24,6 +24,16 @@ impl TurnOrigin {
     }
 }
 
+pub(crate) fn map_discovered_depmap_provider_capability(
+    host: &mut wisp_core::specialist_manifest::HostPolicy,
+    native_provider: bool,
+    compatible_remote_provider: bool,
+) {
+    if native_provider || compatible_remote_provider {
+        host.available_connectors.insert("depmap_mcp".into());
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn send_message(
     state: State<'_, AppState>,
@@ -830,15 +840,31 @@ pub(crate) async fn send_message_inner(
             );
             agent.add_tool(Box::new(
                 depmap_agent::DepMapAgentRouteTool::with_contract(
-                    remote_read_only_tools,
+                    remote_read_only_tools.clone(),
                     wiring.depmap_contract.clone(),
                 )
                 .with_tool_catalog(tool_catalog),
             ));
             wisp_core::install_scientific_intent_planner_in(&mut agent.tools, &ap.id, &frame_id);
-            let depmap_host = wisp_core::specialist_manifest::HostPolicy::depmap_from_registry(
+            let mut depmap_host = wisp_core::specialist_manifest::HostPolicy::depmap_from_registry(
                 skills.all().iter().map(|skill| skill.name.clone()),
                 &agent.tools,
+            );
+            // Connection ids are opaque user records (`conn-*`), not stable
+            // manifest capabilities. Map either the native local provider or
+            // one compatible, validated remote DepMap contract to the shared
+            // canonical capability only after discovery succeeds.
+            let native_depmap_provider =
+                agent.tools.get(wisp_core::DEPMAP_QUERY_TOOL_NAME).is_some();
+            let compatible_remote_depmap = !remote_read_only_tools.is_empty()
+                && wiring
+                    .depmap_contract
+                    .as_ref()
+                    .is_some_and(|contract| contract.compatible);
+            map_discovered_depmap_provider_capability(
+                &mut depmap_host,
+                native_depmap_provider,
+                compatible_remote_depmap,
             );
             wisp_core::assemble_and_apply_depmap_agent(
                 &mut agent.ctx,
