@@ -37,10 +37,12 @@ cases:
       request_contains: ["<!-- wisp:depmap-agent-assembly:v1:begin -->"]
       assembly_contract: wisp.agent-assembly.v1
       assembly_specialist: depmap_r_agent
-      assembly_tools: [attempt_completion, depmap_query, plan_scientific_intent]
+      assembly_tools: [attempt_completion, depmap_query, list_skill_catalog, search_skills, use_skill, plan_scientific_intent]
+      assembly_schema_digests:
+        depmap_query: aac63d3c9e6d9990ed291ffff1dfed7515a19206a9d00935db072d180d2c09ad
       assembly_skills: [depmap-knowledge-query, depmap-coding-agent]
       assembly_plan_mode: false
-      assembly_approval_tools: [attempt_completion, depmap_query, plan_scientific_intent]
+      assembly_approval_tools: [attempt_completion, depmap_query, list_skill_catalog, search_skills, use_skill, plan_scientific_intent]
       assembly_auto_compact: true
       assembly_max_context_tokens: 128000
       assembly_max_rounds: 6

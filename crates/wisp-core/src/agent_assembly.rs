@@ -70,6 +70,15 @@ impl AgentAssemblySurface {
             .ok_or_else(|| format!("tool '{name}' is not exposed by this Agent assembly"))?;
         validate_discovered_schema(schema, arguments)
     }
+
+    /// Stable digest of the exact schema advertised by this assembly. JSON
+    /// object keys are sorted recursively so serialization order cannot make
+    /// production/eval parity appear to drift.
+    pub fn tool_schema_digest(&self, name: &str) -> Option<String> {
+        self.tool_schema(name)
+            .or_else(|| self.mcp_tool_schemas.get(name))
+            .map(canonical_json_digest)
+    }
 }
 
 pub fn assemble_depmap_agent_surface(
@@ -185,6 +194,26 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn canonical_json_digest(value: &Value) -> String {
+    fn canonicalize(value: &Value) -> Value {
+        match value {
+            Value::Array(values) => Value::Array(values.iter().map(canonicalize).collect()),
+            Value::Object(values) => {
+                let sorted = values
+                    .iter()
+                    .map(|(key, value)| (key.clone(), canonicalize(value)))
+                    .collect::<BTreeMap<_, _>>();
+                serde_json::to_value(sorted).expect("canonical JSON map is serializable")
+            }
+            value => value.clone(),
+        }
+    }
+
+    let encoded = serde_json::to_vec(&canonicalize(value))
+        .expect("Agent assembly schema is JSON serializable");
+    sha256_hex(&encoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +301,17 @@ mod tests {
         assert!(desktop
             .validate_tool_arguments("depmap_fixture", &invalid)
             .is_err());
+        assert_eq!(
+            desktop.tool_schema_digest("depmap_fixture"),
+            eval.tool_schema_digest("depmap_fixture")
+        );
+    }
+
+    #[test]
+    fn schema_digest_is_stable_across_object_key_order() {
+        let left = json!({"type": "object", "properties": {"b": {"type": "string"}, "a": {"type": "integer"}}});
+        let right = json!({"properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "type": "object"});
+        assert_eq!(canonical_json_digest(&left), canonical_json_digest(&right));
     }
 
     #[test]

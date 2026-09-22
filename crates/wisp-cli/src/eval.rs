@@ -307,6 +307,10 @@ struct EvalExpectation {
     assembly_tools: Vec<String>,
     #[serde(default)]
     assembly_mcp_tools: Vec<String>,
+    /// Canonical SHA-256 digests of exact eager or deferred schemas. Presence
+    /// checks alone cannot catch required-field, enum, or policy drift.
+    #[serde(default)]
+    assembly_schema_digests: BTreeMap<String, String>,
     #[serde(default)]
     assembly_skills: Vec<String>,
     #[serde(default)]
@@ -376,6 +380,7 @@ impl Default for EvalExpectation {
             assembly_specialist: None,
             assembly_tools: Vec::new(),
             assembly_mcp_tools: Vec::new(),
+            assembly_schema_digests: BTreeMap::new(),
             assembly_skills: Vec::new(),
             assembly_plan_mode: None,
             assembly_approval_tools: Vec::new(),
@@ -1615,13 +1620,19 @@ fn build_agent(
     run_store: Store,
     run_manager: RunManager,
 ) -> Result<(Agent, Option<wisp_core::AgentAssemblySurface>)> {
-    let skill_paths = vec![root.join(".wisp").join("skills")];
+    let mut skill_paths = Vec::new();
+    if let Some(path) = wisp_skills::bundled_dir() {
+        skill_paths.push(path);
+    }
+    skill_paths.push(root.join(".wisp").join("skills"));
     let skills = Arc::new(SkillIndex::load(&skill_paths));
-    if case.tags.iter().any(|tag| tag == "depmap") {
-        wisp_core::host_scientific_bridge(
-            &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    let depmap_host = case.tags.iter().any(|tag| tag == "depmap").then(|| {
+        wisp_core::specialist_manifest::HostPolicy::bundled_depmap_with_skills(
+            skills.all().iter().map(|skill| skill.name.clone()),
         )
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    });
+    if let Some(host) = depmap_host.as_ref() {
+        wisp_core::host_scientific_bridge(host).map_err(|error| anyhow::anyhow!("{error}"))?;
     }
     let memory = Arc::new(MemoryManager::new(root));
     let mut registry = wisp_core::build_registry(skills.clone(), memory, case.memory_enabled);
@@ -1656,7 +1667,19 @@ fn build_agent(
         registry.add(Box::new(wisp_runtime::RTool::new(manager, project_id)));
     }
     if !case.allowed_tools.is_empty() {
-        registry = registry.filtered(&case.allowed_tools);
+        let mut allowed_tools = case.allowed_tools.clone();
+        if depmap_host.is_some() {
+            // A DepMap Specialist declares required Skills only when the same
+            // snapshot can discover and load them. Keep those production
+            // access tools in narrowed evaluator registries so the recorded
+            // assembly cannot advertise unreachable Skills.
+            allowed_tools.extend(
+                ["list_skill_catalog", "search_skills", "use_skill"]
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        }
+        registry = registry.filtered(&allowed_tools);
     }
     if case.tags.iter().any(|tag| tag == "depmap") {
         wisp_core::install_scientific_intent_planner_in(&mut registry, "eval", "eval");
@@ -1682,7 +1705,9 @@ fn build_agent(
         Some(
             wisp_core::assemble_and_apply_depmap_agent(
                 &mut agent.ctx,
-                &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+                depmap_host
+                    .as_ref()
+                    .expect("DepMap cases construct an actual-skill host policy"),
                 &agent.tools,
                 wisp_core::AgentContextPolicy {
                     max_context_tokens: max_context,
@@ -2090,6 +2115,7 @@ fn verify_assembly_expectations(
         || expect.assembly_specialist.is_some()
         || !expect.assembly_tools.is_empty()
         || !expect.assembly_mcp_tools.is_empty()
+        || !expect.assembly_schema_digests.is_empty()
         || !expect.assembly_skills.is_empty()
         || expect.assembly_plan_mode.is_some()
         || !expect.assembly_approval_tools.is_empty()
@@ -2137,6 +2163,17 @@ fn verify_assembly_expectations(
             failures.push(format!(
                 "expected assembly to expose deferred MCP schema '{tool}'"
             ));
+        }
+    }
+    for (tool, expected_digest) in &expect.assembly_schema_digests {
+        match assembly.tool_schema_digest(tool) {
+            Some(observed) if &observed == expected_digest => {}
+            Some(observed) => failures.push(format!(
+                "expected assembly schema digest for '{tool}' to be '{expected_digest}', observed '{observed}'"
+            )),
+            None => failures.push(format!(
+                "expected assembly schema digest for exposed tool '{tool}'"
+            )),
         }
     }
     for skill in &expect.assembly_skills {
@@ -2295,6 +2332,8 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     .map(|(index, _)| end + index)
                     .unwrap_or(clause_end);
                 let nearby = &sentence[window_start..window_end];
+                let before = &sentence[window_start..start];
+                let after = &sentence[end..window_end];
                 let negated = [
                     " not ",
                     " no ",
@@ -2306,14 +2345,17 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     " without ",
                     "不",
                     "未",
-                    "非",
                     "不能",
                     "并未",
                     "没有",
                     "尚未",
+                    "并非",
+                    "绝非",
                 ]
                 .iter()
-                .any(|cue| format!(" {nearby}").contains(cue));
+                .any(|cue| format!(" {nearby}").contains(cue))
+                    || before.ends_with('非')
+                    || (after.starts_with('非') && !after.starts_with("非常"));
                 offset = start + phrase.len();
                 Some(negated)
             })
@@ -3556,6 +3598,28 @@ mod tests {
                 "没有完成 NANOG-high 合成致死筛选。NANOG-high 分组和合成致死检验都属于尚未执行的新计算；相关性本身不证明合成致死。"
                     .into(),
             ),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
+    }
+
+    #[test]
+    fn semantic_grader_does_not_treat_chinese_very_as_negation() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "合成致死".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some("合成致死非常显著。".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
+            completion: Some("该结果并非合成致死。合成致死非显著。".into()),
             ..Captured::default()
         };
         assert!(verify_semantic_quality(&expect, &captured).is_empty());

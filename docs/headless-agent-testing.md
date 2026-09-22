@@ -26,7 +26,11 @@ surface while still exercising the production Agent loop.
 Each DepMap scenario persists that complete surface as `agent_assembly`.
 `expect.assembly_*` can pin its contract, Specialist, eager/deferred schemas,
 Skills, approval tool set, and context policy; the checked-in status fixture
-asserts all of those production-parity dimensions.
+asserts all of those production-parity dimensions. Schema expectations use a
+canonical SHA-256 digest, so required fields, enums, and additional-properties
+policy cannot drift behind an unchanged tool name. DepMap evals load the
+bundled Skill index and keep its discovery/loading tools exposed when a case
+narrows the registry; a missing required Skill therefore fails assembly.
 
 ## Independent Workflow conversion (CLI)
 

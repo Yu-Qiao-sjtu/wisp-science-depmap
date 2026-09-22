@@ -50,6 +50,20 @@ impl HostPolicy {
                 .collect(),
         }
     }
+
+    /// Build the bundled DepMap host contract from the skills that are
+    /// actually enabled for this Agent snapshot. Connectors and native tool
+    /// sets still come from the bundled host wiring, while missing required
+    /// skills fail assembly instead of being advertised optimistically.
+    pub fn bundled_depmap_with_skills<I, S>(skills: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut policy = Self::bundled_depmap();
+        policy.available_skills = skills.into_iter().map(Into::into).collect();
+        policy
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +207,17 @@ mod tests {
         assert_eq!(
             snapshot.required_skills,
             vec!["depmap-knowledge-query", "depmap-coding-agent"]
+        );
+    }
+
+    #[test]
+    fn actual_skill_host_fails_closed_when_a_required_skill_is_not_loaded() {
+        let host = HostPolicy::bundled_depmap_with_skills(["depmap-knowledge-query"]);
+        assert_eq!(
+            assemble(&load_depmap_manifest(), &host),
+            Err(AssemblyError::MissingSkill {
+                skill: "depmap-coding-agent".into(),
+            })
         );
     }
 

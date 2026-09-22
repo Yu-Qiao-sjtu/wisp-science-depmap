@@ -836,9 +836,13 @@ pub(crate) async fn send_message_inner(
                 .with_tool_catalog(tool_catalog),
             ));
             wisp_core::install_scientific_intent_planner_in(&mut agent.tools, &ap.id, &frame_id);
+            let depmap_host =
+                wisp_core::specialist_manifest::HostPolicy::bundled_depmap_with_skills(
+                    skills.all().iter().map(|skill| skill.name.clone()),
+                );
             wisp_core::assemble_and_apply_depmap_agent(
                 &mut agent.ctx,
-                &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+                &depmap_host,
                 &agent.tools,
                 wisp_core::AgentContextPolicy {
                     max_context_tokens: max_context,
