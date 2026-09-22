@@ -1065,7 +1065,10 @@ impl Tool for FixtureNativeTool {
             if let Err(error) = wisp_core::validate_depmap_query_arguments(args) {
                 return ToolResult::fail(format!("invalid DepMap fixture tool arguments: {error}"));
             }
-            if let Err(error) = wisp_mcp::validate_tool_arguments(&self.fixture.schema, args) {
+            let scenario_args = wisp_core::normalize_depmap_query_schema_aliases(args);
+            if let Err(error) =
+                wisp_mcp::validate_tool_arguments(&self.fixture.schema, &scenario_args)
+            {
                 return ToolResult::fail(format!(
                     "arguments do not match this DepMap scenario: {error}"
                 ));
@@ -2451,7 +2454,6 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     " doesn't ",
                     " cannot ",
                     " can't ",
-                    " without ",
                     "不能",
                     "并未",
                     "没有",
@@ -2471,6 +2473,7 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 ]
                 .iter()
                 .any(|cue| format!(" {negation_window}").contains(cue))
+                    || format!(" {before}").contains(" without ")
                     || after.starts_with("非显著")
                     || after.starts_with("非因果")
                     || before.ends_with("并非")
@@ -3734,6 +3737,20 @@ mod tests {
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
 
         let captured = Captured {
+            completion: Some(
+                "Synthetic lethality was observed without evidence of confounding.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
+            completion: Some("The result was observed without synthetic lethality.".into()),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
+
+        let captured = Captured {
             completion: Some("Synthetic lethality or causality is not established.".into()),
             ..Captured::default()
         };
@@ -3893,5 +3910,35 @@ mod tests {
             .await;
         assert!(intended.success);
         assert_eq!(intended.content, "fixture result");
+
+        let tcga = FixtureNativeTool {
+            name: wisp_core::DEPMAP_QUERY_TOOL_NAME.into(),
+            fixture: FixtureTool {
+                description: "TCGA fixture".into(),
+                schema: json!({
+                    "type":"object",
+                    "properties": {
+                        "mode":{"type":"string","enum":["tcga_expression_survival"]},
+                        "gene":{"type":"string"},
+                        "endpoint":{"type":"string","enum":["DSS"]}
+                    },
+                    "required":["mode","gene","endpoint"],
+                    "additionalProperties":false
+                }),
+                result: "TCGA fixture result".into(),
+                error: false,
+            },
+        };
+        let alias = tcga
+            .run(
+                &json!({
+                    "mode":"tcga_expression_survival",
+                    "gene":"ESR1",
+                    "endpoint":"dss"
+                }),
+                &env,
+            )
+            .await;
+        assert!(alias.success, "{}", alias.content);
     }
 }

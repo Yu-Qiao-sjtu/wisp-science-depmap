@@ -64,10 +64,10 @@ pub use delegation_policy::{
     ResolutionError, ResolvedAgentTask, ResolvedDelegationPlan,
 };
 pub use depmap_query_contract::{
-    depmap_query_schema, depmap_query_tool_schema, validate_depmap_query_arguments,
-    DEPMAP_DRUG_OMICS, DEPMAP_LINEAGE_DEPENDENCY_RANKINGS, DEPMAP_LINEAGE_EVENTS,
-    DEPMAP_LINEAGE_NETWORK_FAMILIES, DEPMAP_MATRIX_MODULES, DEPMAP_MAX_TOP_LIMIT,
-    DEPMAP_QUERY_DESCRIPTION, DEPMAP_QUERY_TOOL_NAME,
+    depmap_query_schema, depmap_query_tool_schema, normalize_depmap_query_schema_aliases,
+    validate_depmap_query_arguments, DEPMAP_DRUG_OMICS, DEPMAP_LINEAGE_DEPENDENCY_RANKINGS,
+    DEPMAP_LINEAGE_EVENTS, DEPMAP_LINEAGE_NETWORK_FAMILIES, DEPMAP_MATRIX_MODULES,
+    DEPMAP_MAX_TOP_LIMIT, DEPMAP_QUERY_DESCRIPTION, DEPMAP_QUERY_TOOL_NAME,
 };
 pub use execution::{
     DelegationExecutionObserver, DelegationExecutionResult, DelegationExecutionStatus,

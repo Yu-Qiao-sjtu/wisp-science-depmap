@@ -75,12 +75,11 @@ pub fn depmap_query_tool_schema() -> ToolSchema {
     )
 }
 
-/// Validate and normalize the flat model-facing arguments before a provider
-/// sees them. This is shared by desktop execution and deterministic evals so
-/// a scripted trajectory cannot accept a call that production rejects.
-/// Host-specific lineage alias canonicalization is intentionally applied by
-/// the desktop after this contract-level validation.
-pub fn validate_depmap_query_arguments(args: &Value) -> Result<Value, String> {
+/// Apply only aliases accepted before provider-schema validation. This is
+/// intentionally narrower than full query normalization: eval scenario
+/// contracts use it without inheriting mode defaults that their fixture schema
+/// did not declare.
+pub fn normalize_depmap_query_schema_aliases(args: &Value) -> Value {
     let mut normalized_args = args.clone();
     if let Some(endpoint) = normalized_args
         .get("endpoint")
@@ -89,6 +88,16 @@ pub fn validate_depmap_query_arguments(args: &Value) -> Result<Value, String> {
     {
         normalized_args["endpoint"] = Value::String(endpoint);
     }
+    normalized_args
+}
+
+/// Validate and normalize the flat model-facing arguments before a provider
+/// sees them. This is shared by desktop execution and deterministic evals so
+/// a scripted trajectory cannot accept a call that production rejects.
+/// Host-specific lineage alias canonicalization is intentionally applied by
+/// the desktop after this contract-level validation.
+pub fn validate_depmap_query_arguments(args: &Value) -> Result<Value, String> {
+    let normalized_args = normalize_depmap_query_schema_aliases(args);
     crate::scientific_intent::validate_discovered_schema(&depmap_query_schema(), &normalized_args)
         .map_err(|error| format!("invalid DepMap query schema: {error}"))?;
     let args = &normalized_args;
