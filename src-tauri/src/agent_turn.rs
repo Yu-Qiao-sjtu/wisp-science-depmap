@@ -559,6 +559,7 @@ pub(crate) async fn send_message_inner(
     }
     let reused_agent = guard.is_some();
     if guard.is_none() {
+        let mut native_depmap_provider_installed = false;
         let skills = specialist_skill_index(&state.store, &ap, specialist.as_ref()).await;
         // Desktop history lives in SQLite. Do not hydrate the project-shared
         // `.wisp/session.json` (CLI leftover / other session) into model context.
@@ -697,6 +698,7 @@ pub(crate) async fn send_message_inner(
                 ap.id.clone(),
                 frame_id.clone(),
             ) {
+                native_depmap_provider_installed = true;
                 agent.add_tool(Box::new(tool.evidence_tool()));
                 agent.add_tool(Box::new(tool));
             }
@@ -854,8 +856,6 @@ pub(crate) async fn send_message_inner(
             // manifest capabilities. Map either the native local provider or
             // one compatible, validated remote DepMap contract to the shared
             // canonical capability only after discovery succeeds.
-            let native_depmap_provider =
-                agent.tools.get(wisp_core::DEPMAP_QUERY_TOOL_NAME).is_some();
             let compatible_remote_depmap = !remote_read_only_tools.is_empty()
                 && wiring
                     .depmap_contract
@@ -863,7 +863,7 @@ pub(crate) async fn send_message_inner(
                     .is_some_and(|contract| contract.compatible);
             map_discovered_depmap_provider_capability(
                 &mut depmap_host,
-                native_depmap_provider,
+                native_depmap_provider_installed,
                 compatible_remote_depmap,
             );
             wisp_core::assemble_and_apply_depmap_agent(

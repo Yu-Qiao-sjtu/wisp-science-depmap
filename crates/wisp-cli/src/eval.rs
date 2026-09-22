@@ -2373,8 +2373,6 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let predicate_boundaries = [
                     ",",
                     "，",
-                    " and ",
-                    " or ",
                     " while ",
                     " whereas ",
                     "以及",
@@ -2382,9 +2380,43 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     "且",
                     "同时",
                     "而",
-                    "和",
                     "、",
                 ];
+                let coordinator_boundaries = [" and ", " or ", "和"];
+                let following = sentence[end..].trim_start();
+                // A coordinator starts a new predicate only when the target
+                // phrase is followed by one. Otherwise the coordinated terms
+                // share the earlier predicate and its negation.
+                let target_starts_predicate = [
+                    "is ",
+                    "are ",
+                    "was ",
+                    "were ",
+                    "remains ",
+                    "remain ",
+                    "has ",
+                    "have ",
+                    "does ",
+                    "do ",
+                    "can ",
+                    "cannot ",
+                    "supports ",
+                    "establishes ",
+                    "shows ",
+                    "indicates ",
+                    "显著",
+                    "成立",
+                    "支持",
+                    "证明",
+                    "表明",
+                    "是",
+                    "并非",
+                    "不是",
+                    "没有",
+                    "尚未",
+                ]
+                .iter()
+                .any(|predicate| following.starts_with(predicate));
                 let clause_start = boundaries
                     .iter()
                     .chain(predicate_boundaries.iter())
@@ -2393,9 +2425,22 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     })
                     .max()
                     .unwrap_or(0);
+                let clause_start = if target_starts_predicate {
+                    coordinator_boundaries
+                        .iter()
+                        .filter_map(|boundary| {
+                            prefix.rfind(boundary).map(|index| index + boundary.len())
+                        })
+                        .max()
+                        .unwrap_or(0)
+                        .max(clause_start)
+                } else {
+                    clause_start
+                };
                 let clause_end = boundaries
                     .iter()
                     .chain(predicate_boundaries.iter())
+                    .chain(coordinator_boundaries.iter())
                     .filter_map(|boundary| sentence[end..].find(boundary).map(|index| end + index))
                     .min()
                     .unwrap_or(sentence.len());
@@ -3660,6 +3705,30 @@ mod tests {
         let captured = Captured {
             completion: Some(
                 "Synthetic lethality was significant and causality was not established.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_preserves_negation_across_coordinated_objects() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some("No evidence supports causality or synthetic lethality.".into()),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
+
+        let captured = Captured {
+            completion: Some(
+                "Causality was not established and synthetic lethality was significant.".into(),
             ),
             ..Captured::default()
         };
