@@ -2085,15 +2085,9 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
             std::iter::from_fn(move || {
                 let relative = sentence.get(offset..)?.find(&phrase)?;
                 let start = offset + relative;
+                let end = start + phrase.len();
                 let prefix = &sentence[..start];
-                let bounded_start = prefix
-                    .char_indices()
-                    .rev()
-                    .nth(79)
-                    .map(|(index, _)| index)
-                    .unwrap_or(0);
-                let bounded = &prefix[bounded_start..];
-                let clause_start = [
+                let boundaries = [
                     ", but ",
                     ", yet ",
                     ", however ",
@@ -2107,12 +2101,32 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     "不过",
                     "但",
                     "却",
-                ]
-                .iter()
-                .filter_map(|boundary| bounded.rfind(boundary).map(|index| index + boundary.len()))
-                .max()
-                .unwrap_or(0);
-                let nearby = &bounded[clause_start..];
+                ];
+                let clause_start = boundaries
+                    .iter()
+                    .filter_map(|boundary| {
+                        prefix.rfind(boundary).map(|index| index + boundary.len())
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let clause_end = boundaries
+                    .iter()
+                    .filter_map(|boundary| sentence[end..].find(boundary).map(|index| end + index))
+                    .min()
+                    .unwrap_or(sentence.len());
+                let window_start = prefix
+                    .char_indices()
+                    .rev()
+                    .nth(79)
+                    .map(|(index, _)| index)
+                    .unwrap_or(0)
+                    .max(clause_start);
+                let window_end = sentence[end..clause_end]
+                    .char_indices()
+                    .nth(80)
+                    .map(|(index, _)| end + index)
+                    .unwrap_or(clause_end);
+                let nearby = &sentence[window_start..window_end];
                 let negated = [
                     " not ",
                     " no ",
@@ -2127,6 +2141,8 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     "非",
                     "不能",
                     "并未",
+                    "没有",
+                    "尚未",
                 ]
                 .iter()
                 .any(|cue| format!(" {nearby}").contains(cue));
@@ -3355,5 +3371,24 @@ mod tests {
             ..Captured::default()
         };
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_supports_chinese_preposed_and_postposed_negation() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "合成致死".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some(
+                "没有完成 NANOG-high 合成致死筛选。NANOG-high 分组和合成致死检验都属于尚未执行的新计算；相关性本身不证明合成致死。"
+                    .into(),
+            ),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
     }
 }
