@@ -1,9 +1,39 @@
 //! The `Tool` trait every built-in or MCP-backed tool implements.
 
-use crate::env::{Approval, ToolEnv, ToolResult};
+use crate::{
+    env::{Approval, ToolEnv, ToolResult},
+    execution::{CacheableToolResult, ToolExecutionPolicy},
+};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::{future::Future, pin::Pin};
 use wisp_llm::ToolSchema;
+
+pub type ToolCompletion = Pin<Box<dyn Future<Output = ToolResult> + Send + 'static>>;
+
+/// Result of a coordinated tool call. A detached completion keeps execution
+/// capacity occupied after a caller stops waiting for remote work that cannot
+/// be cancelled safely.
+pub struct ToolRunOutcome {
+    pub result: ToolResult,
+    pub detached_completion: Option<ToolCompletion>,
+}
+
+impl ToolRunOutcome {
+    pub fn complete(result: ToolResult) -> Self {
+        Self {
+            result,
+            detached_completion: None,
+        }
+    }
+
+    pub fn detached(result: ToolResult, completion: ToolCompletion) -> Self {
+        Self {
+            result,
+            detached_completion: Some(completion),
+        }
+    }
+}
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -34,6 +64,17 @@ pub trait Tool: Send + Sync {
     fn connector_id(&self) -> Option<&str> {
         None
     }
+    /// Non-secret revision of the connector credential/account used by this
+    /// tool. Connector-backed caching is disabled when this is absent.
+    fn cache_authorization_revision(&self) -> Option<&str> {
+        None
+    }
+    /// Complete, non-secret remote contract snapshot that defines cached
+    /// result semantics. Connector implementations should include output
+    /// schemas and all other server metadata that can change interpretation.
+    fn cache_contract(&self) -> Option<Value> {
+        None
+    }
     /// Optional ingestion budget for this tool's textual result. The global
     /// `WISP_TOOL_RESULT_BUDGET` override still wins. Tools should use this
     /// only for intentionally bounded, self-contained contracts where spilling
@@ -41,12 +82,43 @@ pub trait Tool: Send + Sync {
     fn context_result_budget(&self) -> Option<usize> {
         None
     }
+    /// Execution controls are fail-closed: tools must explicitly opt a
+    /// read-only, certain result into caching. Concurrency limits still apply
+    /// to uncached calls.
+    fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::default()
+    }
+    /// Return the bounded structured projection that may be persisted. The
+    /// default deliberately refuses to infer safety from an arbitrary result.
+    fn cacheable_result(&self, _result: &ToolResult) -> Option<CacheableToolResult> {
+        None
+    }
+    /// Revalidate live remote metadata immediately before a cache hit is
+    /// returned. Native tools accept their in-process contract by default.
+    async fn validate_cache_hit(&self) -> Result<(), String> {
+        Ok(())
+    }
+    /// Revalidate a cache hit while allowing remote implementations to detach
+    /// provider work when this caller stops waiting. Detached validation keeps
+    /// its execution permit until the provider request actually completes.
+    async fn validate_cache_hit_coordinated(&self, _env: &dyn ToolEnv) -> ToolRunOutcome {
+        match self.validate_cache_hit().await {
+            Ok(()) => ToolRunOutcome::complete(ToolResult::ok("{}")),
+            Err(error) => ToolRunOutcome::complete(ToolResult::fail(error)),
+        }
+    }
     /// One-line preview shown in the tool-call card (e.g. the file path).
     fn preview(&self, _args: &Value) -> String {
         String::new()
     }
     /// Hook fired before `run` (e.g. `edit` emits a unified diff here).
     async fn before(&self, _args: &Value, _env: &dyn ToolEnv) {}
+    /// Coordinators use this hook so a remote operation may return promptly to
+    /// its cancelled caller while retaining its concurrency lease until the
+    /// non-cancellable provider work actually finishes.
+    async fn run_coordinated(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        ToolRunOutcome::complete(self.run(args, env).await)
+    }
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult;
 }
 

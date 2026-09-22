@@ -3,13 +3,138 @@
 use crate::client::{McpCallResult, McpClient, RemoteTool};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wisp_llm::ToolSchema;
-use wisp_tools::{Approval, McpAppServer, Tool, ToolEnv, ToolEvent, ToolResult};
+use wisp_tools::{
+    Approval, CacheableToolResult, McpAppServer, Tool, ToolCacheContract, ToolCacheMode, ToolEnv,
+    ToolEvent, ToolExecutionPolicy, ToolResult, ToolRunOutcome,
+};
 
 const MAX_PRESENTATION_HTML_BYTES: usize = 32 * 1024 * 1024;
+const GENERATED_ARTIFACTS_PREFIX: &str = "Generated artifacts:";
+
+async fn caller_cancelled(env: &dyn ToolEnv) {
+    loop {
+        if env.caller_cancelled() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn render_with_cancellation<F>(rendering: F, env: &dyn ToolEnv) -> ToolResult
+where
+    F: Future<Output = ToolResult>,
+{
+    tokio::pin!(rendering);
+    tokio::select! {
+        result = &mut rendering => result,
+        _ = caller_cancelled(env) => ToolResult::fail(
+            "MCP result rendering cancelled by user; pending resource reads were stopped."
+        ),
+    }
+}
+
+fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
+    let mut policy = ToolExecutionPolicy::default();
+    let Some(cache) = meta.and_then(|meta| meta.pointer("/wisp/cache")) else {
+        return policy;
+    };
+    policy.max_concurrency = cache
+        .get("maxConcurrency")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 256) as usize)
+        .unwrap_or(policy.max_concurrency);
+    policy.max_queue = cache
+        .get("maxQueue")
+        .and_then(Value::as_u64)
+        .map(|value| value.min(10_000) as usize)
+        .unwrap_or(policy.max_queue);
+    let durable = cache.get("durable").and_then(Value::as_bool) == Some(true);
+    let enabled = cache.get("enabled").and_then(Value::as_bool) == Some(true)
+        && cache.get("safeStructuredEvidence").and_then(Value::as_bool) == Some(true)
+        && cache.get("artifactFree").and_then(Value::as_bool) == Some(true);
+    policy.cache = ToolCacheContract {
+        mode: if !enabled {
+            ToolCacheMode::Disabled
+        } else if durable {
+            ToolCacheMode::MemoryAndProject
+        } else {
+            ToolCacheMode::Memory
+        },
+        capability_version: cache
+            .get("capabilityVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        schema_version: cache
+            .get("schemaVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        release_digest: cache
+            .get("releaseDigest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        index_digest: cache
+            .get("indexDigest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        ttl: Duration::from_secs(
+            cache
+                .get("ttlSeconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(86_400),
+        ),
+        max_result_bytes: cache
+            .get("maxResultBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(8 * 1024 * 1024) as usize,
+        shared_authorization: cache.get("sharedAuthorization").and_then(Value::as_bool)
+            == Some(true),
+        certain_outcome: cache.get("certainOutcome").and_then(Value::as_bool) == Some(true),
+    };
+    policy
+}
+
+fn execution_policy_for_remote(remote: &RemoteTool) -> ToolExecutionPolicy {
+    let mut policy = execution_policy_from_meta(remote.meta.as_ref());
+    // MCP Apps carry presentation state which every caller must receive from
+    // its own invocation. Disable caching before coordination so they cannot
+    // enter the single-flight path and strand a coalesced caller without UI.
+    if remote.ui_resource_uri().is_some() {
+        policy.cache.mode = ToolCacheMode::Disabled;
+    }
+    policy
+}
+
+fn cache_safe_mcp_result(remote: &RemoteTool, result: &ToolResult) -> bool {
+    let safe = remote
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.pointer("/wisp/cache/safeStructuredEvidence"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let Some(envelope) = crate::result::ModelResultEnvelope::decode(&result.content) else {
+        return false;
+    };
+    safe && remote.ui_resource_uri().is_none()
+        && !envelope
+            .display_text
+            .lines()
+            .any(|line| line.trim_start().starts_with(GENERATED_ARTIFACTS_PREFIX))
+}
+
+fn remote_cache_contract(remote: &RemoteTool) -> Option<Value> {
+    serde_json::to_value(remote).ok()
+}
 
 pub struct McpTool {
     name: String,
@@ -21,6 +146,7 @@ pub struct McpTool {
     /// server — including app-only helpers that never entered the registry.
     catalog: Arc<Vec<RemoteTool>>,
     connector_id: String,
+    authorization_revision: String,
     require_approval: bool,
 }
 
@@ -44,6 +170,16 @@ impl McpTool {
         connector_id: impl Into<String>,
         catalog: Arc<Vec<RemoteTool>>,
     ) -> Self {
+        Self::with_catalog_authorized(tool, client, connector_id, "", catalog)
+    }
+
+    pub fn with_catalog_authorized(
+        tool: RemoteTool,
+        client: Arc<McpClient>,
+        connector_id: impl Into<String>,
+        authorization_revision: impl Into<String>,
+        catalog: Arc<Vec<RemoteTool>>,
+    ) -> Self {
         let schema = ToolSchema::new(&tool.name, &tool.description, tool.input_schema.clone());
         Self {
             name: tool.name.clone(),
@@ -52,6 +188,7 @@ impl McpTool {
             client: Arc::clone(&client),
             catalog,
             connector_id: connector_id.into(),
+            authorization_revision: authorization_revision.into(),
             require_approval: false,
         }
     }
@@ -65,6 +202,88 @@ impl McpTool {
         let mut wrapped = Self::with_catalog(tool, client, connector_id, catalog);
         wrapped.require_approval = true;
         wrapped
+    }
+
+    pub fn with_catalog_authorized_requiring_approval(
+        tool: RemoteTool,
+        client: Arc<McpClient>,
+        connector_id: impl Into<String>,
+        authorization_revision: impl Into<String>,
+        catalog: Arc<Vec<RemoteTool>>,
+    ) -> Self {
+        let mut wrapped = Self::with_catalog_authorized(
+            tool,
+            client,
+            connector_id,
+            authorization_revision,
+            catalog,
+        );
+        wrapped.require_approval = true;
+        wrapped
+    }
+
+    async fn render_call_result(
+        &self,
+        args: &Value,
+        result: McpCallResult,
+        env: &dyn ToolEnv,
+    ) -> ToolResult {
+        let mut output = crate::result::model_result(&result);
+        let artifacts = materialize_html_resources(&result, env.project_root(), env).await;
+        if !artifacts.is_empty() {
+            let artifact_text = format!(
+                "{GENERATED_ARTIFACTS_PREFIX} {}",
+                artifacts
+                    .iter()
+                    .map(|path| path.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Some(mut envelope) = crate::result::ModelResultEnvelope::decode(&output.content)
+            {
+                envelope.append_display_text(&artifact_text);
+                output.content = serde_json::to_string(&envelope)
+                    .expect("MCP model-result envelope is JSON serializable");
+            } else {
+                output.content.push_str("\n\n");
+                output.content.push_str(&artifact_text);
+            }
+        }
+        if let Some(uri) = self.remote.ui_resource_uri() {
+            self.emit_mcp_app(uri, args, &result, env).await;
+        }
+        output
+    }
+
+    async fn run_coordinated_impl(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        let client = Arc::clone(&self.client);
+        let remote = self.remote.clone();
+        let owned_args = args.clone();
+        let mut request =
+            tokio::spawn(async move { client.tool_call_checked(&remote, &owned_args).await });
+        tokio::select! {
+            joined = &mut request => {
+                let result = match joined {
+                    Ok(Ok(result)) => render_with_cancellation(
+                        self.render_call_result(args, result, env),
+                        env,
+                    ).await,
+                    Ok(Err(error)) => ToolResult::fail(format!("mcp {} error: {error}", self.name)),
+                    Err(error) => ToolResult::fail(format!("mcp {} request task failed: {error}", self.name)),
+                };
+                ToolRunOutcome::complete(result)
+            }
+            _ = caller_cancelled(env) => ToolRunOutcome::detached(
+                ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
+                Box::pin(async move {
+                    match request.await {
+                        Ok(Ok(result)) => crate::result::model_result(&result),
+                        Ok(Err(error)) => ToolResult::fail(format!("MCP request failed after caller cancellation: {error}")),
+                        Err(error) => ToolResult::fail(format!("MCP request task failed after caller cancellation: {error}")),
+                    }
+                }),
+            ),
+        }
     }
 
     async fn emit_mcp_app(
@@ -471,63 +690,214 @@ impl Tool for McpTool {
     fn connector_id(&self) -> Option<&str> {
         (!self.connector_id.is_empty()).then_some(self.connector_id.as_str())
     }
+    fn cache_authorization_revision(&self) -> Option<&str> {
+        (!self.authorization_revision.is_empty()).then_some(self.authorization_revision.as_str())
+    }
+    fn cache_contract(&self) -> Option<Value> {
+        remote_cache_contract(&self.remote)
+    }
+    fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+        execution_policy_for_remote(&self.remote)
+    }
+    fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
+        cache_safe_mcp_result(&self.remote, result)
+            .then(|| CacheableToolResult::structured(result.content.clone()))
+    }
+    async fn validate_cache_hit(&self) -> Result<(), String> {
+        self.client
+            .validate_tool_contract(&self.remote)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    async fn validate_cache_hit_coordinated(&self, env: &dyn ToolEnv) -> ToolRunOutcome {
+        let client = Arc::clone(&self.client);
+        let remote = self.remote.clone();
+        let mut validation = tokio::spawn(async move {
+            client
+                .validate_tool_contract(&remote)
+                .await
+                .map(|()| ToolResult::ok("{}"))
+                .unwrap_or_else(|error| ToolResult::fail(error.to_string()))
+        });
+        tokio::select! {
+            joined = &mut validation => ToolRunOutcome::complete(
+                joined.unwrap_or_else(|error| ToolResult::fail(format!("MCP cache validation task failed: {error}")))
+            ),
+            _ = async {
+                loop {
+                    if env.caller_cancelled() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            } => ToolRunOutcome::detached(
+                ToolResult::fail("MCP cache validation cancelled by caller; server request kept alive."),
+                Box::pin(async move {
+                    validation.await.unwrap_or_else(|error| {
+                        ToolResult::fail(format!("MCP cache validation task failed after caller cancellation: {error}"))
+                    })
+                }),
+            ),
+        }
+    }
     fn preview(&self, args: &Value) -> String {
         let s = args.to_string();
         s.chars().take(120).collect()
     }
+    async fn run_coordinated(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        self.run_coordinated_impl(args, env).await
+    }
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
-        let call = async {
-            match self.client.tool_call_checked(&self.remote, args).await {
-                Ok(result) => {
-                    let mut output = crate::result::model_result(&result);
-                    let artifacts =
-                        materialize_html_resources(&result, env.project_root(), env).await;
-                    if !artifacts.is_empty() {
-                        let artifact_text = format!(
-                            "Generated artifacts: {}",
-                            artifacts
-                                .iter()
-                                .map(|path| path.to_string_lossy())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                        if let Some(mut envelope) =
-                            crate::result::ModelResultEnvelope::decode(&output.content)
-                        {
-                            envelope.append_display_text(&artifact_text);
-                            output.content = serde_json::to_string(&envelope)
-                                .expect("MCP model-result envelope is JSON serializable");
-                        } else {
-                            output.content.push_str("\n\n");
-                            output.content.push_str(&artifact_text);
-                        }
-                    }
-                    if let Some(uri) = self.remote.ui_resource_uri() {
-                        self.emit_mcp_app(uri, args, &result, env).await;
-                    }
-                    output
-                }
-                Err(e) => ToolResult::fail(format!("mcp {name} error: {e}", name = self.name)),
-            }
-        };
-        tokio::select! {
-            result = call => result,
-            _ = async { loop {
-                if env.is_cancelled() { break; }
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            } } => ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
-        }
+        self.run_coordinated_impl(args, env).await.result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+
+    #[test]
+    fn cache_metadata_is_explicit_versioned_and_bounded() {
+        let meta = json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "durable": true,
+                "capabilityVersion": "cap-v2",
+                "schemaVersion": "schema-v3",
+                "releaseDigest": "release-sha",
+                "indexDigest": "index-sha",
+                "ttlSeconds": 999_999,
+                "maxResultBytes": 99_999_999,
+                "sharedAuthorization": true,
+                "certainOutcome": true,
+                "safeStructuredEvidence": true,
+                "artifactFree": true,
+                "maxConcurrency": 999,
+                "maxQueue": 99_999
+            }}
+        });
+        let policy = execution_policy_from_meta(Some(&meta));
+        assert_eq!(policy.cache.mode, ToolCacheMode::MemoryAndProject);
+        assert_eq!(policy.cache.capability_version, "cap-v2");
+        assert_eq!(policy.cache.release_digest, "release-sha");
+        assert_eq!(policy.cache.ttl, Duration::from_secs(86_400));
+        assert_eq!(policy.cache.max_result_bytes, 8 * 1024 * 1024);
+        assert_eq!(policy.max_concurrency, 256);
+        assert_eq!(policy.max_queue, 10_000);
+        assert!(policy.cache.shared_authorization);
+        assert!(policy.cache.certain_outcome);
+    }
+
+    #[test]
+    fn absent_cache_metadata_stays_fail_closed() {
+        let policy = execution_policy_from_meta(None);
+        assert_eq!(policy.cache.mode, ToolCacheMode::Disabled);
+        assert!(!policy.cache.shared_authorization);
+        assert!(!policy.cache.certain_outcome);
+
+        let retracted = execution_policy_from_meta(Some(&json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "capabilityVersion": "cap-v1",
+                "schemaVersion": "schema-v1",
+                "releaseDigest": "release-v1",
+                "indexDigest": "index-v1",
+                "ttlSeconds": 60,
+                "maxResultBytes": 1024,
+                "sharedAuthorization": true,
+                "certainOutcome": true,
+                "artifactFree": true
+            }}
+        })));
+        assert_eq!(retracted.cache.mode, ToolCacheMode::Disabled);
+    }
+
+    #[test]
+    fn cache_contract_covers_complete_remote_tool_snapshot() {
+        let mut remote = RemoteTool {
+            name: "bounded_read".into(),
+            title: Some("Bounded read".into()),
+            description: "bounded evidence".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(json!({"type": "object", "required": ["evidence"]})),
+            meta: Some(json!({"wisp": {"cache": {"enabled": true}}})),
+            annotations: Some(json!({"readOnlyHint": true})),
+        };
+        let baseline = remote_cache_contract(&remote).unwrap();
+        assert_eq!(baseline.get("outputSchema"), remote.output_schema.as_ref());
+
+        remote.output_schema = Some(json!({"type": "object", "required": ["claims"]}));
+        assert_ne!(remote_cache_contract(&remote).unwrap(), baseline);
+    }
+
+    #[test]
+    fn artifact_producing_and_app_results_are_not_cacheable() {
+        let mut remote = RemoteTool {
+            name: "bounded_read".into(),
+            title: None,
+            description: "bounded read".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            meta: Some(json!({
+                "wisp": {"cache": {"safeStructuredEvidence": true}}
+            })),
+            annotations: Some(json!({"readOnlyHint": true})),
+        };
+        let ordinary = ToolResult::ok(
+            serde_json::to_string(&crate::result::ModelResultEnvelope {
+                schema: crate::result::MODEL_RESULT_SCHEMA.into(),
+                display_text: "bounded evidence".into(),
+                structured_content: Some(json!({"status": "FOUND"})),
+            })
+            .unwrap(),
+        );
+        assert!(cache_safe_mcp_result(&remote, &ordinary));
+
+        let artifact = ToolResult::ok(
+            serde_json::to_string(&crate::result::ModelResultEnvelope {
+                schema: crate::result::MODEL_RESULT_SCHEMA.into(),
+                display_text:
+                    "bounded evidence\n\nGenerated artifacts: .wisp/plugin-artifacts/a.html".into(),
+                structured_content: Some(json!({"status": "FOUND"})),
+            })
+            .unwrap(),
+        );
+        assert!(!cache_safe_mcp_result(&remote, &artifact));
+
+        remote.meta = Some(json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "safeStructuredEvidence": true
+            }}
+        }));
+        assert_eq!(
+            execution_policy_for_remote(&remote).cache.mode,
+            ToolCacheMode::Disabled
+        );
+
+        remote.meta = Some(json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "safeStructuredEvidence": true,
+                "artifactFree": true
+            }},
+            "ui": {"resourceUri": "ui://example/app"}
+        }));
+        assert!(!cache_safe_mcp_result(&remote, &ordinary));
+        assert_eq!(
+            execution_policy_for_remote(&remote).cache.mode,
+            ToolCacheMode::Disabled
+        );
+    }
 
     struct TestEnv {
         root: PathBuf,
         changed: Mutex<Vec<String>>,
+        cancelled: AtomicBool,
     }
 
     #[async_trait]
@@ -545,6 +915,10 @@ mod tests {
                 self.changed.lock().unwrap().push(path);
             }
         }
+
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
     }
 
     #[tokio::test]
@@ -559,6 +933,7 @@ mod tests {
         let env = TestEnv {
             root: root.clone(),
             changed: Mutex::new(Vec::new()),
+            cancelled: AtomicBool::new(false),
         };
         let result = McpCallResult {
             content: vec![json!({
@@ -583,6 +958,32 @@ mod tests {
             &[paths[0].to_string_lossy().to_string()]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn result_rendering_stops_when_the_caller_cancels() {
+        let env = TestEnv {
+            root: std::env::temp_dir(),
+            changed: Mutex::new(Vec::new()),
+            cancelled: AtomicBool::new(false),
+        };
+        let rendering = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            ToolResult::ok("rendered")
+        };
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            env.cancelled.store(true, Ordering::SeqCst);
+        };
+
+        let (result, ()) = tokio::time::timeout(Duration::from_millis(200), async {
+            tokio::join!(render_with_cancellation(rendering, &env), cancel)
+        })
+        .await
+        .expect("render cancellation should release the caller promptly");
+
+        assert!(!result.success);
+        assert!(result.content.contains("rendering cancelled"));
     }
 
     #[tokio::test]

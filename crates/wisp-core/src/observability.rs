@@ -191,6 +191,10 @@ impl ErrorClass {
 pub enum CacheOutcome {
     Hit,
     Miss,
+    Stale,
+    Bypass,
+    Coalesced,
+    Evicted,
     Disabled,
 }
 
@@ -199,6 +203,10 @@ impl CacheOutcome {
         match self {
             Self::Hit => "hit",
             Self::Miss => "miss",
+            Self::Stale => "stale",
+            Self::Bypass => "bypass",
+            Self::Coalesced => "coalesced",
+            Self::Evicted => "evicted",
             Self::Disabled => "disabled",
         }
     }
@@ -464,6 +472,9 @@ const OPERATIONAL_EXTRA_KEYS: &[&str] = &[
     "guardrail_version",
     "guardrail_outcome",
     "guardrail_stage",
+    "cache_event",
+    "queue_event",
+    "queue_depth",
 ];
 
 fn env_flag(name: &str) -> bool {
@@ -1064,6 +1075,9 @@ impl SpanGuard {
         match key {
             "tool_id" => open.span.attributes.tool_id = Some(value.into()),
             "capability_id" => open.span.attributes.capability_id = Some(value.into()),
+            "contract_fingerprint" => {
+                open.span.attributes.contract_fingerprint = Some(value.into())
+            }
             "connector_id"
             | "host"
             | "stop_reason"
@@ -1127,6 +1141,15 @@ impl SpanGuard {
         } else {
             CacheOutcome::Miss
         });
+    }
+
+    pub fn set_cache_outcome(&self, outcome: CacheOutcome) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .span
+            .attributes
+            .cache_outcome = Some(outcome);
     }
 
     pub fn set_error_class(&self, class: ErrorClass) {
