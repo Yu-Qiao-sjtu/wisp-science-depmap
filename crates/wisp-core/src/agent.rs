@@ -5,8 +5,8 @@
 use crate::archive::{prune_dir, ArchiveRetention};
 use crate::context::{image_content, ContextManager};
 use crate::guardrail::{
-    evaluate_handoff, evaluate_tool_input, GuardrailChain, GuardrailContext, GuardrailDecision,
-    GuardrailSeverity, DispatchPath,
+    evaluate_final_output, evaluate_handoff, evaluate_tool_input, DispatchPath, GuardrailChain,
+    GuardrailContext, GuardrailDecision, GuardrailSeverity,
 };
 use crate::observability::{
     finish_turn_span, mcp_capability_id, plan_tool_spans, ErrorClass, SpanGuard, SpanKind,
@@ -52,6 +52,31 @@ const STUCK_LOOP_MESSAGE: &str = "检测到智能体连续重复相同的工具�
 /// ~16 KiB ≈ 4K estimated tokens. Override with WISP_TOOL_RESULT_BUDGET
 /// (bytes; 0 disables).
 const DEFAULT_STREAM_RESULT_BUDGET: usize = 16 * 1024;
+
+fn resolve_guardrail_tool_input(
+    tools: &Registry,
+    name: &str,
+    requested_name: &str,
+    args: &serde_json::Value,
+) -> (Option<serde_json::Value>, serde_json::Value) {
+    if name == "use_mcp_tool" {
+        let nested = args
+            .get("tool_input")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let schema = tools
+            .get(requested_name)
+            .map(|tool| tool.schema().function.parameters);
+        (schema, nested)
+    } else {
+        (
+            tools
+                .get(name)
+                .map(|tool| tool.schema().function.parameters),
+            args.clone(),
+        )
+    }
+}
 
 fn context_archive(root: &Path) -> (PathBuf, String) {
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -675,11 +700,43 @@ async fn agent_loop_execute(
         );
 
         if comp.tool_calls.is_empty() && !env.guidance_pending() {
-            if let Some(span) = turn_span {
-                span.child(SpanKind::Completion, "agent.completion")
-                    .end(SpanStatus::Ok);
+            let completion_span =
+                turn_span.map(|span| span.child(SpanKind::Completion, "agent.completion"));
+            let parsed = serde_json::from_str(comp.content.trim()).ok();
+            let output_value = parsed.or_else(|| {
+                let text = comp.content.trim();
+                (!text.is_empty()).then(|| serde_json::Value::String(comp.content.clone()))
+            });
+            let outcome = evaluate_final_output(
+                &GuardrailChain::production(),
+                GuardrailContext {
+                    path: DispatchPath::Direct,
+                    tool: String::new(),
+                    arguments: serde_json::Value::Null,
+                    schema: None,
+                    allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                    approval_required: false,
+                    approval_granted: false,
+                    stale_approval: false,
+                    output: output_value,
+                    output_contract: ctx.output_contract().cloned(),
+                },
+                completion_span.as_ref(),
+            );
+            match outcome.decision {
+                GuardrailDecision::Reject { reason, .. } => {
+                    if let Some(span) = completion_span {
+                        span.end(SpanStatus::Error);
+                    }
+                    anyhow::bail!(reason);
+                }
+                _ => {
+                    if let Some(span) = completion_span {
+                        span.end(SpanStatus::Ok);
+                    }
+                    return Ok(AgentLoopOutcome::Completed);
+                }
             }
-            return Ok(AgentLoopOutcome::Completed);
         }
 
         let mut batch_control = ToolControl::Continue;
@@ -758,9 +815,8 @@ async fn agent_loop_execute(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let schema = tools
-                .get(&name)
-                .map(|tool| tool.schema().function.parameters);
+            let (schema, guard_arguments) =
+                resolve_guardrail_tool_input(tools, &name, requested_name, &args);
             let path = if name == "use_mcp_tool" {
                 DispatchPath::DeferredMcp
             } else if name == "delegate_tasks" {
@@ -771,7 +827,7 @@ async fn agent_loop_execute(
             let guard_ctx = GuardrailContext {
                 path: path.clone(),
                 tool: requested_name.to_string(),
-                arguments: args.clone(),
+                arguments: guard_arguments,
                 schema,
                 allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
                 approval_required: false,
@@ -2282,6 +2338,37 @@ mod tests {
         assert_eq!(ctx.messages[2].tool_name.as_deref(), Some(ASK_USER));
         assert_eq!(tool_result_ids(&ctx), vec!["ask-1", "later-1"]);
         assert!(ctx.messages[3].content.as_text().contains("ended the turn"));
+    }
+
+    #[tokio::test]
+    async fn typed_final_output_contract_rejects_unsupported_completion() {
+        let provider = SequenceProvider::new([Completion {
+            content: r#"{"status":"FOUND","secret":"row"}"#.into(),
+            finish_reason: Some("stop".into()),
+            ..Completion::default()
+        }]);
+        let tools = Registry::builtins().filtered(&[]);
+        let mut ctx = ContextManager::new(100_000);
+        ctx.set_output_contract(Some(serde_json::json!({
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": false
+        })));
+        let error = agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &NullOutput,
+            "summarize",
+            0,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("final output"), "{error}");
     }
 
     #[tokio::test]

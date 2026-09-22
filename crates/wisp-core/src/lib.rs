@@ -49,7 +49,8 @@ pub use execution::{
 };
 pub use guardrail::{
     evaluate_final_output, evaluate_handoff, evaluate_tool_input, DispatchPath, GuardrailChain,
-    GuardrailContext, GuardrailDecision, GuardrailOutcome, GuardrailSeverity, GUARDRAIL_CONTRACT_ID,
+    GuardrailContext, GuardrailDecision, GuardrailOutcome, GuardrailSeverity,
+    GUARDRAIL_CONTRACT_ID,
 };
 pub use memory::{
     MemoryManager, MemorySearchQuery, MemorySearchRequest, MemorySearchResponse, MemorySearchResult,

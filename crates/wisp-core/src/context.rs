@@ -331,6 +331,8 @@ pub struct ContextManager {
     /// This deliberately survives a resumable provider/compaction failure and
     /// is reset only when the host starts a genuinely new user turn.
     active_turn_allowed_tools: Option<Vec<String>>,
+    /// Optional typed contract for the model's empty-tool-call completion.
+    output_contract: Option<serde_json::Value>,
 }
 
 impl ContextManager {
@@ -357,6 +359,7 @@ impl ContextManager {
             last_boundary_tokens: None,
             auto_compact_retry_floor: None,
             active_turn_allowed_tools: None,
+            output_contract: None,
         }
     }
 
@@ -370,6 +373,14 @@ impl ContextManager {
 
     pub(crate) fn set_active_turn_allowed_tools(&mut self, tools: Vec<String>) {
         self.active_turn_allowed_tools = Some(tools);
+    }
+
+    pub fn set_output_contract(&mut self, contract: Option<serde_json::Value>) {
+        self.output_contract = contract;
+    }
+
+    pub fn output_contract(&self) -> Option<&serde_json::Value> {
+        self.output_contract.as_ref()
     }
 
     pub fn len(&self) -> usize {

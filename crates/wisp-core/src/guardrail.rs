@@ -211,9 +211,6 @@ impl GuardrailChain {
                 stage,
                 outcome: next.as_str().into(),
             });
-            if span.is_some() {
-                record_span(span, rail.id(), rail.version(), stage, &next);
-            }
             if decision.is_denial() && matches!(next, GuardrailDecision::Allow) {
                 continue;
             }
@@ -228,6 +225,9 @@ impl GuardrailChain {
                 break;
             }
         }
+        if let Some((id, version)) = merged_span_identity(&records, &decision) {
+            record_span(span, id, version, stage, &decision);
+        }
         GuardrailOutcome {
             contract: GUARDRAIL_CONTRACT_ID.into(),
             contract_version: GUARDRAIL_CONTRACT_VERSION.into(),
@@ -236,6 +236,19 @@ impl GuardrailChain {
             records,
         }
     }
+}
+
+fn merged_span_identity<'a>(
+    records: &'a [GuardrailRecord],
+    decision: &GuardrailDecision,
+) -> Option<(&'a str, &'a str)> {
+    let outcome = decision.as_str();
+    records
+        .iter()
+        .rev()
+        .find(|record| record.outcome == outcome)
+        .or(records.last())
+        .map(|record| (record.id.as_str(), record.version.as_str()))
 }
 
 fn record_span(
@@ -276,10 +289,7 @@ impl Guardrail for RouteAllowlistRail {
         } else {
             GuardrailDecision::Reject {
                 severity: GuardrailSeverity::Terminal,
-                reason: format!(
-                    "tool '{}' is blocked by the active turn route",
-                    ctx.tool
-                ),
+                reason: format!("tool '{}' is blocked by the active turn route", ctx.tool),
             }
         }
     }
@@ -318,6 +328,15 @@ impl Guardrail for ToolInputSchemaRail {
         GuardrailStage::ToolInput
     }
     fn evaluate(&self, ctx: &GuardrailContext) -> GuardrailDecision {
+        if matches!(ctx.path, DispatchPath::DeferredMcp) && ctx.schema.is_none() {
+            return GuardrailDecision::Reject {
+                severity: GuardrailSeverity::Recoverable,
+                reason: format!(
+                    "deferred MCP tool '{}' has no discovered input schema",
+                    ctx.tool
+                ),
+            };
+        }
         let Some(schema) = &ctx.schema else {
             return GuardrailDecision::Allow;
         };
@@ -537,5 +556,71 @@ mod tests {
         assert!(encoded.contains("tool_input_schema"));
         assert!(encoded.contains("recoverable_reject"));
         assert!(!encoded.contains("invented"));
+    }
+
+    #[test]
+    fn deferred_mcp_validates_nested_tool_input_not_the_gateway() {
+        let schema = default_tool_schema();
+        let nested = GuardrailContext {
+            path: DispatchPath::DeferredMcp,
+            tool: "fixture_mcp_query".into(),
+            arguments: serde_json::json!({"invented": true}),
+            schema: Some(schema.clone()),
+            allowed_tools: None,
+            approval_required: false,
+            approval_granted: false,
+            stale_approval: false,
+            output: None,
+            output_contract: None,
+        };
+        let outcome = evaluate_tool_input(&GuardrailChain::production(), nested, None);
+        assert_eq!(outcome.decision.as_str(), "recoverable_reject");
+
+        let missing = GuardrailContext {
+            path: DispatchPath::DeferredMcp,
+            tool: "missing_connector".into(),
+            arguments: serde_json::json!({"query": "ok"}),
+            schema: None,
+            allowed_tools: None,
+            approval_required: false,
+            approval_granted: false,
+            stale_approval: false,
+            output: None,
+            output_contract: None,
+        };
+        let missing_outcome = evaluate_tool_input(&GuardrailChain::production(), missing, None);
+        match missing_outcome.decision {
+            GuardrailDecision::Reject {
+                severity: GuardrailSeverity::Recoverable,
+                reason,
+            } => assert!(reason.contains("discovered input schema"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn merged_span_keeps_the_denial_after_a_later_allow() {
+        struct AllowAll;
+        impl Guardrail for AllowAll {
+            fn id(&self) -> &'static str {
+                "allow_all"
+            }
+            fn stage(&self) -> GuardrailStage {
+                GuardrailStage::ToolInput
+            }
+            fn evaluate(&self, _ctx: &GuardrailContext) -> GuardrailDecision {
+                GuardrailDecision::Allow
+            }
+        }
+        let trace = AgentTrace::in_memory();
+        let turn = trace.start_turn(TurnIdentity::default());
+        let span = turn.child(SpanKind::Tool, "agent.tool");
+        let chain = GuardrailChain::production().with_extra(Box::new(AllowAll));
+        let _ = evaluate_tool_input(&chain, invalid_call(DispatchPath::Direct), Some(&span));
+        span.end(SpanStatus::Error);
+        turn.end(SpanStatus::Error);
+        let encoded = trace.memory().unwrap().document().encoded();
+        assert!(encoded.contains("recoverable_reject"));
+        assert!(!encoded.contains("\"guardrail_outcome\":\"allow\""));
     }
 }
