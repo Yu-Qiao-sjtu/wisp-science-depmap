@@ -13,11 +13,13 @@ The checked-in corpus lives at
 family records its canonical intent and permitted ambiguity, expected
 capability and query shape, allowed and forbidden tools, provider and coverage
 fixture, terminal decisions, tool/context budgets, and typed evidence
-invariants. Executable question variants also retain the prompt-to-intent
-proposal produced for that exact prompt. Deterministic replay plans from this
+invariants. Every question variant also retains the prompt-to-intent proposal
+produced for that exact prompt. Deterministic replay plans from this
 recorded proposal rather than injecting the canonical target, and rejects a
 changed prompt without a reviewed mapping or a proposal that routes outside
-the ACU contract. The examples are regression fixtures; they do not create
+the ACU contract. Production Agent replay covers both executable paths and
+terminal responses; each completion must be non-empty and explicitly free of
+unsupported claims. The examples are regression fixtures; they do not create
 gene-specific or lineage-specific planner branches.
 
 Every enabled core capability and every terminal planner decision must be
@@ -66,8 +68,9 @@ contract, and ACU-suite digests. This makes an unreviewed release, coverage, or
 schema change fail before scientific dispatch instead of merely appearing as
 different metadata in a completed report. Digests use canonical sorted JSON so
 the same release lock is stable on Windows, macOS, and Linux. The server digest
-also covers Reader mode, evidence-envelope, claim-validator, and specialist
-manifest contracts.
+also covers Reader mode, evidence-envelope, claim-validator, and the complete
+resolved specialist snapshot (including instructions, skills, connectors,
+native tool sets, and output contracts).
 
 Model-quality failures, provider-canary failures, deterministic contract
 failures, and release-assembly failures use separate blocker kinds so a flaky

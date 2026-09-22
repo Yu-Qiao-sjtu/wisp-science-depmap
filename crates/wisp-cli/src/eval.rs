@@ -2706,14 +2706,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_agent_assembly_replays_every_executable_acu() {
+    async fn production_agent_assembly_replays_every_acu_terminal_response() {
         let corpus = wisp_core::load_bundled_depmap_acu_corpus();
         let catalog = wisp_core::IntentCatalog::bundled_depmap();
-        for acu in corpus.cases.into_iter().filter(|case| {
-            case.allowed_terminal_decisions
-                .iter()
-                .any(|decision| decision == "execute")
-        }) {
+        for acu in corpus.cases {
             let replay = wisp_core::replay_acu(&acu, &catalog);
             assert!(replay.passed, "{}: {:#?}", acu.id, replay.failures);
             for (variant_index, prompt) in acu.question_family.iter().enumerate() {
@@ -2730,43 +2726,66 @@ mod tests {
                     .unwrap()
                     .proposed_intent
                     .clone();
-                let tool = prompt_replay.tool.clone().unwrap();
-                let arguments = prompt_replay.arguments.clone().unwrap();
-                let schema = acu.fixture.tool_schemas.get(&tool).unwrap().clone();
                 let evidence = acu.fixture.evidence.clone().unwrap();
-                let tool_result = serde_json::to_string(&json!({
-                    "schema": "wisp.mcp-tool-result.v1",
-                    "structured_content": evidence.structured_content,
-                    "display_text": "bounded evidence"
-                }))
-                .unwrap();
                 let completion = serde_json::to_string(&evidence.completion).unwrap();
+                let mut allowed_tools = vec!["attempt_completion".to_string()];
+                let mut required_tools = vec![wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL.to_string()];
+                let mut tool_order = required_tools.clone();
+                let mut fixture_tools = serde_json::Map::new();
+                let mut script = vec![json!({
+                    "tool_calls":[{
+                        "id":"plan-1",
+                        "name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,
+                        "arguments":{"intent":proposed_intent}
+                    }]
+                })];
+                if let (Some(tool), Some(arguments)) =
+                    (prompt_replay.tool.clone(), prompt_replay.arguments.clone())
+                {
+                    let schema = acu.fixture.tool_schemas.get(&tool).unwrap().clone();
+                    let tool_result = serde_json::to_string(&json!({
+                        "schema": "wisp.mcp-tool-result.v1",
+                        "structured_content": evidence.structured_content,
+                        "display_text": "bounded evidence"
+                    }))
+                    .unwrap();
+                    allowed_tools.push(tool.clone());
+                    required_tools.push(tool.clone());
+                    tool_order.push(tool.clone());
+                    fixture_tools.insert(
+                        tool.clone(),
+                        json!({"schema": schema, "result": tool_result}),
+                    );
+                    script.push(json!({
+                        "tool_calls":[{"id":"evidence-1","name":tool,"arguments":arguments}]
+                    }));
+                }
+                required_tools.push("attempt_completion".into());
+                tool_order.push("attempt_completion".into());
+                script.push(json!({
+                    "tool_calls":[{
+                        "id":"done-1",
+                        "name":"attempt_completion",
+                        "arguments":{"result":completion}
+                    }]
+                }));
                 let case: EvalCase = serde_json::from_value(json!({
                     "id": format!("acu-{}-variant-{}", acu.id, variant_index + 1),
                     "description": "production assembly ACU paraphrase replay",
                     "tags": ["depmap", "acu", "release-gate"],
                     "prompt": prompt,
-                    "allowed_tools": [tool, "attempt_completion"],
-                    "fixture_tools": {
-                        tool.clone(): {
-                            "schema": schema,
-                            "result": tool_result
-                        }
-                    },
-                    "script": [
-                        {"tool_calls":[{"id":"plan-1","name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,"arguments":{"intent":proposed_intent}}]},
-                        {"tool_calls":[{"id":"evidence-1","name":tool,"arguments":arguments}]},
-                        {"tool_calls":[{"id":"done-1","name":"attempt_completion","arguments":{"result":completion}}]}
-                    ],
+                    "allowed_tools": allowed_tools,
+                    "fixture_tools": fixture_tools,
+                    "script": script,
                     "limits": {
                         "max_tool_calls": acu.budget.max_tool_calls,
                         "max_context_tokens": acu.budget.max_context_tokens,
                         "max_rounds": 4
                     },
                     "expect": {
-                        "required_tools": [wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL, tool, "attempt_completion"],
-                        "forbidden_tools": ["shell", "run_in_context"],
-                        "tool_order": [wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL, tool, "attempt_completion"],
+                        "required_tools": required_tools,
+                        "forbidden_tools": acu.forbidden_tools,
+                        "tool_order": tool_order,
                         "remaining_script": 0
                     }
                 }))
@@ -2794,7 +2813,7 @@ mod tests {
                     };
                     result.failures.extend(wisp_core::validate_acu_evidence(
                         &acu,
-                        "execute",
+                        &prompt_replay.decision,
                         Some(&observed),
                     ));
                 } else {

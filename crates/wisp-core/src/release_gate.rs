@@ -412,34 +412,28 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
                 case.id
             ));
         }
-        if case
-            .allowed_terminal_decisions
-            .iter()
-            .any(|decision| decision == "execute")
-        {
-            for prompt in &case.question_family {
-                let matching = case
-                    .prompt_mappings
-                    .iter()
-                    .filter(|mapping| mapping.prompt == *prompt)
-                    .count();
-                if matching != 1 {
-                    errors.push(format!(
-                        "executable ACU '{}' needs exactly one recorded prompt mapping for '{}'",
-                        case.id, prompt
-                    ));
-                }
-            }
-            if case
+        for prompt in &case.question_family {
+            let matching = case
                 .prompt_mappings
                 .iter()
-                .any(|mapping| !case.question_family.contains(&mapping.prompt))
-            {
+                .filter(|mapping| mapping.prompt == *prompt)
+                .count();
+            if matching != 1 {
                 errors.push(format!(
-                    "executable ACU '{}' has a prompt mapping outside its question family",
-                    case.id
+                    "ACU '{}' needs exactly one recorded prompt mapping for '{}'",
+                    case.id, prompt
                 ));
             }
+        }
+        if case
+            .prompt_mappings
+            .iter()
+            .any(|mapping| !case.question_family.contains(&mapping.prompt))
+        {
+            errors.push(format!(
+                "ACU '{}' has a prompt mapping outside its question family",
+                case.id
+            ));
         }
         if case.budget.max_tool_calls == 0 || case.budget.max_context_tokens == 0 {
             errors.push(format!("ACU '{}' needs positive budgets", case.id));
@@ -461,6 +455,16 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
         {
             errors.push(format!(
                 "executable ACU '{}' needs a replayable evidence fixture",
+                case.id
+            ));
+        }
+        if case
+            .evidence_invariants
+            .contains(&AcuEvidenceInvariant::NoUnsupportedClaim)
+            && case.fixture.evidence.is_none()
+        {
+            errors.push(format!(
+                "ACU '{}' needs a replayable completion observation",
                 case.id
             ));
         }
@@ -780,7 +784,7 @@ pub fn validate_acu_evidence(
                     failures.push("replay performed forbidden raw matrix I/O".into());
                 }
             }
-            AcuEvidenceInvariant::NoUnsupportedClaim if executes => {
+            AcuEvidenceInvariant::NoUnsupportedClaim => {
                 let valid = observation.is_some_and(|value| {
                     value.completion.unsupported_claims.is_empty()
                         && !value.completion.text.trim().is_empty()
@@ -793,8 +797,7 @@ pub fn validate_acu_evidence(
             AcuEvidenceInvariant::StructuredEvidenceRequired
             | AcuEvidenceInvariant::ReleaseRequired
             | AcuEvidenceInvariant::ScopeRequired
-            | AcuEvidenceInvariant::ClaimsMustBeGrounded
-            | AcuEvidenceInvariant::NoUnsupportedClaim => {}
+            | AcuEvidenceInvariant::ClaimsMustBeGrounded => {}
         }
     }
     failures
@@ -906,8 +909,10 @@ pub fn build_release_gate(
     }
     let capability_digest = digest_json(&catalog.capabilities);
     let coverage_digest = digest_json(&inputs.coverage);
-    let server_contract_digest = digest_json(&Value::Array(
-        rows.iter()
+    let server_contract_digest = digest_json(&serde_json::json!({
+        "specialist": specialist,
+        "capabilities": rows
+            .iter()
             .map(|row| {
                 serde_json::json!({
                     "tool": row.tool,
@@ -916,11 +921,10 @@ pub fn build_release_gate(
                     "provider": row.provider_contract,
                     "evidence_envelope": row.evidence_envelope_contract,
                     "claim_validator": row.claim_validator_contract,
-                    "specialist_manifest_version": row.specialist_manifest_version,
                 })
             })
-            .collect(),
-    ));
+            .collect::<Vec<_>>(),
+    }));
     let acu_suite_digest = digest_json(corpus);
     if let Some(expected) = &inputs.expected_digests {
         for (code, label, actual, expected) in [
@@ -1198,6 +1202,31 @@ mod tests {
     }
 
     #[test]
+    fn terminal_acus_reject_unsupported_completion_claims() {
+        let catalog = IntentCatalog::bundled_depmap();
+        let mut case = load_bundled_depmap_acu_corpus()
+            .cases
+            .into_iter()
+            .find(|case| case.id == "provider-unavailable-stops")
+            .unwrap();
+        assert!(replay_acu(&case, &catalog).passed);
+
+        case.fixture
+            .evidence
+            .as_mut()
+            .unwrap()
+            .completion
+            .unsupported_claims = vec!["KRAS is selectively essential".into()];
+        let replay = replay_acu(&case, &catalog);
+
+        assert!(!replay.passed);
+        assert!(replay
+            .failures
+            .iter()
+            .any(|failure| failure.contains("unsupported claims")));
+    }
+
+    #[test]
     fn closure_matrix_uses_production_manifest_catalog_and_contract_digests() {
         let corpus = load_bundled_depmap_acu_corpus();
         let bridge = host_scientific_bridge(&HostPolicy::bundled_depmap()).unwrap();
@@ -1303,6 +1332,20 @@ mod tests {
         validator.claim_validator_contract = "changed-validator".into();
         let mut specialist = bridge.specialist.clone();
         specialist.manifest_version = "changed-manifest".into();
+        let mut specialist_instructions = bridge.specialist.clone();
+        specialist_instructions.instructions_digest = "changed-instructions".into();
+        let mut specialist_connectors = bridge.specialist.clone();
+        specialist_connectors
+            .connectors
+            .push("changed-connector".into());
+        let mut specialist_tools = bridge.specialist.clone();
+        specialist_tools
+            .native_tool_sets
+            .push("changed-tools".into());
+        let mut specialist_outputs = bridge.specialist.clone();
+        specialist_outputs
+            .output_contracts
+            .push("changed-output".into());
 
         for changed in [
             build_release_gate(
@@ -1327,6 +1370,28 @@ mod tests {
                 &validator,
             ),
             build_release_gate(&corpus, &bridge.catalog, &specialist, &tools, &inputs),
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &specialist_instructions,
+                &tools,
+                &inputs,
+            ),
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &specialist_connectors,
+                &tools,
+                &inputs,
+            ),
+            build_release_gate(&corpus, &bridge.catalog, &specialist_tools, &tools, &inputs),
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &specialist_outputs,
+                &tools,
+                &inputs,
+            ),
         ] {
             assert_ne!(
                 changed.server_contract_digest,
