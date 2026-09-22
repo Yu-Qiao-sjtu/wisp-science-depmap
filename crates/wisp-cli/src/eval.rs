@@ -1929,7 +1929,7 @@ fn verify_case(
         }
     }
     verify_assembly_expectations(&case.expect, assembly, &mut failures);
-    verify_allowed_tool_calls(&case.allowed_tools, &captured.tool_calls, &mut failures);
+    verify_allowed_tool_calls(case, &captured.tool_calls, &mut failures);
     for tool in &case.expect.required_tools {
         if !captured.tool_calls.iter().any(|call| &call.name == tool) {
             failures.push(format!("required tool '{tool}' was not called"));
@@ -2146,15 +2146,30 @@ fn verify_case(
 }
 
 fn verify_allowed_tool_calls(
-    allowed_tools: &[String],
+    case: &EvalCase,
     tool_calls: &[ToolCallRecord],
     failures: &mut Vec<String>,
 ) {
-    if allowed_tools.is_empty() {
+    if case.allowed_tools.is_empty() {
         return;
     }
     for call in tool_calls {
-        if !allowed_tools.iter().any(|tool| tool == &call.name) {
+        let allowed = case.allowed_tools.iter().any(|tool| tool == &call.name)
+            || (call.name == "search_mcp_tools"
+                && case
+                    .fixture_mcp
+                    .keys()
+                    .any(|tool| case.allowed_tools.contains(tool)))
+            || (call.name == "use_mcp_tool"
+                && call
+                    .arguments
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool| {
+                        case.fixture_mcp.contains_key(tool)
+                            && case.allowed_tools.iter().any(|allowed| allowed == tool)
+                    }));
+        if !allowed {
             failures.push(format!(
                 "tool '{}' was called outside the case allowed_tools contract",
                 call.name
@@ -3972,7 +3987,14 @@ mod tests {
 
     #[test]
     fn case_allowed_tools_rejects_assembly_only_calls() {
-        let allowed = vec!["depmap_agent_route".into(), "attempt_completion".into()];
+        let case: EvalCase = serde_yaml::from_str(
+            r#"
+id: scoped
+description: scoped
+allowed_tools: [depmap_agent_route, attempt_completion]
+"#,
+        )
+        .unwrap();
         let calls = vec![
             ToolCallRecord {
                 call_id: "route-1".into(),
@@ -3986,9 +4008,37 @@ mod tests {
             },
         ];
         let mut failures = Vec::new();
-        verify_allowed_tool_calls(&allowed, &calls, &mut failures);
+        verify_allowed_tool_calls(&case, &calls, &mut failures);
         assert_eq!(failures.len(), 1);
         assert!(failures[0].contains("list_skill_catalog"));
+    }
+
+    #[test]
+    fn case_allowed_tools_preserves_the_deferred_mcp_gateway() {
+        let case: EvalCase = serde_yaml::from_str(
+            r#"
+id: scoped-mcp
+description: scoped-mcp
+allowed_tools: [fixture_gene_lookup, attempt_completion]
+fixture_mcp: {fixture_gene_lookup: fixture}
+"#,
+        )
+        .unwrap();
+        let calls = vec![
+            ToolCallRecord {
+                call_id: "search-1".into(),
+                name: "search_mcp_tools".into(),
+                arguments: json!({"query":"gene"}),
+            },
+            ToolCallRecord {
+                call_id: "use-1".into(),
+                name: "use_mcp_tool".into(),
+                arguments: json!({"tool_name":"fixture_gene_lookup","tool_input":{}}),
+            },
+        ];
+        let mut failures = Vec::new();
+        verify_allowed_tool_calls(&case, &calls, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
     }
 
     #[tokio::test]
