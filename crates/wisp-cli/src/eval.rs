@@ -2709,6 +2709,7 @@ mod tests {
     async fn production_agent_assembly_replays_every_acu_terminal_response() {
         let corpus = wisp_core::load_bundled_depmap_acu_corpus();
         let catalog = wisp_core::IntentCatalog::bundled_depmap();
+        let release = corpus.release.clone();
         for acu in corpus.cases {
             let replay = wisp_core::replay_acu(&acu, &catalog);
             assert!(replay.passed, "{}: {:#?}", acu.id, replay.failures);
@@ -2815,6 +2816,7 @@ mod tests {
                         &acu,
                         &prompt_replay.decision,
                         Some(&observed),
+                        Some(&release),
                     ));
                 } else {
                     result

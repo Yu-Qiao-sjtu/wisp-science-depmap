@@ -441,20 +441,39 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
         if case.evidence_invariants.is_empty() {
             errors.push(format!("ACU '{}' needs typed evidence invariants", case.id));
         }
-        if case.allowed_terminal_decisions.is_empty() {
+        if case.allowed_terminal_decisions.len() != 1 {
             errors.push(format!(
-                "ACU '{}' needs a terminal bridge decision",
+                "ACU '{}' must exercise exactly one terminal bridge decision",
                 case.id
             ));
         }
-        if case
+        let executes = case
             .allowed_terminal_decisions
             .iter()
-            .any(|decision| decision == "execute")
-            && case.fixture.evidence.is_none()
-        {
+            .any(|decision| decision == "execute");
+        if executes && case.fixture.evidence.is_none() {
             errors.push(format!(
                 "executable ACU '{}' needs a replayable evidence fixture",
+                case.id
+            ));
+        }
+        if executes
+            && !case
+                .evidence_invariants
+                .contains(&AcuEvidenceInvariant::NoUnsupportedClaim)
+        {
+            errors.push(format!(
+                "executable ACU '{}' must reject unsupported completion claims",
+                case.id
+            ));
+        }
+        if executes
+            && !case
+                .evidence_invariants
+                .contains(&AcuEvidenceInvariant::NoRawMatrixIo)
+        {
+            errors.push(format!(
+                "executable ACU '{}' must forbid raw matrix I/O",
                 case.id
             ));
         }
@@ -479,7 +498,7 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
                 case.id
             ));
         }
-        for decision in &case.allowed_terminal_decisions {
+        if let Some(decision) = case.allowed_terminal_decisions.first() {
             if !TERMINAL_DECISIONS.contains(&decision.as_str()) {
                 errors.push(format!(
                     "ACU '{}' names unknown terminal decision '{decision}'",
@@ -528,7 +547,7 @@ pub fn replay_acu(case: &AcuCase, catalog: &IntentCatalog) -> AcuReplay {
     for (name, schema) in &case.fixture.tool_schemas {
         tools.insert(name.clone(), schema.clone());
     }
-    replay_acu_with_tools(case, catalog, &tools)
+    replay_acu_with_tools(case, catalog, &tools, None)
 }
 
 pub fn replay_acu_prompt(case: &AcuCase, prompt: &str, catalog: &IntentCatalog) -> AcuReplay {
@@ -536,15 +555,22 @@ pub fn replay_acu_prompt(case: &AcuCase, prompt: &str, catalog: &IntentCatalog) 
     for (name, schema) in &case.fixture.tool_schemas {
         tools.insert(name.clone(), schema.clone());
     }
-    replay_acu_prompt_with_tools(case, prompt, catalog, &tools)
+    replay_acu_prompt_with_tools(case, prompt, catalog, &tools, None)
 }
 
 fn replay_acu_with_tools(
     case: &AcuCase,
     catalog: &IntentCatalog,
     tools: &ToolCatalog,
+    expected_release: Option<&str>,
 ) -> AcuReplay {
-    replay_acu_with_intent_and_tools(case, case.canonical_intent.clone(), catalog, tools)
+    replay_acu_with_intent_and_tools(
+        case,
+        case.canonical_intent.clone(),
+        catalog,
+        tools,
+        expected_release,
+    )
 }
 
 fn replay_acu_prompt_with_tools(
@@ -552,6 +578,7 @@ fn replay_acu_prompt_with_tools(
     prompt: &str,
     catalog: &IntentCatalog,
     tools: &ToolCatalog,
+    expected_release: Option<&str>,
 ) -> AcuReplay {
     let Some(mapping) = case
         .prompt_mappings
@@ -568,7 +595,13 @@ fn replay_acu_prompt_with_tools(
             failures: vec!["question variant has no recorded prompt-to-intent mapping".into()],
         };
     };
-    replay_acu_with_intent_and_tools(case, mapping.proposed_intent.clone(), catalog, tools)
+    replay_acu_with_intent_and_tools(
+        case,
+        mapping.proposed_intent.clone(),
+        catalog,
+        tools,
+        expected_release,
+    )
 }
 
 fn replay_acu_with_intent_and_tools(
@@ -576,6 +609,7 @@ fn replay_acu_with_intent_and_tools(
     proposed_intent: ScientificIntent,
     catalog: &IntentCatalog,
     tools: &ToolCatalog,
+    expected_release: Option<&str>,
 ) -> AcuReplay {
     let coverage = match case.fixture.coverage {
         AcuCoverageState::Computed
@@ -682,6 +716,7 @@ fn replay_acu_with_intent_and_tools(
         case,
         &decision,
         case.fixture.evidence.as_ref(),
+        expected_release,
     ));
     replay.passed = replay.failures.is_empty();
     replay
@@ -691,6 +726,7 @@ pub fn validate_acu_evidence(
     case: &AcuCase,
     decision: &str,
     observation: Option<&AcuEvidenceFixture>,
+    expected_release: Option<&str>,
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let executes = decision == "execute";
@@ -717,9 +753,17 @@ pub fn validate_acu_evidence(
                 let valid = structured
                     .and_then(|value| value.get("release"))
                     .and_then(Value::as_str)
-                    .is_some_and(|value| !value.trim().is_empty());
+                    .is_some_and(|value| {
+                        !value.trim().is_empty()
+                            && expected_release.is_none_or(|expected| value == expected)
+                    });
                 if !valid {
-                    failures.push("evidence release is missing".into());
+                    failures.push(match expected_release {
+                        Some(expected) => {
+                            format!("evidence release is missing or does not match '{expected}'")
+                        }
+                        None => "evidence release is missing".into(),
+                    });
                 }
             }
             AcuEvidenceInvariant::ScopeRequired if executes => {
@@ -839,7 +883,7 @@ pub fn build_release_gate(
                 .iter()
                 .any(|decision| decision == "execute")
             {
-                replay_acu_with_tools(case, catalog, tools)
+                replay_acu_with_tools(case, catalog, tools, Some(inputs.release.as_str()))
             } else {
                 replay_acu(case, catalog)
             }
@@ -851,7 +895,13 @@ pub fn build_release_gate(
             .any(|decision| decision == "execute")
     }) {
         for (index, prompt) in case.question_family.iter().enumerate() {
-            let mut replay = replay_acu_prompt_with_tools(case, prompt, catalog, tools);
+            let mut replay = replay_acu_prompt_with_tools(
+                case,
+                prompt,
+                catalog,
+                tools,
+                Some(inputs.release.as_str()),
+            );
             replay.id = format!("{}#prompt-{}", case.id, index + 1);
             replays.push(replay);
         }
@@ -1199,6 +1249,71 @@ mod tests {
             .failures
             .iter()
             .any(|failure| failure.contains("not grounded")));
+
+        let mut raw_matrix = load_bundled_depmap_acu_corpus()
+            .cases
+            .into_iter()
+            .find(|case| case.id == "mutation-global-execute")
+            .unwrap();
+        raw_matrix
+            .fixture
+            .evidence
+            .as_mut()
+            .unwrap()
+            .uses_raw_matrix_io = true;
+        assert!(replay_acu(&raw_matrix, &catalog)
+            .failures
+            .iter()
+            .any(|failure| failure.contains("raw matrix")));
+    }
+
+    #[test]
+    fn corpus_requires_one_observed_decision_and_execute_safety_invariants() {
+        let catalog = IntentCatalog::bundled_depmap();
+        let mut corpus = load_bundled_depmap_acu_corpus();
+        let case = corpus
+            .cases
+            .iter_mut()
+            .find(|case| case.id == "codependency-execute")
+            .unwrap();
+        case.allowed_terminal_decisions
+            .push("provider_unavailable".into());
+        case.evidence_invariants
+            .retain(|invariant| *invariant != AcuEvidenceInvariant::NoUnsupportedClaim);
+
+        let errors = validate_acu_corpus(&corpus, &catalog).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("exactly one terminal")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("unsupported completion claims")));
+    }
+
+    #[test]
+    fn release_gate_rejects_evidence_from_another_release() {
+        let mut corpus = load_bundled_depmap_acu_corpus();
+        corpus.cases[0]
+            .fixture
+            .evidence
+            .as_mut()
+            .unwrap()
+            .structured_content["release"] = Value::String("25Q4".into());
+        let bridge = host_scientific_bridge(&HostPolicy::bundled_depmap()).unwrap();
+        let artifact = build_release_gate(
+            &corpus,
+            &bridge.catalog,
+            &bridge.specialist,
+            &production_contract_tools(),
+            &gate_inputs(&bridge.catalog),
+        );
+
+        assert!(!artifact.passed);
+        assert!(artifact.blockers.iter().any(|blocker| {
+            blocker.code == "acu_replay_failed"
+                && blocker.detail.contains("evidence release")
+                && blocker.detail.contains("26Q1")
+        }));
     }
 
     #[test]

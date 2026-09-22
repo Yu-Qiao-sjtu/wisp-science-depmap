@@ -19,7 +19,10 @@ recorded proposal rather than injecting the canonical target, and rejects a
 changed prompt without a reviewed mapping or a proposal that routes outside
 the ACU contract. Production Agent replay covers both executable paths and
 terminal responses; each completion must be non-empty and explicitly free of
-unsupported claims. The examples are regression fixtures; they do not create
+unsupported claims. Every executable ACU also forbids raw matrix I/O and its
+evidence release must exactly match the gated release. Each ACU exercises one
+terminal decision, so corpus-wide coverage counts observed outcomes rather than
+allowed alternatives. The examples are regression fixtures; they do not create
 gene-specific or lineage-specific planner branches.
 
 Every enabled core capability and every terminal planner decision must be
