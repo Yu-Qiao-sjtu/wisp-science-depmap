@@ -13,6 +13,7 @@ use wisp_tools::{
 };
 
 const MAX_PRESENTATION_HTML_BYTES: usize = 32 * 1024 * 1024;
+const GENERATED_ARTIFACTS_PREFIX: &str = "Generated artifacts:";
 
 fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
     let mut policy = ToolExecutionPolicy::default();
@@ -76,6 +77,23 @@ fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
         certain_outcome: cache.get("certainOutcome").and_then(Value::as_bool) == Some(true),
     };
     policy
+}
+
+fn cache_safe_mcp_result(remote: &RemoteTool, result: &ToolResult) -> bool {
+    let safe = remote
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.pointer("/wisp/cache/safeStructuredEvidence"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let Some(envelope) = crate::result::ModelResultEnvelope::decode(&result.content) else {
+        return false;
+    };
+    safe && remote.ui_resource_uri().is_none()
+        && !envelope
+            .display_text
+            .lines()
+            .any(|line| line.trim_start().starts_with(GENERATED_ARTIFACTS_PREFIX))
 }
 
 pub struct McpTool {
@@ -542,14 +560,7 @@ impl Tool for McpTool {
         execution_policy_from_meta(self.remote.meta.as_ref())
     }
     fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
-        let safe = self
-            .remote
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.pointer("/wisp/cache/safeStructuredEvidence"))
-            .and_then(Value::as_bool)
-            == Some(true);
-        (safe && self.remote.ui_resource_uri().is_none())
+        cache_safe_mcp_result(&self.remote, result)
             .then(|| CacheableToolResult::structured(result.content.clone()))
     }
     fn preview(&self, args: &Value) -> String {
@@ -565,7 +576,7 @@ impl Tool for McpTool {
                         materialize_html_resources(&result, env.project_root(), env).await;
                     if !artifacts.is_empty() {
                         let artifact_text = format!(
-                            "Generated artifacts: {}",
+                            "{GENERATED_ARTIFACTS_PREFIX} {}",
                             artifacts
                                 .iter()
                                 .map(|path| path.to_string_lossy())
@@ -643,6 +654,47 @@ mod tests {
         assert_eq!(policy.cache.mode, ToolCacheMode::Disabled);
         assert!(!policy.cache.shared_authorization);
         assert!(!policy.cache.certain_outcome);
+    }
+
+    #[test]
+    fn artifact_producing_and_app_results_are_not_cacheable() {
+        let mut remote = RemoteTool {
+            name: "bounded_read".into(),
+            title: None,
+            description: "bounded read".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            meta: Some(json!({
+                "wisp": {"cache": {"safeStructuredEvidence": true}}
+            })),
+            annotations: Some(json!({"readOnlyHint": true})),
+        };
+        let ordinary = ToolResult::ok(
+            serde_json::to_string(&crate::result::ModelResultEnvelope {
+                schema: crate::result::MODEL_RESULT_SCHEMA.into(),
+                display_text: "bounded evidence".into(),
+                structured_content: Some(json!({"status": "FOUND"})),
+            })
+            .unwrap(),
+        );
+        assert!(cache_safe_mcp_result(&remote, &ordinary));
+
+        let artifact = ToolResult::ok(
+            serde_json::to_string(&crate::result::ModelResultEnvelope {
+                schema: crate::result::MODEL_RESULT_SCHEMA.into(),
+                display_text:
+                    "bounded evidence\n\nGenerated artifacts: .wisp/plugin-artifacts/a.html".into(),
+                structured_content: Some(json!({"status": "FOUND"})),
+            })
+            .unwrap(),
+        );
+        assert!(!cache_safe_mcp_result(&remote, &artifact));
+
+        remote.meta = Some(json!({
+            "wisp": {"cache": {"safeStructuredEvidence": true}},
+            "ui": {"resourceUri": "ui://example/app"}
+        }));
+        assert!(!cache_safe_mcp_result(&remote, &ordinary));
     }
 
     struct TestEnv {

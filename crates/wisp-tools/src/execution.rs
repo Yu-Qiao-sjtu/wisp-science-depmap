@@ -3,14 +3,19 @@
 //! Caching is deliberately opt-in and stores only a tool-provided structured
 //! projection. Backpressure is always active, including for mutating tools.
 
-use crate::{Tool, ToolControl, ToolEnv, ToolResult};
+use crate::{
+    Approval, ConfirmDecision, Tool, ToolControl, ToolEnv, ToolEvent, ToolResourceLease, ToolResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
@@ -158,6 +163,7 @@ struct MemoryCache {
 struct Flight {
     result: Mutex<Option<ToolResult>>,
     notify: Notify,
+    interested_callers: AtomicUsize,
 }
 
 impl Flight {
@@ -165,7 +171,113 @@ impl Flight {
         Self {
             result: Mutex::new(None),
             notify: Notify::new(),
+            interested_callers: AtomicUsize::new(1),
         }
+    }
+}
+
+/// A single-flight leader executes for every still-interested authorized
+/// caller, not just the turn that happened to arrive first.
+struct SharedFlightEnv<'a> {
+    inner: &'a dyn ToolEnv,
+    flight: &'a Flight,
+    leader_interested: AtomicBool,
+}
+
+impl SharedFlightEnv<'_> {
+    fn observe_leader_cancel(&self) -> bool {
+        if self.inner.is_cancelled() && self.leader_interested.swap(false, Ordering::SeqCst) {
+            self.flight
+                .interested_callers
+                .fetch_sub(1, Ordering::SeqCst);
+        }
+        self.flight.interested_callers.load(Ordering::SeqCst) == 0
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolEnv for SharedFlightEnv<'_> {
+    fn project_root(&self) -> &Path {
+        self.inner.project_root()
+    }
+    fn restrict_read_paths_to_project(&self) -> bool {
+        self.inner.restrict_read_paths_to_project()
+    }
+    fn resolve_read_path(&self, path: &str, allow_directory: bool) -> Result<PathBuf, String> {
+        self.inner.resolve_read_path(path, allow_directory)
+    }
+    async fn confirm(&self, message: &str) -> bool {
+        self.inner.confirm(message).await
+    }
+    async fn confirm_decision(&self, message: &str) -> ConfirmDecision {
+        self.inner.confirm_decision(message).await
+    }
+    async fn approval_mode(&self, tool: &str) -> Approval {
+        self.inner.approval_mode(tool).await
+    }
+    async fn acquire_tool_resources(
+        &self,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Option<ToolResourceLease>, String> {
+        self.inner.acquire_tool_resources(tool, args).await
+    }
+    fn approval_bypass(&self) -> bool {
+        self.inner.approval_bypass()
+    }
+    fn force_ask_mutations(&self) -> bool {
+        self.inner.force_ask_mutations()
+    }
+    fn plan_mode(&self) -> bool {
+        self.inner.plan_mode()
+    }
+    fn project_write_locked(&self) -> bool {
+        self.inner.project_write_locked()
+    }
+    fn artifact_requested(&self) -> bool {
+        self.inner.artifact_requested()
+    }
+    fn danger_auto_approve(&self) -> bool {
+        self.inner.danger_auto_approve()
+    }
+    async fn emit(&self, event: ToolEvent) {
+        self.inner.emit(event).await;
+    }
+    fn is_cancelled(&self) -> bool {
+        self.observe_leader_cancel()
+    }
+    fn guidance_pending(&self) -> bool {
+        self.inner.guidance_pending()
+    }
+    fn cancel_flag(&self) -> Option<&std::sync::atomic::AtomicBool> {
+        None
+    }
+    async fn preflight_local_execution(&self, source: &str) -> Result<(), String> {
+        self.inner.preflight_local_execution(source).await
+    }
+    async fn preflight_shell(&self, cmd: &str) -> Result<(), String> {
+        self.inner.preflight_shell(cmd).await
+    }
+    fn note_shell_outcome(&self, cmd: &str, success: bool, detail: &str) {
+        self.inner.note_shell_outcome(cmd, success, detail);
+    }
+    fn report_written_paths(&self, paths: &[String]) {
+        self.inner.report_written_paths(paths);
+    }
+    fn turn_id(&self) -> Option<&str> {
+        self.inner.turn_id()
+    }
+    fn frame_id(&self) -> Option<&str> {
+        self.inner.frame_id()
+    }
+    fn project_id(&self) -> Option<&str> {
+        self.inner.project_id()
+    }
+    fn tool_execution_scope(&self) -> ToolExecutionScope {
+        self.inner.tool_execution_scope()
+    }
+    fn note_tool_execution(&self, event: &ToolExecutionDiagnostic) {
+        self.inner.note_tool_execution(event);
     }
 }
 
@@ -291,6 +403,7 @@ impl ToolExecutionCoordinator {
         let (flight, leader) = {
             let mut flights = lock(&self.flights);
             if let Some(existing) = flights.get(&identity.fingerprint) {
+                existing.interested_callers.fetch_add(1, Ordering::SeqCst);
                 (existing.clone(), false)
             } else {
                 let flight = Arc::new(Flight::new());
@@ -309,9 +422,15 @@ impl ToolExecutionCoordinator {
             return wait_for_flight(tool.name(), provider, env, flight).await;
         }
 
+        let shared_env = SharedFlightEnv {
+            inner: env,
+            flight: flight.as_ref(),
+            leader_interested: AtomicBool::new(true),
+        };
         let result = self
-            .execute_limited(tool, args, env, provider, &policy)
+            .execute_limited(tool, args, &shared_env, provider, &policy)
             .await;
+        let leader_cancelled = env.is_cancelled();
         if let Some(record) = valid_cache_projection(tool, &result, &policy.cache) {
             self.store_cache(env.project_root(), &identity, record, &policy.cache, env)
                 .await;
@@ -327,7 +446,12 @@ impl ToolExecutionCoordinator {
         *lock(&flight.result) = Some(result.clone());
         lock(&self.flights).remove(&identity.fingerprint);
         flight.notify.notify_waiters();
-        result
+        if leader_cancelled {
+            emit(env, ToolExecutionSignal::Cancelled, None, None);
+            typed_error("tool_wait_cancelled", tool.name(), provider, 0, 0)
+        } else {
+            result
+        }
     }
 
     async fn execute_limited(
@@ -594,6 +718,7 @@ async fn wait_for_flight(
             return result;
         }
         if env.is_cancelled() {
+            flight.interested_callers.fetch_sub(1, Ordering::SeqCst);
             emit(env, ToolExecutionSignal::Cancelled, None, None);
             return typed_error("tool_wait_cancelled", tool, provider, 0, 0);
         }
@@ -741,6 +866,7 @@ mod tests {
         read_only: bool,
         project_result: bool,
         delay_ms: u64,
+        cancel_aware: bool,
     }
 
     #[async_trait]
@@ -777,9 +903,17 @@ mod tests {
                 .then(|| CacheableToolResult::structured(result.content.clone()))
         }
 
-        async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        async fn run(&self, _args: &Value, env: &dyn ToolEnv) -> ToolResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+            let mut elapsed = 0;
+            while elapsed < self.delay_ms {
+                if self.cancel_aware && env.is_cancelled() {
+                    return ToolResult::fail("cancelled by all callers");
+                }
+                let step = (self.delay_ms - elapsed).min(5);
+                tokio::time::sleep(Duration::from_millis(step)).await;
+                elapsed += step;
+            }
             ToolResult::ok(r#"{"evidence":[{"id":"bounded-ref"}]}"#)
         }
     }
@@ -871,6 +1005,7 @@ mod tests {
             read_only: true,
             project_result: true,
             delay_ms: 60,
+            cancel_aware: false,
         })
     }
 
@@ -1013,6 +1148,7 @@ mod tests {
             read_only: false,
             project_result: true,
             delay_ms: 60,
+            cancel_aware: false,
         });
         coordinator
             .execute(mutating.as_ref(), &args, &env, false)
@@ -1126,6 +1262,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_original_leader_does_not_fail_an_active_waiter() {
+        let coordinator = Arc::new(ToolExecutionCoordinator::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Arc::new(FakeTool {
+            name: "cancel_leader",
+            connector: "provider",
+            calls: calls.clone(),
+            policy: cache_policy("release-v1", ToolCacheMode::Memory),
+            read_only: true,
+            project_result: true,
+            delay_ms: 100,
+            cancel_aware: true,
+        });
+        let project = root("cancel-leader");
+        let leader_env = Arc::new(TestEnv::new(project.clone(), "scope-a"));
+        let waiter_env = Arc::new(TestEnv::new(project, "scope-a"));
+        let args = json!({"gene": "KRAS"});
+        let leader = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = leader_env.clone();
+            let args = args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let waiter = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = waiter_env.clone();
+            let args = args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        leader_env.cancelled.store(true, Ordering::SeqCst);
+
+        let leader_result = leader.await.unwrap();
+        let waiter_result = waiter.await.unwrap();
+        assert!(!leader_result.success);
+        assert!(leader_result.content.contains("tool_wait_cancelled"));
+        assert!(waiter_result.success, "{}", waiter_result.content);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn queue_overflow_is_bounded_and_typed() {
         let coordinator = Arc::new(ToolExecutionCoordinator::default());
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1141,6 +1329,7 @@ mod tests {
             read_only: true,
             project_result: false,
             delay_ms: 80,
+            cancel_aware: false,
         });
         let env = Arc::new(TestEnv::new(root("queue"), "scope-a"));
         let first = {
