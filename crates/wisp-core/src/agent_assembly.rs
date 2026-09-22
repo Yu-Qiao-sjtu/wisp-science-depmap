@@ -17,7 +17,8 @@ use std::collections::BTreeMap;
 use wisp_tools::Registry;
 
 pub const AGENT_ASSEMBLY_CONTRACT: &str = "wisp.agent-assembly.v1";
-pub const DEPMAP_ASSEMBLY_SECTION_MARKER: &str = "[DepMap Production Agent Contract]";
+pub const DEPMAP_ASSEMBLY_SECTION_MARKER: &str = "<!-- wisp:depmap-agent-assembly:v1:begin -->";
+const DEPMAP_ASSEMBLY_SECTION_END: &str = "<!-- wisp:depmap-agent-assembly:v1:end -->";
 
 /// The compact instruction subset that must be identical in desktop and eval.
 /// The desktop Specialist may add richer scientific guidance around it.
@@ -128,17 +129,17 @@ pub fn apply_agent_assembly(ctx: &mut ContextManager, surface: &AgentAssemblySur
     let wisp_llm::Content::Text(prompt) = &mut message.content else {
         return;
     };
-    if prompt.contains(DEPMAP_ASSEMBLY_SECTION_MARKER) {
+    let section = format!(
+        "{DEPMAP_ASSEMBLY_SECTION_MARKER}\nSpecialist: {}@{}\n{}\n{DEPMAP_ASSEMBLY_SECTION_END}",
+        surface.specialist.id, surface.specialist.manifest_version, surface.instruction_contract,
+    );
+    // Project instructions may legitimately document the public marker. Only
+    // a complete generated block at the end proves that assembly was applied.
+    if prompt.ends_with(&section) {
         return;
     }
     prompt.push_str("\n\n");
-    prompt.push_str(DEPMAP_ASSEMBLY_SECTION_MARKER);
-    prompt.push_str("\nSpecialist: ");
-    prompt.push_str(&surface.specialist.id);
-    prompt.push('@');
-    prompt.push_str(&surface.specialist.manifest_version);
-    prompt.push_str("\n");
-    prompt.push_str(&surface.instruction_contract);
+    prompt.push_str(&section);
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -255,5 +256,29 @@ mod tests {
         apply_agent_assembly(&mut ctx, &surface);
         let prompt = ctx.messages[0].content.as_text();
         assert_eq!(prompt.matches(DEPMAP_ASSEMBLY_SECTION_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn documented_marker_does_not_suppress_generated_assembly() {
+        let surface = assemble_depmap_agent_surface(
+            &HostPolicy::bundled_depmap(),
+            &registry(),
+            AgentContextPolicy {
+                max_context_tokens: 4_096,
+                max_rounds: 4,
+                auto_compact: false,
+            },
+            false,
+        )
+        .unwrap();
+        let mut ctx = ContextManager::new(4_096);
+        ctx.append_system(format!(
+            "Project docs mention {DEPMAP_ASSEMBLY_SECTION_MARKER} without assembling anything."
+        ));
+        apply_agent_assembly(&mut ctx, &surface);
+        let prompt = ctx.messages[0].content.as_text();
+        assert_eq!(prompt.matches(DEPMAP_ASSEMBLY_SECTION_MARKER).count(), 2);
+        assert!(prompt.ends_with(DEPMAP_ASSEMBLY_SECTION_END));
+        assert!(prompt.contains(&surface.instruction_contract));
     }
 }

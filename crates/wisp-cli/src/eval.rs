@@ -2082,13 +2082,33 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let relative = sentence.get(offset..)?.find(&phrase)?;
                 let start = offset + relative;
                 let prefix = &sentence[..start];
-                let window_start = prefix
+                let bounded_start = prefix
                     .char_indices()
                     .rev()
                     .nth(79)
                     .map(|(index, _)| index)
                     .unwrap_or(0);
-                let nearby = &prefix[window_start..];
+                let bounded = &prefix[bounded_start..];
+                let clause_start = [
+                    ", but ",
+                    ", yet ",
+                    ", however ",
+                    " but ",
+                    " yet ",
+                    " however ",
+                    " although ",
+                    " though ",
+                    "但是",
+                    "然而",
+                    "不过",
+                    "但",
+                    "却",
+                ]
+                .iter()
+                .filter_map(|boundary| bounded.rfind(boundary).map(|index| index + boundary.len()))
+                .max()
+                .unwrap_or(0);
+                let nearby = &bounded[clause_start..];
                 let negated = [
                     " not ",
                     " no ",
@@ -3291,6 +3311,24 @@ mod tests {
         };
         let captured = Captured {
             completion: Some("This result establishes synthetic lethality.".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_does_not_leak_negation_across_contrastive_clauses() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some(
+                "This does not establish causality, but it establishes synthetic lethality.".into(),
+            ),
             ..Captured::default()
         };
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
