@@ -19,8 +19,9 @@ supply both a non-secret authorization revision and complete remote contract.
 Stdio connectors currently bypass caching because their child processes inherit
 ambient environment variables whose credentials cannot be fully represented in
 that revision. OAuth connectors also bypass caching while token refresh can
-rotate credentials after tool registration; static-header HTTP connectors
-remain eligible.
+rotate credentials after tool registration. Static-header HTTP connectors
+remain eligible only with an explicit direct (`none`) or configured proxy
+policy; an empty policy inherits ambient proxy variables and bypasses caching.
 
 MCP servers opt in through `_meta.wisp.cache`:
 
