@@ -811,10 +811,12 @@ fn classify_entry(
     identity: &CacheIdentity,
     contract: &ToolCacheContract,
 ) -> CacheLookup {
-    let elapsed = now_unix_ms().saturating_sub(entry.stored_at_unix_ms);
+    let now = now_unix_ms();
+    let elapsed = now.saturating_sub(entry.stored_at_unix_ms);
     let ttl_ms = contract.ttl.as_millis();
     if entry.format != CACHE_FORMAT
         || entry.fingerprint != identity.fingerprint
+        || entry.stored_at_unix_ms > now
         || elapsed > ttl_ms
         || entry.bytes() > contract.max_result_bytes
         || serde_json::from_str::<Value>(&entry.result.content).is_err()
@@ -1412,6 +1414,29 @@ mod tests {
             delay_ms: 60,
             cancel_aware: false,
         })
+    }
+
+    #[test]
+    fn cache_entries_from_the_future_are_stale() {
+        let identity = CacheIdentity {
+            slot: "future-slot".into(),
+            fingerprint: "future-fingerprint".into(),
+        };
+        let entry = CacheEntry {
+            format: CACHE_FORMAT,
+            fingerprint: identity.fingerprint.clone(),
+            stored_at_unix_ms: now_unix_ms() + 60_000,
+            result: CacheableToolResult::structured(r#"{"evidence":[]}"#),
+        };
+
+        assert!(matches!(
+            classify_entry(
+                entry,
+                &identity,
+                &cache_policy("release-v1", ToolCacheMode::Memory).cache,
+            ),
+            CacheLookup::Stale
+        ));
     }
 
     #[tokio::test]
