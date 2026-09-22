@@ -69,6 +69,9 @@ back to memory-only caching and are never pruned. When a cancelled MCP wait
 leaves provider work running, its connector/tool concurrency lease remains held
 until that request actually completes. A cancelled single-flight leader releases
 its conversation immediately while the independently owned provider request
-continues for still-interested waiters. Operational spans record `hit`, `miss`, `stale`, `bypass`,
+continues for still-interested waiters; if cancellation happens while queued,
+an active waiter takes over the flight. Cache-hit contract validation follows
+the same rule: its caller returns promptly, but provider capacity remains held
+until the live validation request completes. Operational spans record `hit`, `miss`, `stale`, `bypass`,
 `coalesced`, and `evicted`, plus queue state; raw arguments and evidence are not
 added to telemetry.

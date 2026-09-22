@@ -98,6 +98,15 @@ pub trait Tool: Send + Sync {
     async fn validate_cache_hit(&self) -> Result<(), String> {
         Ok(())
     }
+    /// Revalidate a cache hit while allowing remote implementations to detach
+    /// provider work when this caller stops waiting. Detached validation keeps
+    /// its execution permit until the provider request actually completes.
+    async fn validate_cache_hit_coordinated(&self, _env: &dyn ToolEnv) -> ToolRunOutcome {
+        match self.validate_cache_hit().await {
+            Ok(()) => ToolRunOutcome::complete(ToolResult::ok("{}")),
+            Err(error) => ToolRunOutcome::complete(ToolResult::fail(error)),
+        }
+    }
     /// One-line preview shown in the tool-call card (e.g. the file path).
     fn preview(&self, _args: &Value) -> String {
         String::new()

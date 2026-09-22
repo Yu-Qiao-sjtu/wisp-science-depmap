@@ -167,15 +167,21 @@ struct MemoryCache {
 }
 
 struct Flight {
-    result: Mutex<Option<ToolResult>>,
+    resolution: Mutex<Option<FlightResolution>>,
     notify: Notify,
     interested_callers: AtomicUsize,
+}
+
+#[derive(Clone)]
+enum FlightResolution {
+    Completed(ToolResult),
+    Retry,
 }
 
 impl Flight {
     fn new() -> Self {
         Self {
-            result: Mutex::new(None),
+            resolution: Mutex::new(None),
             notify: Notify::new(),
             interested_callers: AtomicUsize::new(1),
         }
@@ -302,6 +308,24 @@ struct GatePermit {
     gate: Arc<Gate>,
 }
 
+enum PermitAcquireError {
+    CallerCancelled(ToolResult),
+    Rejected(ToolResult),
+}
+
+impl PermitAcquireError {
+    fn into_result(self) -> ToolResult {
+        match self {
+            Self::CallerCancelled(result) | Self::Rejected(result) => result,
+        }
+    }
+}
+
+enum LimitedRunOutcome {
+    Started(crate::ToolRunOutcome),
+    CallerCancelled(ToolResult),
+}
+
 impl Drop for GatePermit {
     fn drop(&mut self) {
         let mut counts = lock(&self.gate.counts);
@@ -369,9 +393,13 @@ impl ToolExecutionCoordinator {
 
         if !cache_eligible {
             emit(env, ToolExecutionSignal::Bypass, None, None);
-            let outcome = self
+            let outcome = match self
                 .execute_limited(tool, args, env, provider, &policy)
-                .await;
+                .await
+            {
+                LimitedRunOutcome::Started(outcome) => outcome,
+                LimitedRunOutcome::CallerCancelled(result) => return result,
+            };
             if let Some(completion) = outcome.detached_completion {
                 tokio::spawn(async move {
                     let _ = completion.await;
@@ -391,11 +419,19 @@ impl ToolExecutionCoordinator {
                     .await
                 {
                     Ok(permit) => permit,
-                    Err(result) => return result,
+                    Err(error) => return error.into_result(),
                 };
-                let validation = tool.validate_cache_hit().await;
+                let validation = tool.validate_cache_hit_coordinated(env).await;
+                if let Some(completion) = validation.detached_completion {
+                    tokio::spawn(async move {
+                        let _ = completion.await;
+                        drop(validation_permit);
+                    });
+                    emit(env, ToolExecutionSignal::Cancelled, None, None);
+                    return typed_error("tool_wait_cancelled", tool.name(), provider, 0, 0);
+                }
                 drop(validation_permit);
-                if let Err(error) = validation {
+                if !validation.result.success {
                     self.remove_memory(&identity.slot);
                     emit(
                         env,
@@ -404,7 +440,8 @@ impl ToolExecutionCoordinator {
                         None,
                     );
                     return ToolResult::fail(format!(
-                        "cache contract revalidation failed before replay: {error}"
+                        "cache contract revalidation failed before replay: {}",
+                        validation.result.content
                     ))
                     .stop_batch();
                 }
@@ -430,69 +467,95 @@ impl ToolExecutionCoordinator {
             ),
         }
 
-        let (flight, leader) = {
-            let mut flights = lock(&self.flights);
-            if let Some(existing) = flights.get(&identity.fingerprint) {
-                existing.interested_callers.fetch_add(1, Ordering::SeqCst);
-                (existing.clone(), false)
-            } else {
-                let flight = Arc::new(Flight::new());
-                flights.insert(identity.fingerprint.clone(), flight.clone());
-                (flight, true)
+        loop {
+            let (flight, leader) = {
+                let mut flights = lock(&self.flights);
+                if let Some(existing) = flights.get(&identity.fingerprint) {
+                    existing.interested_callers.fetch_add(1, Ordering::SeqCst);
+                    (existing.clone(), false)
+                } else {
+                    let flight = Arc::new(Flight::new());
+                    flights.insert(identity.fingerprint.clone(), flight.clone());
+                    (flight, true)
+                }
+            };
+
+            if !leader {
+                emit(
+                    env,
+                    ToolExecutionSignal::Coalesced,
+                    Some(&identity.fingerprint),
+                    None,
+                );
+                match wait_for_flight(tool.name(), provider, env, flight).await {
+                    FlightResolution::Completed(result) => return result,
+                    FlightResolution::Retry => continue,
+                }
             }
-        };
 
-        if !leader {
-            emit(
-                env,
-                ToolExecutionSignal::Coalesced,
-                Some(&identity.fingerprint),
-                None,
-            );
-            return wait_for_flight(tool.name(), provider, env, flight).await;
-        }
+            let shared_env = SharedFlightEnv {
+                inner: env,
+                flight: flight.as_ref(),
+            };
+            let outcome = match self
+                .execute_limited(tool, args, &shared_env, provider, &policy)
+                .await
+            {
+                LimitedRunOutcome::Started(outcome) => outcome,
+                LimitedRunOutcome::CallerCancelled(result) => {
+                    let has_waiters = {
+                        let mut flights = lock(&self.flights);
+                        let has_waiters = flight.interested_callers.load(Ordering::SeqCst) > 1;
+                        flights.remove(&identity.fingerprint);
+                        has_waiters
+                    };
+                    let resolution = if has_waiters {
+                        FlightResolution::Retry
+                    } else {
+                        FlightResolution::Completed(result.clone())
+                    };
+                    *lock(&flight.resolution) = Some(resolution);
+                    flight.notify.notify_waiters();
+                    return result;
+                }
+            };
+            if let Some(completion) = outcome.detached_completion {
+                let flights = Arc::clone(&self.flights);
+                let fingerprint = identity.fingerprint.clone();
+                let completed_flight = Arc::clone(&flight);
+                tokio::spawn(async move {
+                    let result = completion.await;
+                    *lock(&completed_flight.resolution) = Some(FlightResolution::Completed(result));
+                    lock(&flights).remove(&fingerprint);
+                    completed_flight.notify.notify_waiters();
+                });
+                match wait_for_flight(tool.name(), provider, env, flight).await {
+                    FlightResolution::Completed(result) => return result,
+                    FlightResolution::Retry => continue,
+                }
+            }
+            let result = outcome.result;
+            let leader_cancelled = env.is_cancelled();
+            if let Some(record) = valid_cache_projection(tool, &result, &policy.cache) {
+                self.store_cache(env.project_root(), &identity, record, &policy.cache, env)
+                    .await;
+            } else {
+                emit(
+                    env,
+                    ToolExecutionSignal::Bypass,
+                    Some(&identity.fingerprint),
+                    None,
+                );
+            }
 
-        let shared_env = SharedFlightEnv {
-            inner: env,
-            flight: flight.as_ref(),
-        };
-        let outcome = self
-            .execute_limited(tool, args, &shared_env, provider, &policy)
-            .await;
-        if let Some(completion) = outcome.detached_completion {
-            let flights = Arc::clone(&self.flights);
-            let fingerprint = identity.fingerprint.clone();
-            let completed_flight = Arc::clone(&flight);
-            tokio::spawn(async move {
-                let result = completion.await;
-                *lock(&completed_flight.result) = Some(result);
-                lock(&flights).remove(&fingerprint);
-                completed_flight.notify.notify_waiters();
-            });
-            return wait_for_flight(tool.name(), provider, env, flight).await;
-        }
-        let result = outcome.result;
-        let leader_cancelled = env.is_cancelled();
-        if let Some(record) = valid_cache_projection(tool, &result, &policy.cache) {
-            self.store_cache(env.project_root(), &identity, record, &policy.cache, env)
-                .await;
-        } else {
-            emit(
-                env,
-                ToolExecutionSignal::Bypass,
-                Some(&identity.fingerprint),
-                None,
-            );
-        }
-
-        *lock(&flight.result) = Some(result.clone());
-        lock(&self.flights).remove(&identity.fingerprint);
-        flight.notify.notify_waiters();
-        if leader_cancelled {
-            emit(env, ToolExecutionSignal::Cancelled, None, None);
-            typed_error("tool_wait_cancelled", tool.name(), provider, 0, 0)
-        } else {
-            result
+            *lock(&flight.resolution) = Some(FlightResolution::Completed(result.clone()));
+            lock(&self.flights).remove(&identity.fingerprint);
+            flight.notify.notify_waiters();
+            if leader_cancelled {
+                emit(env, ToolExecutionSignal::Cancelled, None, None);
+                return typed_error("tool_wait_cancelled", tool.name(), provider, 0, 0);
+            }
+            return result;
         }
     }
 
@@ -503,24 +566,31 @@ impl ToolExecutionCoordinator {
         env: &dyn ToolEnv,
         provider: &str,
         policy: &ToolExecutionPolicy,
-    ) -> crate::ToolRunOutcome {
+    ) -> LimitedRunOutcome {
         let permit = match self
             .acquire_permit(tool.name(), provider, policy, env)
             .await
         {
             Ok(permit) => permit,
-            Err(result) => return crate::ToolRunOutcome::complete(result),
+            Err(PermitAcquireError::CallerCancelled(result)) => {
+                return LimitedRunOutcome::CallerCancelled(result)
+            }
+            Err(PermitAcquireError::Rejected(result)) => {
+                return LimitedRunOutcome::Started(crate::ToolRunOutcome::complete(result))
+            }
         };
         let resource_lease = match env.acquire_tool_resources(tool.name(), args).await {
             Ok(lease) => lease,
             Err(error) => {
-                return crate::ToolRunOutcome::complete(ToolResult::fail(error).stop_batch())
+                return LimitedRunOutcome::Started(crate::ToolRunOutcome::complete(
+                    ToolResult::fail(error).stop_batch(),
+                ))
             }
         };
         tool.before(args, env).await;
         let outcome = tool.run_coordinated(args, env).await;
         if let Some(completion) = outcome.detached_completion {
-            return crate::ToolRunOutcome::detached(
+            return LimitedRunOutcome::Started(crate::ToolRunOutcome::detached(
                 outcome.result,
                 Box::pin(async move {
                     let result = completion.await;
@@ -528,11 +598,11 @@ impl ToolExecutionCoordinator {
                     drop(permit);
                     result
                 }),
-            );
+            ));
         }
         drop(resource_lease);
         drop(permit);
-        crate::ToolRunOutcome::complete(outcome.result)
+        LimitedRunOutcome::Started(crate::ToolRunOutcome::complete(outcome.result))
     }
 
     async fn acquire_permit(
@@ -541,7 +611,7 @@ impl ToolExecutionCoordinator {
         provider: &str,
         policy: &ToolExecutionPolicy,
         env: &dyn ToolEnv,
-    ) -> Result<GatePermit, ToolResult> {
+    ) -> Result<GatePermit, PermitAcquireError> {
         let max_concurrency = policy.max_concurrency.max(1);
         let key = format!("{provider}\0{tool}");
         let gate = {
@@ -553,19 +623,19 @@ impl ToolExecutionCoordinator {
         };
         let mut registered = false;
         loop {
-            if env.is_cancelled() {
+            if env.caller_cancelled() {
                 if registered {
                     let mut counts = lock(&gate.counts);
                     counts.queued = counts.queued.saturating_sub(1);
                 }
                 emit(env, ToolExecutionSignal::Cancelled, None, None);
-                return Err(typed_error(
+                return Err(PermitAcquireError::CallerCancelled(typed_error(
                     "tool_execution_cancelled",
                     tool,
                     provider,
                     max_concurrency,
                     policy.max_queue,
-                ));
+                )));
             }
             {
                 let mut counts = lock(&gate.counts);
@@ -581,13 +651,13 @@ impl ToolExecutionCoordinator {
                         let depth = counts.queued;
                         drop(counts);
                         emit(env, ToolExecutionSignal::Backpressure, None, Some(depth));
-                        return Err(typed_error(
+                        return Err(PermitAcquireError::Rejected(typed_error(
                             "tool_queue_overflow",
                             tool,
                             provider,
                             max_concurrency,
                             policy.max_queue,
-                        ));
+                        )));
                     }
                     counts.queued += 1;
                     registered = true;
@@ -781,15 +851,21 @@ async fn wait_for_flight(
     provider: &str,
     env: &dyn ToolEnv,
     flight: Arc<Flight>,
-) -> ToolResult {
+) -> FlightResolution {
     loop {
-        if let Some(result) = lock(&flight.result).clone() {
-            return result;
+        if let Some(resolution) = lock(&flight.resolution).clone() {
+            return resolution;
         }
         if env.is_cancelled() {
             flight.interested_callers.fetch_sub(1, Ordering::SeqCst);
             emit(env, ToolExecutionSignal::Cancelled, None, None);
-            return typed_error("tool_wait_cancelled", tool, provider, 0, 0);
+            return FlightResolution::Completed(typed_error(
+                "tool_wait_cancelled",
+                tool,
+                provider,
+                0,
+                0,
+            ));
         }
         let _ = tokio::time::timeout(Duration::from_millis(25), flight.notify.notified()).await;
     }
@@ -1117,6 +1193,7 @@ mod tests {
     struct GatedValidationTool {
         calls: Arc<AtomicUsize>,
         validations: Arc<AtomicUsize>,
+        validation_delay_ms: u64,
         policy: ToolExecutionPolicy,
     }
 
@@ -1156,8 +1233,31 @@ mod tests {
 
         async fn validate_cache_hit(&self) -> Result<(), String> {
             self.validations.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            tokio::time::sleep(Duration::from_millis(self.validation_delay_ms)).await;
             Ok(())
+        }
+
+        async fn validate_cache_hit_coordinated(&self, env: &dyn ToolEnv) -> crate::ToolRunOutcome {
+            self.validations.fetch_add(1, Ordering::SeqCst);
+            let delay = self.validation_delay_ms;
+            let mut validation = Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                ToolResult::ok("{}")
+            });
+            tokio::select! {
+                result = &mut validation => crate::ToolRunOutcome::complete(result),
+                _ = async {
+                    loop {
+                        if env.caller_cancelled() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                } => crate::ToolRunOutcome::detached(
+                    ToolResult::fail("cache validation caller stopped waiting"),
+                    Box::pin(async move { validation.await }),
+                ),
+            }
         }
 
         async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
@@ -1498,6 +1598,7 @@ mod tests {
         let tool = Arc::new(GatedValidationTool {
             calls: calls.clone(),
             validations: validations.clone(),
+            validation_delay_ms: 80,
             policy,
         });
         let env = Arc::new(TestEnv::new(root("gated-validation"), "scope-a"));
@@ -1530,6 +1631,69 @@ mod tests {
         assert!(first_hit.await.unwrap().success);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(validations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_cache_hit_validation_releases_caller_but_retains_capacity() {
+        let coordinator = Arc::new(ToolExecutionCoordinator::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let validations = Arc::new(AtomicUsize::new(0));
+        let mut policy = cache_policy("release-v1", ToolCacheMode::Memory);
+        policy.max_concurrency = 1;
+        policy.max_queue = 0;
+        let tool = Arc::new(GatedValidationTool {
+            calls: calls.clone(),
+            validations: validations.clone(),
+            validation_delay_ms: 300,
+            policy,
+        });
+        let project = root("cancelled-cache-validation");
+        let seed_env = TestEnv::new(project.clone(), "scope-a");
+        let args = json!({"gene": "KRAS"});
+        assert!(
+            coordinator
+                .execute(tool.as_ref(), &args, &seed_env, false)
+                .await
+                .success
+        );
+
+        let cancelled_env = Arc::new(TestEnv::new(project.clone(), "scope-a"));
+        let cancelled_hit = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = cancelled_env.clone();
+            let args = args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancelled_env.cancelled.store(true, Ordering::SeqCst);
+        let cancelled = tokio::time::timeout(Duration::from_millis(100), cancelled_hit)
+            .await
+            .expect("cancelled cache validation must release its caller promptly")
+            .unwrap();
+        assert!(!cancelled.success);
+        assert!(cancelled.content.contains("tool_wait_cancelled"));
+
+        let active_env = TestEnv::new(project, "scope-a");
+        let overflow = coordinator
+            .execute(tool.as_ref(), &args, &active_env, false)
+            .await;
+        assert!(!overflow.success);
+        assert!(overflow.content.contains("tool_queue_overflow"));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            coordinator
+                .execute(tool.as_ref(), &args, &active_env, false)
+                .await
+                .success
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(validations.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -1786,6 +1950,84 @@ mod tests {
         assert!(leader_result.content.contains("tool_wait_cancelled"));
         assert!(waiter_result.success, "{}", waiter_result.content);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_queued_flight_leader_hands_execution_to_waiter() {
+        let coordinator = Arc::new(ToolExecutionCoordinator::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut policy = cache_policy("release-v1", ToolCacheMode::Memory);
+        policy.max_concurrency = 1;
+        let tool = Arc::new(FakeTool {
+            name: "queued_cancel_leader",
+            connector: "provider",
+            authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
+            calls: calls.clone(),
+            policy,
+            read_only: true,
+            project_result: true,
+            delay_ms: 300,
+            cancel_aware: true,
+        });
+        let project = root("queued-cancel-leader");
+        let blocker_env = Arc::new(TestEnv::new(project.clone(), "scope-a"));
+        let leader_env = Arc::new(TestEnv::new(project.clone(), "scope-a"));
+        let waiter_env = Arc::new(TestEnv::new(project, "scope-a"));
+        let blocker = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = blocker_env.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(
+                        tool.as_ref(),
+                        &json!({"gene": "BLOCKER"}),
+                        env.as_ref(),
+                        false,
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let shared_args = json!({"gene": "SHARED"});
+        let leader = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = leader_env.clone();
+            let args = shared_args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let waiter = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = waiter_env.clone();
+            let args = shared_args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        leader_env.cancelled.store(true, Ordering::SeqCst);
+
+        let leader_result = tokio::time::timeout(Duration::from_millis(100), leader)
+            .await
+            .expect("queued flight leader must release its cancelled caller promptly")
+            .unwrap();
+        assert!(!leader_result.success);
+        assert!(leader_result.content.contains("tool_execution_cancelled"));
+        assert!(blocker.await.unwrap().success);
+        let waiter_result = waiter.await.unwrap();
+        assert!(waiter_result.success, "{}", waiter_result.content);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

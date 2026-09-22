@@ -690,6 +690,37 @@ impl Tool for McpTool {
             .await
             .map_err(|error| error.to_string())
     }
+    async fn validate_cache_hit_coordinated(&self, env: &dyn ToolEnv) -> ToolRunOutcome {
+        let client = Arc::clone(&self.client);
+        let remote = self.remote.clone();
+        let mut validation = tokio::spawn(async move {
+            client
+                .validate_tool_contract(&remote)
+                .await
+                .map(|()| ToolResult::ok("{}"))
+                .unwrap_or_else(|error| ToolResult::fail(error.to_string()))
+        });
+        tokio::select! {
+            joined = &mut validation => ToolRunOutcome::complete(
+                joined.unwrap_or_else(|error| ToolResult::fail(format!("MCP cache validation task failed: {error}")))
+            ),
+            _ = async {
+                loop {
+                    if env.caller_cancelled() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            } => ToolRunOutcome::detached(
+                ToolResult::fail("MCP cache validation cancelled by caller; server request kept alive."),
+                Box::pin(async move {
+                    validation.await.unwrap_or_else(|error| {
+                        ToolResult::fail(format!("MCP cache validation task failed after caller cancellation: {error}"))
+                    })
+                }),
+            ),
+        }
+    }
     fn preview(&self, args: &Value) -> String {
         let s = args.to_string();
         s.chars().take(120).collect()
