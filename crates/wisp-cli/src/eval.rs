@@ -12,7 +12,8 @@ use wisp_core::{
     build_release_gate, host_agent_observability, load_bundled_depmap_acu_corpus,
     load_bundled_depmap_release_lock, load_bundled_depmap_server_contract, Agent, AgentTrace,
     ContextManager, ExploreTool, GuidanceQueue, HostObservabilityConfig, MemoryManager,
-    ObservabilityHost, Output, ReleaseGateArtifact, ReleaseGateInputs, ToolCatalog,
+    ObservabilityHost, Output, ReleaseGateArtifact, ReleaseGateBlocker, ReleaseGateBlockerKind,
+    ReleaseGateInputs, ToolCatalog,
 };
 use wisp_llm::{
     Message, Provider, ProviderConfig, Role, ScriptedCompletion, ScriptedProvider,
@@ -1091,6 +1092,18 @@ pub async fn run(
         report.comparison = Some(compare_reports(&report, &baseline, path, options));
     }
 
+    let comparison_failed = report.comparison.as_ref().is_some_and(|comparison| {
+        !options.allow_regressions
+            && (!comparison.regressions.is_empty() || !comparison.threshold_failures.is_empty())
+    });
+    let pass_rate_failed = report.summary.pass_rate_percent < options.min_pass_rate_percent;
+    record_model_quality_failures(
+        &mut report.release_gate,
+        report.summary.pass_rate_percent,
+        options.min_pass_rate_percent,
+        comparison_failed,
+    );
+
     let mut rendered = serde_json::to_string_pretty(&report)?;
     rendered.push('\n');
     if let Some(path) = &options.save {
@@ -1105,11 +1118,7 @@ pub async fn run(
     }
     print!("{rendered}");
 
-    let comparison_failed = report.comparison.as_ref().is_some_and(|comparison| {
-        !options.allow_regressions
-            && (!comparison.regressions.is_empty() || !comparison.threshold_failures.is_empty())
-    });
-    if report.summary.pass_rate_percent < options.min_pass_rate_percent || comparison_failed {
+    if pass_rate_failed || comparison_failed {
         bail!(
             "agent eval failed: {}/{} attempts passed ({}%; required {}%)",
             report.summary.passed,
@@ -1119,6 +1128,34 @@ pub async fn run(
         );
     }
     Ok(())
+}
+
+fn record_model_quality_failures(
+    release_gate: &mut Option<ReleaseGateArtifact>,
+    actual_pass_rate: u64,
+    required_pass_rate: u64,
+    comparison_failed: bool,
+) {
+    let Some(artifact) = release_gate.as_mut() else {
+        return;
+    };
+    if actual_pass_rate < required_pass_rate {
+        artifact.blockers.push(ReleaseGateBlocker {
+            kind: ReleaseGateBlockerKind::ModelQuality,
+            code: "model_pass_rate_below_threshold".into(),
+            detail: format!(
+                "model pass rate {actual_pass_rate}% is below required {required_pass_rate}%"
+            ),
+        });
+    }
+    if comparison_failed {
+        artifact.blockers.push(ReleaseGateBlocker {
+            kind: ReleaseGateBlockerKind::ModelQuality,
+            code: "model_regression".into(),
+            detail: "model comparison contains disallowed regressions or threshold failures".into(),
+        });
+    }
+    artifact.passed = artifact.blockers.is_empty();
 }
 
 fn release_gate_for_suite(suite: &EvalSuite) -> Result<Option<ReleaseGateArtifact>> {
@@ -2650,6 +2687,19 @@ mod tests {
         assert_eq!(artifact.coverage_digest.len(), 64);
         assert_eq!(artifact.server_contract_digest.len(), 64);
         assert_eq!(artifact.acu_suite_digest.len(), 64);
+
+        let mut failed_gate = Some(artifact);
+        record_model_quality_failures(&mut failed_gate, 50, 100, true);
+        let failed_gate = failed_gate.unwrap();
+        assert!(!failed_gate.passed);
+        assert_eq!(
+            failed_gate
+                .blockers
+                .iter()
+                .filter(|blocker| blocker.kind == ReleaseGateBlockerKind::ModelQuality)
+                .count(),
+            2
+        );
 
         let ordinary: EvalSuite = serde_yaml::from_str(BUILTIN_SUITE).unwrap();
         assert!(release_gate_for_suite(&ordinary).unwrap().is_none());

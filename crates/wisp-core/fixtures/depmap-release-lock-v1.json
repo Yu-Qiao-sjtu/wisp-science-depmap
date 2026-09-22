@@ -2,9 +2,9 @@
   "schema": "wisp.release-contract-lock.v1",
   "release": "26Q1",
   "digests": {
-    "capability": "57c466aed9236fc5d24760a2cb100a51567664c30d04b134d993c9c01dde6b6f",
+    "capability": "8b13d9cd698c9339e25d5a7a70a5c8f486820caca8fb331f5c168facbcf67905",
     "coverage": "c0c7098c3d3e2227ab2544bf0c6196ade60b25588602d0bf49763c60f77e0381",
-    "server_contract": "54d2ac0f3772acff52f1c1a3137a5f375455f796271c6613d28be31bd6f61fe5",
-    "acu_suite": "7d3fd340d47f7acf5d5c8117dbf5919746d9341fa94f0819facbb3c2914f6963"
+    "server_contract": "a3c56cb556ef6ca3ece32bc86fb08ca7472be74e18633d58c6c551f91071b02a",
+    "acu_suite": "671dc317efb972126dc6625daac70131b87b76e4e9511a54646767f747a6bb8c"
   }
 }

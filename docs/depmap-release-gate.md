@@ -23,6 +23,9 @@ the fix is considered complete.
 The offline production-contract snapshot is
 `crates/wisp-core/fixtures/depmap-mcp-contract-v1.json`. Its schemas are copied
 from FastMCP discovery for the same release rather than inferred from an ACU.
+Executable ACUs are planned against these production schemas, so a newly
+required property or incompatible enum blocks the gate even if an ACU's fake
+provider fixture remains permissive.
 When the provider registration, schema, Reader, or coverage contract changes,
 update that snapshot and intentionally refresh
 `depmap-release-lock-v1.json` in the same reviewed change.
@@ -57,13 +60,19 @@ forbidden fallback, or an unsupported terminal decision.
 The checked-in release lock pins capability, coverage, discovered server
 contract, and ACU-suite digests. This makes an unreviewed release, coverage, or
 schema change fail before scientific dispatch instead of merely appearing as
-different metadata in a completed report.
+different metadata in a completed report. Digests use canonical sorted JSON so
+the same release lock is stable on Windows, macOS, and Linux. The server digest
+also covers Reader mode, evidence-envelope, claim-validator, and specialist
+manifest contracts.
 
 Model-quality failures, provider-canary failures, deterministic contract
 failures, and release-assembly failures use separate blocker kinds so a flaky
 live model result cannot be mistaken for contract drift. Existing eval options
 support repeated live runs across multiple model profiles and retain latency,
 token, tool-call, scenario, and repetition data in the same report.
+If the required model pass rate or a baseline comparison fails, the serialized
+release artifact is marked failed and receives a `model_quality` blocker before
+the report is saved.
 
 ## Optional provider canary
 

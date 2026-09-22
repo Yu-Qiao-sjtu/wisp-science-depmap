@@ -446,6 +446,14 @@ pub fn replay_acu(case: &AcuCase, catalog: &IntentCatalog) -> AcuReplay {
     for (name, schema) in &case.fixture.tool_schemas {
         tools.insert(name.clone(), schema.clone());
     }
+    replay_acu_with_tools(case, catalog, &tools)
+}
+
+fn replay_acu_with_tools(
+    case: &AcuCase,
+    catalog: &IntentCatalog,
+    tools: &ToolCatalog,
+) -> AcuReplay {
     let coverage = match case.fixture.coverage {
         AcuCoverageState::Computed
         | AcuCoverageState::BridgeUnavailable
@@ -461,7 +469,7 @@ pub fn replay_acu(case: &AcuCase, catalog: &IntentCatalog) -> AcuReplay {
         coverage,
         allowed_capability_ids: case.fixture.allowed_capability_ids.clone(),
     };
-    let outcome = plan_scientific_intent(case.canonical_intent.clone(), catalog, &tools, &policy);
+    let outcome = plan_scientific_intent(case.canonical_intent.clone(), catalog, tools, &policy);
     let decision = outcome.decision.kind().to_string();
     let mut replay = AcuReplay {
         id: case.id.clone(),
@@ -569,7 +577,17 @@ pub fn build_release_gate(
     let replays: Vec<_> = corpus
         .cases
         .iter()
-        .map(|case| replay_acu(case, catalog))
+        .map(|case| {
+            if case
+                .allowed_terminal_decisions
+                .iter()
+                .any(|decision| decision == "execute")
+            {
+                replay_acu_with_tools(case, catalog, tools)
+            } else {
+                replay_acu(case, catalog)
+            }
+        })
         .collect();
     for replay in &replays {
         for failure in &replay.failures {
@@ -630,7 +648,11 @@ pub fn build_release_gate(
                 serde_json::json!({
                     "tool": row.tool,
                     "schema": row.discovered_schema_digest,
+                    "reader_mode": row.reader_mode,
                     "provider": row.provider_contract,
+                    "evidence_envelope": row.evidence_envelope_contract,
+                    "claim_validator": row.claim_validator_contract,
+                    "specialist_manifest_version": row.specialist_manifest_version,
                 })
             })
             .collect(),
@@ -728,8 +750,40 @@ fn json_subset(expected: &Value, actual: &Value) -> bool {
 }
 
 fn digest_json(value: &impl Serialize) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    format!("{:x}", Sha256::digest(bytes))
+    let value = serde_json::to_value(value).unwrap_or(Value::Null);
+    format!("{:x}", Sha256::digest(canonical_json(&value).as_bytes()))
+}
+
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).unwrap_or_default(),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => {
+            let mut keys: Vec<_> = values.keys().collect();
+            keys.sort_unstable();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap_or_default(),
+                        canonical_json(&values[key])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -848,6 +902,91 @@ mod tests {
             .blockers
             .iter()
             .any(|blocker| blocker.code == "capability_not_closed"));
+    }
+
+    #[test]
+    fn production_schema_must_accept_every_executable_acu_query() {
+        let corpus = load_bundled_depmap_acu_corpus();
+        let bridge = host_scientific_bridge(&HostPolicy::bundled_depmap()).unwrap();
+        let mut tools = production_contract_tools();
+        tools.insert(
+            "depmap_codependency_evidence",
+            serde_json::json!({
+                "type": "object",
+                "required": ["renamed_gene"],
+                "properties": {"renamed_gene": {"type": "string"}},
+                "additionalProperties": false
+            }),
+        );
+
+        let artifact = build_release_gate(
+            &corpus,
+            &bridge.catalog,
+            &bridge.specialist,
+            &tools,
+            &gate_inputs(&bridge.catalog),
+        );
+
+        assert!(!artifact.passed);
+        assert!(artifact.blockers.iter().any(|blocker| {
+            blocker.code == "acu_replay_failed" && blocker.detail.contains("codependency-execute")
+        }));
+    }
+
+    #[test]
+    fn server_digest_covers_reader_envelope_validator_and_manifest_contracts() {
+        let corpus = load_bundled_depmap_acu_corpus();
+        let bridge = host_scientific_bridge(&HostPolicy::bundled_depmap()).unwrap();
+        let tools = production_contract_tools();
+        let inputs = gate_inputs(&bridge.catalog);
+        let baseline = build_release_gate(
+            &corpus,
+            &bridge.catalog,
+            &bridge.specialist,
+            &tools,
+            &inputs,
+        );
+
+        let mut reader = inputs.clone();
+        reader
+            .reader_modes
+            .insert("codependency_evidence".into(), "changed-reader".into());
+        let mut envelope = inputs.clone();
+        envelope.evidence_envelope_contract = "changed-envelope".into();
+        let mut validator = inputs.clone();
+        validator.claim_validator_contract = "changed-validator".into();
+        let mut specialist = bridge.specialist.clone();
+        specialist.manifest_version = "changed-manifest".into();
+
+        for changed in [
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &bridge.specialist,
+                &tools,
+                &reader,
+            ),
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &bridge.specialist,
+                &tools,
+                &envelope,
+            ),
+            build_release_gate(
+                &corpus,
+                &bridge.catalog,
+                &bridge.specialist,
+                &tools,
+                &validator,
+            ),
+            build_release_gate(&corpus, &bridge.catalog, &specialist, &tools, &inputs),
+        ] {
+            assert_ne!(
+                changed.server_contract_digest,
+                baseline.server_contract_digest
+            );
+        }
     }
 
     #[test]
