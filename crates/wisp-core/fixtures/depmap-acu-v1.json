@@ -13,8 +13,8 @@
       "allowed_tools": ["depmap_codependency_evidence"],
       "forbidden_tools": ["shell","run_in_context"],
       "allowed_terminal_decisions": ["execute"],
-      "fixture": {"coverage":"computed","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}}},
-      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"global"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
       "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io"]
     },
     {
@@ -26,8 +26,8 @@
       "allowed_tools": ["depmap_pair_evidence"],
       "forbidden_tools": ["shell","run_in_context"],
       "allowed_terminal_decisions": ["execute"],
-      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}}},
-      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"pair"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
       "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io"]
     },
     {
@@ -39,8 +39,8 @@
       "allowed_tools": ["depmap_pair_evidence"],
       "forbidden_tools": ["shell","run_in_context"],
       "allowed_terminal_decisions": ["execute"],
-      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}}},
-      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"pair"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
       "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io"]
     },
     {
@@ -52,8 +52,8 @@
       "allowed_tools": ["depmap_synthetic_lethal_evidence"],
       "forbidden_tools": ["shell","run_in_context"],
       "allowed_terminal_decisions": ["execute"],
-      "fixture": {"coverage":"computed","tool_schemas":{"depmap_synthetic_lethal_evidence":{"type":"object","additionalProperties":true}}},
-      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_synthetic_lethal_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"global"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
       "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_unsupported_claim"]
     },
     {
@@ -65,8 +65,8 @@
       "allowed_tools": ["depmap_lineage_mutation_dependency"],
       "forbidden_tools": ["shell","run_in_context"],
       "allowed_terminal_decisions": ["execute"],
-      "fixture": {"coverage":"computed","tool_schemas":{"depmap_lineage_mutation_dependency":{"type":"object","additionalProperties":true}}},
-      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_lineage_mutation_dependency":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"lineage","value":"Lung"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
       "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_unsupported_claim"]
     },
     {

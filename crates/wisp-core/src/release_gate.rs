@@ -86,6 +86,25 @@ pub struct AcuFixture {
     pub allowed_capability_ids: Option<Vec<String>>,
     #[serde(default)]
     pub tool_schemas: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<AcuEvidenceFixture>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcuEvidenceFixture {
+    pub structured_content: Value,
+    pub completion: AcuCompletionFixture,
+    #[serde(default)]
+    pub uses_raw_matrix_io: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcuCompletionFixture {
+    pub text: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub unsupported_claims: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,6 +416,28 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
                 case.id
             ));
         }
+        if case
+            .allowed_terminal_decisions
+            .iter()
+            .any(|decision| decision == "execute")
+            && case.fixture.evidence.is_none()
+        {
+            errors.push(format!(
+                "executable ACU '{}' needs a replayable evidence fixture",
+                case.id
+            ));
+        }
+        if case
+            .allowed_terminal_decisions
+            .iter()
+            .any(|decision| decision == "clarification_required")
+            && case.allowed_ambiguity.is_empty()
+        {
+            errors.push(format!(
+                "clarification ACU '{}' needs allowed ambiguity candidates",
+                case.id
+            ));
+        }
         for decision in &case.allowed_terminal_decisions {
             if !TERMINAL_DECISIONS.contains(&decision.as_str()) {
                 errors.push(format!(
@@ -518,6 +559,18 @@ fn replay_acu_with_tools(
             replay.tool = Some(tool);
             replay.arguments = Some(arguments);
         }
+        PlannerDecision::ClarificationRequired {
+            competing_capability_ids,
+            ..
+        } => {
+            let expected: BTreeSet<_> = case.allowed_ambiguity.iter().cloned().collect();
+            let actual: BTreeSet<_> = competing_capability_ids.into_iter().collect();
+            if actual != expected {
+                replay.failures.push(format!(
+                    "clarification candidates {actual:?} do not match allowed ambiguity {expected:?}"
+                ));
+            }
+        }
         decision => {
             if let Some(expected) = &case.expected_capability {
                 let actual = decision_capability(&decision);
@@ -543,8 +596,130 @@ fn replay_acu_with_tools(
             }
         }
     }
+    replay.failures.extend(validate_acu_evidence(
+        case,
+        &decision,
+        case.fixture.evidence.as_ref(),
+    ));
     replay.passed = replay.failures.is_empty();
     replay
+}
+
+pub fn validate_acu_evidence(
+    case: &AcuCase,
+    decision: &str,
+    observation: Option<&AcuEvidenceFixture>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let executes = decision == "execute";
+    let structured = observation.map(|value| &value.structured_content);
+    let evidence_ids: BTreeSet<_> = structured
+        .and_then(|value| value.get("evidence"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+
+    for invariant in &case.evidence_invariants {
+        match invariant {
+            AcuEvidenceInvariant::StructuredEvidenceRequired if executes => {
+                let valid = structured
+                    .and_then(Value::as_object)
+                    .is_some_and(|value| !value.is_empty() && !evidence_ids.is_empty());
+                if !valid {
+                    failures.push("structured evidence is missing or empty".into());
+                }
+            }
+            AcuEvidenceInvariant::ReleaseRequired if executes => {
+                let valid = structured
+                    .and_then(|value| value.get("release"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty());
+                if !valid {
+                    failures.push("evidence release is missing".into());
+                }
+            }
+            AcuEvidenceInvariant::ScopeRequired if executes => {
+                let valid = structured
+                    .and_then(|value| value.get("scope"))
+                    .is_some_and(|value| !value.is_null());
+                if !valid {
+                    failures.push("evidence scope is missing".into());
+                }
+            }
+            AcuEvidenceInvariant::ClaimsMustBeGrounded if executes => {
+                let claims_grounded = structured
+                    .and_then(|value| value.get("claims"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|claims| {
+                        !claims.is_empty()
+                            && claims.iter().all(|claim| {
+                                claim
+                                    .get("evidence_ids")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|ids| {
+                                        !ids.is_empty()
+                                            && ids.iter().all(|id| {
+                                                id.as_str()
+                                                    .is_some_and(|id| evidence_ids.contains(id))
+                                            })
+                                    })
+                            })
+                    });
+                let completion_grounded = observation.is_some_and(|value| {
+                    !value.completion.evidence_ids.is_empty()
+                        && value
+                            .completion
+                            .evidence_ids
+                            .iter()
+                            .all(|id| evidence_ids.contains(id.as_str()))
+                });
+                if !claims_grounded || !completion_grounded {
+                    failures.push("claims or completion are not grounded in evidence ids".into());
+                }
+            }
+            AcuEvidenceInvariant::CoverageStatePreserved => {
+                let expected = match case.fixture.coverage {
+                    AcuCoverageState::NotRetained
+                    | AcuCoverageState::NotTested
+                    | AcuCoverageState::NotComputed
+                    | AcuCoverageState::AnnotationUnavailable => Some("coverage_gap"),
+                    AcuCoverageState::BridgeUnavailable => Some("bridge_unavailable"),
+                    AcuCoverageState::ProviderUnavailable => Some("provider_unavailable"),
+                    AcuCoverageState::PolicyBlocked => Some("policy_blocked"),
+                    AcuCoverageState::Computed => None,
+                };
+                if expected.is_some_and(|expected| decision != expected) {
+                    failures.push(format!(
+                        "coverage state '{}' was not preserved by decision '{decision}'",
+                        case.fixture.coverage.as_str()
+                    ));
+                }
+            }
+            AcuEvidenceInvariant::NoRawMatrixIo => {
+                if observation.is_some_and(|value| value.uses_raw_matrix_io) {
+                    failures.push("replay performed forbidden raw matrix I/O".into());
+                }
+            }
+            AcuEvidenceInvariant::NoUnsupportedClaim if executes => {
+                let valid = observation.is_some_and(|value| {
+                    value.completion.unsupported_claims.is_empty()
+                        && !value.completion.text.trim().is_empty()
+                });
+                if !valid {
+                    failures
+                        .push("completion contains or cannot exclude unsupported claims".into());
+                }
+            }
+            AcuEvidenceInvariant::StructuredEvidenceRequired
+            | AcuEvidenceInvariant::ReleaseRequired
+            | AcuEvidenceInvariant::ScopeRequired
+            | AcuEvidenceInvariant::ClaimsMustBeGrounded
+            | AcuEvidenceInvariant::NoUnsupportedClaim => {}
+        }
+    }
+    failures
 }
 
 pub fn build_release_gate(
@@ -849,6 +1024,65 @@ mod tests {
             replay.id == "bridge-unavailable-is-not-not-computed"
                 && replay.decision == "bridge_unavailable"
         }));
+    }
+
+    #[test]
+    fn clarification_candidates_must_match_the_acu_contract_exactly() {
+        let catalog = IntentCatalog::bundled_depmap();
+        let mut case = load_bundled_depmap_acu_corpus()
+            .cases
+            .into_iter()
+            .find(|case| case.id == "ambiguous-relation-clarifies")
+            .unwrap();
+        assert!(replay_acu(&case, &catalog).passed);
+
+        case.allowed_ambiguity = vec!["codependency_evidence".into()];
+        let replay = replay_acu(&case, &catalog);
+
+        assert!(!replay.passed);
+        assert!(replay
+            .failures
+            .iter()
+            .any(|failure| failure.contains("clarification candidates")));
+    }
+
+    #[test]
+    fn executable_acus_enforce_scope_grounding_and_completion_invariants() {
+        let catalog = IntentCatalog::bundled_depmap();
+        let case = load_bundled_depmap_acu_corpus()
+            .cases
+            .into_iter()
+            .find(|case| case.id == "codependency-execute")
+            .unwrap();
+        assert!(replay_acu(&case, &catalog).passed);
+
+        let mut missing_scope = case.clone();
+        missing_scope
+            .fixture
+            .evidence
+            .as_mut()
+            .unwrap()
+            .structured_content
+            .as_object_mut()
+            .unwrap()
+            .remove("scope");
+        assert!(replay_acu(&missing_scope, &catalog)
+            .failures
+            .iter()
+            .any(|failure| failure.contains("scope")));
+
+        let mut ungrounded = case;
+        ungrounded
+            .fixture
+            .evidence
+            .as_mut()
+            .unwrap()
+            .completion
+            .evidence_ids = vec!["unknown-evidence".into()];
+        assert!(replay_acu(&ungrounded, &catalog)
+            .failures
+            .iter()
+            .any(|failure| failure.contains("not grounded")));
     }
 
     #[test]

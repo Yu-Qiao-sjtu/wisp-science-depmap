@@ -2720,6 +2720,14 @@ mod tests {
                 let tool = replay.tool.clone().unwrap();
                 let arguments = replay.arguments.clone().unwrap();
                 let schema = acu.fixture.tool_schemas.get(&tool).unwrap().clone();
+                let evidence = acu.fixture.evidence.clone().unwrap();
+                let tool_result = serde_json::to_string(&json!({
+                    "schema": "wisp.mcp-tool-result.v1",
+                    "structured_content": evidence.structured_content,
+                    "display_text": "bounded evidence"
+                }))
+                .unwrap();
+                let completion = serde_json::to_string(&evidence.completion).unwrap();
                 let case: EvalCase = serde_json::from_value(json!({
                     "id": format!("acu-{}-variant-{}", acu.id, variant_index + 1),
                     "description": "production assembly ACU paraphrase replay",
@@ -2729,15 +2737,19 @@ mod tests {
                     "fixture_tools": {
                         tool.clone(): {
                             "schema": schema,
-                            "result": "{\"schema\":\"wisp.mcp-tool-result.v1\",\"structured_content\":{\"status\":\"FOUND\",\"release\":\"26Q1\"},\"display_text\":\"bounded evidence\"}"
+                            "result": tool_result
                         }
                     },
                     "script": [
                         {"tool_calls":[{"id":"plan-1","name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,"arguments":{"intent":acu.canonical_intent}}]},
                         {"tool_calls":[{"id":"evidence-1","name":tool,"arguments":arguments}]},
-                        {"tool_calls":[{"id":"done-1","name":"attempt_completion","arguments":{"result":"Bounded 26Q1 evidence retrieved; no unsupported biological claim."}}]}
+                        {"tool_calls":[{"id":"done-1","name":"attempt_completion","arguments":{"result":completion}}]}
                     ],
-                    "limits": {"max_tool_calls": acu.budget.max_tool_calls + 1, "max_rounds": 4},
+                    "limits": {
+                        "max_tool_calls": acu.budget.max_tool_calls,
+                        "max_context_tokens": acu.budget.max_context_tokens,
+                        "max_rounds": 4
+                    },
                     "expect": {
                         "required_tools": [wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL, tool, "attempt_completion"],
                         "forbidden_tools": ["shell", "run_in_context"],
@@ -2747,7 +2759,7 @@ mod tests {
                 }))
                 .unwrap();
                 let id = case.id.clone();
-                let result = run_case(
+                let mut result = run_case(
                     case,
                     1,
                     EvalLimits::default(),
@@ -2757,6 +2769,27 @@ mod tests {
                 )
                 .await
                 .unwrap();
+                let actual_completion: Option<wisp_core::AcuCompletionFixture> = result
+                    .completion
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str(value).ok());
+                if let Some(completion) = actual_completion {
+                    let observed = wisp_core::AcuEvidenceFixture {
+                        structured_content: evidence.structured_content.clone(),
+                        completion,
+                        uses_raw_matrix_io: evidence.uses_raw_matrix_io,
+                    };
+                    result.failures.extend(wisp_core::validate_acu_evidence(
+                        &acu,
+                        "execute",
+                        Some(&observed),
+                    ));
+                } else {
+                    result
+                        .failures
+                        .push("completion did not satisfy the typed ACU evidence contract".into());
+                }
+                result.passed = result.failures.is_empty();
                 assert!(result.passed, "{id}: {:?}", result.failures);
             }
         }
