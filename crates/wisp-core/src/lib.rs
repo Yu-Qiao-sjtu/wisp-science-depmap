@@ -84,13 +84,14 @@ pub use output::{NullOutput, Output, OutputFuture, StreamSinkAdapter, ToolEnvAda
 pub use provenance::ProvenanceRecord;
 pub use release_gate::{
     build_release_gate, load_bundled_depmap_acu_corpus, load_bundled_depmap_release_lock,
-    load_bundled_depmap_server_contract, replay_acu, validate_acu_corpus, validate_acu_evidence,
-    validate_release_canary, AcuBudget, AcuCase, AcuCompletionFixture, AcuCorpus, AcuCoverageState,
-    AcuEvidenceFixture, AcuEvidenceInvariant, AcuFixture, AcuReplay, CapabilityClosureRow,
-    DepMapServerContractSnapshot, ReleaseCanaryObservation, ReleaseCanaryPolicy,
-    ReleaseContractDigests, ReleaseContractLock, ReleaseGateArtifact, ReleaseGateBlocker,
-    ReleaseGateBlockerKind, ReleaseGateInputs, ACU_CORPUS_SCHEMA, DEPMAP_SERVER_CONTRACT_SCHEMA,
-    RELEASE_CONTRACT_LOCK_SCHEMA, RELEASE_GATE_SCHEMA,
+    load_bundled_depmap_server_contract, replay_acu, replay_acu_prompt, validate_acu_corpus,
+    validate_acu_evidence, validate_release_canary, AcuBudget, AcuCase, AcuCompletionFixture,
+    AcuCorpus, AcuCoverageState, AcuEvidenceFixture, AcuEvidenceInvariant, AcuFixture,
+    AcuPromptMapping, AcuReplay, CapabilityClosureRow, DepMapServerContractSnapshot,
+    ReleaseCanaryObservation, ReleaseCanaryPolicy, ReleaseContractDigests, ReleaseContractLock,
+    ReleaseGateArtifact, ReleaseGateBlocker, ReleaseGateBlockerKind, ReleaseGateInputs,
+    ACU_CORPUS_SCHEMA, DEPMAP_SERVER_CONTRACT_SCHEMA, RELEASE_CONTRACT_LOCK_SCHEMA,
+    RELEASE_GATE_SCHEMA,
 };
 pub use scientific_intent::{
     host_scientific_bridge, install_scientific_intent_planner,

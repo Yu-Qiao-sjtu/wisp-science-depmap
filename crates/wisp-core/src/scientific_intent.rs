@@ -1230,6 +1230,30 @@ fn validate_against_schema(schema: &Value, value: &Value, path: &str) -> Result<
     if !schema.is_object() {
         return Ok(());
     }
+    if let Some(all_of) = schema.get("allOf").and_then(Value::as_array) {
+        for branch in all_of {
+            validate_against_schema(branch, value, path)?;
+        }
+    }
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        if !any_of
+            .iter()
+            .any(|branch| validate_against_schema(branch, value, path).is_ok())
+        {
+            return Err(format!("{path} does not match any anyOf branch"));
+        }
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = one_of
+            .iter()
+            .filter(|branch| validate_against_schema(branch, value, path).is_ok())
+            .count();
+        if matches != 1 {
+            return Err(format!(
+                "{path} must match exactly one oneOf branch; matched {matches}"
+            ));
+        }
+    }
     if let Some(type_constraint) = schema.get("type") {
         if !value_matches_type(value, type_constraint) {
             return Err(format!("{path} does not match the tool input schema"));
@@ -1898,6 +1922,39 @@ mod tests {
         )
         .unwrap_err();
         assert!(constant.contains("const"), "{constant}");
+    }
+
+    #[test]
+    fn discovered_schema_enforces_nested_combinator_constraints() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "event": {
+                    "anyOf": [
+                        {"type": "string", "enum": ["damaging_mutation", "hotspot_mutation"]},
+                        {"type": "null"}
+                    ]
+                },
+                "mode": {
+                    "oneOf": [
+                        {"const": "global"},
+                        {"const": "lineage"}
+                    ]
+                }
+            },
+            "required": ["event", "mode"]
+        });
+        validate_discovered_schema(
+            &schema,
+            &json!({"event": "damaging_mutation", "mode": "global"}),
+        )
+        .unwrap();
+        let event = validate_discovered_schema(
+            &schema,
+            &json!({"event": "removed_event", "mode": "global"}),
+        )
+        .unwrap_err();
+        assert!(event.contains("anyOf"), "{event}");
     }
 
     #[test]

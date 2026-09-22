@@ -7,6 +7,7 @@
     {
       "id": "codependency-execute",
       "question_family": ["KRAS 有哪些负共依赖基因？", "Which genes are negatively codependent with KRAS?"],
+      "prompt_mappings": [{"prompt":"KRAS 有哪些负共依赖基因？","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"}},{"prompt":"Which genes are negatively codependent with KRAS?","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"}}],
       "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"},
       "expected_capability": "codependency_evidence",
       "expected_query_shape": {"gene":"KRAS","direction":"negative","limit":20},
@@ -20,6 +21,7 @@
     {
       "id": "coexpression-execute",
       "question_family": ["ESR1 和 FOXA1 是否共表达？", "Check coexpression between FOXA1 and ESR1."],
+      "prompt_mappings": [{"prompt":"ESR1 和 FOXA1 是否共表达？","proposed_intent":{"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}},{"prompt":"Check coexpression between FOXA1 and ESR1.","proposed_intent":{"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}}],
       "canonical_intent": {"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]},
       "expected_capability": "coexpression_evidence",
       "expected_query_shape": {"source":"ESR1","target":"FOXA1"},
@@ -33,6 +35,7 @@
     {
       "id": "expression-dependency-execute",
       "question_family": ["ESR1 表达能否预测 FOXA1 dependency？", "Does ESR1 expression associate with FOXA1 dependency?"],
+      "prompt_mappings": [{"prompt":"ESR1 表达能否预测 FOXA1 dependency？","proposed_intent":{"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}},{"prompt":"Does ESR1 expression associate with FOXA1 dependency?","proposed_intent":{"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}}],
       "canonical_intent": {"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]},
       "expected_capability": "expression_dependency_evidence",
       "expected_query_shape": {"source":"ESR1","target":"FOXA1"},
@@ -46,6 +49,7 @@
     {
       "id": "mutation-global-execute",
       "question_family": ["泛癌 KRAS damaging 突变后依赖哪些基因？", "Across all models, rank dependencies associated with damaging KRAS mutation."],
+      "prompt_mappings": [{"prompt":"泛癌 KRAS damaging 突变后依赖哪些基因？","proposed_intent":{"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}}},{"prompt":"Across all models, rank dependencies associated with damaging KRAS mutation.","proposed_intent":{"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}}}],
       "canonical_intent": {"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}},
       "expected_capability": "mutation_dependency_global",
       "expected_query_shape": {"source":"KRAS","event":"damaging_mutation","limit":20},
@@ -59,6 +63,7 @@
     {
       "id": "mutation-lineage-execute",
       "question_family": ["Lung lineage 中 KRAS 突变相关依赖是什么？", "Find KRAS mutation-associated dependencies in Lung lineage."],
+      "prompt_mappings": [{"prompt":"Lung lineage 中 KRAS 突变相关依赖是什么？","proposed_intent":{"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]}},{"prompt":"Find KRAS mutation-associated dependencies in Lung lineage.","proposed_intent":{"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]}}],
       "canonical_intent": {"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]},
       "expected_capability": "mutation_dependency_lineage",
       "expected_query_shape": {"lineage":"Lung","source":"KRAS","limit":20},

@@ -111,6 +111,8 @@ pub struct AcuCompletionFixture {
 pub struct AcuCase {
     pub id: String,
     pub question_family: Vec<String>,
+    #[serde(default)]
+    pub prompt_mappings: Vec<AcuPromptMapping>,
     pub canonical_intent: ScientificIntent,
     #[serde(default)]
     pub allowed_ambiguity: Vec<String>,
@@ -126,6 +128,12 @@ pub struct AcuCase {
     pub fixture: AcuFixture,
     pub budget: AcuBudget,
     pub evidence_invariants: Vec<AcuEvidenceInvariant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcuPromptMapping {
+    pub prompt: String,
+    pub proposed_intent: ScientificIntent,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -404,6 +412,35 @@ pub fn validate_acu_corpus(corpus: &AcuCorpus, catalog: &IntentCatalog) -> Resul
                 case.id
             ));
         }
+        if case
+            .allowed_terminal_decisions
+            .iter()
+            .any(|decision| decision == "execute")
+        {
+            for prompt in &case.question_family {
+                let matching = case
+                    .prompt_mappings
+                    .iter()
+                    .filter(|mapping| mapping.prompt == *prompt)
+                    .count();
+                if matching != 1 {
+                    errors.push(format!(
+                        "executable ACU '{}' needs exactly one recorded prompt mapping for '{}'",
+                        case.id, prompt
+                    ));
+                }
+            }
+            if case
+                .prompt_mappings
+                .iter()
+                .any(|mapping| !case.question_family.contains(&mapping.prompt))
+            {
+                errors.push(format!(
+                    "executable ACU '{}' has a prompt mapping outside its question family",
+                    case.id
+                ));
+            }
+        }
         if case.budget.max_tool_calls == 0 || case.budget.max_context_tokens == 0 {
             errors.push(format!("ACU '{}' needs positive budgets", case.id));
         }
@@ -490,8 +527,49 @@ pub fn replay_acu(case: &AcuCase, catalog: &IntentCatalog) -> AcuReplay {
     replay_acu_with_tools(case, catalog, &tools)
 }
 
+pub fn replay_acu_prompt(case: &AcuCase, prompt: &str, catalog: &IntentCatalog) -> AcuReplay {
+    let mut tools = ToolCatalog::default();
+    for (name, schema) in &case.fixture.tool_schemas {
+        tools.insert(name.clone(), schema.clone());
+    }
+    replay_acu_prompt_with_tools(case, prompt, catalog, &tools)
+}
+
 fn replay_acu_with_tools(
     case: &AcuCase,
+    catalog: &IntentCatalog,
+    tools: &ToolCatalog,
+) -> AcuReplay {
+    replay_acu_with_intent_and_tools(case, case.canonical_intent.clone(), catalog, tools)
+}
+
+fn replay_acu_prompt_with_tools(
+    case: &AcuCase,
+    prompt: &str,
+    catalog: &IntentCatalog,
+    tools: &ToolCatalog,
+) -> AcuReplay {
+    let Some(mapping) = case
+        .prompt_mappings
+        .iter()
+        .find(|mapping| mapping.prompt == prompt)
+    else {
+        return AcuReplay {
+            id: case.id.clone(),
+            passed: false,
+            decision: "prompt_mapping_missing".into(),
+            capability_id: None,
+            tool: None,
+            arguments: None,
+            failures: vec!["question variant has no recorded prompt-to-intent mapping".into()],
+        };
+    };
+    replay_acu_with_intent_and_tools(case, mapping.proposed_intent.clone(), catalog, tools)
+}
+
+fn replay_acu_with_intent_and_tools(
+    case: &AcuCase,
+    proposed_intent: ScientificIntent,
     catalog: &IntentCatalog,
     tools: &ToolCatalog,
 ) -> AcuReplay {
@@ -510,7 +588,7 @@ fn replay_acu_with_tools(
         coverage,
         allowed_capability_ids: case.fixture.allowed_capability_ids.clone(),
     };
-    let outcome = plan_scientific_intent(case.canonical_intent.clone(), catalog, tools, &policy);
+    let outcome = plan_scientific_intent(proposed_intent, catalog, tools, &policy);
     let decision = outcome.decision.kind().to_string();
     let mut replay = AcuReplay {
         id: case.id.clone(),
@@ -749,7 +827,7 @@ pub fn build_release_gate(
             ),
         });
     }
-    let replays: Vec<_> = corpus
+    let mut replays: Vec<_> = corpus
         .cases
         .iter()
         .map(|case| {
@@ -764,6 +842,17 @@ pub fn build_release_gate(
             }
         })
         .collect();
+    for case in corpus.cases.iter().filter(|case| {
+        case.allowed_terminal_decisions
+            .iter()
+            .any(|decision| decision == "execute")
+    }) {
+        for (index, prompt) in case.question_family.iter().enumerate() {
+            let mut replay = replay_acu_prompt_with_tools(case, prompt, catalog, tools);
+            replay.id = format!("{}#prompt-{}", case.id, index + 1);
+            replays.push(replay);
+        }
+    }
     for replay in &replays {
         for failure in &replay.failures {
             blockers.push(ReleaseGateBlocker {
@@ -1044,6 +1133,29 @@ mod tests {
             .failures
             .iter()
             .any(|failure| failure.contains("clarification candidates")));
+    }
+
+    #[test]
+    fn question_variants_require_recorded_prompt_to_intent_mappings() {
+        let catalog = IntentCatalog::bundled_depmap();
+        let corpus = load_bundled_depmap_acu_corpus();
+        let mut case = corpus
+            .cases
+            .into_iter()
+            .find(|case| case.id == "codependency-execute")
+            .unwrap();
+        for prompt in &case.question_family {
+            assert!(replay_acu_prompt(&case, prompt, &catalog).passed);
+        }
+
+        case.question_family[0] = "unrelated replacement".into();
+        let replay = replay_acu_prompt(&case, &case.question_family[0], &catalog);
+
+        assert!(!replay.passed);
+        assert!(replay
+            .failures
+            .iter()
+            .any(|failure| failure.contains("prompt-to-intent mapping")));
     }
 
     #[test]

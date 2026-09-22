@@ -13,7 +13,11 @@ The checked-in corpus lives at
 family records its canonical intent and permitted ambiguity, expected
 capability and query shape, allowed and forbidden tools, provider and coverage
 fixture, terminal decisions, tool/context budgets, and typed evidence
-invariants. The examples are regression fixtures; they do not create
+invariants. Executable question variants also retain the prompt-to-intent
+proposal produced for that exact prompt. Deterministic replay plans from this
+recorded proposal rather than injecting the canonical target, and rejects a
+changed prompt without a reviewed mapping or a proposal that routes outside
+the ACU contract. The examples are regression fixtures; they do not create
 gene-specific or lineage-specific planner branches.
 
 Every enabled core capability and every terminal planner decision must be

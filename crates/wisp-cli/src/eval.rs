@@ -2717,8 +2717,21 @@ mod tests {
             let replay = wisp_core::replay_acu(&acu, &catalog);
             assert!(replay.passed, "{}: {:#?}", acu.id, replay.failures);
             for (variant_index, prompt) in acu.question_family.iter().enumerate() {
-                let tool = replay.tool.clone().unwrap();
-                let arguments = replay.arguments.clone().unwrap();
+                let prompt_replay = wisp_core::replay_acu_prompt(&acu, prompt, &catalog);
+                assert!(
+                    prompt_replay.passed,
+                    "{} prompt {prompt}: {:#?}",
+                    acu.id, prompt_replay.failures
+                );
+                let proposed_intent = acu
+                    .prompt_mappings
+                    .iter()
+                    .find(|mapping| mapping.prompt == *prompt)
+                    .unwrap()
+                    .proposed_intent
+                    .clone();
+                let tool = prompt_replay.tool.clone().unwrap();
+                let arguments = prompt_replay.arguments.clone().unwrap();
                 let schema = acu.fixture.tool_schemas.get(&tool).unwrap().clone();
                 let evidence = acu.fixture.evidence.clone().unwrap();
                 let tool_result = serde_json::to_string(&json!({
@@ -2741,7 +2754,7 @@ mod tests {
                         }
                     },
                     "script": [
-                        {"tool_calls":[{"id":"plan-1","name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,"arguments":{"intent":acu.canonical_intent}}]},
+                        {"tool_calls":[{"id":"plan-1","name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,"arguments":{"intent":proposed_intent}}]},
                         {"tool_calls":[{"id":"evidence-1","name":tool,"arguments":arguments}]},
                         {"tool_calls":[{"id":"done-1","name":"attempt_completion","arguments":{"result":completion}}]}
                     ],
