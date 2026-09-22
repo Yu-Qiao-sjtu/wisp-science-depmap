@@ -835,7 +835,7 @@ pub(crate) async fn send_message_inner(
                 )
                 .with_tool_catalog(tool_catalog),
             ));
-            wisp_core::install_scientific_intent_planner(&mut agent.tools);
+            wisp_core::install_scientific_intent_planner_in(&mut agent.tools, &ap.id, &frame_id);
         }
         {
             let mut observed = state.plugin_runtime_errors.lock().unwrap();
@@ -968,6 +968,25 @@ pub(crate) async fn send_message_inner(
         .map(|delivery| delivery.id)
         .collect::<Vec<_>>();
     agent.ctx.clear_runtime_injections();
+    if let Some(pending) = wisp_core::latest_pending_checkpoint(&ap.root) {
+        agent
+            .ctx
+            .inject_user(wisp_core::checkpoint_resume_injection(&pending));
+        if let Ok(payload) = serde_json::to_string(&pending) {
+            let _ = state
+                .store
+                .persist_bridge_checkpoint(
+                    &pending.checkpoint_id,
+                    &pending.operation_id,
+                    &ap.id,
+                    &frame_id,
+                    pending.state.as_str(),
+                    pending.schema_version as i64,
+                    &payload,
+                )
+                .await;
+        }
+    }
     if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
         agent.ctx.inject_user(memory);
     }

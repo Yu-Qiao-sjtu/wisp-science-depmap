@@ -1559,6 +1559,24 @@ fn apply_bridge_plan(args: &Value, route: &mut Value, tools: &ToolCatalog, extra
         &PlannerHostPolicy::default(),
     );
     debug_assert_eq!(outcome.contract, PLANNER_CONTRACT_ID);
+    if let Some(checkpoint) = wisp_core::checkpoint_for_outcome(
+        &outcome,
+        &IntentCatalog::bundled_depmap(),
+        "workspace",
+        "route",
+        "depmap-route",
+        &IntentCatalog::bundled_depmap().manifest_version,
+        wisp_core::ContractDigests {
+            manifest: "route".into(),
+            intent_catalog: "route".into(),
+            mcp_schema: "route".into(),
+            provider: "route".into(),
+            coverage: "route".into(),
+            authorization_scope: "route".into(),
+        },
+    ) {
+        route["checkpoint"] = serde_json::to_value(&checkpoint).unwrap_or(Value::Null);
+    }
     route["bridge"] = serde_json::to_value(&outcome).unwrap_or(Value::Null);
     if route.get("state").and_then(Value::as_str) != Some("routed") {
         return;
