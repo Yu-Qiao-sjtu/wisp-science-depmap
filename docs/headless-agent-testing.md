@@ -416,8 +416,6 @@ cases:
       tool_order: [read, attempt_completion]
       tool_args:
         - {name: read, pointer: /path, equals: config.toml}
-      semantic_claims:
-        - {phrase: synthetic lethality, polarity: negated}
 ```
 
 Fixture paths must be relative and remain under the temporary project.

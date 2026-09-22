@@ -20,14 +20,7 @@ use wisp_core::scientific_intent::{
     IntentScope, PlannerDecision, PlannerHostPolicy, RequestedAction, ScientificIntent,
     ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
 };
-use wisp_core::{
-    DEPMAP_DRUG_OMICS as DRUG_OMICS,
-    DEPMAP_LINEAGE_DEPENDENCY_RANKINGS as LINEAGE_DEPENDENCY_RANKINGS,
-    DEPMAP_LINEAGE_EVENTS as LINEAGE_EVENTS,
-    DEPMAP_LINEAGE_NETWORK_FAMILIES as LINEAGE_NETWORK_FAMILIES,
-    DEPMAP_MATRIX_MODULES as MATRIX_MODULES, DEPMAP_MAX_TOP_LIMIT as MAX_TOP_LIMIT,
-    DEPMAP_QUERY_TOOL_NAME as TOOL_NAME,
-};
+use wisp_core::{DEPMAP_DRUG_OMICS as DRUG_OMICS, DEPMAP_QUERY_TOOL_NAME as TOOL_NAME};
 use wisp_llm::ToolSchema;
 use wisp_tools::{Tool, ToolEnv, ToolResult};
 
@@ -3105,227 +3098,13 @@ impl Tool for DepMapQueryTool {
 }
 
 fn validated_query(args: &Value) -> Result<Value, String> {
-    let mode = required_string(args, "mode")?;
-    let mut query = serde_json::Map::new();
-    query.insert("mode".into(), Value::String(mode.clone()));
-    let required: &[&str] = match mode.as_str() {
-        "catalog" => &[],
-        "lineage_catalog" | "lineage_dependency" | "lineage_directions" => &["lineage"],
-        "core" | "model_gene_effect" | "cross_platform_validation" => &["gene"],
-        "pair" => &["module", "source", "target"],
-        "top" => &["module", "source"],
-        "lineage" => &["event", "lineage", "source", "target"],
-        "pathway" => &["pathway", "target"],
-        "drug" => &["omic", "drug", "target"],
-        "lineage_network" => &["family", "lineage", "source"],
-        "lineage_cnv" => &["lineage", "source"],
-        "lineage_drug" => &["omic", "lineage"],
-        "enrichment" => &["lineage", "source"],
-        "tcga_expression_survival" => &["gene"],
-        _ => return Err(format!("unsupported query mode '{mode}'")),
-    };
-    for key in required {
-        let value = required_string(args, key)?;
-        let value = if *key == "lineage" {
-            canonical_lineage_label(&value)
-        } else {
-            value
-        };
-        query.insert((*key).into(), Value::String(value));
-    }
-    if matches!(mode.as_str(), "pair" | "top") {
-        require_allowed(&query, "module", MATRIX_MODULES)?;
-    }
-    if mode == "lineage" {
-        require_allowed(&query, "event", LINEAGE_EVENTS)?;
-    }
-    if mode == "drug" {
-        require_allowed(&query, "omic", DRUG_OMICS)?;
-    }
-    if mode == "lineage_network" {
-        require_allowed(&query, "family", LINEAGE_NETWORK_FAMILIES)?;
-    }
-    if mode == "lineage_dependency" {
-        let ranking = args
-            .get("ranking")
-            .and_then(Value::as_str)
-            .unwrap_or("selective")
-            .trim();
-        if !LINEAGE_DEPENDENCY_RANKINGS.contains(&ranking) {
-            return Err(format!("unsupported ranking '{ranking}'"));
-        }
-        query.insert("ranking".into(), Value::String(ranking.to_string()));
-        let exclude_common = args
-            .get("exclude_common_essential")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        query.insert(
-            "exclude_common_essential".into(),
-            Value::Bool(exclude_common),
-        );
-        let source = args
-            .get("common_essential_source")
-            .and_then(Value::as_str)
-            .unwrap_or("depmap_26q1")
-            .trim();
-        if source != "depmap_26q1" {
-            return Err("common_essential_source must be depmap_26q1".into());
-        }
-        query.insert(
-            "common_essential_source".into(),
-            Value::String(source.to_string()),
-        );
-    }
-    if mode == "model_gene_effect" {
-        if let Some(lineage) = args
-            .get("lineage")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            query.insert(
-                "lineage".into(),
-                Value::String(canonical_lineage_label(lineage)),
-            );
-        }
-        if let Some(model_id) = args
-            .get("model_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let canonical = model_id.to_ascii_uppercase();
-            let valid = canonical.len() == 10
-                && canonical.starts_with("ACH-")
-                && canonical[4..]
-                    .chars()
-                    .all(|character| character.is_ascii_digit());
-            if !valid {
-                return Err("model_id must be a canonical ACH-###### ModelID".into());
-            }
-            query.insert("model_id".into(), Value::String(canonical));
-        }
-        if let Some(threshold) = args.get("gene_effect_at_or_below").and_then(Value::as_f64) {
-            if !threshold.is_finite() {
-                return Err("gene_effect_at_or_below must be finite".into());
-            }
-            query.insert("gene_effect_at_or_below".into(), json!(threshold));
+    let mut query = wisp_core::validate_depmap_query_arguments(args)?;
+    if let Some(lineage) = query.get_mut("lineage") {
+        if let Some(value) = lineage.as_str() {
+            *lineage = Value::String(canonical_lineage_label(value));
         }
     }
-    if mode == "cross_platform_validation" {
-        let lineage = args
-            .get("lineage")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let scope = args
-            .get("scope")
-            .and_then(Value::as_str)
-            .unwrap_or(if lineage.is_some() {
-                "lineage"
-            } else {
-                "global"
-            });
-        if !["global", "lineage"].contains(&scope) {
-            return Err("scope must be global or lineage".into());
-        }
-        if scope == "lineage" && lineage.is_none() {
-            return Err("cross_platform_validation scope=lineage requires lineage".into());
-        }
-        if scope == "global" && lineage.is_some() {
-            return Err("cross_platform_validation scope=global does not take lineage".into());
-        }
-        query.insert("scope".into(), Value::String(scope.into()));
-        if let Some(lineage) = lineage {
-            query.insert(
-                "lineage".into(),
-                Value::String(canonical_lineage_label(lineage)),
-            );
-        }
-    }
-    if mode == "lineage_drug" {
-        require_allowed(&query, "omic", DRUG_OMICS)?;
-        if args
-            .get("drug")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-            && args
-                .get("target")
-                .and_then(Value::as_str)
-                .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err("lineage_drug requires non-empty 'drug', 'target', or both".into());
-        }
-    }
-    for key in ["target", "drug", "collection", "term"] {
-        if let Some(value) = args
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            query.insert(key.into(), Value::String(value.to_string()));
-        }
-    }
-    if mode == "tcga_expression_survival" {
-        if let Some(lineage) = args
-            .get("lineage")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            query.insert(
-                "lineage".into(),
-                Value::String(canonical_lineage_label(lineage)),
-            );
-        }
-        if let Some(project) = args
-            .get("project")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let project = project.to_ascii_uppercase();
-            let project = if project.starts_with("TCGA-") {
-                project
-            } else {
-                format!("TCGA-{project}")
-            };
-            query.insert("project".into(), Value::String(project));
-        }
-        let endpoint = args
-            .get("endpoint")
-            .and_then(Value::as_str)
-            .unwrap_or("OS")
-            .trim()
-            .to_ascii_uppercase();
-        if !["OS", "DSS", "DFI", "PFI"].contains(&endpoint.as_str()) {
-            return Err("endpoint must be one of OS, DSS, DFI, or PFI".into());
-        }
-        query.insert("endpoint".into(), Value::String(endpoint));
-    }
-    if let Some(reciprocal) = args.get("reciprocal").and_then(Value::as_bool) {
-        query.insert("reciprocal".into(), Value::Bool(reciprocal));
-    }
-    if matches!(
-        mode.as_str(),
-        "top"
-            | "lineage_dependency"
-            | "model_gene_effect"
-            | "lineage_directions"
-            | "lineage_network"
-            | "lineage_cnv"
-            | "lineage_drug"
-            | "enrichment"
-            | "tcga_expression_survival"
-    ) {
-        let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(20);
-        if !(1..=MAX_TOP_LIMIT).contains(&limit) {
-            return Err(format!("limit must be between 1 and {MAX_TOP_LIMIT}"));
-        }
-        query.insert("limit".into(), json!(limit));
-    }
-    Ok(Value::Object(query))
+    Ok(query)
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String, String> {
@@ -3405,19 +3184,6 @@ fn canonical_lineage_label(value: &str) -> String {
         "bladder" | "urinarytract" => "Bladder Urinary Tract".into(),
         "vulvar" | "vaginal" | "vulva" | "vagina" => "Vulva Vagina".into(),
         _ => requested.to_string(),
-    }
-}
-
-fn require_allowed(
-    query: &serde_json::Map<String, Value>,
-    key: &str,
-    allowed: &[&str],
-) -> Result<(), String> {
-    let value = query.get(key).and_then(Value::as_str).unwrap_or_default();
-    if allowed.contains(&value) {
-        Ok(())
-    } else {
-        Err(format!("unsupported {key} '{value}'"))
     }
 }
 
@@ -4874,7 +4640,7 @@ mod tests {
         assert_eq!(schema["required"], json!(["mode"]));
         assert_eq!(
             schema["properties"]["module"]["enum"],
-            json!(MATRIX_MODULES)
+            json!(wisp_core::DEPMAP_MATRIX_MODULES)
         );
         assert!(schema["properties"]["mode"]["enum"]
             .as_array()

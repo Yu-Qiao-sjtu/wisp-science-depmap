@@ -1059,6 +1059,11 @@ impl Tool for FixtureNativeTool {
         if let Err(error) = wisp_mcp::validate_tool_arguments(&schema, args) {
             return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
         }
+        if self.name == wisp_core::DEPMAP_QUERY_TOOL_NAME {
+            if let Err(error) = wisp_core::validate_depmap_query_arguments(args) {
+                return ToolResult::fail(format!("invalid DepMap fixture tool arguments: {error}"));
+            }
+        }
         if self.fixture.error {
             ToolResult::fail(&self.fixture.result)
         } else {
@@ -2358,6 +2363,9 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let nearby = &sentence[window_start..window_end];
                 let before = &sentence[window_start..start];
                 let after = &sentence[end..window_end];
+                // `不仅` is an additive affirmative construction, not a
+                // negation of the nearby scientific predicate.
+                let negation_window = nearby.replace("不仅", "");
                 let negated = [
                     " not ",
                     " no ",
@@ -2377,7 +2385,7 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     "绝非",
                 ]
                 .iter()
-                .any(|cue| format!(" {nearby}").contains(cue))
+                .any(|cue| format!(" {negation_window}").contains(cue))
                     || before.ends_with('非')
                     || (after.starts_with('非') && !after.starts_with("非常"));
                 offset = start + phrase.len();
@@ -3665,6 +3673,22 @@ mod tests {
             ..Captured::default()
         };
         assert!(verify_semantic_quality(&expect, &captured).is_empty());
+    }
+
+    #[test]
+    fn semantic_grader_does_not_treat_chinese_additive_conjunction_as_negation() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "合成致死".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some("合成致死不仅显著，而且稳健。".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
     }
 
     #[test]
