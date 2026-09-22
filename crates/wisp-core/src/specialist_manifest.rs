@@ -64,6 +64,40 @@ impl HostPolicy {
         policy.available_skills = skills.into_iter().map(Into::into).collect();
         policy
     }
+
+    /// Derive the DepMap host capability projection from the registry that
+    /// will actually be assembled and executed. The manifest cannot advertise
+    /// a connector or native surface removed by evaluator/host filtering.
+    pub fn depmap_from_registry<I, S>(skills: I, registry: &wisp_tools::Registry) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let names: BTreeSet<_> = registry.names().into_iter().map(str::to_string).collect();
+        let mut available_tool_sets = BTreeSet::new();
+        if [
+            "depmap_query",
+            "depmap_evidence",
+            "depmap_agent_route",
+            "depmap_validate_run",
+        ]
+        .iter()
+        .any(|name| names.contains(*name))
+        {
+            available_tool_sets.insert("scientific_query".to_string());
+        }
+        if ["run_in_context", "get_run", "monitor_run"]
+            .iter()
+            .all(|name| names.contains(*name))
+        {
+            available_tool_sets.insert("runs".to_string());
+        }
+        Self {
+            available_skills: skills.into_iter().map(Into::into).collect(),
+            available_connectors: registry.connector_ids(),
+            available_tool_sets,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,5 +279,20 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn registry_derived_host_does_not_invent_connector_or_tool_sets() {
+        let registry = wisp_tools::Registry::builtins();
+        let host = HostPolicy::depmap_from_registry(
+            ["depmap-knowledge-query", "depmap-coding-agent"],
+            &registry,
+        );
+        assert!(host.available_connectors.is_empty());
+        assert!(host.available_tool_sets.is_empty());
+        assert!(matches!(
+            assemble(&load_depmap_manifest(), &host),
+            Err(AssemblyError::MissingConnector { .. })
+        ));
     }
 }

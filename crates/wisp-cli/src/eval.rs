@@ -913,6 +913,8 @@ struct FixtureMcpTool {
     result: String,
 }
 
+const DEPMAP_EVAL_CONNECTOR_PROBE: &str = "depmap_mcp_contract_probe";
+
 struct FixtureNativeTool {
     name: String,
     fixture: FixtureTool,
@@ -1026,6 +1028,10 @@ impl Tool for FixtureMcpTool {
 
     fn read_only(&self) -> bool {
         true
+    }
+
+    fn connector_id(&self) -> Option<&str> {
+        Some("depmap_mcp")
     }
 
     async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
@@ -1635,14 +1641,7 @@ fn build_agent(
     }
     skill_paths.push(root.join(".wisp").join("skills"));
     let skills = Arc::new(SkillIndex::load(&skill_paths));
-    let depmap_host = case.tags.iter().any(|tag| tag == "depmap").then(|| {
-        wisp_core::specialist_manifest::HostPolicy::bundled_depmap_with_skills(
-            skills.all().iter().map(|skill| skill.name.clone()),
-        )
-    });
-    if let Some(host) = depmap_host.as_ref() {
-        wisp_core::host_scientific_bridge(host).map_err(|error| anyhow::anyhow!("{error}"))?;
-    }
+    let is_depmap = case.tags.iter().any(|tag| tag == "depmap");
     let memory = Arc::new(MemoryManager::new(root));
     let mut registry = wisp_core::build_registry(skills.clone(), memory, case.memory_enabled);
     registry.add(Box::new(wisp_tools::ask_user::AskUserTool));
@@ -1653,10 +1652,31 @@ fn build_agent(
             result: result.clone(),
         }));
     }
+    if is_depmap {
+        registry.add(Box::new(FixtureMcpTool {
+            name: DEPMAP_EVAL_CONNECTOR_PROBE.into(),
+            result: "{}".into(),
+        }));
+    }
     for (name, fixture) in &case.fixture_tools {
         registry.add(Box::new(FixtureNativeTool {
             name: name.clone(),
             fixture: fixture.clone(),
+        }));
+    }
+    if is_depmap
+        && !case
+            .fixture_tools
+            .contains_key(wisp_core::DEPMAP_QUERY_TOOL_NAME)
+    {
+        registry.add(Box::new(FixtureNativeTool {
+            name: wisp_core::DEPMAP_QUERY_TOOL_NAME.into(),
+            fixture: FixtureTool {
+                description: wisp_core::DEPMAP_QUERY_DESCRIPTION.into(),
+                schema: wisp_core::depmap_query_schema(),
+                result: "the scenario did not configure a DepMap query result".into(),
+                error: true,
+            },
         }));
     }
     if !case.explore_script.is_empty() {
@@ -1677,7 +1697,7 @@ fn build_agent(
     }
     if !case.allowed_tools.is_empty() {
         let mut allowed_tools = case.allowed_tools.clone();
-        if depmap_host.is_some() {
+        if is_depmap {
             // A DepMap Specialist declares required Skills only when the same
             // snapshot can discover and load them. Keep those production
             // access tools in narrowed evaluator registries so the recorded
@@ -1687,11 +1707,42 @@ fn build_agent(
                     .into_iter()
                     .map(str::to_string),
             );
+            // Production-parity assembly also requires the configured DepMap
+            // connector and Run control plane to remain present in the actual
+            // post-filter registry. Scenario assertions still forbid calls
+            // outside their intended trajectory.
+            allowed_tools.extend(
+                [
+                    DEPMAP_EVAL_CONNECTOR_PROBE,
+                    wisp_core::DEPMAP_QUERY_TOOL_NAME,
+                    "run_in_context",
+                    "configure_ssh_trust",
+                    "transfer_between_contexts",
+                    "get_run",
+                    "monitor_run",
+                    "cancel_run",
+                    "harvest_run",
+                    "cleanup_run_workspace",
+                    "list_remote_files",
+                    "remove_remote_files",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
         }
         registry = registry.filtered(&allowed_tools);
     }
-    if case.tags.iter().any(|tag| tag == "depmap") {
+    if is_depmap {
         wisp_core::install_scientific_intent_planner_in(&mut registry, "eval", "eval");
+    }
+    let depmap_host = is_depmap.then(|| {
+        wisp_core::specialist_manifest::HostPolicy::depmap_from_registry(
+            skills.all().iter().map(|skill| skill.name.clone()),
+            &registry,
+        )
+    });
+    if let Some(host) = depmap_host.as_ref() {
+        wisp_core::host_scientific_bridge(host).map_err(|error| anyhow::anyhow!("{error}"))?;
     }
     let mut agent = Agent::with_provider(
         provider.build(),
@@ -1710,7 +1761,7 @@ fn build_agent(
     agent
         .ctx
         .set_claim_catalog(Some(wisp_core::ClaimGroundingCatalog::default()));
-    let assembly = if case.tags.iter().any(|tag| tag == "depmap") {
+    let assembly = if is_depmap {
         Some(
             wisp_core::assemble_and_apply_depmap_agent(
                 &mut agent.ctx,
@@ -2363,9 +2414,9 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let nearby = &sentence[window_start..window_end];
                 let before = &sentence[window_start..start];
                 let after = &sentence[end..window_end];
-                // `不仅` is an additive affirmative construction, not a
-                // negation of the nearby scientific predicate.
-                let negation_window = nearby.replace("不仅", "");
+                // `不仅` / `not only` are additive affirmative constructions,
+                // not negations of the nearby scientific predicate.
+                let negation_window = nearby.replace("不仅", "").replace("not only", "");
                 let negated = [
                     " not ",
                     " no ",
@@ -3686,6 +3737,22 @@ mod tests {
         };
         let captured = Captured {
             completion: Some("合成致死不仅显著，而且稳健。".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_does_not_treat_english_additive_conjunction_as_negation() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some("Synthetic lethality is not only significant but robust.".into()),
             ..Captured::default()
         };
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);

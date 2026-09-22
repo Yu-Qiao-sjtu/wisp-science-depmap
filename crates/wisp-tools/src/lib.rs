@@ -29,7 +29,7 @@ pub use env::{
 pub use tool::Tool;
 
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use wisp_llm::ToolSchema;
 
 /// Where a schema in the model request comes from. This is intentionally a
@@ -196,6 +196,16 @@ impl Registry {
 
     pub fn names(&self) -> Vec<&str> {
         self.tools.iter().map(|t| t.name()).collect()
+    }
+
+    /// Connector identities represented by tools actually registered in this
+    /// snapshot. Specialist assembly uses this instead of optimistic host
+    /// declarations so a removed connector fails closed.
+    pub fn connector_ids(&self) -> BTreeSet<String> {
+        self.tools
+            .iter()
+            .filter_map(|tool| tool.connector_id().map(str::to_string))
+            .collect()
     }
 
     /// Every name the approval gate may see: registered tool targets plus
