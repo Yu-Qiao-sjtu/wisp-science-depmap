@@ -4,6 +4,10 @@
 
 use crate::archive::{prune_dir, ArchiveRetention};
 use crate::context::{image_content, ContextManager};
+use crate::guardrail::{
+    evaluate_handoff, evaluate_tool_input, GuardrailChain, GuardrailContext, GuardrailDecision,
+    GuardrailSeverity, DispatchPath,
+};
 use crate::observability::{
     finish_turn_span, mcp_capability_id, plan_tool_spans, ErrorClass, SpanGuard, SpanKind,
     SpanStatus, TurnIdentity,
@@ -754,22 +758,71 @@ async fn agent_loop_execute(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let result = if ctx.active_turn_allowed_tools().is_some_and(|allowed| {
-                !allowed.iter().any(|pattern| {
-                    pattern == requested_name
-                        || pattern
-                            .strip_suffix('*')
-                            .is_some_and(|prefix| requested_name.starts_with(prefix))
-                })
-            }) {
-                wisp_tools::ToolResult::fail(format!(
-                    "tool '{requested_name}' is blocked by the active turn route; use only the route's allowed_next_tools or answer with the current blocker"
-                ))
-                .stop_batch()
+            let schema = tools
+                .get(&name)
+                .map(|tool| tool.schema().function.parameters);
+            let path = if name == "use_mcp_tool" {
+                DispatchPath::DeferredMcp
+            } else if name == "delegate_tasks" {
+                DispatchPath::Delegated
             } else {
-                tools
-                    .run_scoped(&name, &args, env, ctx.active_turn_allowed_tools())
-                    .await
+                DispatchPath::Direct
+            };
+            let guard_ctx = GuardrailContext {
+                path: path.clone(),
+                tool: requested_name.to_string(),
+                arguments: args.clone(),
+                schema,
+                allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                approval_required: false,
+                approval_granted: false,
+                stale_approval: false,
+                output: None,
+                output_contract: None,
+            };
+            let chain = GuardrailChain::production();
+            let mut outcome = evaluate_tool_input(&chain, guard_ctx, tool_span.as_ref());
+            if name == "delegate_tasks" {
+                let handoff = evaluate_handoff(
+                    &chain,
+                    GuardrailContext {
+                        path: DispatchPath::Delegated,
+                        tool: requested_name.to_string(),
+                        arguments: args.clone(),
+                        schema: None,
+                        allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                        approval_required: false,
+                        approval_granted: false,
+                        stale_approval: false,
+                        output: None,
+                        output_contract: None,
+                    },
+                    tool_span.as_ref(),
+                );
+                if handoff.decision.rank_for_merge() > outcome.decision.rank_for_merge() {
+                    outcome = handoff;
+                }
+            }
+            let dispatch_args = match &outcome.decision {
+                GuardrailDecision::Transform { value, .. } => value.clone(),
+                _ => args.clone(),
+            };
+            let result = match &outcome.decision {
+                GuardrailDecision::Allow | GuardrailDecision::Transform { .. } => {
+                    tools
+                        .run_scoped(&name, &dispatch_args, env, ctx.active_turn_allowed_tools())
+                        .await
+                }
+                GuardrailDecision::RequestApproval { reason } => {
+                    wisp_tools::ToolResult::fail(reason.clone()).stop_batch()
+                }
+                GuardrailDecision::Reject {
+                    severity: GuardrailSeverity::Terminal,
+                    reason,
+                } => wisp_tools::ToolResult::fail(reason.clone()).stop_batch(),
+                GuardrailDecision::Reject { reason, .. } => {
+                    wisp_tools::ToolResult::fail(reason.clone())
+                }
             };
             let tool_status = if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
                 SpanStatus::Cancelled

@@ -7,6 +7,7 @@ pub mod context;
 pub mod delegation;
 pub mod delegation_policy;
 pub mod execution;
+pub mod guardrail;
 pub mod memory;
 pub mod method_search;
 pub mod observability;
@@ -45,6 +46,10 @@ pub use execution::{
     DelegationExecutionObserver, DelegationExecutionResult, DelegationExecutionStatus,
     DelegationExecutor, DelegationStepExecution, NoopDelegationObserver, WorkflowRunActivityDriver,
     WorkflowRunActivityRequest,
+};
+pub use guardrail::{
+    evaluate_final_output, evaluate_handoff, evaluate_tool_input, DispatchPath, GuardrailChain,
+    GuardrailContext, GuardrailDecision, GuardrailOutcome, GuardrailSeverity, GUARDRAIL_CONTRACT_ID,
 };
 pub use memory::{
     MemoryManager, MemorySearchQuery, MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
