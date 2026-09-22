@@ -81,8 +81,17 @@ pub fn depmap_query_tool_schema() -> ToolSchema {
 /// Host-specific lineage alias canonicalization is intentionally applied by
 /// the desktop after this contract-level validation.
 pub fn validate_depmap_query_arguments(args: &Value) -> Result<Value, String> {
-    crate::scientific_intent::validate_discovered_schema(&depmap_query_schema(), args)
+    let mut normalized_args = args.clone();
+    if let Some(endpoint) = normalized_args
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_uppercase())
+    {
+        normalized_args["endpoint"] = Value::String(endpoint);
+    }
+    crate::scientific_intent::validate_discovered_schema(&depmap_query_schema(), &normalized_args)
         .map_err(|error| format!("invalid DepMap query schema: {error}"))?;
+    let args = &normalized_args;
     let mode = required_string(args, "mode")?;
     let mut query = serde_json::Map::new();
     query.insert("mode".into(), Value::String(mode.clone()));
@@ -353,5 +362,12 @@ mod tests {
             "unexpected":true
         }))
         .is_err());
+        let survival = validate_depmap_query_arguments(&json!({
+            "mode":"tcga_expression_survival",
+            "gene":"ESR1",
+            "endpoint":"dss"
+        }))
+        .unwrap();
+        assert_eq!(survival["endpoint"], "DSS");
     }
 }
