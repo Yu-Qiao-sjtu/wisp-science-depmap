@@ -1165,7 +1165,12 @@ async fn main() -> Result<()> {
     let _scientific_bridge = wisp_core::host_scientific_bridge(
         &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
     );
-    wisp_core::install_scientific_intent_planner(&mut agent.tools);
+    wisp_core::install_scientific_intent_planner_in(&mut agent.tools, "workspace", "cli");
+    if let Some(pending) = wisp_core::latest_pending_checkpoint(&root) {
+        agent
+            .ctx
+            .inject_user(wisp_core::checkpoint_resume_injection(&pending));
+    }
 
     let out = CliOutput::new(&root);
     if command == CliCommand::Rpc {

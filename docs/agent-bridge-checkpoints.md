@@ -2,7 +2,8 @@
 
 Nonterminal BridgePlanner decisions persist as `wisp.bridge-checkpoint.v1`.
 Resume uses that durable record: intent id/version, capability id/version,
-normalized arguments, release, and contract digests. A later “continue” does
+normalized arguments, release, and contract digests. Desktop, CLI, eval, and
+the `plan_scientific_intent` tool share this path. A later “continue” does
 not ask the model to recreate the scientific request from conversation text.
 
 The checkpoint stores only stable references and a bounded JSON projection. It

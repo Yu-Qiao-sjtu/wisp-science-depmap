@@ -545,6 +545,12 @@ impl ToolCatalog {
         self.tools.contains_key(name)
     }
 
+    pub fn schema_fingerprint(&self) -> String {
+        let mut names: Vec<_> = self.tools.keys().cloned().collect();
+        names.sort();
+        names.join("\n")
+    }
+
     pub fn from_registry(registry: &Registry) -> Self {
         let mut catalog = Self::default();
         for name in registry.names() {
@@ -587,18 +593,30 @@ pub fn host_scientific_bridge(host: &HostPolicy) -> Result<HostScientificBridge,
     })
 }
 
+pub struct ScientificIntentPlanTool {
+    catalog: IntentCatalog,
+    tools: ToolCatalog,
+    project_id: String,
+    session_id: String,
+}
+
 /// Install the shared planner tool after the host registry (including MCP) is complete.
 pub fn install_scientific_intent_planner(registry: &mut Registry) {
+    install_scientific_intent_planner_in(registry, "workspace", "default");
+}
+
+pub fn install_scientific_intent_planner_in(
+    registry: &mut Registry,
+    project_id: impl Into<String>,
+    session_id: impl Into<String>,
+) {
     let tools = ToolCatalog::from_registry(registry);
     registry.add(Box::new(ScientificIntentPlanTool {
         catalog: IntentCatalog::bundled_depmap(),
         tools,
+        project_id: project_id.into(),
+        session_id: session_id.into(),
     }));
-}
-
-pub struct ScientificIntentPlanTool {
-    catalog: IntentCatalog,
-    tools: ToolCatalog,
 }
 
 #[async_trait]
@@ -626,22 +644,109 @@ impl Tool for ScientificIntentPlanTool {
         "plan scientific intent".into()
     }
 
-    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
-        let proposed = match proposed_intent_from_tool_args(args) {
-            Ok(intent) => intent,
-            Err(reason) => {
+    async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
+        let policy = PlannerHostPolicy::default();
+        let digests = crate::bridge_checkpoint::host_contract_digests(
+            &self.catalog,
+            &self.tools,
+            &policy,
+            &self.project_id,
+        );
+        let (outcome, checkpoint) = if let Some(checkpoint_id) =
+            args.get("checkpoint_id").and_then(Value::as_str)
+        {
+            let checkpoint = match crate::bridge_checkpoint::load_checkpoint_file(
+                env.project_root(),
+                checkpoint_id,
+            ) {
+                Ok(checkpoint) => checkpoint,
+                Err(reason) => {
+                    return ToolResult::fail(reason)
+                        .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                        .stop_batch();
+                }
+            };
+            let action = match crate::bridge_checkpoint::resume_action_from_args(args) {
+                Ok(action) => action,
+                Err(reason) => {
+                    return ToolResult::fail(reason)
+                        .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                        .stop_batch();
+                }
+            };
+            let resume_env = crate::bridge_checkpoint::ResumeEnvironment {
+                project_id: &self.project_id,
+                session_id: &self.session_id,
+                catalog: &self.catalog,
+                tools: &self.tools,
+                policy: &policy,
+                digests: &digests,
+            };
+            match crate::bridge_checkpoint::resume_bridge_checkpoint(checkpoint, action, resume_env)
+            {
+                crate::bridge_checkpoint::ResumeOutcome::Resumed(checkpoint)
+                | crate::bridge_checkpoint::ResumeOutcome::Idempotent { checkpoint } => {
+                    let plan = PlannerOutcome {
+                        schema_version: INTENT_SCHEMA_VERSION,
+                        contract: PLANNER_CONTRACT_ID.into(),
+                        decision: checkpoint.decision.clone(),
+                        canonical_intent: checkpoint.intent.clone(),
+                        matched_capability_ids: checkpoint
+                            .capability_id
+                            .clone()
+                            .into_iter()
+                            .collect(),
+                        rejected_model_claims: Vec::new(),
+                    };
+                    (plan, Some(checkpoint))
+                }
+                crate::bridge_checkpoint::ResumeOutcome::ResumeContractChanged { reason }
+                | crate::bridge_checkpoint::ResumeOutcome::Rejected { reason } => {
+                    return ToolResult::fail(reason)
+                        .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                        .stop_batch();
+                }
+            }
+        } else {
+            let proposed = match proposed_intent_from_tool_args(args) {
+                Ok(intent) => intent,
+                Err(reason) => {
+                    return ToolResult::fail(reason)
+                        .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
+                        .stop_batch();
+                }
+            };
+            let outcome = plan_scientific_intent(proposed, &self.catalog, &self.tools, &policy);
+            let operation_id = args
+                .get("operation_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let checkpoint = crate::bridge_checkpoint::checkpoint_for_outcome(
+                &outcome,
+                &self.catalog,
+                &self.project_id,
+                &self.session_id,
+                &operation_id,
+                &self.catalog.manifest_version,
+                digests,
+            );
+            (outcome, checkpoint)
+        };
+        if let Some(checkpoint) = &checkpoint {
+            if let Err(reason) =
+                crate::bridge_checkpoint::persist_checkpoint_file(env.project_root(), checkpoint)
+            {
                 return ToolResult::fail(reason)
                     .allow_next_tools(vec!["ask_user".into(), "attempt_completion".into()])
                     .stop_batch();
             }
-        };
-        let outcome = plan_scientific_intent(
-            proposed,
-            &self.catalog,
-            &self.tools,
-            &PlannerHostPolicy::default(),
-        );
-        let body = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".into());
+        }
+        let mut body = serde_json::to_value(&outcome).unwrap_or(json!({}));
+        if let Some(checkpoint) = &checkpoint {
+            body["checkpoint"] = serde_json::to_value(checkpoint).unwrap_or(Value::Null);
+        }
+        let body = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into());
         match &outcome.decision {
             PlannerDecision::Execute { tool, .. } => ToolResult::ok(body).allow_next_tools(vec![
                 tool.clone(),
@@ -1058,6 +1163,19 @@ fn map_arguments(spec: &IntentSpec, intent: &ScientificIntent) -> Result<Value, 
         }
     }
     Ok(Value::Object(object))
+}
+
+pub fn arguments_for_capability(
+    catalog: &IntentCatalog,
+    intent: &ScientificIntent,
+    capability_id: &str,
+) -> Value {
+    catalog
+        .capabilities
+        .iter()
+        .find(|spec| spec.id == capability_id)
+        .and_then(|spec| map_arguments(spec, intent).ok())
+        .unwrap_or(Value::Object(Map::new()))
 }
 
 fn lookup_binding(intent: &ScientificIntent, from: &str) -> Option<Value> {

@@ -1559,7 +1559,7 @@ fn build_agent(
         registry = registry.filtered(&case.allowed_tools);
     }
     if case.tags.iter().any(|tag| tag == "depmap") {
-        wisp_core::install_scientific_intent_planner(&mut registry);
+        wisp_core::install_scientific_intent_planner_in(&mut registry, "eval", "eval");
     }
     let mut agent = Agent::with_provider(
         provider.build(),

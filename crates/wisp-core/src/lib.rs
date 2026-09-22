@@ -26,7 +26,8 @@ pub use agent::{
     agent_loop, agent_loop_continue, bound_tool_results_in_history, AgentLoopOutcome, GuidanceQueue,
 };
 pub use bridge_checkpoint::{
-    checkpoint_for_outcome, persist_checkpoint, resume_bridge_checkpoint, BridgeCheckpoint,
+    checkpoint_for_outcome, checkpoint_resume_injection, latest_pending_checkpoint,
+    persist_checkpoint, persist_checkpoint_file, resume_bridge_checkpoint, BridgeCheckpoint,
     CheckpointState, ContractDigests, ResumeAction, ResumeEnvironment, ResumeOutcome,
     BRIDGE_CHECKPOINT_CONTRACT, BRIDGE_CHECKPOINT_SCHEMA_VERSION,
 };
@@ -74,9 +75,10 @@ pub use orchestration::{
 pub use output::{NullOutput, Output, OutputFuture, StreamSinkAdapter, ToolEnvAdapter};
 pub use provenance::ProvenanceRecord;
 pub use scientific_intent::{
-    host_scientific_bridge, install_scientific_intent_planner, plan_scientific_intent,
-    IntentCatalog, PlannerDecision, PlannerOutcome, ScientificIntent, ToolCatalog,
-    INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID, SCIENTIFIC_INTENT_PLAN_TOOL,
+    host_scientific_bridge, install_scientific_intent_planner,
+    install_scientific_intent_planner_in, plan_scientific_intent, IntentCatalog, PlannerDecision,
+    PlannerOutcome, ScientificIntent, ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
+    SCIENTIFIC_INTENT_PLAN_TOOL,
 };
 pub use subagent::ExploreTool;
 pub use system_prompt::SystemPrompt;
