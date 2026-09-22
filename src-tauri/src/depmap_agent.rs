@@ -2213,10 +2213,18 @@ impl DepMapQueryTool {
             Ok(query) => query,
             Err(error) => return ToolResult::fail(blocked("invalid_query", error)),
         };
+        self.run_validated_query(workspace, &query).await
+    }
+
+    async fn run_validated_query(
+        &self,
+        workspace: &KnowledgeWorkspace,
+        query: &Value,
+    ) -> ToolResult {
         match &workspace.provider {
-            KnowledgeProvider::Local { root } => self.run_local(root, workspace, &query).await,
+            KnowledgeProvider::Local { root } => self.run_local(root, workspace, query).await,
             KnowledgeProvider::Remote { endpoint } => {
-                self.run_remote(endpoint, workspace, &query).await
+                self.run_remote(endpoint, workspace, query).await
             }
         }
     }
@@ -3083,14 +3091,18 @@ impl Tool for DepMapQueryTool {
     }
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let query = match validated_query(args) {
+            Ok(query) => query,
+            Err(error) => return ToolResult::fail(blocked("invalid_query", error)),
+        };
         let workspace = match self.workspace().await {
             Ok(workspace) => workspace,
             Err(error) => return ToolResult::fail(configuration_blocked(error)),
         };
-        if args.get("mode").and_then(Value::as_str) == Some("status") {
+        if query.get("mode").and_then(Value::as_str) == Some("status") {
             self.run_status(&workspace).await
         } else {
-            let result = self.run_query(&workspace, args).await;
+            let result = self.run_validated_query(&workspace, &query).await;
             self.persist_scientific_result(TOOL_NAME, args, result)
                 .await
         }
@@ -4679,6 +4691,34 @@ mod tests {
             "mode":"lineage_catalog","lineage":"Colorectal"
         }))
         .is_ok());
+    }
+
+    #[tokio::test]
+    async fn query_tool_rejects_an_invalid_status_call_before_provider_lookup() {
+        let root = std::env::temp_dir().join(format!(
+            "wisp-depmap-invalid-status-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = wisp_store::Store::open(&root.join("store.sqlite"))
+            .await
+            .unwrap();
+        let tool = DepMapQueryTool {
+            project_root: root.clone(),
+            query_script: root.join("query.R"),
+            store: store.clone(),
+            project_id: "p".into(),
+            frame_id: "f".into(),
+        };
+        let result = tool
+            .run(&json!({"mode":"status","unexpected":true}), &RouteTestEnv)
+            .await;
+        assert!(!result.success);
+        assert!(result.content.contains("invalid_query"));
+        assert!(result.content.contains("unexpected"));
+        drop(tool);
+        store.close().await;
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

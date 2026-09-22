@@ -1065,6 +1065,11 @@ impl Tool for FixtureNativeTool {
             if let Err(error) = wisp_core::validate_depmap_query_arguments(args) {
                 return ToolResult::fail(format!("invalid DepMap fixture tool arguments: {error}"));
             }
+            if let Err(error) = wisp_mcp::validate_tool_arguments(&self.fixture.schema, args) {
+                return ToolResult::fail(format!(
+                    "arguments do not match this DepMap scenario: {error}"
+                ));
+            }
         } else {
             let schema = self.schema().function.parameters;
             if let Err(error) = wisp_mcp::validate_tool_arguments(&schema, args) {
@@ -3846,5 +3851,47 @@ mod tests {
         let (failures, checks) = grade_semantic_quality(&expect, &captured, &[]);
         assert!(failures.is_empty());
         assert_eq!(checks, 0);
+    }
+
+    #[tokio::test]
+    async fn depmap_fixture_enforces_the_scenario_contract_after_shared_validation() {
+        let tool = FixtureNativeTool {
+            name: wisp_core::DEPMAP_QUERY_TOOL_NAME.into(),
+            fixture: FixtureTool {
+                description: "lineage CNV fixture".into(),
+                schema: json!({
+                    "type":"object",
+                    "properties": {
+                        "mode":{"type":"string","enum":["lineage_cnv"]},
+                        "lineage":{"type":"string"},
+                        "source":{"type":"string"}
+                    },
+                    "required":["mode","lineage","source"],
+                    "additionalProperties":false
+                }),
+                result: "fixture result".into(),
+                error: false,
+            },
+        };
+        let output = wisp_core::NullOutput;
+        let env = wisp_core::ToolEnvAdapter::new(std::env::temp_dir(), &output);
+        let wrong_case = tool.run(&json!({"mode":"catalog"}), &env).await;
+        assert!(!wrong_case.success);
+        assert!(
+            wrong_case
+                .content
+                .contains("do not match this DepMap scenario"),
+            "{}",
+            wrong_case.content
+        );
+
+        let intended = tool
+            .run(
+                &json!({"mode":"lineage_cnv","lineage":"RareCancer","source":"EGFR"}),
+                &env,
+            )
+            .await;
+        assert!(intended.success);
+        assert_eq!(intended.content, "fixture result");
     }
 }
