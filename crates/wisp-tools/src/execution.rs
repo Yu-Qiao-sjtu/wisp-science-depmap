@@ -6,11 +6,17 @@
 use crate::{
     Approval, ConfirmDecision, Tool, ToolControl, ToolEnv, ToolEvent, ToolResourceLease, ToolResult,
 };
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -580,8 +586,9 @@ impl ToolExecutionCoordinator {
         let Ok(directory) = validated_durable_directory(project_root, false) else {
             return CacheLookup::Miss;
         };
-        let path = directory.join(format!("{}.json", identity.slot));
-        let Ok(bytes) = crate::safety::read_no_follow(&path) else {
+        let file_name = format!("{}.json", identity.slot);
+        let Ok(bytes) = read_durable_entry(&directory, &file_name, contract.max_result_bytes)
+        else {
             return CacheLookup::Miss;
         };
         let Ok(entry) = serde_json::from_slice::<CacheEntry>(&bytes) else {
@@ -615,9 +622,9 @@ impl ToolExecutionCoordinator {
                 validated_durable_directory(project_root, true),
                 serde_json::to_vec(&entry),
             ) {
-                let path = directory.join(format!("{}.json", identity.slot));
-                if crate::safety::write_no_follow(&path, &bytes).is_ok() {
-                    enforce_durable_bounds(project_root, env).await;
+                let file_name = format!("{}.json", identity.slot);
+                if write_durable_entry(&directory, &file_name, &bytes).is_ok() {
+                    enforce_durable_bounds(&directory, env);
                 }
             }
         }
@@ -794,91 +801,110 @@ fn emit(
     });
 }
 
-fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return true;
-        }
-    }
-    false
-}
-
-fn validated_durable_directory(project_root: &Path, create: bool) -> Result<PathBuf, String> {
-    let root = dunce::canonicalize(project_root)
+fn validated_durable_directory(project_root: &Path, create: bool) -> Result<Dir, String> {
+    let mut directory = Dir::open_ambient_dir(project_root, ambient_authority())
         .map_err(|error| format!("project root is not resolvable: {error}"))?;
-    let mut directory = root.clone();
     for segment in [".wisp", "tool-cache", "v1"] {
-        directory.push(segment);
-        match std::fs::symlink_metadata(&directory) {
-            Ok(metadata) => {
-                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
-                    return Err(format!(
-                        "durable cache component '{}' is not a regular directory",
-                        directory.display()
-                    ));
-                }
-            }
+        match directory.open_dir_nofollow(segment) {
+            Ok(next) => directory = next,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
-                std::fs::create_dir(&directory).map_err(|error| {
-                    format!(
-                        "could not create durable cache directory '{}': {error}",
-                        directory.display()
-                    )
-                })?;
-                let metadata = std::fs::symlink_metadata(&directory)
-                    .map_err(|error| format!("could not inspect durable cache: {error}"))?;
-                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
-                    return Err("durable cache directory was replaced during creation".into());
+                match directory.create_dir(segment) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(format!(
+                            "could not create durable cache directory '{segment}': {error}"
+                        ));
+                    }
                 }
+                directory = directory.open_dir_nofollow(segment).map_err(|error| {
+                    format!("durable cache component '{segment}' is unsafe: {error}")
+                })?;
             }
             Err(error) => return Err(format!("durable cache is unavailable: {error}")),
         }
     }
-    let canonical = dunce::canonicalize(&directory)
-        .map_err(|error| format!("durable cache is not resolvable: {error}"))?;
-    if !canonical.starts_with(&root) || canonical != directory {
-        return Err("durable cache directory resolves outside the project".into());
-    }
     Ok(directory)
 }
 
-async fn enforce_durable_bounds(project_root: &Path, env: &dyn ToolEnv) {
-    let Ok(directory) = validated_durable_directory(project_root, false) else {
-        return;
-    };
-    let Ok(mut reader) = tokio::fs::read_dir(directory).await else {
+fn read_durable_entry(
+    directory: &Dir,
+    file_name: &str,
+    max_result_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+    let max_entry_bytes = max_result_bytes
+        .saturating_mul(6)
+        .saturating_add(64 * 1024)
+        .min(DEFAULT_DURABLE_BYTES as usize);
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = directory.open_with(file_name, &options)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > max_entry_bytes as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "durable cache entry exceeds its bounded result envelope",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(max_entry_bytes as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_entry_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "durable cache entry grew beyond its bounded result envelope",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn write_durable_entry(directory: &Dir, file_name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .follow(FollowSymlinks::No);
+    let mut file = directory.open_with(file_name, &options)?;
+    file.write_all(bytes)
+}
+
+fn enforce_durable_bounds(directory: &Dir, env: &dyn ToolEnv) {
+    let Ok(reader) = directory.entries() else {
         return;
     };
     let mut files = Vec::new();
     let mut total_bytes = 0u64;
-    while let Ok(Some(item)) = reader.next_entry().await {
-        let path = item.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+    for item in reader.flatten() {
+        let file_name = item.file_name();
+        if Path::new(&file_name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            != Some("json")
+        {
             continue;
         }
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+        let Ok(file_type) = item.file_type() else {
             continue;
         };
-        if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+        if !file_type.is_file() {
             continue;
         }
+        let Ok(metadata) = item.metadata() else {
+            continue;
+        };
         let bytes = metadata.len();
-        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+        let modified = metadata
+            .modified()
+            .map(cap_std::time::SystemTime::into_std)
+            .unwrap_or(UNIX_EPOCH);
         total_bytes = total_bytes.saturating_add(bytes);
-        files.push((modified, path, bytes));
+        files.push((modified, file_name, bytes));
     }
     files.sort_by_key(|(modified, _, _)| *modified);
     while files.len() > DEFAULT_DURABLE_ENTRIES || total_bytes > DEFAULT_DURABLE_BYTES {
-        let (_, path, bytes) = files.remove(0);
-        let safe = std::fs::symlink_metadata(&path)
-            .is_ok_and(|metadata| !metadata_is_link_or_reparse(&metadata) && metadata.is_file());
-        if safe && tokio::fs::remove_file(path).await.is_ok() {
+        let (_, file_name, bytes) = files.remove(0);
+        if directory.remove_file(file_name).is_ok() {
             total_bytes = total_bytes.saturating_sub(bytes);
             emit(env, ToolExecutionSignal::Evicted, None, None);
         }
@@ -1407,6 +1433,20 @@ mod tests {
             .execute(tool.as_ref(), &args, &env, false)
             .await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn durable_cache_rejects_oversized_serialized_entries_before_reading() {
+        let project = root("durable-oversized");
+        std::fs::create_dir_all(&project).unwrap();
+        let directory = validated_durable_directory(&project, true).unwrap();
+        let oversized = vec![b'x'; 70 * 1024];
+        write_durable_entry(&directory, "oversized.json", &oversized).unwrap();
+
+        let error = read_durable_entry(&directory, "oversized.json", 512).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         let _ = std::fs::remove_dir_all(project);
     }
 

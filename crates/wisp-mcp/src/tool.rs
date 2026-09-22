@@ -79,6 +79,17 @@ fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
     policy
 }
 
+fn execution_policy_for_remote(remote: &RemoteTool) -> ToolExecutionPolicy {
+    let mut policy = execution_policy_from_meta(remote.meta.as_ref());
+    // MCP Apps carry presentation state which every caller must receive from
+    // its own invocation. Disable caching before coordination so they cannot
+    // enter the single-flight path and strand a coalesced caller without UI.
+    if remote.ui_resource_uri().is_some() {
+        policy.cache.mode = ToolCacheMode::Disabled;
+    }
+    policy
+}
+
 fn cache_safe_mcp_result(remote: &RemoteTool, result: &ToolResult) -> bool {
     let safe = remote
         .meta
@@ -654,7 +665,7 @@ impl Tool for McpTool {
         (!self.authorization_revision.is_empty()).then_some(self.authorization_revision.as_str())
     }
     fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
-        execution_policy_from_meta(self.remote.meta.as_ref())
+        execution_policy_for_remote(&self.remote)
     }
     fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
         cache_safe_mcp_result(&self.remote, result)
@@ -757,10 +768,17 @@ mod tests {
         assert!(!cache_safe_mcp_result(&remote, &artifact));
 
         remote.meta = Some(json!({
-            "wisp": {"cache": {"safeStructuredEvidence": true}},
+            "wisp": {"cache": {
+                "enabled": true,
+                "safeStructuredEvidence": true
+            }},
             "ui": {"resourceUri": "ui://example/app"}
         }));
         assert!(!cache_safe_mcp_result(&remote, &ordinary));
+        assert_eq!(
+            execution_policy_for_remote(&remote).cache.mode,
+            ToolCacheMode::Disabled
+        );
     }
 
     struct TestEnv {
