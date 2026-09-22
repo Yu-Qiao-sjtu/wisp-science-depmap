@@ -69,6 +69,12 @@ pub trait Tool: Send + Sync {
     fn cache_authorization_revision(&self) -> Option<&str> {
         None
     }
+    /// Complete, non-secret remote contract snapshot that defines cached
+    /// result semantics. Connector implementations should include output
+    /// schemas and all other server metadata that can change interpretation.
+    fn cache_contract(&self) -> Option<Value> {
+        None
+    }
     /// Optional ingestion budget for this tool's textual result. The global
     /// `WISP_TOOL_RESULT_BUDGET` override still wins. Tools should use this
     /// only for intentionally bounded, self-contained contracts where spilling

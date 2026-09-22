@@ -10,11 +10,15 @@ Caching is fail-closed. A tool must be read-only, must not carry an approval,
 and must explicitly declare a certain, shareable result. Its fingerprint
 includes normalized arguments, Agent identity, authorization and policy scope,
 connector identity, a one-way credential/account revision, the discovered input
-schema, capability/schema versions, and release/index digests. The connector
-revision covers both credentials and non-secret transport configuration such
-as HTTP URL, stdio command/arguments, working directory, and proxy. Changing
-any credential, transport, or contract digest prevents replay. Connector-backed caching is
-disabled when the host cannot supply a non-secret authorization revision.
+schema, the complete remote tool snapshot (including its output schema and
+metadata), capability/schema versions, and release/index digests. The connector
+revision covers both credentials and non-secret HTTP transport configuration,
+including URL and proxy. Changing any credential, transport, or contract
+prevents replay. Connector-backed caching is disabled when the host cannot
+supply both a non-secret authorization revision and complete remote contract.
+Stdio connectors currently bypass caching because their child processes inherit
+ambient environment variables whose credentials cannot be fully represented in
+that revision.
 
 MCP servers opt in through `_meta.wisp.cache`:
 

@@ -109,6 +109,10 @@ fn cache_safe_mcp_result(remote: &RemoteTool, result: &ToolResult) -> bool {
             .any(|line| line.trim_start().starts_with(GENERATED_ARTIFACTS_PREFIX))
 }
 
+fn remote_cache_contract(remote: &RemoteTool) -> Option<Value> {
+    serde_json::to_value(remote).ok()
+}
+
 pub struct McpTool {
     name: String,
     schema: ToolSchema,
@@ -666,6 +670,9 @@ impl Tool for McpTool {
     fn cache_authorization_revision(&self) -> Option<&str> {
         (!self.authorization_revision.is_empty()).then_some(self.authorization_revision.as_str())
     }
+    fn cache_contract(&self) -> Option<Value> {
+        remote_cache_contract(&self.remote)
+    }
     fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
         execution_policy_for_remote(&self.remote)
     }
@@ -750,6 +757,24 @@ mod tests {
             }}
         })));
         assert_eq!(retracted.cache.mode, ToolCacheMode::Disabled);
+    }
+
+    #[test]
+    fn cache_contract_covers_complete_remote_tool_snapshot() {
+        let mut remote = RemoteTool {
+            name: "bounded_read".into(),
+            title: Some("Bounded read".into()),
+            description: "bounded evidence".into(),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(json!({"type": "object", "required": ["evidence"]})),
+            meta: Some(json!({"wisp": {"cache": {"enabled": true}}})),
+            annotations: Some(json!({"readOnlyHint": true})),
+        };
+        let baseline = remote_cache_contract(&remote).unwrap();
+        assert_eq!(baseline.get("outputSchema"), remote.output_schema.as_ref());
+
+        remote.output_schema = Some(json!({"type": "object", "required": ["claims"]}));
+        assert_ne!(remote_cache_contract(&remote).unwrap(), baseline);
     }
 
     #[test]

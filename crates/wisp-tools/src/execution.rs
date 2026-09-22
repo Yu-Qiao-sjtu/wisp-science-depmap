@@ -371,9 +371,10 @@ impl ToolExecutionCoordinator {
             && !scope.authorization_scope.is_empty()
             && !scope.policy_projection.is_empty()
             && (tool.connector_id().is_none()
-                || tool
+                || (tool
                     .cache_authorization_revision()
-                    .is_some_and(|revision| !revision.is_empty()));
+                    .is_some_and(|revision| !revision.is_empty())
+                    && tool.cache_contract().is_some()));
 
         if !cache_eligible {
             emit(env, ToolExecutionSignal::Bypass, None, None);
@@ -708,6 +709,7 @@ fn cache_identity(
         "capability_version": contract.capability_version,
         "schema_version": contract.schema_version,
         "schema": schema.function.parameters,
+        "remote_contract": tool.cache_contract(),
         "release_digest": contract.release_digest,
         "index_digest": contract.index_digest,
     });
@@ -982,6 +984,7 @@ mod tests {
         name: &'static str,
         connector: &'static str,
         authorization_revision: &'static str,
+        remote_contract_revision: &'static str,
         cache_contract_valid: Arc<AtomicBool>,
         calls: Arc<AtomicUsize>,
         policy: ToolExecutionPolicy,
@@ -1018,6 +1021,11 @@ mod tests {
 
         fn cache_authorization_revision(&self) -> Option<&str> {
             Some(self.authorization_revision)
+        }
+
+        fn cache_contract(&self) -> Option<Value> {
+            (!self.remote_contract_revision.is_empty())
+                .then(|| json!({"revision": self.remote_contract_revision}))
         }
 
         fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
@@ -1089,6 +1097,10 @@ mod tests {
 
         fn cache_authorization_revision(&self) -> Option<&str> {
             Some("credential-v1")
+        }
+
+        fn cache_contract(&self) -> Option<Value> {
+            Some(json!({"revision": "remote-contract-v1"}))
         }
 
         fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
@@ -1225,6 +1237,7 @@ mod tests {
             name,
             connector,
             authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls,
             policy,
@@ -1304,6 +1317,7 @@ mod tests {
             name: "isolated_read",
             connector: "provider-a",
             authorization_revision: "credential-v2",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
@@ -1369,7 +1383,24 @@ mod tests {
             .execute(capability_v2.as_ref(), &args, &env_a, false)
             .await;
 
-        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        let remote_contract_v2 = Arc::new(FakeTool {
+            name: "isolated_read",
+            connector: "provider-a",
+            authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v2",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
+            calls: calls.clone(),
+            policy: cache_policy("release-v1", ToolCacheMode::Memory),
+            read_only: true,
+            project_result: true,
+            delay_ms: 60,
+            cancel_aware: false,
+        });
+        coordinator
+            .execute(remote_contract_v2.as_ref(), &args, &env_a, false)
+            .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 10);
         assert!(lock(&env_a.diagnostics)
             .iter()
             .any(|event| event.signal == ToolExecutionSignal::Stale));
@@ -1384,6 +1415,7 @@ mod tests {
             name: "revalidated_read",
             connector: "provider",
             authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: valid.clone(),
             calls: calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
@@ -1466,6 +1498,7 @@ mod tests {
             name: "mutating",
             connector: "provider",
             authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: mutating_calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
@@ -1513,6 +1546,28 @@ mod tests {
             .execute(approval_bearing.as_ref(), &args, &env, true)
             .await;
         assert_eq!(approval_calls.load(Ordering::SeqCst), 2);
+
+        let missing_contract_calls = Arc::new(AtomicUsize::new(0));
+        let missing_contract = Arc::new(FakeTool {
+            name: "missing_remote_contract",
+            connector: "provider",
+            authorization_revision: "credential-v1",
+            remote_contract_revision: "",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
+            calls: missing_contract_calls.clone(),
+            policy: cache_policy("release-v1", ToolCacheMode::Memory),
+            read_only: true,
+            project_result: true,
+            delay_ms: 0,
+            cancel_aware: false,
+        });
+        coordinator
+            .execute(missing_contract.as_ref(), &args, &env, false)
+            .await;
+        coordinator
+            .execute(missing_contract.as_ref(), &args, &env, false)
+            .await;
+        assert_eq!(missing_contract_calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -1639,6 +1694,7 @@ mod tests {
             name: "cancel_leader",
             connector: "provider",
             authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
@@ -1693,6 +1749,7 @@ mod tests {
             name: "bounded_queue",
             connector: "provider",
             authorization_revision: "credential-v1",
+            remote_contract_revision: "remote-contract-v1",
             cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: calls.clone(),
             policy: ToolExecutionPolicy {

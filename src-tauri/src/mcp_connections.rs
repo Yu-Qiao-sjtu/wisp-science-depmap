@@ -35,15 +35,24 @@ impl Spec {
     }
     pub(crate) fn authorization_revision(&self) -> String {
         use sha2::{Digest, Sha256};
-        let credential_revision = match self {
-            Self::Custom(connection) => match &connection.transport {
-                McpTransport::Http {
-                    auth: McpHttpAuth::OAuth,
-                    ..
-                } => crate::mcp_oauth::credential_revision(&connection.id).unwrap_or_default(),
-                _ => crate::mcp_secrets::hydrated_secret_digest(connection),
-            },
-            Self::Plugin(_) | Self::Development(_) => String::new(),
+        let Self::Custom(connection) = self else {
+            // Plugin and development MCPs are stdio children. They inherit the
+            // host environment, whose ambient credentials cannot be scoped
+            // into a durable cache identity.
+            return String::new();
+        };
+        let credential_revision = match &connection.transport {
+            McpTransport::Http {
+                auth: McpHttpAuth::OAuth,
+                ..
+            } => crate::mcp_oauth::credential_revision(&connection.id).unwrap_or_default(),
+            McpTransport::Http { .. } => crate::mcp_secrets::hydrated_secret_digest(connection),
+            McpTransport::Stdio { .. } => {
+                // `McpClient::launch_with_command` inherits ambient variables
+                // in addition to configured env slots. Fail closed until the
+                // child environment is explicitly allowlisted and versioned.
+                return String::new();
+            }
         };
         let mut hasher = Sha256::new();
         hasher.update(b"wisp-mcp-authorization-revision-v2");
@@ -617,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn authorization_revision_covers_non_secret_transport_configuration() {
+    fn http_revision_covers_transport_while_inherited_stdio_bypasses_cache() {
         let http = |url: &str| {
             Spec::Custom(McpConnection {
                 id: "same-connector".into(),
@@ -648,10 +657,11 @@ mod tests {
                 },
             })
         };
-        assert_ne!(
-            stdio("--first").authorization_revision(),
-            stdio("--second").authorization_revision()
-        );
+        assert!(stdio("--first").authorization_revision().is_empty());
+        assert!(stdio("--second").authorization_revision().is_empty());
+        assert!(Spec::Development(vec!["server".into()])
+            .authorization_revision()
+            .is_empty());
     }
 
     async fn lifecycle_fixture() -> (
