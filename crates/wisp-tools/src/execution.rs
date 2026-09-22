@@ -413,7 +413,7 @@ impl ToolExecutionCoordinator {
             .lookup_cache(env.project_root(), &identity, &policy.cache)
             .await
         {
-            CacheLookup::Hit(result) => {
+            CacheLookup::Hit(entry) => {
                 let validation_permit = match self
                     .acquire_permit(tool.name(), provider, &policy, env)
                     .await
@@ -445,13 +445,25 @@ impl ToolExecutionCoordinator {
                     ))
                     .stop_batch();
                 }
+                if matches!(
+                    classify_entry(entry.clone(), &identity, &policy.cache),
+                    CacheLookup::Hit(_)
+                ) {
+                    emit(
+                        env,
+                        ToolExecutionSignal::Hit,
+                        Some(&identity.fingerprint),
+                        None,
+                    );
+                    return ToolResult::ok(entry.result.content);
+                }
+                self.remove_memory(&identity.slot);
                 emit(
                     env,
-                    ToolExecutionSignal::Hit,
+                    ToolExecutionSignal::Stale,
                     Some(&identity.fingerprint),
                     None,
                 );
-                return ToolResult::ok(result.content);
             }
             CacheLookup::Stale => emit(
                 env,
@@ -763,7 +775,7 @@ impl ToolExecutionCoordinator {
 }
 
 enum CacheLookup {
-    Hit(CacheableToolResult),
+    Hit(CacheEntry),
     Stale,
     Miss,
 }
@@ -823,7 +835,7 @@ fn classify_entry(
     {
         CacheLookup::Stale
     } else {
-        CacheLookup::Hit(entry.result)
+        CacheLookup::Hit(entry)
     }
 }
 
@@ -1678,6 +1690,33 @@ mod tests {
         assert!(first_hit.await.unwrap().success);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(validations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_expiring_during_validation_is_not_replayed() {
+        let coordinator = ToolExecutionCoordinator::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let validations = Arc::new(AtomicUsize::new(0));
+        let mut policy = cache_policy("release-v1", ToolCacheMode::Memory);
+        policy.cache.ttl = Duration::from_millis(20);
+        let tool = GatedValidationTool {
+            calls: calls.clone(),
+            validations: validations.clone(),
+            validation_delay_ms: 60,
+            policy,
+        };
+        let env = TestEnv::new(root("expired-during-validation"), "scope-a");
+        let args = json!({"gene": "KRAS"});
+        assert!(coordinator.execute(&tool, &args, &env, false).await.success);
+
+        let refreshed = coordinator.execute(&tool, &args, &env, false).await;
+
+        assert!(refreshed.success);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(validations.load(Ordering::SeqCst), 1);
+        assert!(lock(&env.diagnostics)
+            .iter()
+            .any(|event| event.signal == ToolExecutionSignal::Stale));
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@
 use crate::client::{McpCallResult, McpClient, RemoteTool};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,6 +15,28 @@ use wisp_tools::{
 
 const MAX_PRESENTATION_HTML_BYTES: usize = 32 * 1024 * 1024;
 const GENERATED_ARTIFACTS_PREFIX: &str = "Generated artifacts:";
+
+async fn caller_cancelled(env: &dyn ToolEnv) {
+    loop {
+        if env.caller_cancelled() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn render_with_cancellation<F>(rendering: F, env: &dyn ToolEnv) -> ToolResult
+where
+    F: Future<Output = ToolResult>,
+{
+    tokio::pin!(rendering);
+    tokio::select! {
+        result = &mut rendering => result,
+        _ = caller_cancelled(env) => ToolResult::fail(
+            "MCP result rendering cancelled by user; pending resource reads were stopped."
+        ),
+    }
+}
 
 fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
     let mut policy = ToolExecutionPolicy::default();
@@ -241,20 +264,16 @@ impl McpTool {
         tokio::select! {
             joined = &mut request => {
                 let result = match joined {
-                    Ok(Ok(result)) => self.render_call_result(args, result, env).await,
+                    Ok(Ok(result)) => render_with_cancellation(
+                        self.render_call_result(args, result, env),
+                        env,
+                    ).await,
                     Ok(Err(error)) => ToolResult::fail(format!("mcp {} error: {error}", self.name)),
                     Err(error) => ToolResult::fail(format!("mcp {} request task failed: {error}", self.name)),
                 };
                 ToolRunOutcome::complete(result)
             }
-            _ = async {
-                loop {
-                    if env.caller_cancelled() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            } => ToolRunOutcome::detached(
+            _ = caller_cancelled(env) => ToolRunOutcome::detached(
                 ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
                 Box::pin(async move {
                     match request.await {
@@ -736,7 +755,10 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
 
     #[test]
     fn cache_metadata_is_explicit_versioned_and_bounded() {
@@ -875,6 +897,7 @@ mod tests {
     struct TestEnv {
         root: PathBuf,
         changed: Mutex<Vec<String>>,
+        cancelled: AtomicBool,
     }
 
     #[async_trait]
@@ -892,6 +915,10 @@ mod tests {
                 self.changed.lock().unwrap().push(path);
             }
         }
+
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
     }
 
     #[tokio::test]
@@ -906,6 +933,7 @@ mod tests {
         let env = TestEnv {
             root: root.clone(),
             changed: Mutex::new(Vec::new()),
+            cancelled: AtomicBool::new(false),
         };
         let result = McpCallResult {
             content: vec![json!({
@@ -930,6 +958,32 @@ mod tests {
             &[paths[0].to_string_lossy().to_string()]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn result_rendering_stops_when_the_caller_cancels() {
+        let env = TestEnv {
+            root: std::env::temp_dir(),
+            changed: Mutex::new(Vec::new()),
+            cancelled: AtomicBool::new(false),
+        };
+        let rendering = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            ToolResult::ok("rendered")
+        };
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            env.cancelled.store(true, Ordering::SeqCst);
+        };
+
+        let (result, ()) = tokio::time::timeout(Duration::from_millis(200), async {
+            tokio::join!(render_with_cancellation(rendering, &env), cancel)
+        })
+        .await
+        .expect("render cancellation should release the caller promptly");
+
+        assert!(!result.success);
+        assert!(result.content.contains("rendering cancelled"));
     }
 
     #[tokio::test]
