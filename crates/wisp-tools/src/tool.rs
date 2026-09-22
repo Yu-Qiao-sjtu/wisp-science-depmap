@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::{future::Future, pin::Pin};
 use wisp_llm::ToolSchema;
 
-pub type ToolCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+pub type ToolCompletion = Pin<Box<dyn Future<Output = ToolResult> + Send + 'static>>;
 
 /// Result of a coordinated tool call. A detached completion keeps execution
 /// capacity occupied after a caller stops waiting for remote work that cannot

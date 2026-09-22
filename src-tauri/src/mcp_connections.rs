@@ -45,7 +45,13 @@ impl Spec {
             McpTransport::Http {
                 auth: McpHttpAuth::OAuth,
                 ..
-            } => crate::mcp_oauth::credential_revision(&connection.id).unwrap_or_default(),
+            } => {
+                // OAuth may refresh while the lazy connection is established.
+                // A revision captured before that rotation is not a safe cache
+                // scope, so OAuth remains uncached until revisions are queried
+                // dynamically at lookup time.
+                return String::new();
+            }
             McpTransport::Http { .. } => crate::mcp_secrets::hydrated_secret_digest(connection),
             McpTransport::Stdio { .. } => {
                 // `McpClient::launch_with_command` inherits ambient variables
@@ -643,6 +649,17 @@ mod tests {
             http("https://first.example/mcp").authorization_revision(),
             http("https://second.example/mcp").authorization_revision()
         );
+        let oauth = Spec::Custom(McpConnection {
+            id: "oauth-connector".into(),
+            name: "oauth".into(),
+            enabled: true,
+            transport: McpTransport::Http {
+                url: "https://oauth.example/mcp".into(),
+                headers: vec![],
+                auth: McpHttpAuth::OAuth,
+            },
+        });
+        assert!(oauth.authorization_revision().is_empty());
 
         let stdio = |argument: &str| {
             Spec::Custom(McpConnection {

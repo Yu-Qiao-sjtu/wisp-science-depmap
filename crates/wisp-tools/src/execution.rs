@@ -19,7 +19,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -187,18 +187,6 @@ impl Flight {
 struct SharedFlightEnv<'a> {
     inner: &'a dyn ToolEnv,
     flight: &'a Flight,
-    leader_interested: AtomicBool,
-}
-
-impl SharedFlightEnv<'_> {
-    fn observe_leader_cancel(&self) -> bool {
-        if self.inner.is_cancelled() && self.leader_interested.swap(false, Ordering::SeqCst) {
-            self.flight
-                .interested_callers
-                .fetch_sub(1, Ordering::SeqCst);
-        }
-        self.flight.interested_callers.load(Ordering::SeqCst) == 0
-    }
 }
 
 #[async_trait::async_trait]
@@ -250,7 +238,10 @@ impl ToolEnv for SharedFlightEnv<'_> {
         self.inner.emit(event).await;
     }
     fn is_cancelled(&self) -> bool {
-        self.observe_leader_cancel()
+        self.inner.is_cancelled() && self.flight.interested_callers.load(Ordering::SeqCst) <= 1
+    }
+    fn caller_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
     }
     fn guidance_pending(&self) -> bool {
         self.inner.guidance_pending()
@@ -322,7 +313,7 @@ impl Drop for GatePermit {
 
 pub struct ToolExecutionCoordinator {
     memory: Mutex<MemoryCache>,
-    flights: Mutex<HashMap<String, Arc<Flight>>>,
+    flights: Arc<Mutex<HashMap<String, Arc<Flight>>>>,
     gates: Mutex<HashMap<String, Arc<Gate>>>,
     max_memory_entries: usize,
     max_memory_bytes: usize,
@@ -332,7 +323,7 @@ impl Default for ToolExecutionCoordinator {
     fn default() -> Self {
         Self {
             memory: Mutex::new(MemoryCache::default()),
-            flights: Mutex::new(HashMap::new()),
+            flights: Arc::new(Mutex::new(HashMap::new())),
             gates: Mutex::new(HashMap::new()),
             max_memory_entries: DEFAULT_MEMORY_ENTRIES,
             max_memory_bytes: DEFAULT_MEMORY_BYTES,
@@ -378,9 +369,15 @@ impl ToolExecutionCoordinator {
 
         if !cache_eligible {
             emit(env, ToolExecutionSignal::Bypass, None, None);
-            return self
+            let outcome = self
                 .execute_limited(tool, args, env, provider, &policy)
                 .await;
+            if let Some(completion) = outcome.detached_completion {
+                tokio::spawn(async move {
+                    let _ = completion.await;
+                });
+            }
+            return outcome.result;
         }
 
         let identity = cache_identity(tool, args, provider, &policy.cache, &scope);
@@ -458,11 +455,23 @@ impl ToolExecutionCoordinator {
         let shared_env = SharedFlightEnv {
             inner: env,
             flight: flight.as_ref(),
-            leader_interested: AtomicBool::new(true),
         };
-        let result = self
+        let outcome = self
             .execute_limited(tool, args, &shared_env, provider, &policy)
             .await;
+        if let Some(completion) = outcome.detached_completion {
+            let flights = Arc::clone(&self.flights);
+            let fingerprint = identity.fingerprint.clone();
+            let completed_flight = Arc::clone(&flight);
+            tokio::spawn(async move {
+                let result = completion.await;
+                *lock(&completed_flight.result) = Some(result);
+                lock(&flights).remove(&fingerprint);
+                completed_flight.notify.notify_waiters();
+            });
+            return wait_for_flight(tool.name(), provider, env, flight).await;
+        }
+        let result = outcome.result;
         let leader_cancelled = env.is_cancelled();
         if let Some(record) = valid_cache_projection(tool, &result, &policy.cache) {
             self.store_cache(env.project_root(), &identity, record, &policy.cache, env)
@@ -494,28 +503,36 @@ impl ToolExecutionCoordinator {
         env: &dyn ToolEnv,
         provider: &str,
         policy: &ToolExecutionPolicy,
-    ) -> ToolResult {
+    ) -> crate::ToolRunOutcome {
         let permit = match self
             .acquire_permit(tool.name(), provider, policy, env)
             .await
         {
             Ok(permit) => permit,
-            Err(result) => return result,
+            Err(result) => return crate::ToolRunOutcome::complete(result),
         };
         let resource_lease = match env.acquire_tool_resources(tool.name(), args).await {
             Ok(lease) => lease,
-            Err(error) => return ToolResult::fail(error).stop_batch(),
+            Err(error) => {
+                return crate::ToolRunOutcome::complete(ToolResult::fail(error).stop_batch())
+            }
         };
         tool.before(args, env).await;
         let outcome = tool.run_coordinated(args, env).await;
         if let Some(completion) = outcome.detached_completion {
-            tokio::spawn(async move {
-                completion.await;
-                drop(resource_lease);
-                drop(permit);
-            });
+            return crate::ToolRunOutcome::detached(
+                outcome.result,
+                Box::pin(async move {
+                    let result = completion.await;
+                    drop(resource_lease);
+                    drop(permit);
+                    result
+                }),
+            );
         }
-        outcome.result
+        drop(resource_lease);
+        drop(permit);
+        crate::ToolRunOutcome::complete(outcome.result)
     }
 
     async fn acquire_permit(
@@ -1044,6 +1061,32 @@ mod tests {
                 .ok_or_else(|| "remote catalog changed".into())
         }
 
+        async fn run_coordinated(&self, _args: &Value, env: &dyn ToolEnv) -> crate::ToolRunOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let delay = self.delay_ms;
+            let mut work = Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                ToolResult::ok(r#"{"evidence":[{"id":"bounded-ref"}]}"#)
+            });
+            if !self.cancel_aware {
+                return crate::ToolRunOutcome::complete(work.await);
+            }
+            tokio::select! {
+                result = &mut work => crate::ToolRunOutcome::complete(result),
+                _ = async {
+                    loop {
+                        if env.caller_cancelled() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                } => crate::ToolRunOutcome::detached(
+                    ToolResult::fail("caller stopped waiting"),
+                    Box::pin(async move { work.await }),
+                ),
+            }
+        }
+
         async fn run(&self, _args: &Value, env: &dyn ToolEnv) -> ToolResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let mut elapsed = 0;
@@ -1152,6 +1195,7 @@ mod tests {
                 ToolResult::fail("caller stopped waiting"),
                 Box::pin(async move {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
+                    ToolResult::fail("detached completion finished")
                 }),
             )
         }
@@ -1700,7 +1744,7 @@ mod tests {
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
             read_only: true,
             project_result: true,
-            delay_ms: 100,
+            delay_ms: 300,
             cancel_aware: true,
         });
         let project = root("cancel-leader");
@@ -1733,7 +1777,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         leader_env.cancelled.store(true, Ordering::SeqCst);
 
-        let leader_result = leader.await.unwrap();
+        let leader_result = tokio::time::timeout(Duration::from_millis(100), leader)
+            .await
+            .expect("cancelled single-flight leader must release its turn promptly")
+            .unwrap();
         let waiter_result = waiter.await.unwrap();
         assert!(!leader_result.success);
         assert!(leader_result.content.contains("tool_wait_cancelled"));

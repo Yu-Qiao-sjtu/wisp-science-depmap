@@ -18,7 +18,9 @@ prevents replay. Connector-backed caching is disabled when the host cannot
 supply both a non-secret authorization revision and complete remote contract.
 Stdio connectors currently bypass caching because their child processes inherit
 ambient environment variables whose credentials cannot be fully represented in
-that revision.
+that revision. OAuth connectors also bypass caching while token refresh can
+rotate credentials after tool registration; static-header HTTP connectors
+remain eligible.
 
 MCP servers opt in through `_meta.wisp.cache`:
 
@@ -65,6 +67,8 @@ persisted. Every cache directory component is opened through a retained
 capability directory handle, and file I/O uses relative no-follow opens; unsafe durable paths fall
 back to memory-only caching and are never pruned. When a cancelled MCP wait
 leaves provider work running, its connector/tool concurrency lease remains held
-until that request actually completes. Operational spans record `hit`, `miss`, `stale`, `bypass`,
+until that request actually completes. A cancelled single-flight leader releases
+its conversation immediately while the independently owned provider request
+continues for still-interested waiters. Operational spans record `hit`, `miss`, `stale`, `bypass`,
 `coalesced`, and `evicted`, plus queue state; raw arguments and evidence are not
 added to telemetry.

@@ -249,7 +249,7 @@ impl McpTool {
             }
             _ = async {
                 loop {
-                    if env.is_cancelled() {
+                    if env.caller_cancelled() {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -257,7 +257,11 @@ impl McpTool {
             } => ToolRunOutcome::detached(
                 ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
                 Box::pin(async move {
-                    let _ = request.await;
+                    match request.await {
+                        Ok(Ok(result)) => crate::result::model_result(&result),
+                        Ok(Err(error)) => ToolResult::fail(format!("MCP request failed after caller cancellation: {error}")),
+                        Err(error) => ToolResult::fail(format!("MCP request task failed after caller cancellation: {error}")),
+                    }
                 }),
             ),
         }
