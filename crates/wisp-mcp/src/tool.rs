@@ -5,11 +5,78 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wisp_llm::ToolSchema;
-use wisp_tools::{Approval, McpAppServer, Tool, ToolEnv, ToolEvent, ToolResult};
+use wisp_tools::{
+    Approval, CacheableToolResult, McpAppServer, Tool, ToolCacheContract, ToolCacheMode, ToolEnv,
+    ToolEvent, ToolExecutionPolicy, ToolResult,
+};
 
 const MAX_PRESENTATION_HTML_BYTES: usize = 32 * 1024 * 1024;
+
+fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
+    let mut policy = ToolExecutionPolicy::default();
+    let Some(cache) = meta.and_then(|meta| meta.pointer("/wisp/cache")) else {
+        return policy;
+    };
+    policy.max_concurrency = cache
+        .get("maxConcurrency")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 256) as usize)
+        .unwrap_or(policy.max_concurrency);
+    policy.max_queue = cache
+        .get("maxQueue")
+        .and_then(Value::as_u64)
+        .map(|value| value.min(10_000) as usize)
+        .unwrap_or(policy.max_queue);
+    let durable = cache.get("durable").and_then(Value::as_bool) == Some(true);
+    let enabled = cache.get("enabled").and_then(Value::as_bool) == Some(true);
+    policy.cache = ToolCacheContract {
+        mode: if !enabled {
+            ToolCacheMode::Disabled
+        } else if durable {
+            ToolCacheMode::MemoryAndProject
+        } else {
+            ToolCacheMode::Memory
+        },
+        capability_version: cache
+            .get("capabilityVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        schema_version: cache
+            .get("schemaVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        release_digest: cache
+            .get("releaseDigest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        index_digest: cache
+            .get("indexDigest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        ttl: Duration::from_secs(
+            cache
+                .get("ttlSeconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(86_400),
+        ),
+        max_result_bytes: cache
+            .get("maxResultBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(8 * 1024 * 1024) as usize,
+        shared_authorization: cache.get("sharedAuthorization").and_then(Value::as_bool)
+            == Some(true),
+        certain_outcome: cache.get("certainOutcome").and_then(Value::as_bool) == Some(true),
+    };
+    policy
+}
 
 pub struct McpTool {
     name: String,
@@ -471,6 +538,20 @@ impl Tool for McpTool {
     fn connector_id(&self) -> Option<&str> {
         (!self.connector_id.is_empty()).then_some(self.connector_id.as_str())
     }
+    fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+        execution_policy_from_meta(self.remote.meta.as_ref())
+    }
+    fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
+        let safe = self
+            .remote
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.pointer("/wisp/cache/safeStructuredEvidence"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        (safe && self.remote.ui_resource_uri().is_none())
+            .then(|| CacheableToolResult::structured(result.content.clone()))
+    }
     fn preview(&self, args: &Value) -> String {
         let s = args.to_string();
         s.chars().take(120).collect()
@@ -524,6 +605,45 @@ impl Tool for McpTool {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn cache_metadata_is_explicit_versioned_and_bounded() {
+        let meta = json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "durable": true,
+                "capabilityVersion": "cap-v2",
+                "schemaVersion": "schema-v3",
+                "releaseDigest": "release-sha",
+                "indexDigest": "index-sha",
+                "ttlSeconds": 999_999,
+                "maxResultBytes": 99_999_999,
+                "sharedAuthorization": true,
+                "certainOutcome": true,
+                "safeStructuredEvidence": true,
+                "maxConcurrency": 999,
+                "maxQueue": 99_999
+            }}
+        });
+        let policy = execution_policy_from_meta(Some(&meta));
+        assert_eq!(policy.cache.mode, ToolCacheMode::MemoryAndProject);
+        assert_eq!(policy.cache.capability_version, "cap-v2");
+        assert_eq!(policy.cache.release_digest, "release-sha");
+        assert_eq!(policy.cache.ttl, Duration::from_secs(86_400));
+        assert_eq!(policy.cache.max_result_bytes, 8 * 1024 * 1024);
+        assert_eq!(policy.max_concurrency, 256);
+        assert_eq!(policy.max_queue, 10_000);
+        assert!(policy.cache.shared_authorization);
+        assert!(policy.cache.certain_outcome);
+    }
+
+    #[test]
+    fn absent_cache_metadata_stays_fail_closed() {
+        let policy = execution_policy_from_meta(None);
+        assert_eq!(policy.cache.mode, ToolCacheMode::Disabled);
+        assert!(!policy.cache.shared_authorization);
+        assert!(!policy.cache.certain_outcome);
+    }
 
     struct TestEnv {
         root: PathBuf,

@@ -351,6 +351,66 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
     fn frame_id(&self) -> Option<&str> {
         self.out.frame_id()
     }
+    fn tool_execution_scope(&self) -> wisp_tools::ToolExecutionScope {
+        wisp_tools::ToolExecutionScope {
+            agent_identity: "wisp-agent:v1".to_string(),
+            authorization_scope: self.out.project_id().unwrap_or_default().to_string(),
+            policy_projection: format!(
+                "plan={};write_locked={};approval_bypass={};force_ask_mutations={}",
+                self.out.plan_mode(),
+                self.out.project_write_locked(),
+                self.out.approval_bypass(),
+                self.out.force_ask_mutations()
+            ),
+        }
+    }
+    fn note_tool_execution(&self, event: &wisp_tools::ToolExecutionDiagnostic) {
+        use crate::observability::CacheOutcome;
+        let current = self
+            .current_span
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(span) = current.as_ref() else {
+            return;
+        };
+        match event.signal {
+            wisp_tools::ToolExecutionSignal::Hit => {
+                span.set_cache_outcome(CacheOutcome::Hit);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Miss => {
+                span.set_cache_outcome(CacheOutcome::Miss);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Stale => {
+                span.set_cache_outcome(CacheOutcome::Stale);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Bypass => {
+                span.set_cache_outcome(CacheOutcome::Bypass);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Coalesced => {
+                span.set_cache_outcome(CacheOutcome::Coalesced);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Evicted => {
+                span.set_cache_outcome(CacheOutcome::Evicted);
+                span.set_str("cache_event", event.signal.as_str());
+            }
+            wisp_tools::ToolExecutionSignal::Queued
+            | wisp_tools::ToolExecutionSignal::Backpressure
+            | wisp_tools::ToolExecutionSignal::Cancelled => {
+                span.set_str("queue_event", event.signal.as_str());
+                if let Some(depth) = event.queue_depth {
+                    span.set_str("queue_depth", &depth.to_string());
+                }
+            }
+        }
+        if let Some(fingerprint) = event.fingerprint.as_deref() {
+            span.set_str("contract_fingerprint", fingerprint);
+        }
+    }
     async fn emit(&self, event: wisp_tools::ToolEvent) {
         match event {
             wisp_tools::ToolEvent::Call { name, preview } => self.out.tool_call(&name, &preview),

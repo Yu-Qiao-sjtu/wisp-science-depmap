@@ -336,6 +336,14 @@ pub trait ToolEnv: Send + Sync {
     fn project_id(&self) -> Option<&str> {
         None
     }
+    /// Non-secret identities used to isolate cache and single-flight work.
+    /// Empty fields disable caching but never disable backpressure.
+    fn tool_execution_scope(&self) -> crate::execution::ToolExecutionScope {
+        crate::execution::ToolExecutionScope::default()
+    }
+    /// Best-effort operational diagnostics. Implementations must not attach
+    /// arguments or cached evidence to telemetry.
+    fn note_tool_execution(&self, _event: &crate::execution::ToolExecutionDiagnostic) {}
 }
 
 #[derive(Debug, Clone)]

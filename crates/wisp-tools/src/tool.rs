@@ -1,6 +1,9 @@
 //! The `Tool` trait every built-in or MCP-backed tool implements.
 
-use crate::env::{Approval, ToolEnv, ToolResult};
+use crate::{
+    env::{Approval, ToolEnv, ToolResult},
+    execution::{CacheableToolResult, ToolExecutionPolicy},
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use wisp_llm::ToolSchema;
@@ -39,6 +42,17 @@ pub trait Tool: Send + Sync {
     /// only for intentionally bounded, self-contained contracts where spilling
     /// the result would cause a more expensive or less safe read-back loop.
     fn context_result_budget(&self) -> Option<usize> {
+        None
+    }
+    /// Execution controls are fail-closed: tools must explicitly opt a
+    /// read-only, certain result into caching. Concurrency limits still apply
+    /// to uncached calls.
+    fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::default()
+    }
+    /// Return the bounded structured projection that may be persisted. The
+    /// default deliberately refuses to infer safety from an arbitrary result.
+    fn cacheable_result(&self, _result: &ToolResult) -> Option<CacheableToolResult> {
         None
     }
     /// One-line preview shown in the tool-call card (e.g. the file path).

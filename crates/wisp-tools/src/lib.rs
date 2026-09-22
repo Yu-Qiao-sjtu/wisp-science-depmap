@@ -9,6 +9,7 @@ pub mod ask_user;
 pub mod attempt_completion;
 pub mod edit;
 pub mod env;
+pub mod execution;
 pub mod grep;
 pub mod image;
 pub mod network;
@@ -25,6 +26,10 @@ pub mod write;
 pub use env::{
     Approval, ConfirmDecision, ImageData, McpAppServer, ToolControl, ToolEnv, ToolEvent,
     ToolResourceLease, ToolResult,
+};
+pub use execution::{
+    CacheableToolResult, ToolCacheContract, ToolCacheMode, ToolExecutionDiagnostic,
+    ToolExecutionPolicy, ToolExecutionScope, ToolExecutionSignal,
 };
 pub use tool::Tool;
 
@@ -428,6 +433,9 @@ async fn run_registered_tool(tool: &dyn Tool, args: &Value, env: &dyn ToolEnv) -
     // `Ask` shows the card then routes through `confirm`; `Allow` runs as before.
     let host_approval = env.approval_mode(name).await;
     let mutating = plan_mode_blocks(name) && !tool.read_only();
+    let approval_bearing = host_approval == env::Approval::Ask
+        || tool.minimum_approval() == env::Approval::Ask
+        || (env.force_ask_mutations() && mutating);
     let approval = if host_approval == env::Approval::Deny {
         // An explicit block remains a hard policy even in Full Permission.
         env::Approval::Deny
@@ -463,15 +471,9 @@ async fn run_registered_tool(tool: &dyn Tool, args: &Value, env: &dyn ToolEnv) -
         env.emit(ToolEvent::Result { ok: false }).await;
         return ToolResult::fail(format!("tool '{name}' was denied by the user")).stop_batch();
     }
-    let _resource_lease = match env.acquire_tool_resources(name, args).await {
-        Ok(lease) => lease,
-        Err(error) => {
-            env.emit(ToolEvent::Result { ok: false }).await;
-            return ToolResult::fail(error).stop_batch();
-        }
-    };
-    tool.before(args, env).await;
-    let result = tool.run(args, env).await;
+    let result = execution::coordinator()
+        .execute(tool, args, env, approval_bearing)
+        .await;
     env.emit(ToolEvent::Result { ok: result.success }).await;
     result
 }
