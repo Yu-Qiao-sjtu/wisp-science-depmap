@@ -27,8 +27,11 @@ Each DepMap scenario persists that complete surface as `agent_assembly`.
 `expect.assembly_*` can pin its contract, Specialist, eager/deferred schemas,
 Skills, approval tool set, and context policy; the checked-in status fixture
 asserts all of those production-parity dimensions. Schema expectations use a
-canonical SHA-256 digest, so required fields, enums, and additional-properties
-policy cannot drift behind an unchanged tool name. DepMap evals load the
+canonical SHA-256 digest of the complete provider tool schema, including its
+tool-selection description, so required fields, enums, descriptions, and
+additional-properties policy cannot drift behind an unchanged tool name. The
+native DepMap query fixture imports that schema from the same shared contract
+as the desktop tool. DepMap evals load the
 bundled Skill index and keep its discovery/loading tools exposed when a case
 narrows the registry; a missing required Skill therefore fails assembly.
 

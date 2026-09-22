@@ -1040,6 +1040,9 @@ impl Tool for FixtureNativeTool {
     }
 
     fn schema(&self) -> ToolSchema {
+        if self.name == wisp_core::DEPMAP_QUERY_TOOL_NAME {
+            return wisp_core::depmap_query_tool_schema();
+        }
         ToolSchema::new(
             &self.name,
             &self.fixture.description,
@@ -1052,7 +1055,8 @@ impl Tool for FixtureNativeTool {
     }
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
-        if let Err(error) = wisp_mcp::validate_tool_arguments(&self.fixture.schema, args) {
+        let schema = self.schema().function.parameters;
+        if let Err(error) = wisp_mcp::validate_tool_arguments(&schema, args) {
             return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
         }
         if self.fixture.error {
@@ -2307,8 +2311,27 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     "但",
                     "却",
                 ];
+                // Predicate coordinators are also scope boundaries. Without
+                // them, an unrelated later predicate such as "causality was
+                // not established" can negate an earlier affirmative claim.
+                let predicate_boundaries = [
+                    ",",
+                    "，",
+                    " and ",
+                    " or ",
+                    " while ",
+                    " whereas ",
+                    "以及",
+                    "并且",
+                    "且",
+                    "同时",
+                    "而",
+                    "和",
+                    "、",
+                ];
                 let clause_start = boundaries
                     .iter()
+                    .chain(predicate_boundaries.iter())
                     .filter_map(|boundary| {
                         prefix.rfind(boundary).map(|index| index + boundary.len())
                     })
@@ -2316,6 +2339,7 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     .unwrap_or(0);
                 let clause_end = boundaries
                     .iter()
+                    .chain(predicate_boundaries.iter())
                     .filter_map(|boundary| sentence[end..].find(boundary).map(|index| end + index))
                     .min()
                     .unwrap_or(sentence.len());
@@ -3559,6 +3583,24 @@ mod tests {
         let captured = Captured {
             completion: Some(
                 "This does not establish causality, but it establishes synthetic lethality.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_binds_negation_to_the_target_predicate() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some(
+                "Synthetic lethality was significant and causality was not established.".into(),
             ),
             ..Captured::default()
         };

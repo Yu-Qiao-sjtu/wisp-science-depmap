@@ -39,7 +39,7 @@ cases:
       assembly_specialist: depmap_r_agent
       assembly_tools: [attempt_completion, depmap_query, list_skill_catalog, search_skills, use_skill, plan_scientific_intent]
       assembly_schema_digests:
-        depmap_query: aac63d3c9e6d9990ed291ffff1dfed7515a19206a9d00935db072d180d2c09ad
+        depmap_query: 9481ae9caf7776094c5286013ae7b33abc6afeef169a99f579f8e527b4d5b867
       assembly_skills: [depmap-knowledge-query, depmap-coding-agent]
       assembly_plan_mode: false
       assembly_approval_tools: [attempt_completion, depmap_query, list_skill_catalog, search_skills, use_skill, plan_scientific_intent]

@@ -9,6 +9,7 @@ pub mod claim_record;
 pub mod context;
 pub mod delegation;
 pub mod delegation_policy;
+pub mod depmap_query_contract;
 pub mod execution;
 pub mod guardrail;
 pub mod memory;
@@ -61,6 +62,11 @@ pub use delegation_policy::{
     CapabilityDefinition, CapabilityRegistry, CapabilityRisk, DelegatedTaskProposal,
     DelegationHostPolicy, ExecutorFeature, ExecutorProfilePolicy, ModelFeature, ModelProfilePolicy,
     ResolutionError, ResolvedAgentTask, ResolvedDelegationPlan,
+};
+pub use depmap_query_contract::{
+    depmap_query_schema, depmap_query_tool_schema, DEPMAP_DRUG_OMICS,
+    DEPMAP_LINEAGE_DEPENDENCY_RANKINGS, DEPMAP_LINEAGE_EVENTS, DEPMAP_LINEAGE_NETWORK_FAMILIES,
+    DEPMAP_MATRIX_MODULES, DEPMAP_MAX_TOP_LIMIT, DEPMAP_QUERY_DESCRIPTION, DEPMAP_QUERY_TOOL_NAME,
 };
 pub use execution::{
     DelegationExecutionObserver, DelegationExecutionResult, DelegationExecutionStatus,

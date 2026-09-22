@@ -58,7 +58,10 @@ pub struct AgentAssemblySurface {
 
 impl AgentAssemblySurface {
     pub fn tool_schema(&self, name: &str) -> Option<&Value> {
-        self.tool_schemas.get(name)
+        self.tool_schemas
+            .get(name)
+            .or_else(|| self.mcp_tool_schemas.get(name))
+            .and_then(|schema| schema.pointer("/function/parameters"))
     }
 
     /// Use the same schema validator as the production guardrail path. Tests
@@ -66,7 +69,6 @@ impl AgentAssemblySurface {
     pub fn validate_tool_arguments(&self, name: &str, arguments: &Value) -> Result<(), String> {
         let schema = self
             .tool_schema(name)
-            .or_else(|| self.mcp_tool_schemas.get(name))
             .ok_or_else(|| format!("tool '{name}' is not exposed by this Agent assembly"))?;
         validate_discovered_schema(schema, arguments)
     }
@@ -75,7 +77,8 @@ impl AgentAssemblySurface {
     /// object keys are sorted recursively so serialization order cannot make
     /// production/eval parity appear to drift.
     pub fn tool_schema_digest(&self, name: &str) -> Option<String> {
-        self.tool_schema(name)
+        self.tool_schemas
+            .get(name)
             .or_else(|| self.mcp_tool_schemas.get(name))
             .map(canonical_json_digest)
     }
@@ -91,7 +94,12 @@ pub fn assemble_depmap_agent_surface(
     let tool_schemas = registry
         .schemas()
         .into_iter()
-        .map(|schema| (schema.function.name, schema.function.parameters))
+        .map(|schema| {
+            let name = schema.function.name.clone();
+            let value =
+                serde_json::to_value(schema).expect("model-facing tool schema is serializable");
+            (name, value)
+        })
         .collect();
     let mut mcp_projection = registry
         .names()
@@ -103,9 +111,11 @@ pub fn assemble_depmap_agent_surface(
     let mcp_tool_schemas = mcp_projection
         .iter()
         .filter_map(|name| {
-            registry
-                .get(name)
-                .map(|tool| (name.clone(), tool.schema().function.parameters))
+            registry.get(name).map(|tool| {
+                let value = serde_json::to_value(tool.schema())
+                    .expect("deferred model-facing tool schema is serializable");
+                (name.clone(), value)
+            })
         })
         .collect();
     let mut approval_tools = registry.approval_names().into_iter().collect::<Vec<_>>();
@@ -312,6 +322,26 @@ mod tests {
         let left = json!({"type": "object", "properties": {"b": {"type": "string"}, "a": {"type": "integer"}}});
         let right = json!({"properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "type": "object"});
         assert_eq!(canonical_json_digest(&left), canonical_json_digest(&right));
+        let changed_description = json!({
+            "type": "function",
+            "function": {
+                "name": "fixture",
+                "description": "changed",
+                "parameters": left,
+            }
+        });
+        let original_description = json!({
+            "type": "function",
+            "function": {
+                "name": "fixture",
+                "description": "original",
+                "parameters": right,
+            }
+        });
+        assert_ne!(
+            canonical_json_digest(&changed_description),
+            canonical_json_digest(&original_description)
+        );
     }
 
     #[test]

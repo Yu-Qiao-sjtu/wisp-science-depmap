@@ -20,10 +20,17 @@ use wisp_core::scientific_intent::{
     IntentScope, PlannerDecision, PlannerHostPolicy, RequestedAction, ScientificIntent,
     ToolCatalog, INTENT_SCHEMA_VERSION, PLANNER_CONTRACT_ID,
 };
+use wisp_core::{
+    DEPMAP_DRUG_OMICS as DRUG_OMICS,
+    DEPMAP_LINEAGE_DEPENDENCY_RANKINGS as LINEAGE_DEPENDENCY_RANKINGS,
+    DEPMAP_LINEAGE_EVENTS as LINEAGE_EVENTS,
+    DEPMAP_LINEAGE_NETWORK_FAMILIES as LINEAGE_NETWORK_FAMILIES,
+    DEPMAP_MATRIX_MODULES as MATRIX_MODULES, DEPMAP_MAX_TOP_LIMIT as MAX_TOP_LIMIT,
+    DEPMAP_QUERY_TOOL_NAME as TOOL_NAME,
+};
 use wisp_llm::ToolSchema;
 use wisp_tools::{Tool, ToolEnv, ToolResult};
 
-const TOOL_NAME: &str = "depmap_query";
 const EVIDENCE_TOOL_NAME: &str = "depmap_evidence";
 const ROUTE_TOOL_NAME: &str = "depmap_agent_route";
 const EVIDENCE_HISTORY_TOOL_NAME: &str = "depmap_evidence_history";
@@ -32,7 +39,6 @@ const VALIDATE_RUN_TOOL_NAME: &str = "depmap_validate_run";
 const SKILL_NAME: &str = "depmap-knowledge-query";
 const MAX_REMOTE_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VALIDATION_JSON_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_TOP_LIMIT: i64 = 100;
 // One evidence request fans out to a bounded set of module queries. Three retained rows
 // per query are enough for topic triage while keeping the complete bundle in
 // the model's first tool result. Surgical follow-ups remain available through
@@ -49,23 +55,6 @@ const EVIDENCE_SECTIONS: &[&str] = &[
     "enrichment",
     "tcga",
 ];
-const MATRIX_MODULES: &[&str] = &[
-    "effect_correlation",
-    "expression_correlation",
-    "expression_dependency",
-    "damaging_mutation_dependency",
-    "custom_missense_mutation_dependency",
-    "hotspot_mutation_dependency",
-    "cnv_amplification_dependency",
-];
-const LINEAGE_EVENTS: &[&str] = &["damaging", "custom_missense", "hotspot"];
-const DRUG_OMICS: &[&str] = &["effect", "expression", "cnv"];
-const LINEAGE_NETWORK_FAMILIES: &[&str] = &[
-    "effect_correlation",
-    "expression_correlation",
-    "expression_dependency",
-];
-const LINEAGE_DEPENDENCY_RANKINGS: &[&str] = &["selective", "mean_dependency"];
 const CANONICAL_LINEAGES: &[&str] = &[
     "Adrenal Gland",
     "Ampulla of Vater",
@@ -3082,11 +3071,7 @@ impl Tool for DepMapQueryTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            TOOL_NAME,
-            "Query the active project's precomputed DepMap knowledge provider through a flat model-compatible schema. This tool is read-only and keeps full matrices out of context. Use mode=lineage_catalog for cancer-only availability, mode=lineage_dependency only for a cancer's dependency-gene ranking, mode=model_gene_effect for bounded canonical ModelID rows for one exact gene, mode=cross_platform_validation for precomputed Broad/Sanger/RNAi validation of one exact gene, and mode=lineage_directions for a cancer-only research-direction request without an anchor gene. Use mode=status only when provider health is actually needed. Sparse results distinguish FOUND, NOT_RETAINED, INELIGIBLE, NOT_COMPUTED, and MODULE_UNAVAILABLE. Never repeat an empty-argument or rejected mode call and never start raw-data analysis from a coverage gap.",
-            depmap_query_schema(),
-        )
+        wisp_core::depmap_query_tool_schema()
     }
 
     fn read_only(&self) -> bool {
@@ -3117,44 +3102,6 @@ impl Tool for DepMapQueryTool {
                 .await
         }
     }
-}
-
-fn depmap_query_schema() -> Value {
-    json!({
-        "type":"object",
-        "description":"Flat model-compatible schema. Runtime validation enforces the fields required by each mode.",
-        "properties": {
-            "mode": {"type":"string","enum":[
-                "status","catalog","lineage_catalog","lineage_dependency","lineage_directions","model_gene_effect","cross_platform_validation","core","pair","top",
-                "lineage","pathway","drug","lineage_network","lineage_cnv",
-                "lineage_drug","enrichment","tcga_expression_survival"
-            ]},
-            "gene": {"type":"string"},
-            "model_id": {"type":"string","description":"Optional exact canonical ACH-###### ModelID for model_gene_effect."},
-            "gene_effect_at_or_below": {"type":"number","description":"Optional declared descriptive Chronos Gene Effect threshold for model_gene_effect; no cutoff is applied when omitted."},
-            "scope": {"type":"string","enum":["global","lineage"],"description":"For cross_platform_validation: global (default) or one canonical lineage."},
-            "module": {"type":"string","enum":MATRIX_MODULES},
-            "source": {"type":"string"},
-            "target": {"type":"string"},
-            "limit": {"type":"integer","minimum":1,"maximum":MAX_TOP_LIMIT},
-            "event": {"type":"string","enum":LINEAGE_EVENTS},
-            "lineage": {"type":"string"},
-            "pathway": {"type":"string"},
-            "drug": {"type":"string"},
-            "omic": {"type":"string","enum":DRUG_OMICS},
-            "family": {"type":"string","enum":LINEAGE_NETWORK_FAMILIES},
-            "ranking": {"type":"string","enum":LINEAGE_DEPENDENCY_RANKINGS,"description":"For lineage_dependency: selective (default; one-sided FDR-significant lineage-vs-rest effects ordered by precomputed rank) or mean_dependency (descriptive lowest lineage mean Gene Effect)."},
-            "exclude_common_essential": {"type":"boolean","description":"For lineage_dependency: exclude genes labelled common-essential by the selected versioned source."},
-            "common_essential_source": {"type":"string","enum":["depmap_26q1"]},
-            "collection": {"type":"string"},
-            "term": {"type":"string"},
-            "reciprocal": {"type":"boolean"},
-            "project": {"type":"string","description":"Optional TCGA project code, for example TCGA-BRCA or BRCA"},
-            "endpoint": {"type":"string","enum":["OS","DSS","DFI","PFI"]}
-        },
-        "required":["mode"],
-        "additionalProperties":false
-    })
 }
 
 fn validated_query(args: &Value) -> Result<Value, String> {
@@ -4922,7 +4869,7 @@ mod tests {
 
     #[test]
     fn query_schema_is_flat_for_model_compatibility_and_runtime_stays_strict() {
-        let schema = depmap_query_schema();
+        let schema = wisp_core::depmap_query_schema();
         assert!(schema.get("oneOf").is_none());
         assert_eq!(schema["required"], json!(["mode"]));
         assert_eq!(
