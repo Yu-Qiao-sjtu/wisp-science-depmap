@@ -34,7 +34,7 @@ cases:
     expect:
       completion_contains: [26Q1, "169.7565", "17", "14"]
       completion_not_contains: ["1.9 TB"]
-      request_contains: ["[DepMap Production Agent Contract]"]
+      request_contains: ["<!-- wisp:depmap-agent-assembly:v1:begin -->"]
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [shell, read, write, edit, run_in_context]
       tool_order: [depmap_query, attempt_completion]

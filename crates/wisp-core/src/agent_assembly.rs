@@ -138,8 +138,30 @@ pub fn apply_agent_assembly(ctx: &mut ContextManager, surface: &AgentAssemblySur
     if prompt.ends_with(&section) {
         return;
     }
+    remove_generated_assembly_sections(prompt);
     prompt.push_str("\n\n");
     prompt.push_str(&section);
+}
+
+fn remove_generated_assembly_sections(prompt: &mut String) {
+    let mut cursor = 0;
+    while let Some(relative_start) = prompt[cursor..].find(DEPMAP_ASSEMBLY_SECTION_MARKER) {
+        let start = cursor + relative_start;
+        let body_start = start + DEPMAP_ASSEMBLY_SECTION_MARKER.len();
+        if !prompt[body_start..].starts_with("\nSpecialist: ") {
+            // A lone marker can be project documentation, not generated state.
+            cursor = body_start;
+            continue;
+        }
+        let Some(relative_end) = prompt[body_start..].find(DEPMAP_ASSEMBLY_SECTION_END) else {
+            break;
+        };
+        let end = body_start + relative_end + DEPMAP_ASSEMBLY_SECTION_END.len();
+        prompt.replace_range(start..end, "");
+        cursor = start;
+    }
+    let trimmed_len = prompt.trim_end().len();
+    prompt.truncate(trimmed_len);
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -280,5 +302,32 @@ mod tests {
         assert_eq!(prompt.matches(DEPMAP_ASSEMBLY_SECTION_MARKER).count(), 2);
         assert!(prompt.ends_with(DEPMAP_ASSEMBLY_SECTION_END));
         assert!(prompt.contains(&surface.instruction_contract));
+    }
+
+    #[test]
+    fn stale_generated_assembly_is_replaced() {
+        let mut old = assemble_depmap_agent_surface(
+            &HostPolicy::bundled_depmap(),
+            &registry(),
+            AgentContextPolicy {
+                max_context_tokens: 4_096,
+                max_rounds: 4,
+                auto_compact: false,
+            },
+            false,
+        )
+        .unwrap();
+        old.instruction_contract = "old assembly instructions".into();
+        let mut current = old.clone();
+        current.instruction_contract = "current assembly instructions".into();
+        let mut ctx = ContextManager::new(4_096);
+        ctx.append_system("base");
+        apply_agent_assembly(&mut ctx, &old);
+        apply_agent_assembly(&mut ctx, &current);
+        let prompt = ctx.messages[0].content.as_text();
+        assert_eq!(prompt.matches(DEPMAP_ASSEMBLY_SECTION_MARKER).count(), 1);
+        assert!(!prompt.contains(&old.instruction_contract));
+        assert!(prompt.contains(&current.instruction_contract));
+        assert!(prompt.ends_with(DEPMAP_ASSEMBLY_SECTION_END));
     }
 }

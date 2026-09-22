@@ -2048,8 +2048,12 @@ fn verify_semantic_quality(expect: &EvalExpectation, captured: &Captured) -> Vec
         .filter_map(|claim| {
             let observed = semantic_polarities(completion, &claim.phrase);
             let matched = match claim.polarity {
-                SemanticPolarity::Affirmed => observed.iter().any(|negated| !negated),
-                SemanticPolarity::Negated => observed.iter().any(|negated| *negated),
+                SemanticPolarity::Affirmed => {
+                    !observed.is_empty() && observed.iter().all(|negated| !negated)
+                }
+                SemanticPolarity::Negated => {
+                    !observed.is_empty() && observed.iter().all(|negated| *negated)
+                }
             };
             (!matched).then(|| {
                 format!(
@@ -3328,6 +3332,25 @@ mod tests {
         let captured = Captured {
             completion: Some(
                 "This does not establish causality, but it establishes synthetic lethality.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+    }
+
+    #[test]
+    fn semantic_grader_rejects_contradictory_polarities() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some(
+                "This does not establish synthetic lethality. It establishes synthetic lethality."
+                    .into(),
             ),
             ..Captured::default()
         };
