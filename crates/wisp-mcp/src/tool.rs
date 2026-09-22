@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wisp_llm::ToolSchema;
 use wisp_tools::{
     Approval, CacheableToolResult, McpAppServer, Tool, ToolCacheContract, ToolCacheMode, ToolEnv,
-    ToolEvent, ToolExecutionPolicy, ToolResult,
+    ToolEvent, ToolExecutionPolicy, ToolResult, ToolRunOutcome,
 };
 
 const MAX_PRESENTATION_HTML_BYTES: usize = 32 * 1024 * 1024;
@@ -106,6 +106,7 @@ pub struct McpTool {
     /// server — including app-only helpers that never entered the registry.
     catalog: Arc<Vec<RemoteTool>>,
     connector_id: String,
+    authorization_revision: String,
     require_approval: bool,
 }
 
@@ -129,6 +130,16 @@ impl McpTool {
         connector_id: impl Into<String>,
         catalog: Arc<Vec<RemoteTool>>,
     ) -> Self {
+        Self::with_catalog_authorized(tool, client, connector_id, "", catalog)
+    }
+
+    pub fn with_catalog_authorized(
+        tool: RemoteTool,
+        client: Arc<McpClient>,
+        connector_id: impl Into<String>,
+        authorization_revision: impl Into<String>,
+        catalog: Arc<Vec<RemoteTool>>,
+    ) -> Self {
         let schema = ToolSchema::new(&tool.name, &tool.description, tool.input_schema.clone());
         Self {
             name: tool.name.clone(),
@@ -137,6 +148,7 @@ impl McpTool {
             client: Arc::clone(&client),
             catalog,
             connector_id: connector_id.into(),
+            authorization_revision: authorization_revision.into(),
             require_approval: false,
         }
     }
@@ -150,6 +162,88 @@ impl McpTool {
         let mut wrapped = Self::with_catalog(tool, client, connector_id, catalog);
         wrapped.require_approval = true;
         wrapped
+    }
+
+    pub fn with_catalog_authorized_requiring_approval(
+        tool: RemoteTool,
+        client: Arc<McpClient>,
+        connector_id: impl Into<String>,
+        authorization_revision: impl Into<String>,
+        catalog: Arc<Vec<RemoteTool>>,
+    ) -> Self {
+        let mut wrapped = Self::with_catalog_authorized(
+            tool,
+            client,
+            connector_id,
+            authorization_revision,
+            catalog,
+        );
+        wrapped.require_approval = true;
+        wrapped
+    }
+
+    async fn render_call_result(
+        &self,
+        args: &Value,
+        result: McpCallResult,
+        env: &dyn ToolEnv,
+    ) -> ToolResult {
+        let mut output = crate::result::model_result(&result);
+        let artifacts = materialize_html_resources(&result, env.project_root(), env).await;
+        if !artifacts.is_empty() {
+            let artifact_text = format!(
+                "{GENERATED_ARTIFACTS_PREFIX} {}",
+                artifacts
+                    .iter()
+                    .map(|path| path.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Some(mut envelope) = crate::result::ModelResultEnvelope::decode(&output.content)
+            {
+                envelope.append_display_text(&artifact_text);
+                output.content = serde_json::to_string(&envelope)
+                    .expect("MCP model-result envelope is JSON serializable");
+            } else {
+                output.content.push_str("\n\n");
+                output.content.push_str(&artifact_text);
+            }
+        }
+        if let Some(uri) = self.remote.ui_resource_uri() {
+            self.emit_mcp_app(uri, args, &result, env).await;
+        }
+        output
+    }
+
+    async fn run_coordinated_impl(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        let client = Arc::clone(&self.client);
+        let remote = self.remote.clone();
+        let owned_args = args.clone();
+        let mut request =
+            tokio::spawn(async move { client.tool_call_checked(&remote, &owned_args).await });
+        tokio::select! {
+            joined = &mut request => {
+                let result = match joined {
+                    Ok(Ok(result)) => self.render_call_result(args, result, env).await,
+                    Ok(Err(error)) => ToolResult::fail(format!("mcp {} error: {error}", self.name)),
+                    Err(error) => ToolResult::fail(format!("mcp {} request task failed: {error}", self.name)),
+                };
+                ToolRunOutcome::complete(result)
+            }
+            _ = async {
+                loop {
+                    if env.is_cancelled() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            } => ToolRunOutcome::detached(
+                ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
+                Box::pin(async move {
+                    let _ = request.await;
+                }),
+            ),
+        }
     }
 
     async fn emit_mcp_app(
@@ -556,6 +650,9 @@ impl Tool for McpTool {
     fn connector_id(&self) -> Option<&str> {
         (!self.connector_id.is_empty()).then_some(self.connector_id.as_str())
     }
+    fn cache_authorization_revision(&self) -> Option<&str> {
+        (!self.authorization_revision.is_empty()).then_some(self.authorization_revision.as_str())
+    }
     fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
         execution_policy_from_meta(self.remote.meta.as_ref())
     }
@@ -563,52 +660,21 @@ impl Tool for McpTool {
         cache_safe_mcp_result(&self.remote, result)
             .then(|| CacheableToolResult::structured(result.content.clone()))
     }
+    async fn validate_cache_hit(&self) -> Result<(), String> {
+        self.client
+            .validate_tool_contract(&self.remote)
+            .await
+            .map_err(|error| error.to_string())
+    }
     fn preview(&self, args: &Value) -> String {
         let s = args.to_string();
         s.chars().take(120).collect()
     }
+    async fn run_coordinated(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        self.run_coordinated_impl(args, env).await
+    }
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult {
-        let call = async {
-            match self.client.tool_call_checked(&self.remote, args).await {
-                Ok(result) => {
-                    let mut output = crate::result::model_result(&result);
-                    let artifacts =
-                        materialize_html_resources(&result, env.project_root(), env).await;
-                    if !artifacts.is_empty() {
-                        let artifact_text = format!(
-                            "{GENERATED_ARTIFACTS_PREFIX} {}",
-                            artifacts
-                                .iter()
-                                .map(|path| path.to_string_lossy())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                        if let Some(mut envelope) =
-                            crate::result::ModelResultEnvelope::decode(&output.content)
-                        {
-                            envelope.append_display_text(&artifact_text);
-                            output.content = serde_json::to_string(&envelope)
-                                .expect("MCP model-result envelope is JSON serializable");
-                        } else {
-                            output.content.push_str("\n\n");
-                            output.content.push_str(&artifact_text);
-                        }
-                    }
-                    if let Some(uri) = self.remote.ui_resource_uri() {
-                        self.emit_mcp_app(uri, args, &result, env).await;
-                    }
-                    output
-                }
-                Err(e) => ToolResult::fail(format!("mcp {name} error: {e}", name = self.name)),
-            }
-        };
-        tokio::select! {
-            result = call => result,
-            _ = async { loop {
-                if env.is_cancelled() { break; }
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            } } => ToolResult::fail("MCP wait cancelled by user; server kept alive. External operation outcome may be unknown; do not replay automatically."),
-        }
+        self.run_coordinated_impl(args, env).await.result
     }
 }
 

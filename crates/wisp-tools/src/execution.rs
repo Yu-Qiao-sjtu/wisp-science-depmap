@@ -363,7 +363,11 @@ impl ToolExecutionCoordinator {
             && !policy.cache.index_digest.is_empty()
             && !scope.agent_identity.is_empty()
             && !scope.authorization_scope.is_empty()
-            && !scope.policy_projection.is_empty();
+            && !scope.policy_projection.is_empty()
+            && (tool.connector_id().is_none()
+                || tool
+                    .cache_authorization_revision()
+                    .is_some_and(|revision| !revision.is_empty()));
 
         if !cache_eligible {
             emit(env, ToolExecutionSignal::Bypass, None, None);
@@ -378,6 +382,19 @@ impl ToolExecutionCoordinator {
             .await
         {
             CacheLookup::Hit(result) => {
+                if let Err(error) = tool.validate_cache_hit().await {
+                    self.remove_memory(&identity.slot);
+                    emit(
+                        env,
+                        ToolExecutionSignal::Stale,
+                        Some(&identity.fingerprint),
+                        None,
+                    );
+                    return ToolResult::fail(format!(
+                        "cache contract revalidation failed before replay: {error}"
+                    ))
+                    .stop_batch();
+                }
                 emit(
                     env,
                     ToolExecutionSignal::Hit,
@@ -469,13 +486,20 @@ impl ToolExecutionCoordinator {
             Ok(permit) => permit,
             Err(result) => return result,
         };
-        let _permit = permit;
-        let _resource_lease = match env.acquire_tool_resources(tool.name(), args).await {
+        let resource_lease = match env.acquire_tool_resources(tool.name(), args).await {
             Ok(lease) => lease,
             Err(error) => return ToolResult::fail(error).stop_batch(),
         };
         tool.before(args, env).await;
-        tool.run(args, env).await
+        let outcome = tool.run_coordinated(args, env).await;
+        if let Some(completion) = outcome.detached_completion {
+            tokio::spawn(async move {
+                completion.await;
+                drop(resource_lease);
+                drop(permit);
+            });
+        }
+        outcome.result
     }
 
     async fn acquire_permit(
@@ -553,8 +577,11 @@ impl ToolExecutionCoordinator {
         if contract.mode != ToolCacheMode::MemoryAndProject {
             return CacheLookup::Miss;
         }
-        let path = durable_path(project_root, &identity.slot);
-        let Ok(bytes) = tokio::fs::read(path).await else {
+        let Ok(directory) = validated_durable_directory(project_root, false) else {
+            return CacheLookup::Miss;
+        };
+        let path = directory.join(format!("{}.json", identity.slot));
+        let Ok(bytes) = crate::safety::read_no_follow(&path) else {
             return CacheLookup::Miss;
         };
         let Ok(entry) = serde_json::from_slice::<CacheEntry>(&bytes) else {
@@ -584,15 +611,13 @@ impl ToolExecutionCoordinator {
         if self.insert_memory(identity.slot.clone(), entry.clone(), Some(env))
             && contract.mode == ToolCacheMode::MemoryAndProject
         {
-            let path = durable_path(project_root, &identity.slot);
-            if let Some(parent) = path.parent() {
-                let directory = parent.to_path_buf();
-                if tokio::fs::create_dir_all(&directory).await.is_ok() {
-                    if let Ok(bytes) = serde_json::to_vec(&entry) {
-                        if tokio::fs::write(&path, bytes).await.is_ok() {
-                            enforce_durable_bounds(&directory, env).await;
-                        }
-                    }
+            if let (Ok(directory), Ok(bytes)) = (
+                validated_durable_directory(project_root, true),
+                serde_json::to_vec(&entry),
+            ) {
+                let path = directory.join(format!("{}.json", identity.slot));
+                if crate::safety::write_no_follow(&path, &bytes).is_ok() {
+                    enforce_durable_bounds(project_root, env).await;
                 }
             }
         }
@@ -623,6 +648,14 @@ impl ToolExecutionCoordinator {
         }
         true
     }
+
+    fn remove_memory(&self, slot: &str) {
+        let mut cache = lock(&self.memory);
+        if let Some(entry) = cache.entries.remove(slot) {
+            cache.bytes = cache.bytes.saturating_sub(entry.bytes());
+        }
+        cache.order.retain(|candidate| candidate != slot);
+    }
 }
 
 enum CacheLookup {
@@ -648,6 +681,7 @@ fn cache_identity(
     let stable = json!({
         "agent": scope.agent_identity,
         "authorization": scope.authorization_scope,
+        "connector_authorization": tool.cache_authorization_revision().unwrap_or_default(),
         "policy": scope.policy_projection,
         "tool": tool.name(),
         "provider": provider,
@@ -760,15 +794,64 @@ fn emit(
     });
 }
 
-fn durable_path(project_root: &Path, slot: &str) -> PathBuf {
-    project_root
-        .join(".wisp")
-        .join("tool-cache")
-        .join("v1")
-        .join(format!("{slot}.json"))
+fn metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
 }
 
-async fn enforce_durable_bounds(directory: &Path, env: &dyn ToolEnv) {
+fn validated_durable_directory(project_root: &Path, create: bool) -> Result<PathBuf, String> {
+    let root = dunce::canonicalize(project_root)
+        .map_err(|error| format!("project root is not resolvable: {error}"))?;
+    let mut directory = root.clone();
+    for segment in [".wisp", "tool-cache", "v1"] {
+        directory.push(segment);
+        match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => {
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                    return Err(format!(
+                        "durable cache component '{}' is not a regular directory",
+                        directory.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+                std::fs::create_dir(&directory).map_err(|error| {
+                    format!(
+                        "could not create durable cache directory '{}': {error}",
+                        directory.display()
+                    )
+                })?;
+                let metadata = std::fs::symlink_metadata(&directory)
+                    .map_err(|error| format!("could not inspect durable cache: {error}"))?;
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                    return Err("durable cache directory was replaced during creation".into());
+                }
+            }
+            Err(error) => return Err(format!("durable cache is unavailable: {error}")),
+        }
+    }
+    let canonical = dunce::canonicalize(&directory)
+        .map_err(|error| format!("durable cache is not resolvable: {error}"))?;
+    if !canonical.starts_with(&root) || canonical != directory {
+        return Err("durable cache directory resolves outside the project".into());
+    }
+    Ok(directory)
+}
+
+async fn enforce_durable_bounds(project_root: &Path, env: &dyn ToolEnv) {
+    let Ok(directory) = validated_durable_directory(project_root, false) else {
+        return;
+    };
     let Ok(mut reader) = tokio::fs::read_dir(directory).await else {
         return;
     };
@@ -779,10 +862,10 @@ async fn enforce_durable_bounds(directory: &Path, env: &dyn ToolEnv) {
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let Ok(metadata) = item.metadata().await else {
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
             continue;
         };
-        if !metadata.is_file() {
+        if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
             continue;
         }
         let bytes = metadata.len();
@@ -793,7 +876,9 @@ async fn enforce_durable_bounds(directory: &Path, env: &dyn ToolEnv) {
     files.sort_by_key(|(modified, _, _)| *modified);
     while files.len() > DEFAULT_DURABLE_ENTRIES || total_bytes > DEFAULT_DURABLE_BYTES {
         let (_, path, bytes) = files.remove(0);
-        if tokio::fs::remove_file(path).await.is_ok() {
+        let safe = std::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| !metadata_is_link_or_reparse(&metadata) && metadata.is_file());
+        if safe && tokio::fs::remove_file(path).await.is_ok() {
             total_bytes = total_bytes.saturating_sub(bytes);
             emit(env, ToolExecutionSignal::Evicted, None, None);
         }
@@ -861,6 +946,8 @@ mod tests {
     struct FakeTool {
         name: &'static str,
         connector: &'static str,
+        authorization_revision: &'static str,
+        cache_contract_valid: Arc<AtomicBool>,
         calls: Arc<AtomicUsize>,
         policy: ToolExecutionPolicy,
         read_only: bool,
@@ -894,6 +981,10 @@ mod tests {
             Some(self.connector)
         }
 
+        fn cache_authorization_revision(&self) -> Option<&str> {
+            Some(self.authorization_revision)
+        }
+
         fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
             self.policy.clone()
         }
@@ -901,6 +992,13 @@ mod tests {
         fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
             self.project_result
                 .then(|| CacheableToolResult::structured(result.content.clone()))
+        }
+
+        async fn validate_cache_hit(&self) -> Result<(), String> {
+            self.cache_contract_valid
+                .load(Ordering::SeqCst)
+                .then_some(())
+                .ok_or_else(|| "remote catalog changed".into())
         }
 
         async fn run(&self, _args: &Value, env: &dyn ToolEnv) -> ToolResult {
@@ -923,6 +1021,49 @@ mod tests {
         scope: ToolExecutionScope,
         cancelled: Arc<AtomicBool>,
         diagnostics: Mutex<Vec<ToolExecutionDiagnostic>>,
+    }
+
+    struct DetachedTool {
+        calls: Arc<AtomicUsize>,
+        completion_ms: u64,
+    }
+
+    #[async_trait]
+    impl Tool for DetachedTool {
+        fn name(&self) -> &str {
+            "detached_remote"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new(self.name(), "detached remote", json!({"type": "object"}))
+        }
+
+        fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+            ToolExecutionPolicy {
+                cache: ToolCacheContract::default(),
+                max_concurrency: 1,
+                max_queue: 0,
+            }
+        }
+
+        async fn run_coordinated(
+            &self,
+            _args: &Value,
+            _env: &dyn ToolEnv,
+        ) -> crate::ToolRunOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let delay = self.completion_ms;
+            crate::ToolRunOutcome::detached(
+                ToolResult::fail("caller stopped waiting"),
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }),
+            )
+        }
+
+        async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+            unreachable!("the coordinator must use run_coordinated")
+        }
     }
 
     impl TestEnv {
@@ -1000,6 +1141,8 @@ mod tests {
         Arc::new(FakeTool {
             name,
             connector,
+            authorization_revision: "credential-v1",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls,
             policy,
             read_only: true,
@@ -1074,6 +1217,21 @@ mod tests {
             .execute(v1.as_ref(), &json!({"gene": "NRAS"}), &env_a, false)
             .await;
         coordinator.execute(v1.as_ref(), &args, &env_b, false).await;
+        let credential_v2 = Arc::new(FakeTool {
+            name: "isolated_read",
+            connector: "provider-a",
+            authorization_revision: "credential-v2",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
+            calls: calls.clone(),
+            policy: cache_policy("release-v1", ToolCacheMode::Memory),
+            read_only: true,
+            project_result: true,
+            delay_ms: 60,
+            cancel_aware: false,
+        });
+        coordinator
+            .execute(credential_v2.as_ref(), &args, &env_a, false)
+            .await;
         let provider_b = fake(
             "isolated_read",
             "provider-b",
@@ -1128,8 +1286,44 @@ mod tests {
             .execute(capability_v2.as_ref(), &args, &env_a, false)
             .await;
 
-        assert_eq!(calls.load(Ordering::SeqCst), 8);
+        assert_eq!(calls.load(Ordering::SeqCst), 9);
         assert!(lock(&env_a.diagnostics)
+            .iter()
+            .any(|event| event.signal == ToolExecutionSignal::Stale));
+    }
+
+    #[tokio::test]
+    async fn cache_hit_revalidates_live_connector_contract() {
+        let coordinator = ToolExecutionCoordinator::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let valid = Arc::new(AtomicBool::new(true));
+        let tool = Arc::new(FakeTool {
+            name: "revalidated_read",
+            connector: "provider",
+            authorization_revision: "credential-v1",
+            cache_contract_valid: valid.clone(),
+            calls: calls.clone(),
+            policy: cache_policy("release-v1", ToolCacheMode::Memory),
+            read_only: true,
+            project_result: true,
+            delay_ms: 0,
+            cancel_aware: false,
+        });
+        let env = TestEnv::new(root("revalidate"), "scope-a");
+        let args = json!({"gene": "KRAS"});
+        assert!(
+            coordinator
+                .execute(tool.as_ref(), &args, &env, false)
+                .await
+                .success
+        );
+        valid.store(false, Ordering::SeqCst);
+        let rejected = coordinator.execute(tool.as_ref(), &args, &env, false).await;
+
+        assert!(!rejected.success);
+        assert!(rejected.content.contains("remote catalog changed"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(lock(&env.diagnostics)
             .iter()
             .any(|event| event.signal == ToolExecutionSignal::Stale));
     }
@@ -1143,6 +1337,8 @@ mod tests {
         let mutating = Arc::new(FakeTool {
             name: "mutating",
             connector: "provider",
+            authorization_revision: "credential-v1",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: mutating_calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
             read_only: false,
@@ -1201,6 +1397,7 @@ mod tests {
             cache_policy("release-v1", ToolCacheMode::MemoryAndProject),
         );
         let project = root("durable");
+        std::fs::create_dir_all(&project).unwrap();
         let env = TestEnv::new(project.clone(), "scope-a");
         let args = json!({"gene": "KRAS"});
         ToolExecutionCoordinator::default()
@@ -1211,6 +1408,37 @@ mod tests {
             .await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn durable_cache_refuses_symlinked_storage_components() {
+        use std::os::unix::fs::symlink;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = fake(
+            "symlink_safe_read",
+            "provider",
+            calls.clone(),
+            cache_policy("release-v1", ToolCacheMode::MemoryAndProject),
+        );
+        let project = root("symlink-project");
+        let outside = root("symlink-outside");
+        std::fs::create_dir_all(project.join(".wisp")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.json"), b"keep").unwrap();
+        symlink(&outside, project.join(".wisp").join("tool-cache")).unwrap();
+        let env = TestEnv::new(project.clone(), "scope-a");
+
+        let result = ToolExecutionCoordinator::default()
+            .execute(tool.as_ref(), &json!({"gene": "KRAS"}), &env, false)
+            .await;
+
+        assert!(result.success);
+        assert_eq!(std::fs::read(outside.join("keep.json")).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(project);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[tokio::test]
@@ -1268,6 +1496,8 @@ mod tests {
         let tool = Arc::new(FakeTool {
             name: "cancel_leader",
             connector: "provider",
+            authorization_revision: "credential-v1",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: calls.clone(),
             policy: cache_policy("release-v1", ToolCacheMode::Memory),
             read_only: true,
@@ -1320,6 +1550,8 @@ mod tests {
         let tool = Arc::new(FakeTool {
             name: "bounded_queue",
             connector: "provider",
+            authorization_revision: "credential-v1",
+            cache_contract_valid: Arc::new(AtomicBool::new(true)),
             calls: calls.clone(),
             policy: ToolExecutionPolicy {
                 cache: ToolCacheContract::default(),
@@ -1350,5 +1582,28 @@ mod tests {
         assert!(overflow.content.contains("tool_queue_overflow"));
         assert!(first.await.unwrap().success);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn detached_remote_work_retains_capacity_until_completion() {
+        let coordinator = ToolExecutionCoordinator::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = DetachedTool {
+            calls: calls.clone(),
+            completion_ms: 80,
+        };
+        let env = TestEnv::new(root("detached-capacity"), "scope-a");
+
+        let cancelled = coordinator.execute(&tool, &json!({}), &env, false).await;
+        assert!(!cancelled.success);
+        let overflow = coordinator.execute(&tool, &json!({}), &env, false).await;
+        assert!(!overflow.success);
+        assert!(overflow.content.contains("tool_queue_overflow"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let next = coordinator.execute(&tool, &json!({}), &env, false).await;
+        assert!(!next.success);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

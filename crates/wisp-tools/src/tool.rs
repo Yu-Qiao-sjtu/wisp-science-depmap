@@ -6,7 +6,34 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+use std::{future::Future, pin::Pin};
 use wisp_llm::ToolSchema;
+
+pub type ToolCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// Result of a coordinated tool call. A detached completion keeps execution
+/// capacity occupied after a caller stops waiting for remote work that cannot
+/// be cancelled safely.
+pub struct ToolRunOutcome {
+    pub result: ToolResult,
+    pub detached_completion: Option<ToolCompletion>,
+}
+
+impl ToolRunOutcome {
+    pub fn complete(result: ToolResult) -> Self {
+        Self {
+            result,
+            detached_completion: None,
+        }
+    }
+
+    pub fn detached(result: ToolResult, completion: ToolCompletion) -> Self {
+        Self {
+            result,
+            detached_completion: Some(completion),
+        }
+    }
+}
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -37,6 +64,11 @@ pub trait Tool: Send + Sync {
     fn connector_id(&self) -> Option<&str> {
         None
     }
+    /// Non-secret revision of the connector credential/account used by this
+    /// tool. Connector-backed caching is disabled when this is absent.
+    fn cache_authorization_revision(&self) -> Option<&str> {
+        None
+    }
     /// Optional ingestion budget for this tool's textual result. The global
     /// `WISP_TOOL_RESULT_BUDGET` override still wins. Tools should use this
     /// only for intentionally bounded, self-contained contracts where spilling
@@ -55,12 +87,23 @@ pub trait Tool: Send + Sync {
     fn cacheable_result(&self, _result: &ToolResult) -> Option<CacheableToolResult> {
         None
     }
+    /// Revalidate live remote metadata immediately before a cache hit is
+    /// returned. Native tools accept their in-process contract by default.
+    async fn validate_cache_hit(&self) -> Result<(), String> {
+        Ok(())
+    }
     /// One-line preview shown in the tool-call card (e.g. the file path).
     fn preview(&self, _args: &Value) -> String {
         String::new()
     }
     /// Hook fired before `run` (e.g. `edit` emits a unified diff here).
     async fn before(&self, _args: &Value, _env: &dyn ToolEnv) {}
+    /// Coordinators use this hook so a remote operation may return promptly to
+    /// its cancelled caller while retaining its concurrency lease until the
+    /// non-cancellable provider work actually finishes.
+    async fn run_coordinated(&self, args: &Value, env: &dyn ToolEnv) -> ToolRunOutcome {
+        ToolRunOutcome::complete(self.run(args, env).await)
+    }
     async fn run(&self, args: &Value, env: &dyn ToolEnv) -> ToolResult;
 }
 

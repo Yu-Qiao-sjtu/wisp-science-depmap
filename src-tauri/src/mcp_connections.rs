@@ -33,6 +33,21 @@ impl Spec {
             _ => None,
         }
     }
+    pub(crate) fn authorization_revision(&self) -> String {
+        match self {
+            Self::Custom(connection) => match &connection.transport {
+                McpTransport::Http {
+                    auth: McpHttpAuth::OAuth,
+                    ..
+                } => crate::mcp_oauth::credential_revision(&connection.id).unwrap_or_default(),
+                _ => crate::mcp_secrets::hydrated_secret_digest(connection),
+            },
+            Self::Plugin(_) | Self::Development(_) => {
+                use sha2::{Digest, Sha256};
+                hex::encode(Sha256::digest(self.descriptor().as_bytes()))
+            }
+        }
+    }
     fn descriptor(&self) -> String {
         // Memory only; never log a descriptor (it may contain user-supplied env).
         let value = match self {

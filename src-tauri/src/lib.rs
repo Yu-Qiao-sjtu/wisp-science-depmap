@@ -5547,6 +5547,7 @@ async fn finish_custom_mcp_wiring(
             .acquire(store, project_id, frame_id, scope_key, &spec)
             .await;
         let connector_id = spec.id().to_string();
+        let authorization_revision = spec.authorization_revision();
         let name = spec.name().to_string();
         let plugin_id = spec.plugin_id().map(str::to_string);
         if let Some(id) = &plugin_id {
@@ -5558,7 +5559,15 @@ async fn finish_custom_mcp_wiring(
                 Err(error) => Err(anyhow::anyhow!(error)),
             };
             let approval = plugin_id.is_some();
-            (index, name, plugin_id, connector_id, approval, res)
+            (
+                index,
+                name,
+                plugin_id,
+                connector_id,
+                authorization_revision,
+                approval,
+                res,
+            )
         });
     }
     let mut results = Vec::new();
@@ -5567,12 +5576,19 @@ async fn finish_custom_mcp_wiring(
             results.push(r);
         }
     }
-    results.sort_by_key(|(i, _, _, _, _, _)| *i);
-    for (_, name, plugin_id, connector_id, require_approval, res) in results {
+    results.sort_by_key(|(i, _, _, _, _, _, _)| *i);
+    for (_, name, plugin_id, connector_id, authorization_revision, require_approval, res) in results
+    {
         match res {
             Ok(client) => {
-                match register_mcp_with_approval(registry, client, &connector_id, require_approval)
-                    .await
+                match register_mcp_with_approval(
+                    registry,
+                    client,
+                    &connector_id,
+                    &authorization_revision,
+                    require_approval,
+                )
+                .await
                 {
                     Ok(registered) => {
                         result.added_tools.extend(registered.names);
@@ -5613,6 +5629,7 @@ async fn register_mcp_with_approval(
     registry: &mut wisp_tools::Registry,
     client: std::sync::Arc<wisp_mcp::McpClient>,
     connector_id: &str,
+    authorization_revision: &str,
     require_approval: bool,
 ) -> Result<RegisteredMcpTools, String> {
     if connector_id.trim().is_empty() {
@@ -5682,17 +5699,19 @@ async fn register_mcp_with_approval(
                 }
                 names.push(t.name.clone());
                 let tool = if require_approval {
-                    wisp_mcp::McpTool::with_catalog_requiring_approval(
+                    wisp_mcp::McpTool::with_catalog_authorized_requiring_approval(
                         t.clone(),
                         client.clone(),
                         connector_id,
+                        authorization_revision,
                         std::sync::Arc::clone(&catalog),
                     )
                 } else {
-                    wisp_mcp::McpTool::with_catalog(
+                    wisp_mcp::McpTool::with_catalog_authorized(
                         t.clone(),
                         client.clone(),
                         connector_id,
+                        authorization_revision,
                         std::sync::Arc::clone(&catalog),
                     )
                 };

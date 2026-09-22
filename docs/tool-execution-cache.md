@@ -9,8 +9,10 @@ Queue overflow and cancellation return structured errors with stable codes:
 Caching is fail-closed. A tool must be read-only, must not carry an approval,
 and must explicitly declare a certain, shareable result. Its fingerprint
 includes normalized arguments, Agent identity, authorization and policy scope,
-connector identity, the discovered input schema, capability/schema versions,
-and release/index digests. Changing any contract digest prevents replay.
+connector identity, a one-way credential/account revision, the discovered input
+schema, capability/schema versions, and release/index digests. Changing any
+credential or contract digest prevents replay. Connector-backed caching is
+disabled when the host cannot supply a non-secret authorization revision.
 
 MCP servers opt in through `_meta.wisp.cache`:
 
@@ -41,8 +43,17 @@ the model-visible JSON contains no credentials, restricted raw matrices, or
 hidden server paths. MCP App tools are never cached because replay would skip
 their presentation and artifact side effects.
 
+Before returning an MCP cache hit, Wisp refreshes `tools/list` and compares the
+live registration, metadata, and schema with the registered snapshot. A change
+fails closed and marks the hit stale, so an old release/index result is not
+served for the remainder of its TTL.
+
 Memory entries and project entries under `.wisp/tool-cache/v1/` are bounded.
 Only hashed filenames and a tool-provided structured JSON projection are
-persisted. Operational spans record `hit`, `miss`, `stale`, `bypass`,
+persisted. Every cache directory component is checked with symlink/reparse-point
+metadata and final file I/O uses no-follow handles; unsafe durable paths fall
+back to memory-only caching and are never pruned. When a cancelled MCP wait
+leaves provider work running, its connector/tool concurrency lease remains held
+until that request actually completes. Operational spans record `hit`, `miss`, `stale`, `bypass`,
 `coalesced`, and `evicted`, plus queue state; raw arguments and evidence are not
 added to telemetry.

@@ -31,7 +31,7 @@ pub use execution::{
     CacheableToolResult, ToolCacheContract, ToolCacheMode, ToolExecutionDiagnostic,
     ToolExecutionPolicy, ToolExecutionScope, ToolExecutionSignal,
 };
-pub use tool::Tool;
+pub use tool::{Tool, ToolCompletion, ToolRunOutcome};
 
 use serde_json::Value;
 use std::collections::HashSet;
