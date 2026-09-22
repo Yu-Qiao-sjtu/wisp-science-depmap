@@ -30,3 +30,6 @@ Guardrail identity, version, stage, and the merged chain outcome are recorded
 on the operational trace from [agent observability](agent-observability.md).
 A later allow cannot overwrite a denial on those span keys. Default spans do
 not include prompts, tool arguments, or scientific rows.
+
+Structured scientific claims in a final answer are grounded by
+[claim records](agent-claim-grounding.md) before presentation.

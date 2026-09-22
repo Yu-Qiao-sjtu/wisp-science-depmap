@@ -4737,6 +4737,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION.to_string(),
             PROJECT_STARS_MIGRATION.to_string(),
             BRIDGE_CHECKPOINTS_MIGRATION.to_string(),
+            CLAIM_RECORDS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();

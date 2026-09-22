@@ -11,6 +11,7 @@ mod agent_workflows;
 mod artifacts;
 mod ask_user_requests;
 mod bridge_checkpoints;
+mod claim_records;
 mod codex_imports;
 mod execution_contexts;
 mod explorations;
@@ -57,6 +58,7 @@ pub use agent_workflows::{
 pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
 pub use bridge_checkpoints::BridgeCheckpointRecord;
+pub use claim_records::ClaimRecordRow;
 pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
@@ -196,6 +198,8 @@ const PROJECT_STARS_MIGRATION: &str = "0058_project_stars";
 const BRIDGE_CHECKPOINTS_MIGRATION: &str = "0059_bridge_checkpoints";
 const BRIDGE_CHECKPOINTS_MIGRATION_SQL: &str =
     include_str!("../migrations/0059_bridge_checkpoints.sql");
+const CLAIM_RECORDS_MIGRATION: &str = "0060_claim_records";
+const CLAIM_RECORDS_MIGRATION_SQL: &str = include_str!("../migrations/0060_claim_records.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -785,6 +789,10 @@ impl Store {
             Self::execute_sql_script(pool, BRIDGE_CHECKPOINTS_MIGRATION_SQL).await?;
             Self::record_migration(pool, BRIDGE_CHECKPOINTS_MIGRATION).await?;
         }
+        if !Self::migration_applied(pool, CLAIM_RECORDS_MIGRATION).await? {
+            Self::execute_sql_script(pool, CLAIM_RECORDS_MIGRATION_SQL).await?;
+            Self::record_migration(pool, CLAIM_RECORDS_MIGRATION).await?;
+        }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was
         // later folded into 0000_init.sql (or into an already-shipped apply_*
@@ -1174,6 +1182,25 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS run_environment_snapshots (\
              run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, \
              env_snapshot_hash TEXT NOT NULL REFERENCES env_snapshots(hash) ON DELETE RESTRICT)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS claim_records (\
+             claim_id TEXT PRIMARY KEY, \
+             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, \
+             frame_id TEXT NOT NULL, \
+             schema_version INTEGER NOT NULL, \
+             payload_json TEXT NOT NULL, \
+             source_versions TEXT NOT NULL, \
+             created_at INTEGER NOT NULL, \
+             updated_at INTEGER NOT NULL)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ix_claim_records_project_frame \
+             ON claim_records(project_id, frame_id, updated_at DESC)",
         )
         .execute(pool)
         .await?;

@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod archive;
 pub mod bridge_checkpoint;
+pub mod claim_record;
 pub mod context;
 pub mod delegation;
 pub mod delegation_policy;
@@ -30,6 +31,12 @@ pub use bridge_checkpoint::{
     persist_checkpoint, persist_checkpoint_file, resume_bridge_checkpoint, BridgeCheckpoint,
     CheckpointState, ContractDigests, ResumeAction, ResumeEnvironment, ResumeOutcome,
     BRIDGE_CHECKPOINT_CONTRACT, BRIDGE_CHECKPOINT_SCHEMA_VERSION,
+};
+pub use claim_record::{
+    claims_from_output, rewrite_unsupported_claims, validate_claims, ClaimCheck, ClaimCheckCode,
+    ClaimGroundingCatalog, ClaimKind, ClaimRecord, ClaimSourceKind, ClaimSourceRef,
+    ClaimValidationReport, GroundedArtifact, GroundedEvidence, GroundedPaper, GroundedRun,
+    CLAIM_RECORD_CONTRACT, CLAIM_RECORD_SCHEMA_VERSION,
 };
 pub use context::{
     repair_unpaired_tool_calls, tool_call_pairing, unpaired_tool_call_ids, ContextManager,

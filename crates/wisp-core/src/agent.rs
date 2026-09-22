@@ -720,6 +720,7 @@ async fn agent_loop_execute(
                     stale_approval: false,
                     output: output_value,
                     output_contract: ctx.output_contract().cloned(),
+                    claim_catalog: ctx.claim_catalog().cloned(),
                 },
                 completion_span.as_ref(),
             );
@@ -835,6 +836,7 @@ async fn agent_loop_execute(
                 stale_approval: false,
                 output: None,
                 output_contract: None,
+                claim_catalog: None,
             };
             let chain = GuardrailChain::production();
             let mut outcome = evaluate_tool_input(&chain, guard_ctx, tool_span.as_ref());
@@ -852,6 +854,7 @@ async fn agent_loop_execute(
                         stale_approval: false,
                         output: None,
                         output_contract: None,
+                        claim_catalog: None,
                     },
                     tool_span.as_ref(),
                 );
