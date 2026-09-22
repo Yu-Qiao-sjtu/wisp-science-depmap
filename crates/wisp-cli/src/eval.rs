@@ -2448,7 +2448,6 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 let negation_window = nearby.replace("不仅", "").replace("not only", "");
                 let negated = [
                     " not ",
-                    " no ",
                     " never ",
                     " does not ",
                     " doesn't ",
@@ -2473,6 +2472,11 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 ]
                 .iter()
                 .any(|cue| format!(" {negation_window}").contains(cue))
+                    // English `no` is a determiner: it scopes forward over
+                    // its object/proposition, not backward over a scientific
+                    // claim that precedes an unrelated `no evidence ...`
+                    // adjunct.
+                    || format!(" {before}").contains(" no ")
                     || format!(" {before}").contains(" without ")
                     || after.starts_with("非显著")
                     || after.starts_with("非因果")
@@ -3745,6 +3749,14 @@ mod tests {
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
 
         let captured = Captured {
+            completion: Some(
+                "Synthetic lethality was significant with no evidence of confounding.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
             completion: Some("The result was observed without synthetic lethality.".into()),
             ..Captured::default()
         };
@@ -3940,5 +3952,26 @@ mod tests {
             )
             .await;
         assert!(alias.success, "{}", alias.content);
+
+        let status = FixtureNativeTool {
+            name: wisp_core::DEPMAP_QUERY_TOOL_NAME.into(),
+            fixture: FixtureTool {
+                description: "status fixture".into(),
+                schema: json!({
+                    "type":"object",
+                    "properties": {
+                        "mode":{"type":"string","enum":["status"]}
+                    },
+                    "required":["mode"],
+                    "additionalProperties":false
+                }),
+                result: "status fixture result".into(),
+                error: false,
+            },
+        };
+        let null_optional = status
+            .run(&json!({"mode":"status","gene":null}), &env)
+            .await;
+        assert!(null_optional.success, "{}", null_optional.content);
     }
 }

@@ -81,6 +81,10 @@ pub fn depmap_query_tool_schema() -> ToolSchema {
 /// did not declare.
 pub fn normalize_depmap_query_schema_aliases(args: &Value) -> Value {
     let mut normalized_args = args.clone();
+    // Production schema validation treats model-emitted nulls as omitted
+    // optional fields. Keep that normalization visible to any narrower
+    // scenario/provider schema that validates the same request afterwards.
+    crate::scientific_intent::omit_null_object_fields(&mut normalized_args);
     if let Some(endpoint) = normalized_args
         .get("endpoint")
         .and_then(Value::as_str)
@@ -378,5 +382,11 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(survival["endpoint"], "DSS");
+
+        let status = normalize_depmap_query_schema_aliases(&json!({
+            "mode":"status",
+            "gene":null
+        }));
+        assert_eq!(status, json!({"mode":"status"}));
     }
 }
