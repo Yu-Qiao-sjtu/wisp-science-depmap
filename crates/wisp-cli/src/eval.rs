@@ -1704,43 +1704,6 @@ fn build_agent(
         )));
         registry.add(Box::new(wisp_runtime::RTool::new(manager, project_id)));
     }
-    if !case.allowed_tools.is_empty() {
-        let mut allowed_tools = case.allowed_tools.clone();
-        if is_depmap {
-            // A DepMap Specialist declares required Skills only when the same
-            // snapshot can discover and load them. Keep those production
-            // access tools in narrowed evaluator registries so the recorded
-            // assembly cannot advertise unreachable Skills.
-            allowed_tools.extend(
-                ["list_skill_catalog", "search_skills", "use_skill"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-            // Production-parity assembly also requires the configured DepMap
-            // connector and Run control plane to remain present in the actual
-            // post-filter registry. Scenario assertions still forbid calls
-            // outside their intended trajectory.
-            allowed_tools.extend(
-                [
-                    DEPMAP_EVAL_CONNECTOR_PROBE,
-                    wisp_core::DEPMAP_QUERY_TOOL_NAME,
-                    "run_in_context",
-                    "configure_ssh_trust",
-                    "transfer_between_contexts",
-                    "get_run",
-                    "monitor_run",
-                    "cancel_run",
-                    "harvest_run",
-                    "cleanup_run_workspace",
-                    "list_remote_files",
-                    "remove_remote_files",
-                ]
-                .into_iter()
-                .map(str::to_string),
-            );
-        }
-        registry = registry.filtered(&allowed_tools);
-    }
     if is_depmap {
         wisp_core::install_scientific_intent_planner_in(&mut registry, "eval", "eval");
     }
@@ -1752,6 +1715,29 @@ fn build_agent(
     });
     if let Some(host) = depmap_host.as_ref() {
         wisp_core::host_scientific_bridge(host).map_err(|error| anyhow::anyhow!("{error}"))?;
+    }
+    // Assembly metadata audits the complete production-parity host wiring.
+    // The scenario Registry is narrowed only afterwards, so extra assembly
+    // capabilities never become callable outside the case contract.
+    let assembly = if let Some(host) = depmap_host.as_ref() {
+        Some(
+            wisp_core::assemble_depmap_agent_surface(
+                host,
+                &registry,
+                wisp_core::AgentContextPolicy {
+                    max_context_tokens: max_context,
+                    max_rounds,
+                    auto_compact: case.auto_compact.unwrap_or(true),
+                },
+                case.plan_mode,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
+        )
+    } else {
+        None
+    };
+    if !case.allowed_tools.is_empty() {
+        registry = registry.filtered(&case.allowed_tools);
     }
     let mut agent = Agent::with_provider(
         provider.build(),
@@ -1770,26 +1756,9 @@ fn build_agent(
     agent
         .ctx
         .set_claim_catalog(Some(wisp_core::ClaimGroundingCatalog::default()));
-    let assembly = if is_depmap {
-        Some(
-            wisp_core::assemble_and_apply_depmap_agent(
-                &mut agent.ctx,
-                depmap_host
-                    .as_ref()
-                    .expect("DepMap cases construct an actual-skill host policy"),
-                &agent.tools,
-                wisp_core::AgentContextPolicy {
-                    max_context_tokens: max_context,
-                    max_rounds,
-                    auto_compact: case.auto_compact.unwrap_or(true),
-                },
-                case.plan_mode,
-            )
-            .map_err(|error| anyhow::anyhow!("{error}"))?,
-        )
-    } else {
-        None
-    };
+    if let Some(surface) = assembly.as_ref() {
+        wisp_core::apply_agent_assembly(&mut agent.ctx, surface);
+    }
     Ok((agent, assembly))
 }
 
@@ -1960,6 +1929,7 @@ fn verify_case(
         }
     }
     verify_assembly_expectations(&case.expect, assembly, &mut failures);
+    verify_allowed_tool_calls(&case.allowed_tools, &captured.tool_calls, &mut failures);
     for tool in &case.expect.required_tools {
         if !captured.tool_calls.iter().any(|call| &call.name == tool) {
             failures.push(format!("required tool '{tool}' was not called"));
@@ -2173,6 +2143,24 @@ fn verify_case(
         ));
     }
     failures
+}
+
+fn verify_allowed_tool_calls(
+    allowed_tools: &[String],
+    tool_calls: &[ToolCallRecord],
+    failures: &mut Vec<String>,
+) {
+    if allowed_tools.is_empty() {
+        return;
+    }
+    for call in tool_calls {
+        if !allowed_tools.iter().any(|tool| tool == &call.name) {
+            failures.push(format!(
+                "tool '{}' was called outside the case allowed_tools contract",
+                call.name
+            ));
+        }
+    }
 }
 
 fn verify_assembly_expectations(
@@ -2447,12 +2435,6 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 // nearby scientific predicate.
                 let negation_window = nearby.replace("不仅", "").replace("not only", "");
                 let negated = [
-                    " not ",
-                    " never ",
-                    " does not ",
-                    " doesn't ",
-                    " cannot ",
-                    " can't ",
                     "不能",
                     "并未",
                     "没有",
@@ -2472,10 +2454,9 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                 ]
                 .iter()
                 .any(|cue| format!(" {negation_window}").contains(cue))
-                    // English `no` is a determiner: it scopes forward over
-                    // its object/proposition, not backward over a scientific
-                    // claim that precedes an unrelated `no evidence ...`
-                    // adjunct.
+                    || english_predicate_negation(before, after)
+                    // English determiners/prepositions scope forward, not
+                    // backward over a claim that precedes their object.
                     || format!(" {before}").contains(" no ")
                     || format!(" {before}").contains(" without ")
                     || after.starts_with("非显著")
@@ -2487,6 +2468,105 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
             })
         })
         .collect()
+}
+
+/// Conservative English predicate binding for post/preposed `not`, `never`,
+/// and contracted/modal equivalents. A bare cue in a noun modifier (for
+/// example, `models not carrying TP53`) is not a negation of the target claim.
+fn english_predicate_negation(before: &str, after: &str) -> bool {
+    const AUXILIARIES: &[&str] = &[
+        "am",
+        "are",
+        "aren't",
+        "can",
+        "can't",
+        "cannot",
+        "could",
+        "couldn't",
+        "did",
+        "didn't",
+        "do",
+        "does",
+        "doesn't",
+        "had",
+        "has",
+        "have",
+        "is",
+        "isn't",
+        "may",
+        "might",
+        "must",
+        "should",
+        "shouldn't",
+        "was",
+        "wasn't",
+        "were",
+        "weren't",
+        "will",
+        "won't",
+        "would",
+        "wouldn't",
+    ];
+
+    fn has_open_relative(value: &str) -> bool {
+        [" that ", " which ", " who ", " whom ", " whose "]
+            .iter()
+            .filter_map(|marker| value.rfind(marker))
+            .max()
+            .is_some_and(|relative| {
+                !value[relative..].contains(',') && !value[relative..].contains('，')
+            })
+    }
+
+    fn previous_word(value: &str, cue: usize) -> &str {
+        value[..cue]
+            .trim_end()
+            .rsplit_once(char::is_whitespace)
+            .map_or_else(|| value[..cue].trim(), |(_, word)| word)
+            .trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+    }
+
+    fn bound_cue(value: &str, cue: &str, auxiliaries: &[&str]) -> bool {
+        let mut offset = 0;
+        while let Some(relative) = value[offset..].find(cue) {
+            let index = offset + relative;
+            let prefix = &value[..index];
+            if !has_open_relative(prefix) && auxiliaries.contains(&previous_word(value, index)) {
+                return true;
+            }
+            offset = index + cue.len();
+        }
+        false
+    }
+
+    let before = format!(" {} ", before.replace("not only", ""));
+    let after = format!(" {} ", after.replace("not only", ""));
+    let direct_before = before.trim_end().ends_with(" not");
+    let direct_after = after.trim_start().starts_with("not ");
+    direct_before
+        || direct_after
+        || bound_cue(&before, " not ", AUXILIARIES)
+        || bound_cue(&before, " never ", AUXILIARIES)
+        || bound_cue(&after, " not ", AUXILIARIES)
+        || bound_cue(&after, " never ", AUXILIARIES)
+        || [
+            " can't ",
+            " cannot ",
+            " couldn't ",
+            " didn't ",
+            " doesn't ",
+            " isn't ",
+            " shouldn't ",
+            " wasn't ",
+            " weren't ",
+            " won't ",
+            " wouldn't ",
+        ]
+        .iter()
+        .any(|cue| {
+            before.contains(cue) && !has_open_relative(&before[..before.find(cue).unwrap_or(0)])
+                || after.contains(cue) && !has_open_relative(&after[..after.find(cue).unwrap_or(0)])
+        })
 }
 
 fn contains_folded(haystack: &str, needle: &str) -> bool {
@@ -3757,6 +3837,14 @@ mod tests {
         assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
 
         let captured = Captured {
+            completion: Some(
+                "Synthetic lethality in models not carrying TP53 mutations was significant.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
             completion: Some("The result was observed without synthetic lethality.".into()),
             ..Captured::default()
         };
@@ -3880,6 +3968,27 @@ mod tests {
         let (failures, checks) = grade_semantic_quality(&expect, &captured, &[]);
         assert!(failures.is_empty());
         assert_eq!(checks, 0);
+    }
+
+    #[test]
+    fn case_allowed_tools_rejects_assembly_only_calls() {
+        let allowed = vec!["depmap_agent_route".into(), "attempt_completion".into()];
+        let calls = vec![
+            ToolCallRecord {
+                call_id: "route-1".into(),
+                name: "depmap_agent_route".into(),
+                arguments: json!({}),
+            },
+            ToolCallRecord {
+                call_id: "skill-1".into(),
+                name: "list_skill_catalog".into(),
+                arguments: json!({}),
+            },
+        ];
+        let mut failures = Vec::new();
+        verify_allowed_tool_calls(&allowed, &calls, &mut failures);
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("list_skill_catalog"));
     }
 
     #[tokio::test]

@@ -123,7 +123,9 @@ pub fn assemble_depmap_agent_surface(
     let instruction_digest = sha256_hex(DEPMAP_PRODUCTION_INSTRUCTIONS.as_bytes());
     Ok(AgentAssemblySurface {
         contract: AGENT_ASSEMBLY_CONTRACT.into(),
-        enabled_skills: specialist.required_skills.clone(),
+        // Audit the complete project-enabled set after host policy is
+        // applied, rather than duplicating the manifest's minimum list.
+        enabled_skills: host.available_skills.iter().cloned().collect(),
         specialist,
         instruction_contract: DEPMAP_PRODUCTION_INSTRUCTIONS.into(),
         instruction_digest,
@@ -314,6 +316,31 @@ mod tests {
         assert_eq!(
             desktop.tool_schema_digest("depmap_fixture"),
             eval.tool_schema_digest("depmap_fixture")
+        );
+    }
+
+    #[test]
+    fn assembly_records_the_actual_enabled_skill_set() {
+        let mut host = HostPolicy::bundled_depmap();
+        host.available_skills.insert("literature-review".into());
+        let surface = assemble_depmap_agent_surface(
+            &host,
+            &registry(),
+            AgentContextPolicy {
+                max_context_tokens: 4_096,
+                max_rounds: 4,
+                auto_compact: true,
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            surface.enabled_skills,
+            vec![
+                "depmap-coding-agent",
+                "depmap-knowledge-query",
+                "literature-review"
+            ]
         );
     }
 
