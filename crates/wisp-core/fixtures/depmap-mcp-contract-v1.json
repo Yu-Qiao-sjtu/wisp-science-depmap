@@ -1,0 +1,66 @@
+{
+  "schema": "wisp.depmap-server-contract-snapshot.v1",
+  "release": "26Q1",
+  "provider_contract": "depmap-mcp.v1",
+  "evidence_envelope_contract": "wisp.mcp-tool-result.v1",
+  "reader_modes": {
+    "codependency_evidence": "bounded_precomputed",
+    "coexpression_evidence": "bounded_precomputed",
+    "expression_dependency_evidence": "bounded_precomputed",
+    "mutation_dependency_global": "bounded_precomputed",
+    "mutation_dependency_lineage": "bounded_precomputed"
+  },
+  "coverage": {
+    "codependency_evidence": "computed",
+    "coexpression_evidence": "computed",
+    "expression_dependency_evidence": "computed",
+    "mutation_dependency_global": "computed",
+    "mutation_dependency_lineage": "computed"
+  },
+  "tool_schemas": {
+    "depmap_pair_evidence": {
+      "properties": {
+        "lineage": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Lineage"},
+        "source": {"title": "Source", "type": "string"},
+        "target": {"title": "Target", "type": "string"}
+      },
+      "required": ["source", "target"],
+      "title": "depmap_pair_evidenceArguments",
+      "type": "object"
+    },
+    "depmap_codependency_evidence": {
+      "properties": {
+        "direction": {"default": "positive", "enum": ["positive", "negative"], "title": "Direction", "type": "string"},
+        "gene": {"title": "Gene", "type": "string"},
+        "limit": {"default": 20, "title": "Limit", "type": "integer"},
+        "lineage": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Lineage"}
+      },
+      "required": ["gene"],
+      "title": "depmap_codependency_evidenceArguments",
+      "type": "object"
+    },
+    "depmap_synthetic_lethal_evidence": {
+      "properties": {
+        "event": {"anyOf": [{"enum": ["damaging_mutation", "custom_missense_mutation", "hotspot_mutation", "cnv_amplification"], "type": "string"}, {"type": "null"}], "default": null, "title": "Event"},
+        "limit": {"default": 20, "title": "Limit", "type": "integer"},
+        "lineage": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Lineage"},
+        "source": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Source"},
+        "target": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Target"}
+      },
+      "title": "depmap_synthetic_lethal_evidenceArguments",
+      "type": "object"
+    },
+    "depmap_lineage_mutation_dependency": {
+      "properties": {
+        "event": {"anyOf": [{"enum": ["damaging", "hotspot", "damaging_mutation", "custom_missense_mutation", "hotspot_mutation"], "type": "string"}, {"type": "null"}], "default": null, "title": "Event"},
+        "limit": {"default": 20, "title": "Limit", "type": "integer"},
+        "lineage": {"title": "Lineage", "type": "string"},
+        "source": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Source"},
+        "target": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Target"}
+      },
+      "required": ["lineage"],
+      "title": "depmap_lineage_mutation_dependencyArguments",
+      "type": "object"
+    }
+  }
+}
