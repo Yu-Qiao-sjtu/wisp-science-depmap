@@ -4664,6 +4664,18 @@ mod tests {
             .contains(&json!("tcga_expression_survival")));
         assert!(validated_query(&json!({"mode":"pair"})).is_err());
         assert!(validated_query(&json!({
+            "mode":"top",
+            "module":"effect_correlation",
+            "source":"KRAS",
+            "limit":"5"
+        }))
+        .is_err());
+        assert!(validated_query(&json!({
+            "mode":"status",
+            "unexpected":true
+        }))
+        .is_err());
+        assert!(validated_query(&json!({
             "mode":"lineage_catalog","lineage":"Colorectal"
         }))
         .is_ok());

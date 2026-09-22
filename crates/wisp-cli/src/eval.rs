@@ -1061,13 +1061,14 @@ impl Tool for FixtureNativeTool {
     }
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
-        let schema = self.schema().function.parameters;
-        if let Err(error) = wisp_mcp::validate_tool_arguments(&schema, args) {
-            return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
-        }
         if self.name == wisp_core::DEPMAP_QUERY_TOOL_NAME {
             if let Err(error) = wisp_core::validate_depmap_query_arguments(args) {
                 return ToolResult::fail(format!("invalid DepMap fixture tool arguments: {error}"));
+            }
+        } else {
+            let schema = self.schema().function.parameters;
+            if let Err(error) = wisp_mcp::validate_tool_arguments(&schema, args) {
+                return ToolResult::fail(format!("invalid fixture tool arguments: {error}"));
             }
         }
         if self.fixture.error {
@@ -2334,61 +2335,6 @@ fn verify_semantic_quality(expect: &EvalExpectation, captured: &Captured) -> Vec
         .collect()
 }
 
-fn semantic_segment_has_predicate(segment: &str) -> bool {
-    let padded = format!(" {} ", segment.trim().to_lowercase());
-    [
-        " is ",
-        " are ",
-        " was ",
-        " were ",
-        " remains ",
-        " remain ",
-        " has ",
-        " have ",
-        " does ",
-        " do ",
-        " can ",
-        " cannot ",
-        " supports ",
-        " supported ",
-        " establishes ",
-        " established ",
-        " shows ",
-        " showed ",
-        " indicates ",
-        " indicated ",
-        " confirms ",
-        " confirmed ",
-        " validates ",
-        " validated ",
-        " detects ",
-        " detected ",
-        " observes ",
-        " observed ",
-    ]
-    .iter()
-    .any(|predicate| padded.contains(predicate))
-        || [
-            "显著",
-            "成立",
-            "支持",
-            "证明",
-            "表明",
-            "显示",
-            "确认",
-            "验证",
-            "观察到",
-            "检测到",
-            "存在",
-            "属于",
-            "返回",
-            "是",
-            "为",
-        ]
-        .iter()
-        .any(|predicate| segment.contains(predicate))
-}
-
 /// Return one boolean per sentence-level phrase occurrence: true means a
 /// nearby negation scopes over the phrase. This deliberately grades meaning,
 /// not the raw presence/absence of a scientifically loaded substring.
@@ -2440,25 +2386,28 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                     .filter_map(|boundary| sentence[end..].find(boundary).map(|index| end + index))
                     .min()
                     .unwrap_or(sentence.len());
-                // A coordinator starts a new target-side assertion only when
-                // the target has its own predicate. Coordinated objects share
-                // the predicate (and negation) on their left.
-                let clause_start =
-                    if semantic_segment_has_predicate(&sentence[end..base_clause_end]) {
-                        coordinator_boundaries
-                            .iter()
-                            .filter_map(|boundary| {
-                                prefix.rfind(boundary).map(|index| index + boundary.len())
-                            })
-                            .max()
-                            .unwrap_or(0)
-                            .max(clause_start)
-                    } else {
-                        clause_start
-                    };
-                // Likewise, end the target-side assertion at a coordinator
-                // only when both sides contain predicates. Coordinated
-                // subjects share the predicate (and negation) on their right.
+                // A coordinator before the target is a scope boundary when
+                // the target has its own following clause material. If the
+                // target ends at the hard boundary, it is a coordinated object
+                // and shares the predicate (and negation) on its left. This is
+                // structural: arbitrary scientific predicates need no verb
+                // allowlist.
+                let clause_start = if !sentence[end..base_clause_end].trim().is_empty() {
+                    coordinator_boundaries
+                        .iter()
+                        .filter_map(|boundary| {
+                            prefix.rfind(boundary).map(|index| index + boundary.len())
+                        })
+                        .max()
+                        .unwrap_or(0)
+                        .max(clause_start)
+                } else {
+                    clause_start
+                };
+                // A coordinator after the target is a scope boundary when the
+                // target already has clause material before it. Immediate
+                // coordination has no intervening material, so coordinated
+                // subjects retain their shared postposed predicate.
                 let clause_end = coordinator_boundaries
                     .iter()
                     .filter_map(|boundary| {
@@ -2466,12 +2415,7 @@ fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
                             .find(boundary)
                             .and_then(|relative| {
                                 let index = end + relative;
-                                let right = index + boundary.len();
-                                (semantic_segment_has_predicate(&sentence[end..index])
-                                    && semantic_segment_has_predicate(
-                                        &sentence[right..base_clause_end],
-                                    ))
-                                .then_some(index)
+                                (!sentence[end..index].trim().is_empty()).then_some(index)
                             })
                     })
                     .min()
@@ -3771,6 +3715,14 @@ mod tests {
         let captured = Captured {
             completion: Some(
                 "Causality was not established and synthetic lethality was significant.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
+
+        let captured = Captured {
+            completion: Some(
+                "Synthetic lethality was significant and not attributable to confounding.".into(),
             ),
             ..Captured::default()
         };

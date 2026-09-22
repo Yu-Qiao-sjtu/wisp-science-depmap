@@ -81,6 +81,8 @@ pub fn depmap_query_tool_schema() -> ToolSchema {
 /// Host-specific lineage alias canonicalization is intentionally applied by
 /// the desktop after this contract-level validation.
 pub fn validate_depmap_query_arguments(args: &Value) -> Result<Value, String> {
+    crate::scientific_intent::validate_discovered_schema(&depmap_query_schema(), args)
+        .map_err(|error| format!("invalid DepMap query schema: {error}"))?;
     let mode = required_string(args, "mode")?;
     let mut query = serde_json::Map::new();
     query.insert("mode".into(), Value::String(mode.clone()));
@@ -337,6 +339,18 @@ mod tests {
             "module":"unknown",
             "source":"KRAS",
             "target":"NRAS"
+        }))
+        .is_err());
+        assert!(validate_depmap_query_arguments(&json!({
+            "mode":"top",
+            "module":"effect_correlation",
+            "source":"KRAS",
+            "limit":"5"
+        }))
+        .is_err());
+        assert!(validate_depmap_query_arguments(&json!({
+            "mode":"status",
+            "unexpected":true
         }))
         .is_err());
     }
