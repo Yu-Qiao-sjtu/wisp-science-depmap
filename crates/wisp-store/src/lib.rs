@@ -10,6 +10,7 @@ mod agent_workflow_run_activities;
 mod agent_workflows;
 mod artifacts;
 mod ask_user_requests;
+mod bridge_checkpoints;
 mod codex_imports;
 mod execution_contexts;
 mod explorations;
@@ -55,6 +56,7 @@ pub use agent_workflows::{
 };
 pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
+pub use bridge_checkpoints::BridgeCheckpointRecord;
 pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
@@ -191,6 +193,9 @@ const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL: &str =
 // upstream project-stars migration arrived. Give the upstream migration a
 // new durable id so existing fork databases do not mistake it for 0056.
 const PROJECT_STARS_MIGRATION: &str = "0058_project_stars";
+const BRIDGE_CHECKPOINTS_MIGRATION: &str = "0059_bridge_checkpoints";
+const BRIDGE_CHECKPOINTS_MIGRATION_SQL: &str =
+    include_str!("../migrations/0059_bridge_checkpoints.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -775,6 +780,10 @@ impl Store {
             )
             .await?;
             Self::record_migration(pool, PROJECT_STARS_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, BRIDGE_CHECKPOINTS_MIGRATION).await? {
+            Self::execute_sql_script(pool, BRIDGE_CHECKPOINTS_MIGRATION_SQL).await?;
+            Self::record_migration(pool, BRIDGE_CHECKPOINTS_MIGRATION).await?;
         }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was

@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod archive;
+pub mod bridge_checkpoint;
 pub mod context;
 pub mod delegation;
 pub mod delegation_policy;
@@ -23,6 +24,11 @@ pub mod workflow_conversion;
 
 pub use agent::{
     agent_loop, agent_loop_continue, bound_tool_results_in_history, AgentLoopOutcome, GuidanceQueue,
+};
+pub use bridge_checkpoint::{
+    checkpoint_for_outcome, persist_checkpoint, resume_bridge_checkpoint, BridgeCheckpoint,
+    CheckpointState, ContractDigests, ResumeAction, ResumeEnvironment, ResumeOutcome,
+    BRIDGE_CHECKPOINT_CONTRACT, BRIDGE_CHECKPOINT_SCHEMA_VERSION,
 };
 pub use context::{
     repair_unpaired_tool_calls, tool_call_pairing, unpaired_tool_call_ids, ContextManager,

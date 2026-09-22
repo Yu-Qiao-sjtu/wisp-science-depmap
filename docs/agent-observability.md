@@ -91,3 +91,8 @@ and repeated-call rate.
 (model → tool → fake MCP → final response), approval pause/resume, delegated
 child causality, redaction of sensitive fixtures, retry vs cancel terminals,
 and local exporters. Those tests do not start a collector or use the network.
+
+Durable continuation of a paused scientific plan is a separate contract:
+[agent bridge checkpoints](agent-bridge-checkpoints.md). Trace causality is
+preserved across reconnect and Run monitoring; checkpoint state is not inferred
+from the transcript.
