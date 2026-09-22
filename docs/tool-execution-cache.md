@@ -10,8 +10,10 @@ Caching is fail-closed. A tool must be read-only, must not carry an approval,
 and must explicitly declare a certain, shareable result. Its fingerprint
 includes normalized arguments, Agent identity, authorization and policy scope,
 connector identity, a one-way credential/account revision, the discovered input
-schema, capability/schema versions, and release/index digests. Changing any
-credential or contract digest prevents replay. Connector-backed caching is
+schema, capability/schema versions, and release/index digests. The connector
+revision covers both credentials and non-secret transport configuration such
+as HTTP URL, stdio command/arguments, working directory, and proxy. Changing
+any credential, transport, or contract digest prevents replay. Connector-backed caching is
 disabled when the host cannot supply a non-secret authorization revision.
 
 MCP servers opt in through `_meta.wisp.cache`:
@@ -29,19 +31,24 @@ MCP servers opt in through `_meta.wisp.cache`:
   "sharedAuthorization": true,
   "certainOutcome": true,
   "safeStructuredEvidence": true,
+  "artifactFree": true,
   "maxConcurrency": 4,
   "maxQueue": 32
 }
 ```
 
-The version/digest, TTL, result-size, authorization, outcome, and safe-evidence
-fields are required for eligibility; durability and queue limits are optional.
+The version/digest, TTL, result-size, authorization, outcome, safe-evidence,
+and artifact-free fields are required for eligibility; durability and queue
+limits are optional.
 `sharedAuthorization` means the
 bounded result may be reused only within the host-provided authorization scope;
 it never permits sharing across scopes. `safeStructuredEvidence` asserts that
 the model-visible JSON contains no credentials, restricted raw matrices, or
 hidden server paths. MCP App tools are never cached because replay would skip
-their presentation and artifact side effects.
+their presentation and artifact side effects. `artifactFree` is an up-front
+promise that the response cannot materialize HTML or another project artifact;
+without it, the call also stays out of single-flight so each caller receives
+its own artifact events.
 
 Before returning an MCP cache hit, Wisp refreshes `tools/list` and compares the
 live registration, metadata, and schema with the registered snapshot. A change
@@ -50,8 +57,8 @@ served for the remainder of its TTL.
 
 Memory entries and project entries under `.wisp/tool-cache/v1/` are bounded.
 Only hashed filenames and a tool-provided structured JSON projection are
-persisted. Every cache directory component is checked with symlink/reparse-point
-metadata and final file I/O uses no-follow handles; unsafe durable paths fall
+persisted. Every cache directory component is opened through a retained
+capability directory handle, and file I/O uses relative no-follow opens; unsafe durable paths fall
 back to memory-only caching and are never pruned. When a cancelled MCP wait
 leaves provider work running, its connector/tool concurrency lease remains held
 until that request actually completes. Operational spans record `hit`, `miss`, `stale`, `bypass`,

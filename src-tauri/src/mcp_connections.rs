@@ -34,7 +34,8 @@ impl Spec {
         }
     }
     pub(crate) fn authorization_revision(&self) -> String {
-        match self {
+        use sha2::{Digest, Sha256};
+        let credential_revision = match self {
             Self::Custom(connection) => match &connection.transport {
                 McpTransport::Http {
                     auth: McpHttpAuth::OAuth,
@@ -42,11 +43,14 @@ impl Spec {
                 } => crate::mcp_oauth::credential_revision(&connection.id).unwrap_or_default(),
                 _ => crate::mcp_secrets::hydrated_secret_digest(connection),
             },
-            Self::Plugin(_) | Self::Development(_) => {
-                use sha2::{Digest, Sha256};
-                hex::encode(Sha256::digest(self.descriptor().as_bytes()))
-            }
-        }
+            Self::Plugin(_) | Self::Development(_) => String::new(),
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(b"wisp-mcp-authorization-revision-v2");
+        hasher.update(self.descriptor().as_bytes());
+        hasher.update([0]);
+        hasher.update(credential_revision.as_bytes());
+        hex::encode(hasher.finalize())
     }
     fn descriptor(&self) -> String {
         // Memory only; never log a descriptor (it may contain user-supplied env).
@@ -610,6 +614,44 @@ mod tests {
         hold_initialize: AtomicBool,
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
+    }
+
+    #[test]
+    fn authorization_revision_covers_non_secret_transport_configuration() {
+        let http = |url: &str| {
+            Spec::Custom(McpConnection {
+                id: "same-connector".into(),
+                name: "remote".into(),
+                enabled: true,
+                transport: McpTransport::Http {
+                    url: url.into(),
+                    headers: vec![],
+                    auth: McpHttpAuth::None,
+                },
+            })
+        };
+        assert_ne!(
+            http("https://first.example/mcp").authorization_revision(),
+            http("https://second.example/mcp").authorization_revision()
+        );
+
+        let stdio = |argument: &str| {
+            Spec::Custom(McpConnection {
+                id: "same-connector".into(),
+                name: "local".into(),
+                enabled: true,
+                transport: McpTransport::Stdio {
+                    command: "server".into(),
+                    args: vec![argument.into()],
+                    env: vec![],
+                    cwd: Some("workspace".into()),
+                },
+            })
+        };
+        assert_ne!(
+            stdio("--first").authorization_revision(),
+            stdio("--second").authorization_revision()
+        );
     }
 
     async fn lifecycle_fixture() -> (

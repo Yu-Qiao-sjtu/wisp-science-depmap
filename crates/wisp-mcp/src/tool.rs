@@ -32,7 +32,8 @@ fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
         .unwrap_or(policy.max_queue);
     let durable = cache.get("durable").and_then(Value::as_bool) == Some(true);
     let enabled = cache.get("enabled").and_then(Value::as_bool) == Some(true)
-        && cache.get("safeStructuredEvidence").and_then(Value::as_bool) == Some(true);
+        && cache.get("safeStructuredEvidence").and_then(Value::as_bool) == Some(true)
+        && cache.get("artifactFree").and_then(Value::as_bool) == Some(true);
     policy.cache = ToolCacheContract {
         mode: if !enabled {
             ToolCacheMode::Disabled
@@ -710,6 +711,7 @@ mod tests {
                 "sharedAuthorization": true,
                 "certainOutcome": true,
                 "safeStructuredEvidence": true,
+                "artifactFree": true,
                 "maxConcurrency": 999,
                 "maxQueue": 99_999
             }}
@@ -743,7 +745,8 @@ mod tests {
                 "ttlSeconds": 60,
                 "maxResultBytes": 1024,
                 "sharedAuthorization": true,
-                "certainOutcome": true
+                "certainOutcome": true,
+                "artifactFree": true
             }}
         })));
         assert_eq!(retracted.cache.mode, ToolCacheMode::Disabled);
@@ -787,6 +790,18 @@ mod tests {
             "wisp": {"cache": {
                 "enabled": true,
                 "safeStructuredEvidence": true
+            }}
+        }));
+        assert_eq!(
+            execution_policy_for_remote(&remote).cache.mode,
+            ToolCacheMode::Disabled
+        );
+
+        remote.meta = Some(json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "safeStructuredEvidence": true,
+                "artifactFree": true
             }},
             "ui": {"resourceUri": "ui://example/app"}
         }));
