@@ -17,6 +17,13 @@ The default eval suite uses a deterministic scripted provider, temporary
 workspaces, and fixture MCP/subagent boundaries, so it requires no API key,
 network, SSH host, GPU, scheduler, Python, or R installation.
 
+DepMap-tagged cases also pass through `wisp.agent-assembly.v1`, the same
+post-wiring assembly surface used by desktop turns. It pins the Specialist
+identity and shared instruction contract, captures the eager tool schemas and
+deferred MCP projection, and records approval/context policy before execution.
+The evaluator therefore cannot silently drift to a different prompt or schema
+surface while still exercising the production Agent loop.
+
 ## Independent Workflow conversion (CLI)
 
 Interactive, `run`, and `rpc` Agents expose `create_workflow`,
@@ -117,7 +124,8 @@ The suite covers reads and exact edits, shell execution, persisted local Runs
 Python and R runtime cells, approval denial, skills, deferred MCP discovery,
 read-only subagent delegation, resume without tool replay, session restart,
 queued guidance, cancellation, vision fallback, manual compaction, plan-mode
-refusals, and the shared agent observability contract (local JSONL traces under
+refusals, clarification pauses, provider failure, bounded-stop summaries, and
+the shared agent observability contract (local JSONL traces under
 `.wisp/traces/`; see [agent observability](agent-observability.md)).
 gating, and project path containment.
 
@@ -138,7 +146,10 @@ cargo run -p wisp-cli -- eval \
 Every trajectory is JSONL with schema `wisp.agent-trajectory.v1`. It includes
 the full provider requests, messages, tool call IDs, parsed tool arguments,
 tool results, approvals, compaction events, and usage. The JSON summary uses
-`wisp.agent-eval-report.v1`.
+`wisp.agent-eval-report.v1`. Reports keep `contract_failures` separate from
+`model_quality_failures`; the latter also has an explicit check count and score.
+This prevents a model-quality change from being mistaken for a broken runtime
+contract.
 
 ### Budgets and baselines
 
@@ -174,6 +185,12 @@ provider. Live mode requires the normal `WISP_API_KEY`, `WISP_PROVIDER`, and
 a dedicated vision model instead of being sent to the chat model. Scripted
 steps are ignored in live mode; live suites should use tolerant semantic
 assertions rather than exact prose.
+
+`expect.semantic_claims` provides a small negation-aware assertion for loaded
+scientific phrases. For example, `{phrase: synthetic lethality, polarity:
+negated}` accepts “does not establish synthetic lethality” and rejects an
+affirmative claim. Keep exact protocol, tool, schema, and budget checks in the
+ordinary deterministic expectation fields.
 
 ### DepMap natural-language intent regression
 
@@ -386,6 +403,8 @@ cases:
       tool_order: [read, attempt_completion]
       tool_args:
         - {name: read, pointer: /path, equals: config.toml}
+      semantic_claims:
+        - {phrase: synthetic lethality, polarity: negated}
 ```
 
 Fixture paths must be relative and remain under the temporary project.

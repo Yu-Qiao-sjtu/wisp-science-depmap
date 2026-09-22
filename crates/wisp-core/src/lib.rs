@@ -2,6 +2,7 @@
 //! agent loop, markdown memory, and memory tools.
 
 pub mod agent;
+pub mod agent_assembly;
 pub mod archive;
 pub mod bridge_checkpoint;
 pub mod claim_record;
@@ -25,6 +26,11 @@ pub mod workflow_conversion;
 
 pub use agent::{
     agent_loop, agent_loop_continue, bound_tool_results_in_history, AgentLoopOutcome, GuidanceQueue,
+};
+pub use agent_assembly::{
+    apply_agent_assembly, assemble_depmap_agent_surface, AgentApprovalPolicy, AgentAssemblySurface,
+    AgentContextPolicy, AGENT_ASSEMBLY_CONTRACT, DEPMAP_ASSEMBLY_SECTION_MARKER,
+    DEPMAP_PRODUCTION_INSTRUCTIONS,
 };
 pub use bridge_checkpoint::{
     checkpoint_for_outcome, checkpoint_resume_injection, latest_pending_checkpoint,

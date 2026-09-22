@@ -295,6 +295,10 @@ struct EvalExpectation {
     completion_contains: Vec<String>,
     #[serde(default)]
     completion_not_contains: Vec<String>,
+    /// Negation-aware scientific meaning checks. These are reported as model
+    /// quality rather than deterministic runtime-contract failures.
+    #[serde(default)]
+    semantic_claims: Vec<SemanticClaimExpectation>,
     #[serde(default)]
     expected_files: BTreeMap<String, String>,
     #[serde(default)]
@@ -323,6 +327,8 @@ struct EvalExpectation {
     #[serde(default)]
     approvals: Option<usize>,
     #[serde(default)]
+    stop_reason: Option<String>,
+    #[serde(default)]
     remaining_script: Option<usize>,
     #[serde(default)]
     compactions: Option<usize>,
@@ -345,6 +351,7 @@ impl Default for EvalExpectation {
             error_contains: Vec::new(),
             completion_contains: Vec::new(),
             completion_not_contains: Vec::new(),
+            semantic_claims: Vec::new(),
             expected_files: BTreeMap::new(),
             file_contains: BTreeMap::new(),
             deleted_files: Vec::new(),
@@ -356,12 +363,26 @@ impl Default for EvalExpectation {
             final_request_contains: Vec::new(),
             final_request_not_contains: Vec::new(),
             approvals: None,
+            stop_reason: None,
             remaining_script: None,
             compactions: None,
             compaction_strategies: Vec::new(),
             max_compaction_ratio_percent: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SemanticClaimExpectation {
+    phrase: String,
+    polarity: SemanticPolarity,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SemanticPolarity {
+    Affirmed,
+    Negated,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,6 +426,7 @@ struct Captured {
     cached_tokens: u64,
     completion: Option<String>,
     approvals: Vec<bool>,
+    stop_reasons: Vec<String>,
     compactions: Vec<CompactionRecord>,
     events: Vec<TrajectoryEvent>,
 }
@@ -484,6 +506,16 @@ impl EvalOutput {
             .lock()
             .expect("eval capture mutex poisoned")
             .clone()
+    }
+
+    fn record_stop_reason(&self, outcome: &wisp_core::AgentLoopOutcome) {
+        if let Some(reason) = outcome.stop_reason() {
+            self.captured
+                .lock()
+                .expect("eval capture mutex poisoned")
+                .stop_reasons
+                .push(reason.into());
+        }
     }
 }
 
@@ -709,10 +741,20 @@ struct ScenarioResult {
     repetition: usize,
     passed: bool,
     failures: Vec<String>,
+    #[serde(default)]
+    contract_failures: Vec<String>,
+    #[serde(default)]
+    model_quality_failures: Vec<String>,
+    #[serde(default)]
+    model_quality_checks: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_quality_score_percent: Option<u64>,
     duration_ms: u64,
     rounds: usize,
     tool_calls: Vec<ToolCallRecord>,
     tool_errors: u64,
+    #[serde(default)]
+    stop_reasons: Vec<String>,
     input_tokens: u64,
     output_tokens: u64,
     reasoning_tokens: u64,
@@ -737,6 +779,14 @@ struct ReportSummary {
     attempts: usize,
     passed: usize,
     pass_rate_percent: u64,
+    #[serde(default)]
+    deterministic_contract_failures: u64,
+    #[serde(default)]
+    model_quality_failures: u64,
+    #[serde(default)]
+    model_quality_checks: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_quality_score_percent: Option<u64>,
     duration_ms: u64,
     rounds: usize,
     tool_calls: u64,
@@ -1363,7 +1413,7 @@ async fn run_case(
     let captured = output.snapshot();
     let after = snapshot_workspace(workspace.path())?;
     let cost_microusd = calculate_cost(&captured, &options);
-    let mut failures = verify_case(
+    let mut contract_failures = verify_case(
         &case,
         &before,
         &after,
@@ -1376,8 +1426,19 @@ async fn run_case(
         &captured,
         duration_ms,
         cost_microusd,
-        &mut failures,
+        &mut contract_failures,
     );
+    let model_quality_failures = verify_semantic_quality(&case.expect, &captured);
+    let model_quality_checks = case.expect.semantic_claims.len();
+    let model_quality_score_percent = (model_quality_checks > 0).then(|| {
+        let passed = model_quality_checks.saturating_sub(model_quality_failures.len());
+        (passed as u64 * 100) / model_quality_checks as u64
+    });
+    let failures = contract_failures
+        .iter()
+        .chain(&model_quality_failures)
+        .cloned()
+        .collect::<Vec<_>>();
 
     let trajectory_path = if let Some(artifacts) = &options.artifacts {
         Some(write_trajectory(
@@ -1435,10 +1496,15 @@ async fn run_case(
         repetition,
         passed,
         failures,
+        contract_failures,
+        model_quality_failures,
+        model_quality_checks,
+        model_quality_score_percent,
         duration_ms,
         rounds: captured.rounds,
         tool_calls: captured.tool_calls,
         tool_errors: captured.tool_errors,
+        stop_reasons: captured.stop_reasons,
         input_tokens: captured.input_tokens,
         output_tokens: captured.output_tokens,
         reasoning_tokens: captured.reasoning_tokens,
@@ -1578,6 +1644,20 @@ fn build_agent(
     agent
         .ctx
         .set_claim_catalog(Some(wisp_core::ClaimGroundingCatalog::default()));
+    if case.tags.iter().any(|tag| tag == "depmap") {
+        let surface = wisp_core::assemble_depmap_agent_surface(
+            &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+            &agent.tools,
+            wisp_core::AgentContextPolicy {
+                max_context_tokens: max_context,
+                max_rounds,
+                auto_compact: case.auto_compact.unwrap_or(true),
+            },
+            case.plan_mode,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+        wisp_core::apply_agent_assembly(&mut agent.ctx, &surface);
+    }
     Ok(agent)
 }
 
@@ -1635,6 +1715,9 @@ async fn run_actions(
                         (!guidance.is_empty()).then_some(&queue),
                     )
                     .await;
+                if let Ok(outcome) = &result {
+                    output.record_stop_reason(outcome);
+                }
                 if let Err(error) = result {
                     output.push(
                         "action_error",
@@ -1652,6 +1735,9 @@ async fn run_actions(
             }
             EvalAction::Resume { allow_error } => {
                 let result = agent.run_resume(output, Some(cancel), None).await;
+                if let Ok(outcome) = &result {
+                    output.record_stop_reason(outcome);
+                }
                 if let Err(error) = result {
                     output.push(
                         "action_error",
@@ -1802,6 +1888,18 @@ fn verify_case(
             ));
         }
     }
+    if let Some(expected) = &case.expect.stop_reason {
+        if !captured
+            .stop_reasons
+            .iter()
+            .any(|reason| reason == expected)
+        {
+            failures.push(format!(
+                "expected stop reason '{expected}', observed {:?}",
+                captured.stop_reasons
+            ));
+        }
+    }
     if let Some(expected) = case.expect.compactions {
         if captured.compactions.len() != expected {
             failures.push(format!(
@@ -1942,6 +2040,79 @@ fn verify_case(
     failures
 }
 
+fn verify_semantic_quality(expect: &EvalExpectation, captured: &Captured) -> Vec<String> {
+    let completion = captured.completion.as_deref().unwrap_or_default();
+    expect
+        .semantic_claims
+        .iter()
+        .filter_map(|claim| {
+            let observed = semantic_polarities(completion, &claim.phrase);
+            let matched = match claim.polarity {
+                SemanticPolarity::Affirmed => observed.iter().any(|negated| !negated),
+                SemanticPolarity::Negated => observed.iter().any(|negated| *negated),
+            };
+            (!matched).then(|| {
+                format!(
+                    "model-quality claim '{}' was not observed as {}",
+                    claim.phrase,
+                    match claim.polarity {
+                        SemanticPolarity::Affirmed => "affirmed",
+                        SemanticPolarity::Negated => "negated",
+                    }
+                )
+            })
+        })
+        .collect()
+}
+
+/// Return one boolean per sentence-level phrase occurrence: true means a
+/// nearby negation scopes over the phrase. This deliberately grades meaning,
+/// not the raw presence/absence of a scientifically loaded substring.
+fn semantic_polarities(text: &str, phrase: &str) -> Vec<bool> {
+    let phrase = phrase.trim().to_lowercase();
+    if phrase.is_empty() {
+        return Vec::new();
+    }
+    text.split(['.', '!', '?', ';', '\n', '。', '！', '？', '；'])
+        .flat_map(|sentence| {
+            let sentence = sentence.to_lowercase();
+            let phrase = phrase.clone();
+            let mut offset = 0;
+            std::iter::from_fn(move || {
+                let relative = sentence.get(offset..)?.find(&phrase)?;
+                let start = offset + relative;
+                let prefix = &sentence[..start];
+                let window_start = prefix
+                    .char_indices()
+                    .rev()
+                    .nth(79)
+                    .map(|(index, _)| index)
+                    .unwrap_or(0);
+                let nearby = &prefix[window_start..];
+                let negated = [
+                    " not ",
+                    " no ",
+                    " never ",
+                    " does not ",
+                    " doesn't ",
+                    " cannot ",
+                    " can't ",
+                    " without ",
+                    "不",
+                    "未",
+                    "非",
+                    "不能",
+                    "并未",
+                ]
+                .iter()
+                .any(|cue| format!(" {nearby}").contains(cue));
+                offset = start + phrase.len();
+                Some(negated)
+            })
+        })
+        .collect()
+}
+
 fn contains_folded(haystack: &str, needle: &str) -> bool {
     haystack
         .to_ascii_lowercase()
@@ -1956,11 +2127,20 @@ fn apply_limits(
     cost_microusd: u64,
     failures: &mut Vec<String>,
 ) {
+    let round_limit = limits.max_rounds.map(|value| {
+        value
+            + usize::from(
+                captured
+                    .stop_reasons
+                    .iter()
+                    .any(|reason| reason == "max_iterations"),
+            )
+    });
     for (label, actual, maximum) in [
         (
             "rounds",
             captured.rounds as u64,
-            limits.max_rounds.map(|value| value as u64),
+            round_limit.map(|value| value as u64),
         ),
         (
             "tool calls",
@@ -2094,6 +2274,18 @@ fn copy_dir_if_present(src: &Path, dest: &Path) -> Result<()> {
 
 fn summarize(results: &[ScenarioResult]) -> ReportSummary {
     let passed = results.iter().filter(|result| result.passed).count();
+    let deterministic_contract_failures = results
+        .iter()
+        .map(|result| result.contract_failures.len() as u64)
+        .sum::<u64>();
+    let model_quality_failures = results
+        .iter()
+        .map(|result| result.model_quality_failures.len() as u64)
+        .sum::<u64>();
+    let model_quality_checks = results
+        .iter()
+        .map(|result| result.model_quality_checks as u64)
+        .sum::<u64>();
     let compaction_before_tokens = results
         .iter()
         .flat_map(|result| &result.compactions)
@@ -2117,6 +2309,15 @@ fn summarize(results: &[ScenarioResult]) -> ReportSummary {
         } else {
             (passed as u64 * 100) / results.len() as u64
         },
+        deterministic_contract_failures,
+        model_quality_failures,
+        model_quality_checks,
+        model_quality_score_percent: (model_quality_checks > 0).then(|| {
+            model_quality_checks
+                .saturating_sub(model_quality_failures)
+                .saturating_mul(100)
+                / model_quality_checks
+        }),
         duration_ms: results.iter().map(|result| result.duration_ms).sum(),
         rounds: results.iter().map(|result| result.rounds).sum(),
         tool_calls: results
@@ -2426,6 +2627,9 @@ mod tests {
             "skills",
             "mcp",
             "approval",
+            "clarification",
+            "provider",
+            "bounded-stop",
             "resume",
             "session",
             "guidance",
@@ -3056,5 +3260,39 @@ mod tests {
             Some(&provider)
         )
         .is_empty());
+    }
+
+    #[test]
+    fn semantic_grader_does_not_fail_a_negated_scientific_phrase() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some(
+                "This observational result does not establish synthetic lethality.".into(),
+            ),
+            ..Captured::default()
+        };
+        assert!(verify_semantic_quality(&expect, &captured).is_empty());
+    }
+
+    #[test]
+    fn semantic_grader_rejects_the_opposite_polarity() {
+        let expect = EvalExpectation {
+            semantic_claims: vec![SemanticClaimExpectation {
+                phrase: "synthetic lethality".into(),
+                polarity: SemanticPolarity::Negated,
+            }],
+            ..EvalExpectation::default()
+        };
+        let captured = Captured {
+            completion: Some("This result establishes synthetic lethality.".into()),
+            ..Captured::default()
+        };
+        assert_eq!(verify_semantic_quality(&expect, &captured).len(), 1);
     }
 }

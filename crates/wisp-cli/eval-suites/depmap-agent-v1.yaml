@@ -34,6 +34,7 @@ cases:
     expect:
       completion_contains: [26Q1, "169.7565", "17", "14"]
       completion_not_contains: ["1.9 TB"]
+      request_contains: ["[DepMap Production Agent Contract]"]
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [shell, read, write, edit, run_in_context]
       tool_order: [depmap_query, attempt_completion]
@@ -507,6 +508,8 @@ cases:
     expect:
       completion_contains: [没有完成, "n=25", "-0.721", "0.093", 没有分组阈值, 新计算, 不证明合成致死]
       completion_not_contains: ["TF-high synthetic dependency screen 已完成", "唯一 FDR", "直接数据支撑"]
+      semantic_claims:
+        - {phrase: 合成致死, polarity: negated}
       required_tools: [depmap_query, attempt_completion]
       forbidden_tools: [depmap_project_runs, depmap_evidence, shell, read, write, edit, run_in_context, python]
       tool_order: [depmap_query, attempt_completion]

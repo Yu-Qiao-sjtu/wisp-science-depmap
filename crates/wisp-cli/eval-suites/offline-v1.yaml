@@ -158,6 +158,60 @@ cases:
       required_tools: [write, attempt_completion]
       approvals: 1
 
+  - id: clarification-pause
+    description: A real ambiguity emits the native question card and ends the turn.
+    tags: [clarification, lifecycle]
+    prompt: Ask which reference genome to use before doing any work.
+    allowed_tools: [ask_user]
+    script:
+      - tool_calls:
+          - id: ask-1
+            name: ask_user
+            arguments:
+              question: Which reference genome should I use?
+              options:
+                - {label: GRCh38, description: Current standard reference.}
+                - {label: T2T-CHM13, description: Telomere-to-telomere reference.}
+              allow_freeform: true
+    expect:
+      required_tools: [ask_user]
+      forbidden_tools: [read, write, edit, shell, attempt_completion]
+      tool_args:
+        - {name: ask_user, pointer: /question, equals: "Which reference genome should I use?"}
+
+  - id: provider-failure
+    description: A deterministic provider failure is typed and does not dispatch a tool.
+    tags: [provider, failure, recovery]
+    prompt: Exercise the provider failure path.
+    allowed_tools: [attempt_completion]
+    script:
+      - api_error: {status: 400, body: EVAL_PROVIDER_FAILURE}
+    expect:
+      outcome: error
+      error_contains: [EVAL_PROVIDER_FAILURE]
+      forbidden_tools: [attempt_completion]
+
+  - id: bounded-stop-summary
+    description: The iteration budget produces one tool-free final status summary.
+    tags: [bounded-stop, context, recovery]
+    prompt: Inspect marker.txt, then keep investigating indefinitely.
+    files:
+      marker.txt: "BOUND_MARKER\n"
+    allowed_tools: [read, attempt_completion]
+    limits: {max_rounds: 1}
+    script:
+      - tool_calls:
+          - {id: read-1, name: read, arguments: {path: marker.txt}}
+      - content: "Iteration limit reached. The marker was read; further investigation remains."
+        finish_reason: stop
+    expect:
+      required_tools: [read]
+      forbidden_tools: [attempt_completion]
+      stop_reason: max_iterations
+      final_request_contains: ["maximum of 1 model/tool iterations"]
+      tool_args:
+        - {name: read, pointer: /path, equals: marker.txt}
+
   - id: skill-loading
     description: Discover and load a project-local Skill through production tools.
     tags: [skills]

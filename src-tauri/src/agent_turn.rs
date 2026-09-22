@@ -836,6 +836,18 @@ pub(crate) async fn send_message_inner(
                 .with_tool_catalog(tool_catalog),
             ));
             wisp_core::install_scientific_intent_planner_in(&mut agent.tools, &ap.id, &frame_id);
+            let surface = wisp_core::assemble_depmap_agent_surface(
+                &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+                &agent.tools,
+                wisp_core::AgentContextPolicy {
+                    max_context_tokens: max_context,
+                    max_rounds: max_iter,
+                    auto_compact: load_auto_compact_enabled(&state.store).await,
+                },
+                plan_mode_enabled,
+            )
+            .map_err(|error| error.to_string())?;
+            wisp_core::apply_agent_assembly(&mut agent.ctx, &surface);
         }
         {
             let mut observed = state.plugin_runtime_errors.lock().unwrap();
