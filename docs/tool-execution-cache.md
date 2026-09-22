@@ -66,7 +66,9 @@ Memory entries and project entries under `.wisp/tool-cache/v1/` are bounded.
 Only hashed filenames and a tool-provided structured JSON projection are
 persisted. Every cache directory component is opened through a retained
 capability directory handle, and file I/O uses relative no-follow opens; unsafe durable paths fall
-back to memory-only caching and are never pruned. When a cancelled MCP wait
+back to memory-only caching and are never pruned. Entries are written to a
+create-new sibling and atomically replaced, so an existing hard link is never
+opened for truncation. When a cancelled MCP wait
 leaves provider work running, its connector/tool concurrency lease remains held
 until that request actually completes. A cancelled single-flight leader releases
 its conversation immediately while the independently owned provider request

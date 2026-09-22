@@ -19,7 +19,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -963,14 +963,36 @@ fn read_durable_entry(
 }
 
 fn write_durable_entry(directory: &Dir, file_name: &str, bytes: &[u8]) -> std::io::Result<()> {
-    let mut options = OpenOptions::new();
-    options
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .follow(FollowSymlinks::No);
-    let mut file = directory.open_with(file_name, &options)?;
-    file.write_all(bytes)
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+    for _ in 0..32 {
+        let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let temporary = format!(".{file_name}.tmp-{}-{sequence}", std::process::id());
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        let mut file = match directory.open_with(&temporary, &options) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = file.write_all(bytes) {
+            drop(file);
+            let _ = directory.remove_file(&temporary);
+            return Err(error);
+        }
+        drop(file);
+        if let Err(error) = directory.rename(&temporary, directory, file_name) {
+            let _ = directory.remove_file(&temporary);
+            return Err(error);
+        }
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique durable-cache temporary file",
+    ))
 }
 
 fn enforce_durable_bounds(directory: &Dir, env: &dyn ToolEnv) {
@@ -1813,6 +1835,30 @@ mod tests {
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn durable_cache_replaces_hard_link_without_truncating_its_target() {
+        let project = root("durable-hard-link-project");
+        let outside = root("durable-hard-link-outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("keep.json");
+        std::fs::write(&outside_file, b"keep").unwrap();
+        let directory = validated_durable_directory(&project, true).unwrap();
+        let cache_file = project
+            .join(".wisp")
+            .join("tool-cache")
+            .join("v1")
+            .join("linked.json");
+        std::fs::hard_link(&outside_file, &cache_file).unwrap();
+
+        write_durable_entry(&directory, "linked.json", b"replacement").unwrap();
+
+        assert_eq!(std::fs::read(&outside_file).unwrap(), b"keep");
+        assert_eq!(std::fs::read(&cache_file).unwrap(), b"replacement");
+        let _ = std::fs::remove_dir_all(project);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[cfg(unix)]
