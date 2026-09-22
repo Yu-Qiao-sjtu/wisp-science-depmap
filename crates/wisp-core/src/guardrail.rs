@@ -3,6 +3,7 @@
 //! Host stages run in a fixed order. A later stage cannot turn a denial into
 //! an allow, reuse a stale approval, or execute before required approval.
 
+use crate::claim_record::{claims_from_output, validate_claims, ClaimGroundingCatalog};
 use crate::observability::SpanGuard;
 use crate::scientific_intent::validate_discovered_schema;
 use serde::{Deserialize, Serialize};
@@ -157,6 +158,7 @@ pub struct GuardrailContext {
     pub stale_approval: bool,
     pub output: Option<Value>,
     pub output_contract: Option<Value>,
+    pub claim_catalog: Option<ClaimGroundingCatalog>,
 }
 
 pub trait Guardrail: Send + Sync {
@@ -180,6 +182,7 @@ impl GuardrailChain {
                 Box::new(ApprovalPolicyRail),
                 Box::new(ToolInputSchemaRail),
                 Box::new(FinalOutputContractRail),
+                Box::new(ClaimGroundingRail),
             ],
         }
     }
@@ -372,6 +375,47 @@ impl Guardrail for FinalOutputContractRail {
     }
 }
 
+struct ClaimGroundingRail;
+impl Guardrail for ClaimGroundingRail {
+    fn id(&self) -> &'static str {
+        "claim_grounding"
+    }
+    fn stage(&self) -> GuardrailStage {
+        GuardrailStage::FinalOutput
+    }
+    fn evaluate(&self, ctx: &GuardrailContext) -> GuardrailDecision {
+        let Some(output) = &ctx.output else {
+            return GuardrailDecision::Allow;
+        };
+        let claims = match claims_from_output(output) {
+            Ok(claims) => claims,
+            Err(reason) => {
+                return GuardrailDecision::Reject {
+                    severity: GuardrailSeverity::Terminal,
+                    reason,
+                };
+            }
+        };
+        if claims.is_empty() {
+            return GuardrailDecision::Allow;
+        }
+        let Some(catalog) = &ctx.claim_catalog else {
+            return GuardrailDecision::Reject {
+                severity: GuardrailSeverity::Terminal,
+                reason: "claim grounding failed: catalog_missing".into(),
+            };
+        };
+        let report = validate_claims(&claims, catalog);
+        match report.typed_reason() {
+            Some(reason) => GuardrailDecision::Reject {
+                severity: GuardrailSeverity::Terminal,
+                reason,
+            },
+            None => GuardrailDecision::Allow,
+        }
+    }
+}
+
 /// Shared host entry used by direct, deferred MCP, delegated, and resumed paths.
 pub fn evaluate_tool_input(
     chain: &GuardrailChain,
@@ -425,6 +469,7 @@ mod tests {
             stale_approval: false,
             output: None,
             output_contract: None,
+            claim_catalog: None,
         }
     }
 
@@ -511,6 +556,7 @@ mod tests {
                     "required": ["status"],
                     "additionalProperties": false
                 })),
+                claim_catalog: None,
             },
             None,
         );
@@ -572,6 +618,7 @@ mod tests {
             stale_approval: false,
             output: None,
             output_contract: None,
+            claim_catalog: None,
         };
         let outcome = evaluate_tool_input(&GuardrailChain::production(), nested, None);
         assert_eq!(outcome.decision.as_str(), "recoverable_reject");
@@ -587,6 +634,7 @@ mod tests {
             stale_approval: false,
             output: None,
             output_contract: None,
+            claim_catalog: None,
         };
         let missing_outcome = evaluate_tool_input(&GuardrailChain::production(), missing, None);
         match missing_outcome.decision {
@@ -622,5 +670,61 @@ mod tests {
         let encoded = trace.memory().unwrap().document().encoded();
         assert!(encoded.contains("recoverable_reject"));
         assert!(!encoded.contains("\"guardrail_outcome\":\"allow\""));
+    }
+
+    #[test]
+    fn claim_grounding_rejects_a_transposed_p_value() {
+        let catalog = ClaimGroundingCatalog {
+            evidence: vec![crate::claim_record::GroundedEvidence {
+                evidence_id: "ev-1".into(),
+                evidence_state: "FOUND".into(),
+                source_version: "digest-a".into(),
+                provider_version: Some("26Q1".into()),
+                subject: None,
+                scope: None,
+                metric: None,
+                value: None,
+                unit: None,
+                direction: None,
+                p_value: Some(0.001),
+                sample_count: None,
+            }],
+            ..ClaimGroundingCatalog::default()
+        };
+        let claim = serde_json::json!({
+            "contract": crate::CLAIM_RECORD_CONTRACT,
+            "schema_version": 1,
+            "claim_id": "c1",
+            "kind": "measured_fact",
+            "p_value": 0.04,
+            "sources": [{
+                "kind": "evidence",
+                "id": "ev-1",
+                "source_version": "digest-a"
+            }]
+        });
+        let outcome = evaluate_final_output(
+            &GuardrailChain::production(),
+            GuardrailContext {
+                path: DispatchPath::Direct,
+                tool: String::new(),
+                arguments: Value::Null,
+                schema: None,
+                allowed_tools: None,
+                approval_required: false,
+                approval_granted: false,
+                stale_approval: false,
+                output: Some(serde_json::json!({"answer": "p=0.04", "claims": [claim]})),
+                output_contract: None,
+                claim_catalog: Some(catalog),
+            },
+            None,
+        );
+        match outcome.decision {
+            GuardrailDecision::Reject { reason, .. } => {
+                assert!(reason.contains("value_mismatch"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

@@ -333,6 +333,9 @@ pub struct ContextManager {
     active_turn_allowed_tools: Option<Vec<String>>,
     /// Optional typed contract for the model's empty-tool-call completion.
     output_contract: Option<serde_json::Value>,
+    /// Local Evidence/Run/Artifact/Paper snapshots used to ground ClaimRecords.
+    claim_catalog: Option<crate::claim_record::ClaimGroundingCatalog>,
+    claim_persist: Option<crate::claim_record::ClaimPersistHook>,
 }
 
 impl ContextManager {
@@ -360,6 +363,8 @@ impl ContextManager {
             auto_compact_retry_floor: None,
             active_turn_allowed_tools: None,
             output_contract: None,
+            claim_catalog: None,
+            claim_persist: None,
         }
     }
 
@@ -381,6 +386,25 @@ impl ContextManager {
 
     pub fn output_contract(&self) -> Option<&serde_json::Value> {
         self.output_contract.as_ref()
+    }
+
+    pub fn set_claim_catalog(
+        &mut self,
+        catalog: Option<crate::claim_record::ClaimGroundingCatalog>,
+    ) {
+        self.claim_catalog = catalog;
+    }
+
+    pub fn claim_catalog(&self) -> Option<&crate::claim_record::ClaimGroundingCatalog> {
+        self.claim_catalog.as_ref()
+    }
+
+    pub fn set_claim_persist(&mut self, persist: Option<crate::claim_record::ClaimPersistHook>) {
+        self.claim_persist = persist;
+    }
+
+    pub fn claim_persist(&self) -> Option<&crate::claim_record::ClaimPersistHook> {
+        self.claim_persist.as_ref()
     }
 
     pub fn len(&self) -> usize {

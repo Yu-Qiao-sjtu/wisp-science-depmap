@@ -373,10 +373,15 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
 pub struct StreamSinkAdapter<'a> {
     out: &'a dyn Output,
     cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    buffered_text: String,
 }
 impl<'a> StreamSinkAdapter<'a> {
     pub fn new(out: &'a dyn Output) -> Self {
-        Self { out, cancel: None }
+        Self {
+            out,
+            cancel: None,
+            buffered_text: String::new(),
+        }
     }
     /// Like `new`, but the streaming loop can poll `is_cancelled()` to stop
     /// token generation mid-stream when the user hits Stop.
@@ -384,12 +389,28 @@ impl<'a> StreamSinkAdapter<'a> {
         Self {
             out,
             cancel: Some(cancel),
+            buffered_text: String::new(),
         }
+    }
+
+    pub fn clear_buffered_text(&mut self) {
+        self.buffered_text.clear();
+    }
+
+    pub fn flush_assistant_text(&mut self) {
+        if !self.buffered_text.is_empty() {
+            self.out.assistant_text(&self.buffered_text);
+            self.buffered_text.clear();
+        }
+    }
+
+    pub fn discard_assistant_text(&mut self) {
+        self.buffered_text.clear();
     }
 }
 impl<'a> wisp_llm::StreamSink for StreamSinkAdapter<'a> {
     fn on_text(&mut self, delta: &str) {
-        self.out.assistant_text(delta);
+        self.buffered_text.push_str(delta);
     }
     fn on_reasoning(&mut self, delta: &str) {
         self.out.reasoning(delta);
@@ -425,6 +446,23 @@ mod tests {
         );
         // A sink built without a cancel flag never reports cancelled.
         assert!(!StreamSinkAdapter::new(&out).is_cancelled());
+    }
+
+    struct CaptureText(std::sync::Mutex<String>);
+    impl Output for CaptureText {
+        fn assistant_text(&self, delta: &str) {
+            self.0.lock().unwrap().push_str(delta);
+        }
+    }
+
+    #[test]
+    fn stream_sink_holds_assistant_text_until_flush() {
+        let out = CaptureText(std::sync::Mutex::new(String::new()));
+        let mut sink = StreamSinkAdapter::new(&out);
+        sink.on_text("secret");
+        assert!(out.0.lock().unwrap().is_empty());
+        sink.flush_assistant_text();
+        assert_eq!(out.0.lock().unwrap().as_str(), "secret");
     }
 
     struct AsyncConfirmOutput {

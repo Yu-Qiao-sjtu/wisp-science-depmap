@@ -1265,6 +1265,13 @@ pub(crate) async fn send_message_inner(
     // model since the last one, and images already in history must follow the
     // model that is about to receive them, not the one that accepted them.
     agent.ctx.supports_vision = primary_supports_vision;
+    crate::claim_catalog::install_session_claim_grounding(
+        &mut agent.ctx,
+        &state.store,
+        &ap.id,
+        &frame_id,
+    )
+    .await;
     rt.effective_max_iter.store(max_iter, Ordering::SeqCst);
     rt.effective_max_iter_known.store(true, Ordering::SeqCst);
     state.running_turns.lock().await.insert(frame_id.clone());

@@ -29,6 +29,7 @@ mod artifact_commands;
 mod browser_bridge;
 mod browser_url_filters;
 mod channels;
+mod claim_catalog;
 mod codex_import;
 mod configure;
 mod connector_commands;

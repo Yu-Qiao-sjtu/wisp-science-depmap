@@ -6,7 +6,8 @@ waits, delegated children, Workflow/Run transitions, retries, compaction, and
 completion.
 
 This is an operational trace. It does **not** replace the user-facing
-trajectory or the scientific provenance ledger, and it does **not** capture
+trajectory, the scientific provenance ledger, or
+[claim grounding](agent-claim-grounding.md), and it does **not** capture
 chain-of-thought. Traces are written on disk by default and **do not upload**.
 
 ## Format and version

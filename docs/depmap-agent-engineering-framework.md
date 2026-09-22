@@ -504,7 +504,8 @@ coverage_gap
 4. `depmap_evidence_history` 支持列出本会话证据或按 id 恢复；
 5. 超过 256 KiB 的账本 payload 只保留元数据、字节数和 SHA-256，不把大结果复制进 SQLite。
 
-待补：ClaimRecord、回答生成前的数值 Claim 校验、证据详情 UI 和跨会话 release-aware 复用。
+待补：证据详情 UI 和跨会话 release-aware 复用。
+数值 Claim 在呈现前按 `wisp.claim-record.v1` 对照 Evidence/Run/Artifact/Paper 校验；见 [claim grounding](agent-claim-grounding.md)。
 
 ### Phase 3：缓存与工具发现
 
