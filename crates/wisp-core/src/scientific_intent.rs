@@ -1122,6 +1122,13 @@ fn validate_against_schema(schema: &Value, value: &Value, path: &str) -> Result<
             return Err(format!("{path} is not one of the allowed values"));
         }
     }
+    if let Some(const_value) = schema.get("const") {
+        if value != const_value {
+            return Err(format!("{path} does not match the required const value"));
+        }
+    }
+    validate_numeric_bounds(schema, value, path)?;
+    validate_string_constraints(schema, value, path)?;
     if let Some(object) = value.as_object() {
         if let Some(required) = schema.get("required").and_then(Value::as_array) {
             for name in required.iter().filter_map(Value::as_str) {
@@ -1140,6 +1147,16 @@ fn validate_against_schema(schema: &Value, value: &Value, path: &str) -> Result<
                 return Err(format!("{path} does not allow additional properties"));
             }
         }
+        if let Some(min_properties) = schema.get("minProperties").and_then(Value::as_u64) {
+            if (object.len() as u64) < min_properties {
+                return Err(format!("{path} has fewer properties than minProperties"));
+            }
+        }
+        if let Some(max_properties) = schema.get("maxProperties").and_then(Value::as_u64) {
+            if (object.len() as u64) > max_properties {
+                return Err(format!("{path} has more properties than maxProperties"));
+            }
+        }
         if let Some(properties) = properties {
             for (name, child) in object {
                 if let Some(child_schema) = properties.get(name) {
@@ -1148,9 +1165,87 @@ fn validate_against_schema(schema: &Value, value: &Value, path: &str) -> Result<
             }
         }
     }
-    if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
-        for (index, child) in array.iter().enumerate() {
-            validate_against_schema(items, child, &format!("{path}[{index}]"))?;
+    if let Some(array) = value.as_array() {
+        if let Some(min_items) = schema.get("minItems").and_then(Value::as_u64) {
+            if (array.len() as u64) < min_items {
+                return Err(format!("{path} has fewer items than minItems"));
+            }
+        }
+        if let Some(max_items) = schema.get("maxItems").and_then(Value::as_u64) {
+            if (array.len() as u64) > max_items {
+                return Err(format!("{path} has more items than maxItems"));
+            }
+        }
+        if let Some(items) = schema.get("items") {
+            for (index, child) in array.iter().enumerate() {
+                validate_against_schema(items, child, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_numeric_bounds(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    let Some(number) = value.as_f64() else {
+        return Ok(());
+    };
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+        let exclusive = schema
+            .get("exclusiveMinimum")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if exclusive && number <= minimum {
+            return Err(format!("{path} is not greater than exclusiveMinimum"));
+        }
+        if !exclusive && number < minimum {
+            return Err(format!("{path} is below minimum"));
+        }
+    }
+    if let Some(exclusive_minimum) = schema.get("exclusiveMinimum").and_then(Value::as_f64) {
+        if number <= exclusive_minimum {
+            return Err(format!("{path} is not greater than exclusiveMinimum"));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+        let exclusive = schema
+            .get("exclusiveMaximum")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if exclusive && number >= maximum {
+            return Err(format!("{path} is not less than exclusiveMaximum"));
+        }
+        if !exclusive && number > maximum {
+            return Err(format!("{path} is above maximum"));
+        }
+    }
+    if let Some(exclusive_maximum) = schema.get("exclusiveMaximum").and_then(Value::as_f64) {
+        if number >= exclusive_maximum {
+            return Err(format!("{path} is not less than exclusiveMaximum"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_constraints(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    let Some(text) = value.as_str() else {
+        return Ok(());
+    };
+    let len = text.chars().count() as u64;
+    if let Some(min_length) = schema.get("minLength").and_then(Value::as_u64) {
+        if len < min_length {
+            return Err(format!("{path} is shorter than minLength"));
+        }
+    }
+    if let Some(max_length) = schema.get("maxLength").and_then(Value::as_u64) {
+        if len > max_length {
+            return Err(format!("{path} is longer than maxLength"));
+        }
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        let regex = regex::Regex::new(pattern)
+            .map_err(|error| format!("{path} has an invalid schema pattern: {error}"))?;
+        if !regex.is_match(text) {
+            return Err(format!("{path} does not match the required pattern"));
         }
     }
     Ok(())
@@ -1635,6 +1730,56 @@ mod tests {
             validate_discovered_schema(&schema, &json!({"gene": "GENEA", "invented": true}))
                 .unwrap_err();
         assert!(invalid.contains("unexpected property"), "{invalid}");
+    }
+
+    #[test]
+    fn discovered_schema_enforces_bounds_pattern_and_const() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "gene": {"type": "string", "minLength": 3, "pattern": "^[A-Z0-9]+$"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 3},
+                "kind": {"const": "query"},
+                "ids": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}}
+            },
+            "required": ["gene", "count", "kind", "ids"],
+            "additionalProperties": false
+        });
+        validate_discovered_schema(
+            &schema,
+            &json!({"gene": "PTK7", "count": 2, "kind": "query", "ids": ["a"]}),
+        )
+        .unwrap();
+        let short = validate_discovered_schema(
+            &schema,
+            &json!({"gene": "AB", "count": 2, "kind": "query", "ids": ["a"]}),
+        )
+        .unwrap_err();
+        assert!(short.contains("minLength"), "{short}");
+        let pattern = validate_discovered_schema(
+            &schema,
+            &json!({"gene": "ptk7", "count": 2, "kind": "query", "ids": ["a"]}),
+        )
+        .unwrap_err();
+        assert!(pattern.contains("pattern"), "{pattern}");
+        let high = validate_discovered_schema(
+            &schema,
+            &json!({"gene": "PTK7", "count": 9, "kind": "query", "ids": ["a"]}),
+        )
+        .unwrap_err();
+        assert!(high.contains("maximum"), "{high}");
+        let empty = validate_discovered_schema(
+            &schema,
+            &json!({"gene": "PTK7", "count": 1, "kind": "query", "ids": []}),
+        )
+        .unwrap_err();
+        assert!(empty.contains("minItems"), "{empty}");
+        let constant = validate_discovered_schema(
+            &schema,
+            &json!({"gene": "PTK7", "count": 1, "kind": "other", "ids": ["a"]}),
+        )
+        .unwrap_err();
+        assert!(constant.contains("const"), "{constant}");
     }
 
     #[test]

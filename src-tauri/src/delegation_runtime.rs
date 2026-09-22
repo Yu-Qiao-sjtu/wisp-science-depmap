@@ -19,13 +19,14 @@ use wisp_acp::{
 };
 use wisp_core::{
     host_agent_observability, AgentArtifact, AgentBackend, AgentBudget, AgentDelegationLineage,
-    AgentDelegationRequest, AgentDelegationResponse, AgentDelegator, AgentEvidence, AgentExecutorRef,
-    AgentOrigin, AgentOutputSchemaSource, AgentRole, AgentSessionPolicy, AgentSpec, AgentTrace,
-    AgentUsage, CapabilityRegistry, ContextPolicy, DelegationExecutionObserver,
-    DelegationExecutionResult, DelegationExecutionStatus, DelegationExecutor, DelegationHostPolicy,
-    DelegationMode, DelegationPlan, DelegationStatus, ExecutorFeature, ExecutorProfilePolicy,
-    HostObservabilityConfig, ModelFeature, ModelProfilePolicy, ObservabilityHost, PermissionSet,
-    SpanKind, ValidatedAgentDelegationRequest, DYNAMIC_DELEGATION_SCHEMA_VERSION,
+    AgentDelegationRequest, AgentDelegationResponse, AgentDelegator, AgentEvidence,
+    AgentExecutorRef, AgentOrigin, AgentOutputSchemaSource, AgentRole, AgentSessionPolicy,
+    AgentSpec, AgentTrace, AgentUsage, CapabilityRegistry, ContextPolicy,
+    DelegationExecutionObserver, DelegationExecutionResult, DelegationExecutionStatus,
+    DelegationExecutor, DelegationHostPolicy, DelegationMode, DelegationPlan, DelegationStatus,
+    ExecutorFeature, ExecutorProfilePolicy, HostObservabilityConfig, ModelFeature,
+    ModelProfilePolicy, ObservabilityHost, PermissionSet, SpanKind,
+    ValidatedAgentDelegationRequest, DYNAMIC_DELEGATION_SCHEMA_VERSION,
 };
 use wisp_llm::Message;
 use wisp_store::{
@@ -2904,7 +2905,9 @@ impl AgentDelegator for NativeDelegator {
             .lock()
             .unwrap()
             .insert(request.request_id.clone(), cancel.clone());
-        let _dispatch = self.trace.start_span(SpanKind::Delegation, "agent.delegate");
+        let _dispatch = self
+            .trace
+            .start_span(SpanKind::Delegation, "agent.delegate");
         let run = crate::native_delegation::run_native_agent(
             llm.as_ref(),
             request

@@ -460,6 +460,10 @@ const OPERATIONAL_EXTRA_KEYS: &[&str] = &[
     "compaction_strategy",
     "repeated_call",
     "host",
+    "guardrail_id",
+    "guardrail_version",
+    "guardrail_outcome",
+    "guardrail_stage",
 ];
 
 fn env_flag(name: &str) -> bool {
