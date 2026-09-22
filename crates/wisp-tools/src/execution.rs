@@ -388,7 +388,16 @@ impl ToolExecutionCoordinator {
             .await
         {
             CacheLookup::Hit(result) => {
-                if let Err(error) = tool.validate_cache_hit().await {
+                let validation_permit = match self
+                    .acquire_permit(tool.name(), provider, &policy, env)
+                    .await
+                {
+                    Ok(permit) => permit,
+                    Err(result) => return result,
+                };
+                let validation = tool.validate_cache_hit().await;
+                drop(validation_permit);
+                if let Err(error) = validation {
                     self.remove_memory(&identity.slot);
                     emit(
                         env,
@@ -1054,6 +1063,54 @@ mod tests {
         completion_ms: u64,
     }
 
+    struct GatedValidationTool {
+        calls: Arc<AtomicUsize>,
+        validations: Arc<AtomicUsize>,
+        policy: ToolExecutionPolicy,
+    }
+
+    #[async_trait]
+    impl Tool for GatedValidationTool {
+        fn name(&self) -> &str {
+            "gated_validation"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new(self.name(), "gated validation", json!({"type": "object"}))
+        }
+
+        fn read_only(&self) -> bool {
+            true
+        }
+
+        fn connector_id(&self) -> Option<&str> {
+            Some("provider")
+        }
+
+        fn cache_authorization_revision(&self) -> Option<&str> {
+            Some("credential-v1")
+        }
+
+        fn execution_policy(&self, _args: &Value) -> ToolExecutionPolicy {
+            self.policy.clone()
+        }
+
+        fn cacheable_result(&self, result: &ToolResult) -> Option<CacheableToolResult> {
+            Some(CacheableToolResult::structured(result.content.clone()))
+        }
+
+        async fn validate_cache_hit(&self) -> Result<(), String> {
+            self.validations.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            Ok(())
+        }
+
+        async fn run(&self, _args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ToolResult::ok(r#"{"evidence":[{"id":"bounded-ref"}]}"#)
+        }
+    }
+
     #[async_trait]
     impl Tool for DetachedTool {
         fn name(&self) -> &str {
@@ -1352,6 +1409,51 @@ mod tests {
         assert!(lock(&env.diagnostics)
             .iter()
             .any(|event| event.signal == ToolExecutionSignal::Stale));
+    }
+
+    #[tokio::test]
+    async fn cache_hit_validation_obeys_provider_backpressure() {
+        let coordinator = Arc::new(ToolExecutionCoordinator::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let validations = Arc::new(AtomicUsize::new(0));
+        let mut policy = cache_policy("release-v1", ToolCacheMode::Memory);
+        policy.max_concurrency = 1;
+        policy.max_queue = 0;
+        let tool = Arc::new(GatedValidationTool {
+            calls: calls.clone(),
+            validations: validations.clone(),
+            policy,
+        });
+        let env = Arc::new(TestEnv::new(root("gated-validation"), "scope-a"));
+        let args = json!({"gene": "KRAS"});
+        assert!(
+            coordinator
+                .execute(tool.as_ref(), &args, env.as_ref(), false)
+                .await
+                .success
+        );
+
+        let first_hit = {
+            let coordinator = coordinator.clone();
+            let tool = tool.clone();
+            let env = env.clone();
+            let args = args.clone();
+            tokio::spawn(async move {
+                coordinator
+                    .execute(tool.as_ref(), &args, env.as_ref(), false)
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let overflow = coordinator
+            .execute(tool.as_ref(), &args, env.as_ref(), false)
+            .await;
+
+        assert!(!overflow.success);
+        assert!(overflow.content.contains("tool_queue_overflow"));
+        assert!(first_hit.await.unwrap().success);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(validations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

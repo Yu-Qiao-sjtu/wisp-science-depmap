@@ -31,7 +31,8 @@ fn execution_policy_from_meta(meta: Option<&Value>) -> ToolExecutionPolicy {
         .map(|value| value.min(10_000) as usize)
         .unwrap_or(policy.max_queue);
     let durable = cache.get("durable").and_then(Value::as_bool) == Some(true);
-    let enabled = cache.get("enabled").and_then(Value::as_bool) == Some(true);
+    let enabled = cache.get("enabled").and_then(Value::as_bool) == Some(true)
+        && cache.get("safeStructuredEvidence").and_then(Value::as_bool) == Some(true);
     policy.cache = ToolCacheContract {
         mode: if !enabled {
             ToolCacheMode::Disabled
@@ -731,6 +732,21 @@ mod tests {
         assert_eq!(policy.cache.mode, ToolCacheMode::Disabled);
         assert!(!policy.cache.shared_authorization);
         assert!(!policy.cache.certain_outcome);
+
+        let retracted = execution_policy_from_meta(Some(&json!({
+            "wisp": {"cache": {
+                "enabled": true,
+                "capabilityVersion": "cap-v1",
+                "schemaVersion": "schema-v1",
+                "releaseDigest": "release-v1",
+                "indexDigest": "index-v1",
+                "ttlSeconds": 60,
+                "maxResultBytes": 1024,
+                "sharedAuthorization": true,
+                "certainOutcome": true
+            }}
+        })));
+        assert_eq!(retracted.cache.mode, ToolCacheMode::Disabled);
     }
 
     #[test]
