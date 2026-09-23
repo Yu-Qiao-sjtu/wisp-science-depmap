@@ -1,8 +1,11 @@
 # App updates
 
-Wisp supports optional, signed in-app updates on macOS. Windows and Linux keep
-the update check and **Open Releases** path until their installers are enabled
-in a later change.
+This wisp-depmap repository **does not publish macOS installers**. Tagged
+releases attach Windows and Linux packages only. The macOS Release workflow is
+a no-op so missing Developer ID secrets cannot fail a tag.
+
+Upstream Wisp supports optional, signed in-app updates on macOS. This fork
+keeps Windows and Linux on the **Open Releases** path.
 
 Manual installers are also available from the [guided download page](https://wispscience.com/#download)
 through the Cloudflare mirror. See [website deployment and installer synchronization](cloudflare-downloads.md).

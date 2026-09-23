@@ -91,7 +91,7 @@ When asked to release, follow this section. Create the GitHub Release with `gh` 
    gh release create vX.Y.Z --title $title --notes-file .github/release-notes/vX.Y.Z.md --target (git rev-parse HEAD)
    ```
 
-5. Confirm the release exists, then wait until CI has **started** (Create Release, Windows Release, macOS Release, Linux Release):
+5. Confirm the release exists, then wait until CI has **started** (Create Release, Windows Release, Linux Release). Do not wait for macOS Release; this repository does not publish macOS installers.
 
    ```bash
    gh release view vX.Y.Z
