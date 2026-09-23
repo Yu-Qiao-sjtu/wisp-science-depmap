@@ -291,6 +291,12 @@ pub trait ToolEnv: Send + Sync {
     fn is_cancelled(&self) -> bool {
         false
     }
+    /// Whether this particular caller stopped waiting, even when shared work
+    /// must continue for another authorized caller. Ordinary environments use
+    /// the aggregate cancellation signal.
+    fn caller_cancelled(&self) -> bool {
+        self.is_cancelled()
+    }
     /// Whether mid-turn user guidance is waiting to be injected at the next
     /// agent-loop iteration. Long waits such as `monitor_run` poll this so they
     /// can return a live snapshot instead of holding the turn until the Run
@@ -336,6 +342,14 @@ pub trait ToolEnv: Send + Sync {
     fn project_id(&self) -> Option<&str> {
         None
     }
+    /// Non-secret identities used to isolate cache and single-flight work.
+    /// Empty fields disable caching but never disable backpressure.
+    fn tool_execution_scope(&self) -> crate::execution::ToolExecutionScope {
+        crate::execution::ToolExecutionScope::default()
+    }
+    /// Best-effort operational diagnostics. Implementations must not attach
+    /// arguments or cached evidence to telemetry.
+    fn note_tool_execution(&self, _event: &crate::execution::ToolExecutionDiagnostic) {}
 }
 
 #[derive(Debug, Clone)]

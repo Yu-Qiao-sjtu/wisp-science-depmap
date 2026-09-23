@@ -549,6 +549,15 @@ pub fn has_credential(connection_id: &str) -> bool {
     wisp_store::secrets::Secret::get(&secret_name(connection_id)).is_ok()
 }
 
+/// One-way, non-secret revision used only to isolate connector cache entries.
+/// Token rotation may conservatively invalidate hits; credential replacement
+/// must always do so.
+pub fn credential_revision(connection_id: &str) -> Option<String> {
+    wisp_store::secrets::Secret::get(&secret_name(connection_id))
+        .ok()
+        .map(|credential| hex::encode(Sha256::digest(credential.as_bytes())))
+}
+
 pub fn forget(connection_id: &str) {
     let _ = wisp_store::secrets::Secret::delete(&secret_name(connection_id));
 }

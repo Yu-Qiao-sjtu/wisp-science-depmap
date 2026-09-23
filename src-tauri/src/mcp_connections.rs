@@ -33,7 +33,53 @@ impl Spec {
             _ => None,
         }
     }
+    pub(crate) fn authorization_revision(&self) -> String {
+        self.authorization_revision_with_proxy(&network::mcp_proxy())
+    }
+    fn authorization_revision_with_proxy(&self, proxy: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let Self::Custom(connection) = self else {
+            // Plugin and development MCPs are stdio children. They inherit the
+            // host environment, whose ambient credentials cannot be scoped
+            // into a durable cache identity.
+            return String::new();
+        };
+        if matches!(&connection.transport, McpTransport::Http { .. }) && proxy.trim().is_empty() {
+            // Empty means reqwest inherits ambient HTTP(S)/ALL/NO_PROXY state,
+            // including possible proxy credentials and routing. That mutable
+            // authorization boundary cannot safely identify durable results.
+            return String::new();
+        }
+        let credential_revision = match &connection.transport {
+            McpTransport::Http {
+                auth: McpHttpAuth::OAuth,
+                ..
+            } => {
+                // OAuth may refresh while the lazy connection is established.
+                // A revision captured before that rotation is not a safe cache
+                // scope, so OAuth remains uncached until revisions are queried
+                // dynamically at lookup time.
+                return String::new();
+            }
+            McpTransport::Http { .. } => crate::mcp_secrets::hydrated_secret_digest(connection),
+            McpTransport::Stdio { .. } => {
+                // `McpClient::launch_with_command` inherits ambient variables
+                // in addition to configured env slots. Fail closed until the
+                // child environment is explicitly allowlisted and versioned.
+                return String::new();
+            }
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(b"wisp-mcp-authorization-revision-v2");
+        hasher.update(self.descriptor_with_proxy(proxy).as_bytes());
+        hasher.update([0]);
+        hasher.update(credential_revision.as_bytes());
+        hex::encode(hasher.finalize())
+    }
     fn descriptor(&self) -> String {
+        self.descriptor_with_proxy(&network::mcp_proxy())
+    }
+    fn descriptor_with_proxy(&self, proxy: &str) -> String {
         // Memory only; never log a descriptor (it may contain user-supplied env).
         let value = match self {
             Self::Custom(c) => serde_json::to_value(c),
@@ -41,7 +87,7 @@ impl Spec {
             Self::Development(parts) => serde_json::to_value(parts),
         }
         .unwrap();
-        json!([value, network::mcp_proxy()]).to_string()
+        json!([value, proxy]).to_string()
     }
     fn factory(&self) -> ClientFactory {
         let spec = self.clone();
@@ -595,6 +641,59 @@ mod tests {
         hold_initialize: AtomicBool,
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
+    }
+
+    #[test]
+    fn http_revision_covers_transport_while_inherited_stdio_bypasses_cache() {
+        let http = |url: &str| {
+            Spec::Custom(McpConnection {
+                id: "same-connector".into(),
+                name: "remote".into(),
+                enabled: true,
+                transport: McpTransport::Http {
+                    url: url.into(),
+                    headers: vec![],
+                    auth: McpHttpAuth::None,
+                },
+            })
+        };
+        assert_ne!(
+            http("https://first.example/mcp").authorization_revision_with_proxy("none"),
+            http("https://second.example/mcp").authorization_revision_with_proxy("none")
+        );
+        assert!(http("https://first.example/mcp")
+            .authorization_revision_with_proxy("")
+            .is_empty());
+        let oauth = Spec::Custom(McpConnection {
+            id: "oauth-connector".into(),
+            name: "oauth".into(),
+            enabled: true,
+            transport: McpTransport::Http {
+                url: "https://oauth.example/mcp".into(),
+                headers: vec![],
+                auth: McpHttpAuth::OAuth,
+            },
+        });
+        assert!(oauth.authorization_revision_with_proxy("none").is_empty());
+
+        let stdio = |argument: &str| {
+            Spec::Custom(McpConnection {
+                id: "same-connector".into(),
+                name: "local".into(),
+                enabled: true,
+                transport: McpTransport::Stdio {
+                    command: "server".into(),
+                    args: vec![argument.into()],
+                    env: vec![],
+                    cwd: Some("workspace".into()),
+                },
+            })
+        };
+        assert!(stdio("--first").authorization_revision().is_empty());
+        assert!(stdio("--second").authorization_revision().is_empty());
+        assert!(Spec::Development(vec!["server".into()])
+            .authorization_revision()
+            .is_empty());
     }
 
     async fn lifecycle_fixture() -> (

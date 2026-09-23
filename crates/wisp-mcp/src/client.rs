@@ -631,6 +631,33 @@ impl McpClient {
         self.tool_call_checked_generation(expected, args, None)
             .await
     }
+    /// Refresh `tools/list` and prove that the registered snapshot is still
+    /// exact before a cached scientific result may be replayed.
+    pub async fn validate_tool_contract(&self, expected: &RemoteTool) -> Result<()> {
+        let catalog = if let Transport::Managed(m) = &self.transport {
+            let prior = m.is_connected().then(|| m.generation());
+            let client = m.ready().instrument(m.span()).await?;
+            if prior.is_some_and(|generation| generation != m.generation()) {
+                return Err(anyhow!(
+                    "MCP connection changed while validating a cache hit"
+                ));
+            }
+            let catalog = client.tools_list().await?;
+            if catalog.iter().find(|tool| tool.name == expected.name) != Some(expected) {
+                m.catalog_changed();
+                return Err(anyhow!("MCP tool catalog changed; cached evidence was not replayed. Reopen the tool or refresh the conversation."));
+            }
+            return Ok(());
+        } else {
+            self.tools_list().await?
+        };
+        if catalog.iter().find(|tool| tool.name == expected.name) != Some(expected) {
+            return Err(anyhow!(
+                "MCP tool catalog changed; cached evidence was not replayed"
+            ));
+        }
+        Ok(())
+    }
     pub async fn tool_call_checked_generation(
         &self,
         expected: &RemoteTool,

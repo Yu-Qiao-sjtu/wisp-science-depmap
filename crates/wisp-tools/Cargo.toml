@@ -7,7 +7,9 @@ license.workspace = true
 
 [dependencies]
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 async-trait = "0.1"
 regex = { workspace = true }
 glob = { workspace = true }
@@ -16,6 +18,8 @@ dunce = { workspace = true }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 anydoc = "0.1.6"
+cap-std = "3.4.5"
+cap-fs-ext = "3.4.5"
 wisp-llm = { workspace = true }
 
 # ProcessTree needs process groups on Unix and Job Objects on Windows.
