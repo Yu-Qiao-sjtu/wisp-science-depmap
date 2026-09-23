@@ -1,0 +1,10 @@
+{
+  "schema": "wisp.release-contract-lock.v1",
+  "release": "26Q1",
+  "digests": {
+    "capability": "8b13d9cd698c9339e25d5a7a70a5c8f486820caca8fb331f5c168facbcf67905",
+    "coverage": "c0c7098c3d3e2227ab2544bf0c6196ade60b25588602d0bf49763c60f77e0381",
+    "server_contract": "647f55a598d59767238c12f68cd0dfa7ae777f407699977fe449b4b5d74051f8",
+    "acu_suite": "2ac1ac97004bd824841c6f1120844fc7cb7625d4e3598210419b2a79e81bb7bf"
+  }
+}

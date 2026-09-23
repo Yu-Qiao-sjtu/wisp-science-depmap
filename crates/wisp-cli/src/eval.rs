@@ -9,8 +9,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wisp_core::{
-    host_agent_observability, Agent, AgentTrace, ContextManager, ExploreTool, GuidanceQueue,
-    HostObservabilityConfig, MemoryManager, ObservabilityHost, Output,
+    build_release_gate, host_agent_observability, load_bundled_depmap_acu_corpus,
+    load_bundled_depmap_release_lock, load_bundled_depmap_server_contract, Agent, AgentTrace,
+    ContextManager, ExploreTool, GuidanceQueue, HostObservabilityConfig, MemoryManager,
+    ObservabilityHost, Output, ReleaseGateArtifact, ReleaseGateBlocker, ReleaseGateBlockerKind,
+    ReleaseGateInputs, ToolCatalog,
 };
 use wisp_llm::{
     Message, Provider, ProviderConfig, Role, ScriptedCompletion, ScriptedProvider,
@@ -794,6 +797,8 @@ struct EvalReport {
     summary: ReportSummary,
     #[serde(default)]
     model_summaries: Vec<ModelSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_gate: Option<ReleaseGateArtifact>,
     scenarios: Vec<ScenarioResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     comparison: Option<BaselineComparison>,
@@ -984,6 +989,7 @@ pub async fn run(
     validate_options(options)?;
     let suite = load_suite(options.suite.as_deref())?;
     validate_suite(&suite, options.mode)?;
+    let release_gate = release_gate_for_suite(&suite)?;
     let selected = select_cases(&suite, options)?;
     if selected.is_empty() {
         bail!("no eval cases matched the requested filters");
@@ -1073,6 +1079,7 @@ pub async fn run(
         repeat: options.repeat,
         summary: summarize(&scenarios),
         model_summaries: summarize_by_model(&scenarios),
+        release_gate,
         scenarios,
         comparison: None,
     };
@@ -1084,6 +1091,18 @@ pub async fn run(
             .with_context(|| format!("invalid eval v1 baseline {}", path.display()))?;
         report.comparison = Some(compare_reports(&report, &baseline, path, options));
     }
+
+    let comparison_failed = report.comparison.as_ref().is_some_and(|comparison| {
+        !options.allow_regressions
+            && (!comparison.regressions.is_empty() || !comparison.threshold_failures.is_empty())
+    });
+    let pass_rate_failed = report.summary.pass_rate_percent < options.min_pass_rate_percent;
+    record_model_quality_failures(
+        &mut report.release_gate,
+        report.summary.pass_rate_percent,
+        options.min_pass_rate_percent,
+        comparison_failed,
+    );
 
     let mut rendered = serde_json::to_string_pretty(&report)?;
     rendered.push('\n');
@@ -1099,11 +1118,7 @@ pub async fn run(
     }
     print!("{rendered}");
 
-    let comparison_failed = report.comparison.as_ref().is_some_and(|comparison| {
-        !options.allow_regressions
-            && (!comparison.regressions.is_empty() || !comparison.threshold_failures.is_empty())
-    });
-    if report.summary.pass_rate_percent < options.min_pass_rate_percent || comparison_failed {
+    if pass_rate_failed || comparison_failed {
         bail!(
             "agent eval failed: {}/{} attempts passed ({}%; required {}%)",
             report.summary.passed,
@@ -1113,6 +1128,85 @@ pub async fn run(
         );
     }
     Ok(())
+}
+
+fn record_model_quality_failures(
+    release_gate: &mut Option<ReleaseGateArtifact>,
+    actual_pass_rate: u64,
+    required_pass_rate: u64,
+    comparison_failed: bool,
+) {
+    let Some(artifact) = release_gate.as_mut() else {
+        return;
+    };
+    if actual_pass_rate < required_pass_rate {
+        artifact.blockers.push(ReleaseGateBlocker {
+            kind: ReleaseGateBlockerKind::ModelQuality,
+            code: "model_pass_rate_below_threshold".into(),
+            detail: format!(
+                "model pass rate {actual_pass_rate}% is below required {required_pass_rate}%"
+            ),
+        });
+    }
+    if comparison_failed {
+        artifact.blockers.push(ReleaseGateBlocker {
+            kind: ReleaseGateBlockerKind::ModelQuality,
+            code: "model_regression".into(),
+            detail: "model comparison contains disallowed regressions or threshold failures".into(),
+        });
+    }
+    artifact.passed = artifact.blockers.is_empty();
+}
+
+fn release_gate_for_suite(suite: &EvalSuite) -> Result<Option<ReleaseGateArtifact>> {
+    if !suite
+        .cases
+        .iter()
+        .any(|case| case.tags.iter().any(|tag| tag == "depmap"))
+    {
+        return Ok(None);
+    }
+    let corpus = load_bundled_depmap_acu_corpus();
+    let contract = load_bundled_depmap_server_contract();
+    let release_lock = load_bundled_depmap_release_lock();
+    if contract.release != release_lock.release {
+        bail!(
+            "DepMap server contract release '{}' does not match release lock '{}'",
+            contract.release,
+            release_lock.release
+        );
+    }
+    let bridge = wisp_core::host_scientific_bridge(
+        &wisp_core::specialist_manifest::HostPolicy::bundled_depmap(),
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let mut tools = ToolCatalog::default();
+    for (name, schema) in &contract.tool_schemas {
+        tools.insert(name.clone(), schema.clone());
+    }
+    let inputs = ReleaseGateInputs {
+        release: release_lock.release,
+        reader_modes: contract.reader_modes,
+        coverage: contract.coverage,
+        provider_contract: contract.provider_contract,
+        evidence_envelope_contract: contract.evidence_envelope_contract,
+        claim_validator_contract: wisp_core::CLAIM_RECORD_CONTRACT.into(),
+        expected_digests: Some(release_lock.digests),
+    };
+    let artifact = build_release_gate(
+        &corpus,
+        &bridge.catalog,
+        &bridge.specialist,
+        &tools,
+        &inputs,
+    );
+    if !artifact.passed {
+        bail!(
+            "release capability gate failed before eval dispatch: {}",
+            serde_json::to_string(&artifact.blockers)?
+        );
+    }
+    Ok(Some(artifact))
 }
 
 fn validate_options(options: &EvalOptions) -> Result<()> {
@@ -2579,6 +2673,159 @@ mod tests {
             .await
             .unwrap();
             assert!(result.passed, "{:?}", result.failures);
+        }
+    }
+
+    #[test]
+    fn depmap_suites_emit_a_closed_release_artifact_before_dispatch() {
+        let suite: EvalSuite = serde_yaml::from_str(DEPMAP_AGENT_SUITE).unwrap();
+        let artifact = release_gate_for_suite(&suite).unwrap().unwrap();
+        assert!(artifact.passed, "{:#?}", artifact.blockers);
+        assert_eq!(artifact.release, "26Q1");
+        assert!(artifact.rows.iter().all(|row| row.closed));
+        assert_eq!(artifact.capability_digest.len(), 64);
+        assert_eq!(artifact.coverage_digest.len(), 64);
+        assert_eq!(artifact.server_contract_digest.len(), 64);
+        assert_eq!(artifact.acu_suite_digest.len(), 64);
+
+        let mut failed_gate = Some(artifact);
+        record_model_quality_failures(&mut failed_gate, 50, 100, true);
+        let failed_gate = failed_gate.unwrap();
+        assert!(!failed_gate.passed);
+        assert_eq!(
+            failed_gate
+                .blockers
+                .iter()
+                .filter(|blocker| blocker.kind == ReleaseGateBlockerKind::ModelQuality)
+                .count(),
+            2
+        );
+
+        let ordinary: EvalSuite = serde_yaml::from_str(BUILTIN_SUITE).unwrap();
+        assert!(release_gate_for_suite(&ordinary).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn production_agent_assembly_replays_every_acu_terminal_response() {
+        let corpus = wisp_core::load_bundled_depmap_acu_corpus();
+        let catalog = wisp_core::IntentCatalog::bundled_depmap();
+        let release = corpus.release.clone();
+        for acu in corpus.cases {
+            let replay = wisp_core::replay_acu(&acu, &catalog);
+            assert!(replay.passed, "{}: {:#?}", acu.id, replay.failures);
+            for (variant_index, prompt) in acu.question_family.iter().enumerate() {
+                let prompt_replay = wisp_core::replay_acu_prompt(&acu, prompt, &catalog);
+                assert!(
+                    prompt_replay.passed,
+                    "{} prompt {prompt}: {:#?}",
+                    acu.id, prompt_replay.failures
+                );
+                let proposed_intent = acu
+                    .prompt_mappings
+                    .iter()
+                    .find(|mapping| mapping.prompt == *prompt)
+                    .unwrap()
+                    .proposed_intent
+                    .clone();
+                let evidence = acu.fixture.evidence.clone().unwrap();
+                let completion = serde_json::to_string(&evidence.completion).unwrap();
+                let mut allowed_tools = vec!["attempt_completion".to_string()];
+                let mut required_tools = vec![wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL.to_string()];
+                let mut tool_order = required_tools.clone();
+                let mut fixture_tools = serde_json::Map::new();
+                let mut script = vec![json!({
+                    "tool_calls":[{
+                        "id":"plan-1",
+                        "name":wisp_core::SCIENTIFIC_INTENT_PLAN_TOOL,
+                        "arguments":{"intent":proposed_intent}
+                    }]
+                })];
+                if let (Some(tool), Some(arguments)) =
+                    (prompt_replay.tool.clone(), prompt_replay.arguments.clone())
+                {
+                    let schema = acu.fixture.tool_schemas.get(&tool).unwrap().clone();
+                    let tool_result = serde_json::to_string(&json!({
+                        "schema": "wisp.mcp-tool-result.v1",
+                        "structured_content": evidence.structured_content,
+                        "display_text": "bounded evidence"
+                    }))
+                    .unwrap();
+                    allowed_tools.push(tool.clone());
+                    required_tools.push(tool.clone());
+                    tool_order.push(tool.clone());
+                    fixture_tools.insert(
+                        tool.clone(),
+                        json!({"schema": schema, "result": tool_result}),
+                    );
+                    script.push(json!({
+                        "tool_calls":[{"id":"evidence-1","name":tool,"arguments":arguments}]
+                    }));
+                }
+                required_tools.push("attempt_completion".into());
+                tool_order.push("attempt_completion".into());
+                script.push(json!({
+                    "tool_calls":[{
+                        "id":"done-1",
+                        "name":"attempt_completion",
+                        "arguments":{"result":completion}
+                    }]
+                }));
+                let case: EvalCase = serde_json::from_value(json!({
+                    "id": format!("acu-{}-variant-{}", acu.id, variant_index + 1),
+                    "description": "production assembly ACU paraphrase replay",
+                    "tags": ["depmap", "acu", "release-gate"],
+                    "prompt": prompt,
+                    "allowed_tools": allowed_tools,
+                    "fixture_tools": fixture_tools,
+                    "script": script,
+                    "limits": {
+                        "max_tool_calls": acu.budget.max_tool_calls,
+                        "max_context_tokens": acu.budget.max_context_tokens,
+                        "max_rounds": 4
+                    },
+                    "expect": {
+                        "required_tools": required_tools,
+                        "forbidden_tools": acu.forbidden_tools,
+                        "tool_order": tool_order,
+                        "remaining_script": 0
+                    }
+                }))
+                .unwrap();
+                let id = case.id.clone();
+                let mut result = run_case(
+                    case,
+                    1,
+                    EvalLimits::default(),
+                    None,
+                    None,
+                    EvalOptions::default(),
+                )
+                .await
+                .unwrap();
+                let actual_completion: Option<wisp_core::AcuCompletionFixture> = result
+                    .completion
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str(value).ok());
+                if let Some(completion) = actual_completion {
+                    let observed = wisp_core::AcuEvidenceFixture {
+                        structured_content: evidence.structured_content.clone(),
+                        completion,
+                        uses_raw_matrix_io: evidence.uses_raw_matrix_io,
+                    };
+                    result.failures.extend(wisp_core::validate_acu_evidence(
+                        &acu,
+                        &prompt_replay.decision,
+                        Some(&observed),
+                        Some(&release),
+                    ));
+                } else {
+                    result
+                        .failures
+                        .push("completion did not satisfy the typed ACU evidence contract".into());
+                }
+                result.passed = result.failures.is_empty();
+                assert!(result.passed, "{id}: {:?}", result.failures);
+            }
         }
     }
 

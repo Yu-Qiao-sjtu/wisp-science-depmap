@@ -1,0 +1,245 @@
+{
+  "schema": "wisp.agent-capability-use-cases.v1",
+  "id": "depmap-core-acu",
+  "version": "1.0.0",
+  "release": "26Q1",
+  "cases": [
+    {
+      "id": "codependency-execute",
+      "question_family": ["KRAS 有哪些负共依赖基因？", "Which genes are negatively codependent with KRAS?"],
+      "prompt_mappings": [{"prompt":"KRAS 有哪些负共依赖基因？","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"}},{"prompt":"Which genes are negatively codependent with KRAS?","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"}}],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}],"direction":"negative"},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {"gene":"KRAS","direction":"negative","limit":20},
+      "allowed_tools": ["depmap_codependency_evidence"],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["execute"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"global"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
+      "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "coexpression-execute",
+      "question_family": ["ESR1 和 FOXA1 是否共表达？", "Check coexpression between FOXA1 and ESR1."],
+      "prompt_mappings": [{"prompt":"ESR1 和 FOXA1 是否共表达？","proposed_intent":{"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}},{"prompt":"Check coexpression between FOXA1 and ESR1.","proposed_intent":{"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}}],
+      "canonical_intent": {"schema_version":1,"relation":"coexpression","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]},
+      "expected_capability": "coexpression_evidence",
+      "expected_query_shape": {"source":"ESR1","target":"FOXA1"},
+      "allowed_tools": ["depmap_pair_evidence"],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["execute"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"pair"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
+      "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "expression-dependency-execute",
+      "question_family": ["ESR1 表达能否预测 FOXA1 dependency？", "Does ESR1 expression associate with FOXA1 dependency?"],
+      "prompt_mappings": [{"prompt":"ESR1 表达能否预测 FOXA1 dependency？","proposed_intent":{"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}},{"prompt":"Does ESR1 expression associate with FOXA1 dependency?","proposed_intent":{"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]}}],
+      "canonical_intent": {"schema_version":1,"relation":"expression_dependency","entities":[{"role":"source","kind":"gene","identifier":"ESR1"},{"role":"target","kind":"gene","identifier":"FOXA1"}]},
+      "expected_capability": "expression_dependency_evidence",
+      "expected_query_shape": {"source":"ESR1","target":"FOXA1"},
+      "allowed_tools": ["depmap_pair_evidence"],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["execute"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_pair_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"pair"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
+      "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "mutation-global-execute",
+      "question_family": ["泛癌 KRAS damaging 突变后依赖哪些基因？", "Across all models, rank dependencies associated with damaging KRAS mutation."],
+      "prompt_mappings": [{"prompt":"泛癌 KRAS damaging 突变后依赖哪些基因？","proposed_intent":{"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}}},{"prompt":"Across all models, rank dependencies associated with damaging KRAS mutation.","proposed_intent":{"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}}}],
+      "canonical_intent": {"schema_version":1,"relation":"mutation_to_dependency","entities":[{"role":"source","kind":"mutation_event","identifier":"KRAS"}],"constraints":{"event":"damaging"}},
+      "expected_capability": "mutation_dependency_global",
+      "expected_query_shape": {"source":"KRAS","event":"damaging_mutation","limit":20},
+      "allowed_tools": ["depmap_synthetic_lethal_evidence"],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["execute"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_synthetic_lethal_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"global"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
+      "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "mutation-lineage-execute",
+      "question_family": ["Lung lineage 中 KRAS 突变相关依赖是什么？", "Find KRAS mutation-associated dependencies in Lung lineage."],
+      "prompt_mappings": [{"prompt":"Lung lineage 中 KRAS 突变相关依赖是什么？","proposed_intent":{"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]}},{"prompt":"Find KRAS mutation-associated dependencies in Lung lineage.","proposed_intent":{"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]}}],
+      "canonical_intent": {"schema_version":1,"relation":"event_stratified_dependency","scope":"lineage","entities":[{"role":"lineage","kind":"lineage","identifier":"Lung"},{"role":"source","kind":"mutation_event","identifier":"KRAS"}]},
+      "expected_capability": "mutation_dependency_lineage",
+      "expected_query_shape": {"lineage":"Lung","source":"KRAS","limit":20},
+      "allowed_tools": ["depmap_lineage_mutation_dependency"],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["execute"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_lineage_mutation_dependency":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{"status":"FOUND","release":"26Q1","scope":{"kind":"lineage","value":"Lung"},"evidence":[{"id":"acu-evidence-1","source":"depmap"}],"claims":[{"text":"bounded association","evidence_ids":["acu-evidence-1"]}]},"completion":{"text":"Bounded DepMap association.","evidence_ids":["acu-evidence-1"],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":3,"max_context_tokens":128000},
+      "evidence_invariants": ["structured_evidence_required","release_required","scope_required","claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "ambiguous-relation-clarifies",
+      "question_family": ["KRAS 和 NRAS 有什么关系？", "Are KRAS and NRAS associated?"],
+      "prompt_mappings": [
+        {"prompt":"KRAS 和 NRAS 有什么关系？","proposed_intent":{"schema_version":1,"relation":"是否相关","entities":[{"role":"source","kind":"gene","identifier":"KRAS"},{"role":"target","kind":"gene","identifier":"NRAS"}]}},
+        {"prompt":"Are KRAS and NRAS associated?","proposed_intent":{"schema_version":1,"relation":"是否相关","entities":[{"role":"source","kind":"gene","identifier":"KRAS"},{"role":"target","kind":"gene","identifier":"NRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"是否相关","entities":[{"role":"source","kind":"gene","identifier":"KRAS"},{"role":"target","kind":"gene","identifier":"NRAS"}]},
+      "allowed_ambiguity": ["codependency_evidence","coexpression_evidence"],
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["depmap_pair_evidence","depmap_codependency_evidence","shell"],
+      "allowed_terminal_decisions": ["clarification_required"],
+      "fixture": {"coverage":"computed","tool_schemas":{},"evidence":{"structured_content":{},"completion":{"text":"Please choose codependency or coexpression evidence.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "unsupported-intent-stops",
+      "question_family": ["证明 KRAS 导致肺癌。", "Prove that KRAS causes lung cancer."],
+      "prompt_mappings": [
+        {"prompt":"证明 KRAS 导致肺癌。","proposed_intent":{"schema_version":1,"relation":"causal_proof","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Prove that KRAS causes lung cancer.","proposed_intent":{"schema_version":1,"relation":"causal_proof","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"causal_proof","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["unsupported_intent"],
+      "fixture": {"coverage":"computed","tool_schemas":{},"evidence":{"structured_content":{},"completion":{"text":"Causal proof is outside the supported DepMap capability set.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["claims_must_be_grounded","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "not-retained-is-typed",
+      "question_family": ["查询 KRAS 共依赖，若稀疏表未保留请明确说明。", "Query KRAS codependency and preserve a not-retained state."],
+      "prompt_mappings": [
+        {"prompt":"查询 KRAS 共依赖，若稀疏表未保留请明确说明。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Query KRAS codependency and preserve a not-retained state.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["coverage_gap"],
+      "fixture": {"coverage":"not_retained","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"The requested result is not retained in this release.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    },
+    {
+      "id": "not-tested-is-typed",
+      "question_family": ["查询 KRAS 共依赖，未测试时不要当阴性。", "Do not turn an untested KRAS query into a negative."],
+      "prompt_mappings": [
+        {"prompt":"查询 KRAS 共依赖，未测试时不要当阴性。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Do not turn an untested KRAS query into a negative.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["coverage_gap"],
+      "fixture": {"coverage":"not_tested","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"The requested relation was not tested and is not a negative result.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    },
+    {
+      "id": "not-computed-is-typed",
+      "question_family": ["查询未计算的 KRAS 统计量。", "Report that an unavailable KRAS statistic was not computed."],
+      "prompt_mappings": [
+        {"prompt":"查询未计算的 KRAS 统计量。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Report that an unavailable KRAS statistic was not computed.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["coverage_gap"],
+      "fixture": {"coverage":"not_computed","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"The requested statistic was not computed.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "annotation-unavailable-is-typed",
+      "question_family": ["注释缺失时还能解释 KRAS 共依赖吗？", "Preserve unavailable annotation for a KRAS query."],
+      "prompt_mappings": [
+        {"prompt":"注释缺失时还能解释 KRAS 共依赖吗？","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Preserve unavailable annotation for a KRAS query.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["coverage_gap"],
+      "fixture": {"coverage":"annotation_unavailable","tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"The required annotation is unavailable.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    },
+    {
+      "id": "bridge-unavailable-is-not-not-computed",
+      "question_family": ["结果已计算但工具未投影时怎么报告？", "Report a missing MCP projection as bridge unavailable."],
+      "prompt_mappings": [
+        {"prompt":"结果已计算但工具未投影时怎么报告？","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Report a missing MCP projection as bridge unavailable.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["bridge_unavailable"],
+      "fixture": {"coverage":"bridge_unavailable","tool_schemas":{},"evidence":{"structured_content":{},"completion":{"text":"The capability is not projected by the current bridge.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    },
+    {
+      "id": "provider-unavailable-stops",
+      "question_family": ["Provider 离线时查询 KRAS。", "Query KRAS while the selected provider is unavailable."],
+      "prompt_mappings": [
+        {"prompt":"Provider 离线时查询 KRAS。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Query KRAS while the selected provider is unavailable.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["provider_unavailable"],
+      "fixture": {"coverage":"provider_unavailable","provider_available":false,"tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"The selected provider is unavailable.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    },
+    {
+      "id": "stale-schema-blocks-dispatch",
+      "question_family": ["Schema 过期时不要执行 KRAS 共依赖查询。", "Do not dispatch a KRAS codependency query through a stale schema."],
+      "prompt_mappings": [
+        {"prompt":"Schema 过期时不要执行 KRAS 共依赖查询。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Do not dispatch a KRAS codependency query through a stale schema.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_capability": "codependency_evidence",
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["depmap_codependency_evidence","shell","run_in_context"],
+      "allowed_terminal_decisions": ["bridge_unavailable"],
+      "fixture": {"coverage":"computed","tool_schemas":{"depmap_codependency_evidence":{"type":"object","required":["renamed_gene"],"properties":{"renamed_gene":{"type":"string"}},"additionalProperties":false}},"evidence":{"structured_content":{},"completion":{"text":"Dispatch was blocked because the projected schema is stale.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_raw_matrix_io","no_unsupported_claim"]
+    },
+    {
+      "id": "policy-blocked-stops",
+      "question_family": ["策略禁止时查询 KRAS。", "Query KRAS when policy denies the capability."],
+      "prompt_mappings": [
+        {"prompt":"策略禁止时查询 KRAS。","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}},
+        {"prompt":"Query KRAS when policy denies the capability.","proposed_intent":{"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]}}
+      ],
+      "canonical_intent": {"schema_version":1,"relation":"codependency","entities":[{"role":"gene","kind":"gene","identifier":"KRAS"}]},
+      "expected_query_shape": {},
+      "allowed_tools": [],
+      "forbidden_tools": ["shell","run_in_context"],
+      "allowed_terminal_decisions": ["policy_blocked"],
+      "fixture": {"coverage":"policy_blocked","allowed_capability_ids":[],"tool_schemas":{"depmap_codependency_evidence":{"type":"object","additionalProperties":true}},"evidence":{"structured_content":{},"completion":{"text":"Policy blocks this capability.","evidence_ids":[],"unsupported_claims":[]}}},
+      "budget": {"max_tool_calls":2,"max_context_tokens":128000},
+      "evidence_invariants": ["coverage_state_preserved","no_unsupported_claim"]
+    }
+  ]
+}
