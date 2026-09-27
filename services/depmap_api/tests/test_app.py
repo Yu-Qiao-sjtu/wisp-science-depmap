@@ -1963,6 +1963,41 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertEqual(pan_cancer["status"], "NOT_COMPUTED")
         self.assertEqual(pan_cancer["lineages"], [])
 
+    def test_common_essential_exclusion_fails_closed_for_whitespace_only_sidecar(self):
+        sidecar = (
+            self.settings.knowledge_root
+            / "depmap-26q1-core"
+            / "common_essential_genes.csv"
+        )
+        sidecar.write_text("symbol\n   \n\t\n", encoding="utf-8")
+
+        lineage = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Lung",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "limit": 5,
+            }
+        )
+        self.assertEqual(lineage["status"], "NOT_COMPUTED")
+        self.assertEqual(lineage["rows"], [])
+        self.assertEqual(
+            lineage["common_essential_annotation_status"],
+            "ANNOTATION_UNAVAILABLE",
+        )
+
+        pan_cancer = self._query(
+            {
+                "mode": "pan_cancer_dependency",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "limit": 5,
+            }
+        )
+        self.assertEqual(pan_cancer["status"], "NOT_COMPUTED")
+        self.assertEqual(pan_cancer["lineages"], [])
+
     def test_dependency_confounder_qc_is_typed_and_never_filters(self):
         flagged = self._query(
             {

@@ -3221,7 +3221,9 @@ def _common_essential_sidecar(
                 or row.get("gene_symbol")
             )
             if symbol:
-                labels.add(str(symbol).strip().upper())
+                normalized = str(symbol).strip().upper()
+                if normalized:
+                    labels.add(normalized)
     except (OSError, UnicodeError, csv.Error):
         return None
     if not labels:
