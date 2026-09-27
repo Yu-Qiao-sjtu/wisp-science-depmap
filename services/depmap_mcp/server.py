@@ -658,13 +658,17 @@ class DepMapEvidenceService:
                 )
         else:
             text = path.read_text(encoding="utf-8-sig", errors="replace")
+            structured_json = False
             if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
                 try:
                     content = json.loads(text)
+                    structured_json = True
                 except json.JSONDecodeError:
                     content = text[:65536]
             else:
                 content = text[:65536]
+            if not structured_json:
+                content = self.portable_references.text(content)
         return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows,"cursor":cursor}, evidence={"status":"FOUND","uri":uri,"content":content})
 
     def _portable_string(self, value: str) -> str:

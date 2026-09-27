@@ -30,6 +30,7 @@ class PortableReferences:
         re.compile(r"(?<![\w:])//[^\s/]+/[^\s/]+(?:/[^\s\"'<>|,;\]\)}]+)*"),
         re.compile(r"(?<![\w:/])/[^/\s\"'<>|,;\]\)}]+(?:/[^/\s\"'<>|,;\]\)}]+)*"),
     )
+    _PUBLIC_URI_PATTERN = re.compile(r"depmap://[^\s\"'<>|,;\]\)}]+")
 
     def __init__(self, knowledge_root: Path, release: str) -> None:
         self.knowledge_root = knowledge_root.resolve()
@@ -107,6 +108,25 @@ class PortableReferences:
             safe = pattern.sub(replace_root, safe)
         return safe
 
+    def _replace_uri_tokens(self, value: str) -> str:
+        def replace_uri(match: re.Match[str]) -> str:
+            relative = self.parse_public_uri(match.group(0))
+            return (
+                self.public_uri(relative)
+                if relative is not None
+                else PRIVATE_LOCATION_TEXT
+            )
+
+        return self._PUBLIC_URI_PATTERN.sub(replace_uri, value)
+
+    def text(self, value: str) -> str:
+        """Sanitize a free-text preview without changing its JSON type."""
+
+        safe = self._replace_uri_tokens(self._replace_public_roots(value))
+        for pattern in self._ABSOLUTE_PATTERNS:
+            safe = pattern.sub(PRIVATE_LOCATION_TEXT, safe)
+        return safe
+
     def value(self, value: str) -> str | dict[str, str]:
         stripped = value.strip()
         if stripped.startswith("depmap://"):
@@ -128,9 +148,7 @@ class PortableReferences:
         if self._is_absolute(safe_stripped):
             return opaque_location()
 
-        for pattern in self._ABSOLUTE_PATTERNS:
-            safe = pattern.sub(PRIVATE_LOCATION_TEXT, safe)
-        return safe
+        return self.text(safe)
 
     def key(self, value: str) -> str:
         portable = self.value(value)

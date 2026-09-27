@@ -264,6 +264,28 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preview.count("[private location omitted]"), 2)
         self.assertNotIn("<redacted:absolute-path>", preview)
 
+        exact_text_uri = self.index_resource(
+            "depmap-26q1-full/exact-path.txt", "/srv/private/input.rds"
+        )
+        exact_text = await self.service.read_resource(exact_text_uri, max_rows=10)
+        self.assertEqual(
+            exact_text["evidence"]["content"], "[private location omitted]"
+        )
+        self.assertIsInstance(exact_text["evidence"]["content"], str)
+
+        malformed_uri_text = self.index_resource(
+            "depmap-26q1-full/malformed-uri.txt",
+            r"spill: depmap://26Q1/D:\private\spill.json",
+        )
+        malformed_uri = await self.service.read_resource(
+            malformed_uri_text, max_rows=10
+        )
+        self.assertEqual(
+            malformed_uri["evidence"]["content"],
+            "spill: [private location omitted]",
+        )
+        self.assertNotIn("depmap://", malformed_uri["evidence"]["content"])
+
     async def test_catalog_references_are_public_uris_or_typed_opaque_records(self):
         relative = "analysis-modules/分析 α/manifest.json"
         uri = self.index_resource(relative, '{"state":"complete"}')
