@@ -12,6 +12,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import io
 import json
 import math
 import statistics
@@ -337,13 +338,23 @@ def main() -> int:
         del row["_p"]
 
     table = output / "all_targets.csv.gz"
-    with gzip.open(table, "wt", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=["target_gene", "status", "effect_mut_minus_control", "p_raw", "q_bh"],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+    # Keep the cached artifact byte-stable: gzip otherwise embeds the current
+    # time and output filename, making identical runs produce different digests.
+    with table.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+            with io.TextIOWrapper(compressed, encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "target_gene",
+                        "status",
+                        "effect_mut_minus_control",
+                        "p_raw",
+                        "q_bh",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(rows)
 
     result = contract_result(
         "ok",
