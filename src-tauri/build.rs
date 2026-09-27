@@ -19,17 +19,16 @@ fn main() {
     purge_stale_seed_dirs();
     bake_model_catalog();
     tauri_build::build();
-    // tauri-build embeds the Windows manifest into binaries, not examples.
-    // The real-WebView smoke also needs Common Controls v6 (TaskDialogIndirect).
+    // tauri-build embeds the Windows manifest into application binaries, but
+    // Cargo examples and test harnesses are separate executables. Both link
+    // desktop APIs that import TaskDialogIndirect, so they need an equivalent
+    // Common Controls v6 activation context before their entry point runs.
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples/webview_recovery_smoke.manifest");
         println!("cargo:rerun-if-changed={}", manifest.display());
-        println!("cargo:rustc-link-arg-examples=/MANIFEST:EMBED");
-        println!(
-            "cargo:rustc-link-arg-examples=/MANIFESTINPUT:{}",
-            manifest.display()
-        );
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
     }
 }
 

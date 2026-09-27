@@ -102,6 +102,12 @@ jobs:
       - name: Run runtime worker process-tree regression
         run: cargo test -p wisp-runtime --test worker_process_tree
 
+      - name: Run Windows Tauri library tests
+        if: runner.os == 'Windows'
+        env:
+          WISP_CATALOG_OFFLINE: "1"
+        run: cargo test -p wisp-tauri --lib
+
       # Exercise the Python worker and standalone skill helpers on all three
       # OSes, including process handling and project-relative planner paths.
       - name: Run Python worker and skill helper tests (Unix)
