@@ -10,7 +10,7 @@ use crate::trajectory::{
 use crate::AppState;
 use serde::Serialize;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tauri::{AppHandle, State};
 use wisp_core::observability::{TRACE_FORMAT, TRACE_FORMAT_VERSION};
 use wisp_core::{Span, SpanKind, SpanStatus};
@@ -45,10 +45,17 @@ struct TraceExportSummary {
     successful_model_spans: usize,
     excluded_model_spans: usize,
     malformed_model_spans: usize,
+    unreadable_trace_files: usize,
     llm_ms: TraceMetric,
     input_tokens: TraceMetric,
     output_tokens: TraceMetric,
     cached_input_tokens: TraceMetric,
+}
+
+#[derive(Debug, Default)]
+struct TraceDocuments {
+    documents: Vec<String>,
+    unreadable_files: usize,
 }
 
 impl TraceMetric {
@@ -142,31 +149,51 @@ fn trace_summary_from_jsonl<'a>(
     summary
 }
 
-async fn read_trace_documents(project_root: &Path) -> Result<Vec<String>, String> {
-    let mut documents = Vec::new();
+async fn read_trace_documents(project_root: &Path) -> TraceDocuments {
+    let mut result = TraceDocuments::default();
     for leaf in ["traces", "traces-sensitive"] {
         let dir = project_root.join(".wisp").join(leaf);
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(format!("Unable to read local trace store: {error}")),
+            Err(_) => {
+                result.unreadable_files += 1;
+                continue;
+            }
         };
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| format!("Unable to enumerate local traces: {error}"))?
-        {
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => {
+                    result.unreadable_files += 1;
+                    break;
+                }
+            };
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
             }
-            let body = tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|error| format!("Unable to read a local trace: {error}"))?;
-            documents.push(body);
+            match tokio::fs::read_to_string(&path).await {
+                Ok(body) => result.documents.push(body),
+                Err(_) => result.unreadable_files += 1,
+            }
         }
     }
-    Ok(documents)
+    result
+}
+
+fn trace_summary_from_documents(frame_id: &str, documents: TraceDocuments) -> TraceExportSummary {
+    let mut trace =
+        trace_summary_from_jsonl(frame_id, documents.documents.iter().map(String::as_str));
+    trace.unreadable_trace_files = documents.unreadable_files;
+    if trace.unreadable_trace_files > 0 {
+        trace.llm_ms.value = None;
+        trace.input_tokens.value = None;
+        trace.output_tokens.value = None;
+        trace.cached_input_tokens.value = None;
+    }
+    trace
 }
 
 const EXPORT_CSS: &str = r#"
@@ -433,24 +460,38 @@ fn kind_label<'a>(kind: &'a str, l: &'a Labels) -> &'a str {
     }
 }
 
-fn metric_text(metric: &TraceMetric, l: &Labels, duration: bool) -> String {
-    if let Some(value) = metric.value {
-        return if duration {
-            format_duration_ms(value.min(i64::MAX as u64) as i64)
-        } else {
-            value.to_string()
-        };
+fn metric_text(
+    metric: &TraceMetric,
+    unreadable_trace_files: usize,
+    l: &Labels,
+    duration: bool,
+) -> String {
+    if unreadable_trace_files == 0 {
+        if let Some(value) = metric.value {
+            return if duration {
+                format_duration_ms(value.min(i64::MAX as u64) as i64)
+            } else {
+                value.to_string()
+            };
+        }
     }
-    if metric.omitted_spans > 0 {
-        let known = if duration {
-            format_duration_ms(metric.known_subtotal.min(i64::MAX as u64) as i64)
-        } else {
-            metric.known_subtotal.to_string()
-        };
-        format!(
-            "{} (known subtotal {known}; {} {} span(s))",
-            l.unavailable, metric.omitted_spans, l.omitted
-        )
+    if metric.omitted_spans > 0 || unreadable_trace_files > 0 {
+        let mut details = Vec::new();
+        if metric.known_subtotal > 0 || metric.omitted_spans > 0 {
+            let known = if duration {
+                format_duration_ms(metric.known_subtotal.min(i64::MAX as u64) as i64)
+            } else {
+                metric.known_subtotal.to_string()
+            };
+            details.push(format!("known subtotal {known}"));
+        }
+        if metric.omitted_spans > 0 {
+            details.push(format!("{} {} span(s)", metric.omitted_spans, l.omitted));
+        }
+        if unreadable_trace_files > 0 {
+            details.push(format!("{unreadable_trace_files} unreadable trace file(s)"));
+        }
+        format!("{} ({})", l.unavailable, details.join("; "))
     } else {
         l.unavailable.into()
     }
@@ -475,13 +516,28 @@ fn stats_line(stats: &TrajectoryStats, trace: &TraceExportSummary, l: &Labels) -
         "{} · {} successful model spans | LLM {} · {} {} | {} tok/s | cache {cache} | input {} · output {} · cached input {}",
         l.turn.replace("{n}", &stats.turns.to_string()),
         trace.successful_model_spans,
-        metric_text(&trace.llm_ms, l, true),
+        metric_text(&trace.llm_ms, trace.unreadable_trace_files, l, true),
         l.tools,
         format_duration_ms(stats.tool_ms),
         tok_s,
-        metric_text(&trace.input_tokens, l, false),
-        metric_text(&trace.output_tokens, l, false),
-        metric_text(&trace.cached_input_tokens, l, false),
+        metric_text(
+            &trace.input_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
+        metric_text(
+            &trace.output_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
+        metric_text(
+            &trace.cached_input_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
     )
 }
 
@@ -625,6 +681,7 @@ fn write_model_spans(out: &mut String, trace: &TraceExportSummary, l: &Labels) {
     if trace.model_spans.is_empty()
         && trace.malformed_model_spans == 0
         && trace.excluded_model_spans == 0
+        && trace.unreadable_trace_files == 0
     {
         return;
     }
@@ -633,11 +690,16 @@ fn write_model_spans(out: &mut String, trace: &TraceExportSummary, l: &Labels) {
         "<section class=\"turn model-spans\">\n<h2>{}</h2>\n",
         escape_html(l.model_spans)
     );
-    if trace.malformed_model_spans > 0 || trace.excluded_model_spans > 0 {
+    if trace.malformed_model_spans > 0
+        || trace.excluded_model_spans > 0
+        || trace.unreadable_trace_files > 0
+    {
         let _ = write!(
             out,
-            "<p class=\"stats\">{} malformed model span(s); {} non-successful span(s) excluded from totals.</p>\n",
-            trace.malformed_model_spans, trace.excluded_model_spans
+            "<p class=\"stats\">{} malformed model span(s); {} non-successful span(s) excluded from totals; {} unreadable trace file(s).</p>\n",
+            trace.malformed_model_spans,
+            trace.excluded_model_spans,
+            trace.unreadable_trace_files
         );
     }
     for (index, span) in trace.model_spans.iter().enumerate() {
@@ -850,29 +912,12 @@ pub(super) async fn export_session_trajectory(
         .await
         .map_err(|error| error.to_string())?;
     let snapshot = fold_trajectory(&frame_id, model, &messages, &events);
-    let project_root = match state
-        .store
-        .frame_project_id(&frame_id)
-        .await
-        .map_err(|error| error.to_string())?
-    {
-        Some(project_id) => state
-            .store
-            .get_project(&project_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .map(|(_, workspace_dir)| workspace_dir)
-            .filter(|workspace_dir| !workspace_dir.trim().is_empty())
-            .map(PathBuf::from),
-        None => None,
-    };
-    let trace = match project_root {
-        Some(project_root) => {
-            let documents = read_trace_documents(&project_root).await?;
-            trace_summary_from_jsonl(&frame_id, documents.iter().map(String::as_str))
-        }
-        None => TraceExportSummary::default(),
-    };
+    let project_root = crate::exploration_commands::working_project_for_frame(&state, &frame_id)
+        .await?
+        .0
+        .root;
+    let documents = read_trace_documents(&project_root).await;
+    let trace = trace_summary_from_documents(&frame_id, documents);
     let locale = locale.unwrap_or_else(|| "en".into());
     let exported_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let html = render_trajectory_html(&snapshot, &trace, &locale, &exported_at);
@@ -1235,6 +1280,53 @@ mod tests {
         assert!(html.contains("LLM unavailable (known subtotal 500ms; 1 omitted span(s))"));
         assert!(html.contains("cached input unavailable (known subtotal 40; 1 omitted span(s))"));
         assert!(!html.contains("LLM 0ms"));
+    }
+
+    #[tokio::test]
+    async fn unreadable_trace_file_keeps_export_available_and_totals_fail_closed() {
+        let root = std::env::temp_dir().join(format!(
+            "wisp-trajectory-export-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let trace_dir = root.join(".wisp").join("traces");
+        std::fs::create_dir_all(&trace_dir).unwrap();
+        let readable_path = trace_dir.join("readable.jsonl");
+        let unreadable_path = trace_dir.join("invalid-utf8.jsonl");
+        std::fs::write(
+            &readable_path,
+            model_span_json(
+                "complete",
+                "turn-1",
+                "ok",
+                1_000,
+                1_500,
+                Some(500),
+                Some(100),
+                Some(10),
+                Some(40),
+            ),
+        )
+        .unwrap();
+        std::fs::write(&unreadable_path, [0xff, 0xfe]).unwrap();
+
+        let documents = read_trace_documents(&root).await;
+        assert_eq!(documents.documents.len(), 1);
+        assert_eq!(documents.unreadable_files, 1);
+        let trace = trace_summary_from_documents("session-fixture", documents);
+        assert_eq!(trace.model_spans.len(), 1);
+        assert_eq!(trace.unreadable_trace_files, 1);
+        assert_eq!(trace.llm_ms.value, None);
+        assert_eq!(trace.llm_ms.known_subtotal, 500);
+
+        let html = render_trajectory_html(&sample_snapshot(), &trace, "en", "t");
+        assert!(html.contains("LLM unavailable (known subtotal 500ms; 1 unreadable trace file(s))"));
+        assert!(html.contains("1 unreadable trace file(s)."));
+
+        std::fs::remove_file(readable_path).unwrap();
+        std::fs::remove_file(unreadable_path).unwrap();
+        std::fs::remove_dir(trace_dir).unwrap();
+        std::fs::remove_dir(root.join(".wisp")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[test]

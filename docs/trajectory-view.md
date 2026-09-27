@@ -61,9 +61,11 @@ from the same successful model-span set. The cache percentage states its
 denominator (`cached input / input`). A legacy or malformed span with a missing
 latency or token attribute makes that aggregate **unavailable** and reports the
 known subtotal plus omitted-span count; missing telemetry is never displayed
-as zero. Valid model intervals, including calls after an `ask_user` resume,
-remain visible in the model timeline lane even when one of their metrics is
-unavailable.
+as zero. If a retained trace file is concurrently pruned, unreadable, or not
+valid UTF-8, export still succeeds but the affected aggregates are marked
+**unavailable** with an unreadable-file count. Valid model intervals, including
+calls after an `ask_user` resume, remain visible in the model timeline lane
+even when one of their metrics is unavailable.
 
 ## Where the data comes from
 
