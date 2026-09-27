@@ -3213,6 +3213,10 @@ def _common_essential_sidecar(
         return None
     labels: set[str] = set()
     try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            headers = next(csv.reader(handle), [])
+        if not headers or len(headers) != len(set(headers)):
+            return None
         for row in _iter_csv_records(path):
             symbol = (
                 row.get("symbol")

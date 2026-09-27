@@ -2022,6 +2022,33 @@ class LineageSelectivityQueryTests(DepMapApiTests):
             self.assertEqual(payload["status"], "NOT_COMPUTED")
             self.assertFalse(payload["common_essential_filter_applied"])
 
+    def test_common_essential_exclusion_fails_closed_for_duplicate_headers(self):
+        sidecar = (
+            self.settings.knowledge_root
+            / "depmap-26q1-core"
+            / "common_essential_genes.csv"
+        )
+        sidecar.write_text(
+            "symbol,symbol\nCE000,LATE000\n",
+            encoding="utf-8",
+        )
+
+        for mode, extra in (
+            ("lineage_dependency", {"lineage": "Lung"}),
+            ("pan_cancer_dependency", {}),
+        ):
+            payload = self._query(
+                {
+                    "mode": mode,
+                    "ranking": "selective",
+                    "exclude_common_essential": True,
+                    "limit": 5,
+                    **extra,
+                }
+            )
+            self.assertEqual(payload["status"], "NOT_COMPUTED")
+            self.assertFalse(payload["common_essential_filter_applied"])
+
     def test_dependency_confounder_qc_is_typed_and_never_filters(self):
         flagged = self._query(
             {
