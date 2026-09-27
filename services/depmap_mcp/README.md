@@ -49,9 +49,13 @@ The exposed tools are intentionally small:
   tables return a typed error instead of terminating the MCP call;
 
 Resource content is sanitized recursively before it crosses the MCP boundary.
-Paths inside the configured knowledge root become stable `depmap://` URIs;
-other Linux, Windows, and UNC absolute paths are redacted from structured
-content, tabular fields, and bounded text previews.
+Paths inside the configured knowledge root become percent-encoded, stable
+`depmap://` URIs that `depmap_read_resource` can resolve. External Linux,
+Windows-drive, and UNC locations become path-free `opaque_location` records in
+structured content and tabular fields; bounded free-text previews use the
+literal `[private location omitted]`. Catalog, provenance, artifact, matrix,
+overflow, and spill metadata pass through the same recursive boundary. An
+omission marker is never embedded inside a `depmap://` URI.
 
 The query index also records one current coverage state for every registered
 Reader. Enrichment is advertised only when the active release has both a

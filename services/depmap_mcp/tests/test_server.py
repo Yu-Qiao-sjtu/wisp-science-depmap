@@ -15,7 +15,9 @@ from mcp.client.stdio import stdio_client
 
 from services.depmap_api.app import Settings
 from services.depmap_api.app import QueryRequest
+from services.depmap_mcp.catalog_readers import CatalogResolution
 from services.depmap_mcp.catalog_readers import MODE_ALIASES
+from services.depmap_mcp.portable_refs import PortableReferences
 from services.depmap_mcp.server import DepMapEvidenceService
 from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
 
@@ -191,8 +193,8 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             second["evidence"]["capability_catalog_digest"],
         )
 
-    async def test_read_resource_recursively_redacts_absolute_paths(self):
-        inside = self.root / "depmap-26q1-full" / "blocks" / "part-001.rds"
+    async def test_read_resource_recursively_makes_locations_portable(self):
+        inside = self.root / "analysis-modules" / "分析 α" / "part-001.rds"
         uri = self.index_resource(
             "depmap-26q1-full/true_love_gene/manifest.json",
             json.dumps(
@@ -216,19 +218,25 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         content = result["evidence"]["content"]
         self.assertEqual(
             content["inputs"][0],
-            "depmap://26Q1/depmap-26q1-full/blocks/part-001.rds",
+            "depmap://26Q1/analysis-modules/%E5%88%86%E6%9E%90%20%CE%B1/part-001.rds",
         )
-        self.assertEqual(content["inputs"][1:], ["<redacted:absolute-path>"] * 5)
+        opaque = {
+            "reference_type": "opaque_location",
+            "state": "OMITTED",
+            "reason": "absolute path outside the public knowledge root",
+        }
+        self.assertEqual(content["inputs"][1:], [opaque] * 5)
         self.assertEqual(content["nested"]["safe_url"], "https://example.org/reference")
-        self.assertEqual(content["<redacted:absolute-path>"], "key is sanitized too")
+        self.assertEqual(content["[private location omitted]"], "key is sanitized too")
         self.assertEqual(
-            content["<redacted:absolute-path>#2"], "second key survives"
+            content["[private location omitted]#2"], "second key survives"
         )
         serialized = json.dumps(result)
         self.assertNotIn(str(self.root), serialized)
         self.assertNotIn("/home/private", serialized)
         self.assertNotIn("fileserver", serialized)
         self.assertNotIn("-secrets", serialized)
+        self.assertNotIn("<redacted:absolute-path>", serialized)
 
     async def test_read_resource_sanitizes_csv_fields_and_text_previews(self):
         csv_uri = self.index_resource(
@@ -238,7 +246,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         csv_result = await self.service.read_resource(csv_uri, max_rows=10)
         self.assertEqual(
             csv_result["evidence"]["content"][0]["input"],
-            "<redacted:absolute-path>",
+            {
+                "reference_type": "opaque_location",
+                "state": "OMITTED",
+                "reason": "absolute path outside the public knowledge root",
+            },
         )
 
         text_uri = self.index_resource(
@@ -249,7 +261,76 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         preview = text_result["evidence"]["content"]
         self.assertNotIn("/srv/private", preview)
         self.assertNotIn(r"D:\private", preview)
-        self.assertEqual(preview.count("<redacted:absolute-path>"), 2)
+        self.assertEqual(preview.count("[private location omitted]"), 2)
+        self.assertNotIn("<redacted:absolute-path>", preview)
+
+    async def test_catalog_references_are_public_uris_or_typed_opaque_records(self):
+        relative = "analysis-modules/分析 α/manifest.json"
+        uri = self.index_resource(relative, '{"state":"complete"}')
+        inside = self.root / relative
+        collision = str(self.root) + "-private/manifest.json"
+        resolution = CatalogResolution(
+            state="RESOLVED",
+            query_mode="core",
+            artifact_uris=(
+                relative,
+                str(inside),
+                "/srv/private/manifest.json",
+                r"D:\private\manifest.json",
+                r"\\server\share\manifest.json",
+                collision,
+                r"depmap://26Q1/C:\private\manifest.json",
+            ),
+            matrix_blocks=(relative,),
+        )
+
+        evidence = resolution.evidence(self.settings.release, self.root)
+        expected_uri = (
+            "depmap://26Q1/analysis-modules/"
+            "%E5%88%86%E6%9E%90%20%CE%B1/manifest.json"
+        )
+        self.assertEqual(uri, "depmap://26Q1/analysis-modules/分析 α/manifest.json")
+        self.assertEqual(evidence["artifact_uris"][:2], [expected_uri, expected_uri])
+        self.assertEqual(evidence["matrix_blocks"], [expected_uri])
+        for item in evidence["artifact_uris"][2:]:
+            self.assertEqual(item["reference_type"], "opaque_location")
+            self.assertEqual(item["state"], "OMITTED")
+
+        references = PortableReferences(self.root, self.settings.release)
+        public_uris = [
+            item for item in evidence["artifact_uris"] if isinstance(item, str)
+        ] + evidence["matrix_blocks"]
+        self.assertTrue(public_uris)
+        for public_uri in public_uris:
+            self.assertEqual(references.parse_public_uri(public_uri), relative)
+        read_back = await self.service.read_resource(expected_uri)
+        self.assertEqual(read_back["evidence"]["content"]["state"], "complete")
+
+        serialized = json.dumps(evidence)
+        for secret in ("/srv/private", r"D:\private", "server", "-private"):
+            self.assertNotIn(secret, serialized)
+        self.assertNotIn("<redacted:absolute-path>", serialized)
+
+    def test_portable_boundary_covers_nested_overflow_and_spill_hints(self):
+        payload = {
+            "overflow": {
+                "spill_hint": "read /var/private/spill.json before D:\\private\\next.json",
+                "artifact": str(
+                    self.root / "analysis-modules" / "分析 α" / "summary.yaml"
+                ),
+            },
+            "provenance": (r"\\server\share\source.tsv",),
+        }
+        portable = self.service._portable(payload)
+        serialized = json.dumps(portable)
+        self.assertEqual(
+            portable["overflow"]["artifact"],
+            "depmap://26Q1/analysis-modules/%E5%88%86%E6%9E%90%20%CE%B1/summary.yaml",
+        )
+        self.assertEqual(portable["overflow"]["spill_hint"].count("[private location omitted]"), 2)
+        self.assertEqual(portable["provenance"][0]["reference_type"], "opaque_location")
+        for secret in ("/var/private", r"D:\private", "server"):
+            self.assertNotIn(secret, serialized)
 
     def test_every_bounded_query_mode_has_a_catalog_reader_family(self):
         modes = set(get_args(QueryRequest.model_fields["mode"].annotation))
