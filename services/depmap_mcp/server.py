@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -22,53 +22,320 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
-MAX_MODEL_LIST_ITEMS = 40
 MAX_MODEL_STRING_CHARS = 4096
+
+_AUXILIARY_LIST_KEYS = frozenset(
+    {
+        "artifact_uris",
+        "catalog_uris",
+        "matrix_blocks",
+        "provenance",
+        "provenance_uris",
+        "resource_uris",
+    }
+)
 
 
 def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
     """Bound model-facing evidence while retained artifacts remain addressable."""
     original_bytes = len(_canonical_json(value).encode("utf-8"))
     projected: Any = value
+    projected_bytes = original_bytes
     omitted_items = 0
+    omitted_fields = 0
     truncated_strings = 0
+    scientific_page_width: int | None = None
+    lineage_limit: int | None = None
 
-    def project(item: Any, list_limit: int, string_limit: int) -> tuple[Any, int, int]:
-        local_omitted = 0
-        local_truncated = 0
+    def encoded_bytes(item: Any) -> int:
+        return len(_canonical_json(item).encode("utf-8"))
+
+    def is_auxiliary_list(key: str) -> bool:
+        return key in _AUXILIARY_LIST_KEYS or key.endswith("_uris")
+
+    def max_list_length(item: Any, target_key: str | None = None) -> int:
+        maximum = 0
+
+        def visit(child: Any, key: str | None = None) -> None:
+            nonlocal maximum
+            if isinstance(child, dict):
+                for nested_key, nested in child.items():
+                    visit(nested, nested_key)
+            elif isinstance(child, list):
+                if target_key is None or key == target_key:
+                    maximum = max(maximum, len(child))
+                for nested in child:
+                    visit(nested)
+
+        visit(item)
+        return maximum
+
+    def walk_mapping_items(item: Any) -> Iterator[tuple[Any, Any]]:
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                yield key, nested
+                yield from walk_mapping_items(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                yield from walk_mapping_items(nested)
+
+    def drop_duplicate_row_aliases(item: Any) -> tuple[Any, int]:
+        """Remove oversized duplicate tabular aliases before shortening rows."""
+        if isinstance(item, dict):
+            rows = item.get("rows")
+            duplicate_content = (
+                isinstance(rows, list)
+                and isinstance(item.get("content"), list)
+                and item["content"] == rows
+            )
+            output: dict[Any, Any] = {}
+            omitted = 0
+            for key, nested in item.items():
+                if key == "content" and duplicate_content:
+                    omitted += 1
+                    continue
+                output[key], nested_omitted = drop_duplicate_row_aliases(nested)
+                omitted += nested_omitted
+            return output, omitted
+        if isinstance(item, list):
+            output = []
+            omitted = 0
+            for nested in item:
+                projected_nested, nested_omitted = drop_duplicate_row_aliases(nested)
+                output.append(projected_nested)
+                omitted += nested_omitted
+            return output, omitted
+        return item, 0
+
+    def project_lists(
+        item: Any,
+        *,
+        auxiliary_width: int | None = None,
+        row_width: int | None = None,
+        lineage_width: int | None = None,
+    ) -> tuple[Any, int]:
+        """Project semantic list classes without coupling their widths."""
+
+        def visit(child: Any) -> tuple[Any, int]:
+            if isinstance(child, dict):
+                output: dict[Any, Any] = {}
+                omitted = 0
+                original_rows = child.get("rows")
+                original_lineages = child.get("lineages")
+
+                for key, nested in child.items():
+                    if key == "rows" and isinstance(nested, list):
+                        retained = (
+                            nested
+                            if row_width is None
+                            else nested[: min(len(nested), row_width)]
+                        )
+                        projected_rows = []
+                        for entry in retained:
+                            projected_entry, nested_omitted = visit(entry)
+                            projected_rows.append(projected_entry)
+                            omitted += nested_omitted
+                        output[key] = projected_rows
+                        omitted += len(nested) - len(retained)
+                    elif key == "lineages" and isinstance(nested, list):
+                        retained = (
+                            nested
+                            if lineage_width is None
+                            else nested[: min(len(nested), lineage_width)]
+                        )
+                        projected_lineages = []
+                        for entry in retained:
+                            projected_entry, nested_omitted = visit(entry)
+                            projected_lineages.append(projected_entry)
+                            omitted += nested_omitted
+                        output[key] = projected_lineages
+                        omitted += len(nested) - len(retained)
+                    elif (
+                        isinstance(key, str)
+                        and is_auxiliary_list(key)
+                        and isinstance(nested, list)
+                        and auxiliary_width is not None
+                    ):
+                        retained = nested[: min(len(nested), auxiliary_width)]
+                        projected_entries = []
+                        for entry in retained:
+                            projected_entry, nested_omitted = visit(entry)
+                            projected_entries.append(projected_entry)
+                            omitted += nested_omitted
+                        output[key] = projected_entries
+                        omitted += len(nested) - len(retained)
+                    else:
+                        output[key], nested_omitted = visit(nested)
+                        omitted += nested_omitted
+
+                if isinstance(original_rows, list) and len(output["rows"]) < len(
+                    original_rows
+                ):
+                    before = child.get("returned_count", len(original_rows))
+                    if not isinstance(before, int) or isinstance(before, bool):
+                        before = len(original_rows)
+                    output["returned_count_before_projection"] = child.get(
+                        "returned_count_before_projection", before
+                    )
+                    output["returned_count"] = len(output["rows"])
+
+                if isinstance(original_lineages, list) and len(
+                    output["lineages"]
+                ) < len(original_lineages):
+                    before = child.get("lineage_count", len(original_lineages))
+                    if not isinstance(before, int) or isinstance(before, bool):
+                        before = len(original_lineages)
+                    output["lineage_count_before_projection"] = child.get(
+                        "lineage_count_before_projection", before
+                    )
+                    output["lineage_count"] = len(output["lineages"])
+                return output, omitted
+
+            if isinstance(child, list):
+                output = []
+                omitted = 0
+                for nested in child:
+                    projected_nested, nested_omitted = visit(nested)
+                    output.append(projected_nested)
+                    omitted += nested_omitted
+                return output, omitted
+            return child, 0
+
+        return visit(item)
+
+    def largest_fitting_width(
+        maximum: int,
+        build: Callable[[int], tuple[Any, int]],
+        *,
+        minimum: int,
+    ) -> tuple[Any, int, int] | None:
+        if maximum < minimum:
+            return None
+        smallest, smallest_omitted = build(minimum)
+        if encoded_bytes(smallest) > MAX_MODEL_EVIDENCE_BYTES:
+            return None
+        low = minimum
+        high = maximum
+        best = smallest
+        best_omitted = smallest_omitted
+        best_width = minimum
+        while low <= high:
+            middle = (low + high) // 2
+            candidate, candidate_omitted = build(middle)
+            if encoded_bytes(candidate) <= MAX_MODEL_EVIDENCE_BYTES:
+                best = candidate
+                best_omitted = candidate_omitted
+                best_width = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        return best, best_omitted, best_width
+
+    def truncate_strings(item: Any, string_limit: int) -> tuple[Any, int]:
+        truncated = 0
 
         def visit(child: Any) -> Any:
-            nonlocal local_omitted, local_truncated
+            nonlocal truncated
             if isinstance(child, dict):
                 return {key: visit(nested) for key, nested in child.items()}
             if isinstance(child, list):
-                local_omitted += max(0, len(child) - list_limit)
-                return [visit(nested) for nested in child[:list_limit]]
+                return [visit(nested) for nested in child]
             if isinstance(child, str) and len(child) > string_limit:
-                local_truncated += 1
+                truncated += 1
                 return child[:string_limit] + "…[truncated]"
             return child
 
-        return visit(item), local_omitted, local_truncated
+        return visit(item), truncated
 
-    # Tighten the projection in stages so scientific rows survive whenever possible.
-    # Counters are recalculated from the original evidence for the final chosen pass.
-    for list_limit, string_limit in (
-        (MAX_MODEL_LIST_ITEMS, MAX_MODEL_STRING_CHARS),
-        (20, 2048),
-        (10, 1024),
-        (5, 512),
-        (2, 256),
-        (1, 128),
-    ):
-        projected, omitted_items, truncated_strings = project(
-            value, list_limit, string_limit
+    if original_bytes <= MAX_MODEL_EVIDENCE_BYTES:
+        return value, {
+            "original_bytes": original_bytes,
+            "projected_bytes": original_bytes,
+            "max_model_bytes": MAX_MODEL_EVIDENCE_BYTES,
+            "max_list_items": max_list_length(value),
+            "scientific_page_width": None,
+            "lineage_limit": None,
+            "omitted_items": 0,
+            "omitted_fields": 0,
+            "truncated_strings": 0,
+            "is_bounded_projection": False,
+        }
+
+    semantic_base, omitted_fields = drop_duplicate_row_aliases(value)
+    projected = semantic_base
+    projected_bytes = encoded_bytes(projected)
+    auxiliary_maximum = max(
+        (
+            len(nested)
+            for key, nested in walk_mapping_items(semantic_base)
+            if is_auxiliary_list(key) and isinstance(nested, list)
+        ),
+        default=0,
+    )
+    semantic_omitted = 0
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES and auxiliary_maximum:
+        auxiliary_fit = largest_fitting_width(
+            auxiliary_maximum,
+            lambda width: project_lists(semantic_base, auxiliary_width=width),
+            minimum=0,
         )
-        projected_bytes = len(_canonical_json(projected).encode("utf-8"))
-        if projected_bytes <= MAX_MODEL_EVIDENCE_BYTES:
-            break
+        if auxiliary_fit is not None:
+            projected, omitted_items, _ = auxiliary_fit
+            projected_bytes = encoded_bytes(projected)
+        else:
+            semantic_base, semantic_omitted = project_lists(value, auxiliary_width=0)
 
-    omitted_fields = 0
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES:
+        row_maximum = max_list_length(semantic_base, "rows")
+        if row_maximum:
+            row_fit = largest_fitting_width(
+                row_maximum,
+                lambda width: project_lists(semantic_base, row_width=width),
+                minimum=1,
+            )
+            if row_fit is not None:
+                projected, row_omitted, scientific_page_width = row_fit
+                omitted_items = semantic_omitted + row_omitted
+                projected_bytes = encoded_bytes(projected)
+            else:
+                semantic_base, row_omitted = project_lists(
+                    semantic_base, row_width=1
+                )
+                semantic_omitted += row_omitted
+                scientific_page_width = 1
+
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES:
+        lineage_maximum = max_list_length(semantic_base, "lineages")
+        if lineage_maximum:
+            lineage_fit = largest_fitting_width(
+                lineage_maximum,
+                lambda width: project_lists(semantic_base, lineage_width=width),
+                minimum=1,
+            )
+            if lineage_fit is not None:
+                projected, lineage_omitted, lineage_limit = lineage_fit
+                omitted_items = semantic_omitted + lineage_omitted
+                projected_bytes = encoded_bytes(projected)
+            else:
+                semantic_base, lineage_omitted = project_lists(
+                    semantic_base, lineage_width=1
+                )
+                semantic_omitted += lineage_omitted
+                lineage_limit = 1
+
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES:
+        projected = semantic_base
+        omitted_items = semantic_omitted
+        for string_limit in (MAX_MODEL_STRING_CHARS, 2048, 1024, 512, 256, 128):
+            candidate, candidate_truncated = truncate_strings(
+                semantic_base, string_limit
+            )
+            projected = candidate
+            truncated_strings = candidate_truncated
+            projected_bytes = encoded_bytes(projected)
+            if projected_bytes <= MAX_MODEL_EVIDENCE_BYTES:
+                break
+
     if projected_bytes > MAX_MODEL_EVIDENCE_BYTES and isinstance(value, dict):
         # Preserve the scientific result rather than replacing it with provenance.
         # The fallback intentionally keeps a small, explicit schema and accounts for
@@ -80,12 +347,22 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
             "summary",
             "result",
             "rows",
+            "returned_count",
+            "returned_count_before_projection",
+            "matched_row_count",
+            "lineages",
+            "lineage_count",
+            "lineage_count_before_projection",
             "recurrence",
             "metric_semantics",
         )
-        reduced = {key: value[key] for key in retained_keys if key in value}
-        omitted_fields = len(value) - len(reduced)
-        projected, omitted_items, truncated_strings = project(reduced, 1, 128)
+        reduced = {
+            key: semantic_base[key]
+            for key in retained_keys
+            if key in semantic_base
+        }
+        omitted_fields = max(omitted_fields, len(value) - len(reduced))
+        projected, truncated_strings = truncate_strings(reduced, 128)
         projected["projection_notice"] = (
             "Evidence was reduced to a bounded scientific result; request a narrower "
             "query or follow a depmap:// evidence reference for more rows."
@@ -96,17 +373,18 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
         # A pathological mapping can still contain thousands of scalar fields. Keep
         # one compact scientific row/result and guarantee the advertised byte limit.
         compact: dict[str, Any] = {}
-        if isinstance(value, dict):
+        if isinstance(semantic_base, dict):
             for key in ("status", "state", "reason", "summary"):
-                if key in value:
-                    compact[key], _, extra_truncated = project(value[key], 1, 64)
+                if key in semantic_base:
+                    compact[key], extra_truncated = truncate_strings(
+                        semantic_base[key], 64
+                    )
                     truncated_strings += extra_truncated
-            scientific = value.get("result", value.get("rows"))
+            scientific = semantic_base.get("result", semantic_base.get("rows"))
             if scientific is not None:
-                compact["result"], extra_omitted, extra_truncated = project(
-                    scientific, 1, 64
+                compact["result"], extra_truncated = truncate_strings(
+                    scientific, 64
                 )
-                omitted_items += extra_omitted
                 truncated_strings += extra_truncated
             omitted_fields = max(omitted_fields, len(value) - len(compact))
         compact["projection_notice"] = "Evidence exceeded the model budget; one scientific result was retained."
@@ -126,7 +404,9 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
         "original_bytes": original_bytes,
         "projected_bytes": projected_bytes,
         "max_model_bytes": MAX_MODEL_EVIDENCE_BYTES,
-        "max_list_items": MAX_MODEL_LIST_ITEMS,
+        "max_list_items": max_list_length(projected),
+        "scientific_page_width": scientific_page_width,
+        "lineage_limit": lineage_limit,
         "omitted_items": omitted_items,
         "omitted_fields": omitted_fields,
         "truncated_strings": truncated_strings,

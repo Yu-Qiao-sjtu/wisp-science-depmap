@@ -20,6 +20,7 @@ from services.depmap_mcp.catalog_readers import MODE_ALIASES
 from services.depmap_mcp.portable_refs import PortableReferences
 from services.depmap_mcp.server import DepMapEvidenceService
 from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
+from services.depmap_mcp.server import _bounded_model_projection
 
 
 class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +135,28 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page["evidence"]["returned_count"], 5)
         self.assertEqual(page["evidence"]["total_row_count"], 8)
         self.assertGreater(page["evidence"]["returned_count"], 1)
+
+    async def test_wide_csv_projection_drops_duplicate_content_before_rows(self):
+        relative = "analysis-modules/wide/table.csv"
+        payload = "gene,detail\n" + "".join(
+            f"GENE{index},{'x' * 700}\n" for index in range(110)
+        )
+        uri = self.index_resource(relative, payload)
+
+        page = await self.service.read_resource(uri, max_rows=100)
+        evidence = page["evidence"]
+
+        self.assertTrue(page["model_projection"]["is_bounded_projection"])
+        self.assertLessEqual(
+            page["model_projection"]["projected_bytes"], MAX_MODEL_EVIDENCE_BYTES
+        )
+        self.assertNotIn("content", evidence)
+        self.assertEqual(len(evidence["rows"]), 100)
+        self.assertEqual(evidence["returned_count"], 100)
+        self.assertNotIn("returned_count_before_projection", evidence)
+        self.assertEqual(evidence["total_row_count"], 110)
+        self.assertEqual(evidence["next_cursor"], 100)
+        self.assertEqual(evidence["uri"], uri)
 
     async def test_compressed_table_reader_types_empty_and_malformed_inputs(self):
         empty_uri = self.index_bytes(
@@ -619,6 +642,158 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(first["model_projection"]["omitted_items"], 0)
 
+    async def test_projection_keeps_an_under_budget_fifty_row_page_intact(self):
+        for lineage in ("Kidney", "Liver", "Breast", "Bowel", "Lung"):
+            with self.subTest(lineage=lineage):
+                rows = [
+                    {
+                        "rank": index + 1,
+                        "symbol": f"GENE{index:02d}",
+                        "detail": lineage + "x" * 700,
+                    }
+                    for index in range(50)
+                ]
+
+                evidence, projection = _bounded_model_projection(
+                    {
+                        "status": "FOUND",
+                        "lineage": lineage,
+                        "rows": rows,
+                        "returned_count": 50,
+                        "matched_row_count": 73,
+                    }
+                )
+
+                self.assertFalse(projection["is_bounded_projection"])
+                self.assertEqual(len(evidence["rows"]), 50)
+                self.assertEqual(evidence["returned_count"], 50)
+                self.assertEqual(evidence["matched_row_count"], 73)
+                self.assertNotIn("returned_count_before_projection", evidence)
+
+    async def test_projection_shrinks_auxiliary_lists_before_scientific_rows(self):
+        rows = [
+            {"rank": index + 1, "symbol": f"GENE{index:02d}", "detail": "x" * 700}
+            for index in range(50)
+        ]
+
+        evidence, projection = _bounded_model_projection(
+            {
+                "status": "FOUND",
+                "rows": rows,
+                "returned_count": 50,
+                "matched_row_count": 81,
+                "provenance": [
+                    f"depmap://26Q1/source/{index}/" + "p" * 5000
+                    for index in range(40)
+                ],
+            }
+        )
+
+        self.assertLessEqual(
+            projection["projected_bytes"], MAX_MODEL_EVIDENCE_BYTES
+        )
+        self.assertEqual(len(evidence["rows"]), 50)
+        self.assertEqual(evidence["returned_count"], 50)
+        self.assertEqual(evidence["matched_row_count"], 81)
+        self.assertLess(len(evidence["provenance"]), 40)
+
+    async def test_projection_uses_one_scientific_page_width_across_lineages(self):
+        labels = ["Kidney", "Liver", "Breast", "Bowel", "Lung"]
+        lineages = []
+        for lineage_index in range(30):
+            rows = [
+                {
+                    "rank": row_index + 1,
+                    "symbol": f"GENE{row_index:02d}",
+                    "detail": labels[lineage_index % len(labels)] + "x" * 650,
+                }
+                for row_index in range(10)
+            ]
+            lineages.append(
+                {
+                    "lineage": f"{labels[lineage_index % len(labels)]}-{lineage_index:02d}",
+                    "rows": rows,
+                    "returned_count": 10,
+                    "matched_row_count": 25 + lineage_index,
+                }
+            )
+
+        evidence, _projection = _bounded_model_projection(
+            {
+                "status": "FOUND",
+                "lineages": lineages,
+                "lineage_count": 30,
+            }
+        )
+        widths = {len(section["rows"]) for section in evidence["lineages"]}
+
+        self.assertEqual(len(evidence["lineages"]), 30)
+        self.assertEqual(evidence["lineage_count"], 30)
+        self.assertNotIn("lineage_count_before_projection", evidence)
+        self.assertEqual(len(widths), 1)
+        retained_width = widths.pop()
+        self.assertGreater(retained_width, 0)
+        self.assertLess(retained_width, 10)
+        for index, section in enumerate(evidence["lineages"]):
+            self.assertEqual(section["returned_count"], retained_width)
+            self.assertEqual(section["returned_count_before_projection"], 10)
+            self.assertEqual(section["matched_row_count"], 25 + index)
+
+    async def test_projection_drops_lineages_only_after_pages_reach_one_row(self):
+        lineages = [
+            {
+                "lineage": f"Lineage-{index:02d}",
+                "rows": [
+                    {
+                        "rank": 1,
+                        "symbol": f"GENE{index:02d}",
+                        "detail": "x" * 6000,
+                    }
+                ],
+                "returned_count": 1,
+                "matched_row_count": 20,
+            }
+            for index in range(30)
+        ]
+
+        evidence, _projection = _bounded_model_projection(
+            {
+                "status": "FOUND",
+                "lineages": lineages,
+                "lineage_count": 30,
+            }
+        )
+
+        self.assertGreater(len(evidence["lineages"]), 0)
+        self.assertLess(len(evidence["lineages"]), 30)
+        self.assertTrue(
+            all(len(section["rows"]) == 1 for section in evidence["lineages"])
+        )
+        self.assertEqual(evidence["lineage_count"], len(evidence["lineages"]))
+        self.assertEqual(evidence["lineage_count_before_projection"], 30)
+
+    async def test_projection_keeps_the_longest_fitting_prefix_not_a_fixed_forty(self):
+        rows = [
+            {"rank": index + 1, "symbol": f"GENE{index:03d}", "detail": "x" * 1100}
+            for index in range(100)
+        ]
+
+        evidence, _projection = _bounded_model_projection(
+            {
+                "status": "FOUND",
+                "rows": rows,
+                "returned_count": 100,
+                "matched_row_count": 144,
+            }
+        )
+        retained_count = len(evidence["rows"])
+
+        self.assertGreater(retained_count, 40)
+        self.assertLess(retained_count, 100)
+        self.assertEqual(evidence["returned_count"], retained_count)
+        self.assertEqual(evidence["returned_count_before_projection"], 100)
+        self.assertEqual(evidence["matched_row_count"], 144)
+
     async def test_projection_rechecks_budget_for_many_long_provenance_strings(self):
         async def provenance_runner(_settings, query):
             return {
@@ -636,7 +811,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             result["evidence"]["result"]["result"]["rows"][0]["symbol"],
             "ESR1",
         )
-        self.assertGreater(result["model_projection"]["truncated_strings"], 0)
+        self.assertGreater(result["model_projection"]["omitted_items"], 0)
 
     async def test_cancer_only_direction_discovery_needs_no_anchor_gene(self):
         result = await self.service.lineage_directions("结肠癌", 20)
