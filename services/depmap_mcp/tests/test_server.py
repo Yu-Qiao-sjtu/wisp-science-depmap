@@ -23,7 +23,11 @@ from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
 class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # Windows runners may expose the temporary directory through an 8.3
+        # alias while child paths resolve to the long form. Keep the fixture's
+        # configured knowledge root canonical so the path-boundary assertion
+        # compares equivalent paths on every platform.
+        self.root = Path(self.temp.name).resolve()
         (self.root / "depmap-26q1-core").mkdir()
         (self.root / "depmap-26q1-full").mkdir()
         (self.root / "depmap-26q1-module-catalog.csv").write_text(
@@ -179,7 +183,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         evidence = first["evidence"]
 
         self.assertEqual(evidence["query_contract_version"], 13)
-        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-12")
+        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-13")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
         self.assertEqual(
@@ -909,7 +913,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "limit": 7,
             },
         )
-        self.assertEqual(result["tool"], "depmap_lineage_mutation_dependency")
+        self.assertNotIn("tool", result)
         self.assertEqual(result["request"]["source"], "TP53")
         self.assertEqual(result["request"]["target"], "GPX4")
         self.assertEqual(
