@@ -8,6 +8,11 @@ license.workspace = true
 [[bin]]
 name = "wisp-tauri"
 path = "src/main.rs"
+# The desktop binary already receives its production manifest from
+# tauri-build. Unit behavior lives in the library target; asking Cargo to
+# synthesize a binary test harness would combine that resource with the
+# library-harness Common Controls manifest and fail in cvtres on Windows.
+test = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
