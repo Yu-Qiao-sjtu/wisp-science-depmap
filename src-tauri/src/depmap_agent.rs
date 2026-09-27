@@ -3136,6 +3136,7 @@ fn depmap_query_schema() -> Value {
             "module": {"type":"string","enum":MATRIX_MODULES},
             "source": {"type":"string"},
             "target": {"type":"string"},
+            "cursor": {"type":"integer","minimum":0,"description":"For lineage_dependency ranking pages: zero-based offset returned by next_cursor."},
             "limit": {"type":"integer","minimum":1,"maximum":MAX_TOP_LIMIT},
             "event": {"type":"string","enum":LINEAGE_EVENTS},
             "lineage": {"type":"string"},
@@ -3228,6 +3229,11 @@ fn validated_query(args: &Value) -> Result<Value, String> {
             "common_essential_source".into(),
             Value::String(source.to_string()),
         );
+        let cursor = args.get("cursor").and_then(Value::as_i64).unwrap_or(0);
+        if cursor < 0 {
+            return Err("cursor must be a non-negative integer".into());
+        }
+        query.insert("cursor".into(), json!(cursor));
     }
     if mode == "model_gene_effect" {
         if let Some(lineage) = args
@@ -4825,6 +4831,21 @@ mod tests {
         assert_eq!(dependency["lineage"], "Breast");
         assert_eq!(dependency["ranking"], "selective");
         assert_eq!(dependency["limit"], 10);
+        assert_eq!(dependency["cursor"], 0);
+        let dependency_page = validated_query(&json!({
+            "mode":"lineage_dependency",
+            "lineage":"Lung",
+            "cursor":20,
+            "limit":10
+        }))
+        .unwrap();
+        assert_eq!(dependency_page["cursor"], 20);
+        assert!(validated_query(&json!({
+            "mode":"lineage_dependency",
+            "lineage":"Lung",
+            "cursor":-1
+        }))
+        .is_err());
         let descriptive_dependency = validated_query(&json!({
             "mode":"lineage_dependency",
             "lineage":"colorectal cancer",
@@ -4937,6 +4958,7 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("lineage_dependency")));
+        assert_eq!(schema["properties"]["cursor"]["minimum"], 0);
         assert!(schema["properties"]["mode"]["enum"]
             .as_array()
             .unwrap()
