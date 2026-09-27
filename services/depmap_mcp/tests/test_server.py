@@ -23,7 +23,11 @@ from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
 class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # Windows runners may expose the temporary directory through an 8.3
+        # alias while child paths resolve to the long form. Keep the fixture's
+        # configured knowledge root canonical so the path-boundary assertion
+        # compares equivalent paths on every platform.
+        self.root = Path(self.temp.name).resolve()
         (self.root / "depmap-26q1-core").mkdir()
         (self.root / "depmap-26q1-full").mkdir()
         (self.root / "depmap-26q1-module-catalog.csv").write_text(
