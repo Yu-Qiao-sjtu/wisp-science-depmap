@@ -179,7 +179,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         evidence = first["evidence"]
 
         self.assertEqual(evidence["query_contract_version"], 13)
-        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-12")
+        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-13")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
         self.assertEqual(
@@ -909,7 +909,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "limit": 7,
             },
         )
-        self.assertEqual(result["tool"], "depmap_lineage_mutation_dependency")
+        self.assertNotIn("tool", result)
         self.assertEqual(result["request"]["source"], "TP53")
         self.assertEqual(result["request"]["target"], "GPX4")
         self.assertEqual(
