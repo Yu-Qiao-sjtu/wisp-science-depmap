@@ -13,6 +13,15 @@ class WindowsTauriCiContractTests(unittest.TestCase):
         self.assertIn("cargo:rustc-link-arg=/MANIFEST:EMBED", build_script)
         self.assertIn("cargo:rustc-link-arg=/MANIFESTINPUT:", build_script)
 
+        cargo_toml = (ROOT / "src-tauri" / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        bin_target = cargo_toml.split("[[bin]]", maxsplit=1)[1].split(
+            "[build-dependencies]", maxsplit=1
+        )[0]
+        self.assertIn('name = "wisp-tauri"', bin_target)
+        self.assertIn("test = false", bin_target)
+
         manifest = (
             ROOT / "src-tauri" / "examples" / "webview_recovery_smoke.manifest"
         ).read_text(encoding="utf-8")
