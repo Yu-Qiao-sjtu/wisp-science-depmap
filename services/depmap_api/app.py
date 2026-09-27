@@ -3224,7 +3224,7 @@ def _common_essential_sidecar(
                 normalized = str(symbol).strip().upper()
                 if normalized:
                     labels.add(normalized)
-    except (OSError, UnicodeError, csv.Error):
+    except (OSError, UnicodeError, csv.Error, AttributeError, TypeError):
         return None
     if not labels:
         return None

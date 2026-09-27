@@ -88,6 +88,20 @@ stopifnot(
   is.null(second$next_cursor)
 )
 
+writeLines(
+  c("symbol", "NA"),
+  file.path(root, "depmap-26q1-core", "common_essential_genes.csv"),
+  useBytes = TRUE
+)
+missing_value_lineage <- query("lineage_dependency")
+missing_value_pan_cancer <- query("pan_cancer_dependency")
+stopifnot(
+  identical(missing_value_lineage$status, "NOT_COMPUTED"),
+  length(missing_value_lineage$rows) == 0L,
+  identical(missing_value_pan_cancer$status, "NOT_COMPUTED"),
+  length(missing_value_pan_cancer$lineages) == 0L
+)
+
 unlink(file.path(root, "depmap-26q1-core", "common_essential_genes.csv"))
 missing_lineage <- query("lineage_dependency")
 missing_pan_cancer <- query("pan_cancer_dependency")

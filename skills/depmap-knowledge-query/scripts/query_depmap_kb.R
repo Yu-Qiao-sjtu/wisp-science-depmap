@@ -261,7 +261,7 @@ if(a$mode%in%sparse_modes){
     if(common_available){
       common_dt<-tryCatch(fread(common_path),error=function(e)NULL)
       symbol_column<-if(is.null(common_dt))character() else intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt))
-      if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE
+      if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[!is.na(common_symbols)&nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE
     }
     tested[,is_common_essential:=if(common_available)clean(symbol)%in%common_symbols else NA]
     tested[,common_essential_source:=if(common_available)common_source else NA_character_]
@@ -300,7 +300,7 @@ if(a$mode%in%sparse_modes){
     exclude_common<-!is.null(a$exclude_common_essential)&&tolower(trimws(as.character(a$exclude_common_essential)))%in%c("true","1","yes")
     common_source<-if(is.null(a$common_essential_source))"depmap_26q1" else trimws(a$common_essential_source)
     common_path<-file.path(core,"common_essential_genes.csv");common_available<-identical(common_source,"depmap_26q1")&&file.exists(common_path);common_symbols<-character()
-    if(common_available){common_dt<-tryCatch(fread(common_path),error=function(e)NULL);symbol_column<-if(is.null(common_dt))character() else intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt));if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE}
+    if(common_available){common_dt<-tryCatch(fread(common_path),error=function(e)NULL);symbol_column<-if(is.null(common_dt))character() else intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt));if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[!is.na(common_symbols)&nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE}
     annotation_status<-if(common_available)"AVAILABLE" else "ANNOTATION_UNAVAILABLE";common_version<-if(!is.null(manifest$release))manifest$release else "26Q1"
     if(exclude_common&&!common_available){emit(evidence("NOT_COMPUTED",a$mode,"common-essential exclusion was requested, but the versioned sidecar is unavailable",ranking=ranking,lineages=list(),lineage_count=0L,cursor=cursor,next_cursor=NA_integer_,exclude_common_essential_requested=TRUE,common_essential_filter_applied=FALSE,common_essential_source=common_source,common_essential_version=NA_character_,common_essential_provenance=character(),common_essential_annotation_status=annotation_status,housekeeping_filter_applied=FALSE,manifest=manifest,provenance=c(manifest_path,paths)));quit(save="no")}
     summaries<-vector("list",length(paths));retained_symbols<-vector("list",length(paths))
