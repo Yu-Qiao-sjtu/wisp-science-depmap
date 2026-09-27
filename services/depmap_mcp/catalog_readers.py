@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from services.depmap_mcp.portable_refs import PortableReferences
+
 
 Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
@@ -58,10 +60,15 @@ class CatalogResolution:
     validated_provenance_count: int = 0
     reason: str | None = None
 
-    def evidence(self, release: str) -> dict[str, Any]:
+    def evidence(self, release: str, knowledge_root: Path) -> dict[str, Any]:
         value = asdict(self)
-        value["artifact_uris"] = [f"depmap://{release}/{path}" for path in self.artifact_uris]
-        value["matrix_blocks"] = [f"depmap://{release}/{path}" for path in self.matrix_blocks]
+        references = PortableReferences(knowledge_root, release)
+        value["artifact_uris"] = [
+            references.catalog_reference(path) for path in self.artifact_uris
+        ]
+        value["matrix_blocks"] = [
+            references.catalog_reference(path) for path in self.matrix_blocks
+        ]
         return value
 
 

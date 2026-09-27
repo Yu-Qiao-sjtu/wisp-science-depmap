@@ -13,7 +13,6 @@ import csv
 import hashlib
 import json
 import os
-import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import closing
@@ -156,6 +155,7 @@ from services.depmap_api.provider_schema import (
     true_love_arg_violation,
 )
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+from services.depmap_mcp.portable_refs import PortableReferences
 
 
 Runner = Callable[[Settings, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -446,6 +446,9 @@ class DepMapEvidenceService:
         self.catalog_readers = CatalogReaderRegistry(
             settings.knowledge_root, settings.release
         )
+        self.portable_references = PortableReferences(
+            settings.knowledge_root, settings.release
+        )
 
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
@@ -583,10 +586,11 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         max_rows = min(max(int(max_rows), 1), 100)
         cursor = max(int(cursor), 0)
-        prefix = f"depmap://{self.settings.release}/"
-        if not uri.startswith(prefix):
-            raise ValueError(f"uri must start with {prefix}")
-        relative = uri[len(prefix):]
+        relative = self.portable_references.parse_public_uri(uri)
+        if relative is None:
+            raise ValueError(
+                f"uri must be a valid {self.portable_references.uri_prefix} resource"
+            )
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             hit = db.execute("SELECT artifact_kind,size_bytes FROM artifact_catalog WHERE artifact_path=?", (relative,)).fetchone()
@@ -654,55 +658,21 @@ class DepMapEvidenceService:
                 )
         else:
             text = path.read_text(encoding="utf-8-sig", errors="replace")
+            structured_json = False
             if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
                 try:
                     content = json.loads(text)
+                    structured_json = True
                 except json.JSONDecodeError:
                     content = text[:65536]
             else:
                 content = text[:65536]
+            if not structured_json:
+                content = self.portable_references.text(content)
         return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows,"cursor":cursor}, evidence={"status":"FOUND","uri":uri,"content":content})
 
     def _portable_string(self, value: str) -> str:
-        root_variants = {
-            str(self.settings.knowledge_root).rstrip("\\/"),
-            self.settings.knowledge_root.as_posix().rstrip("/"),
-        }
-        safe = value
-        for root in sorted((item for item in root_variants if item), key=len, reverse=True):
-            pattern = re.compile(
-                re.escape(root)
-                + r"(?=$|[\\/])(?P<tail>(?:[\\/][^\s\"'<>|,;\]\)}]*)?)",
-                re.IGNORECASE,
-            )
-
-            def replace_root(match: re.Match[str]) -> str:
-                relative = match.group("tail").lstrip("\\/").replace("\\", "/")
-                base = f"depmap://{self.settings.release}"
-                return f"{base}/{relative}" if relative else base
-
-            safe = pattern.sub(replace_root, safe)
-
-        stripped = safe.strip()
-        exact_absolute = (
-            re.fullmatch(r"[A-Za-z]:[\\/].+", stripped)
-            or re.fullmatch(r"\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?", stripped)
-            or re.fullmatch(r"//[^/]+/[^/]+(?:/.*)?", stripped)
-            or re.fullmatch(r"/[^/\r\n]+(?:/[^/\r\n]+)*", stripped)
-        )
-        if exact_absolute and not stripped.startswith(f"depmap://{self.settings.release}/"):
-            indent = value[: len(value) - len(value.lstrip())]
-            return indent + "<redacted:absolute-path>"
-
-        patterns = (
-            r"(?<![A-Za-z0-9:])[A-Za-z]:[\\/][^\s\"'<>|,;\]\)}]+",
-            r"(?<![A-Za-z0-9:])\\\\[^\s\\/]+[\\/][^\s\\/]+(?:[\\/][^\s\"'<>|,;\]\)}]+)*",
-            r"(?<![A-Za-z0-9:])//[^\s/]+/[^\s/]+(?:/[^\s\"'<>|,;\]\)}]+)*",
-            r"(?<![A-Za-z0-9:/])/[^/\s\"'<>|,;\]\)}]+(?:/[^/\s\"'<>|,;\]\)}]+)*",
-        )
-        for pattern in patterns:
-            safe = re.sub(pattern, "<redacted:absolute-path>", safe)
-        return safe
+        return self.portable_references.key(value)
 
     def _portable(self, value: Any) -> Any:
         if isinstance(value, dict):
@@ -718,8 +688,10 @@ class DepMapEvidenceService:
             return portable
         if isinstance(value, list):
             return [self._portable(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._portable(item) for item in value]
         if isinstance(value, str):
-            return self._portable_string(value)
+            return self.portable_references.value(value)
         return value
 
     def _envelope(
@@ -809,7 +781,9 @@ class DepMapEvidenceService:
             }
         return {
             "query": validated,
-            "catalog_resolution": resolution.evidence(self.settings.release),
+            "catalog_resolution": resolution.evidence(
+                self.settings.release, self.settings.knowledge_root
+            ),
             "metric_semantics": _metric_semantics(validated),
             "status": result.get("status", result.get("state", "FOUND")),
             "result": result,
