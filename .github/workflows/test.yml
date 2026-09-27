@@ -7,6 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  depmap-contract-pr-gate:
+    name: DepMap contract PR gate (offline)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Classify DepMap contract impact
+        id: depmap-contract
+        run: >-
+          python scripts/depmap_contract_gate.py pr
+          --repo-root .
+          --event "$GITHUB_EVENT_PATH"
+          --base "${{ github.event.pull_request.base.sha }}"
+          --head "${{ github.event.pull_request.head.sha }}"
+          --github-output "$GITHUB_OUTPUT"
+
   depmap-service-contracts:
     name: DepMap service contracts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

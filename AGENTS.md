@@ -73,8 +73,23 @@ When asked to release, follow this section. Create the GitHub Release with `gh` 
    <!-- release-title: v1.6.0: Theme -->
    ```
 
-3. Commit as `Release vX.Y.Z` and push `main`. Do not push a tag yet.
-4. Publish the release with `gh` from that commit. This creates the tag and the notes in one step; the tag push then starts CI:
+3. Generate `.github/depmap-live-contract.json` with the documented live probe,
+   then fail closed unless it is fresh and compatible:
+
+   ```bash
+   python scripts/depmap_contract_gate.py compare \
+     --repo-root . \
+     --status-file .github/depmap-live-contract.json \
+     --require-attestation \
+     --max-age-hours 72
+   ```
+
+   The probe and expand → deploy → contract sequence are documented in
+   `docs/depmap-deployment-contract.md`. The reviewed attestation must not
+   contain credentials, host paths, or SSH data.
+4. Commit the release files and attestation as `Release vX.Y.Z`, then push
+   `main`. Do not push a tag yet.
+5. Publish the release with `gh` from that commit. This creates the tag and the notes in one step; the tag push then starts CI:
 
    ```bash
    TITLE="$(scripts/github_release_notes.sh .github/release-notes/vX.Y.Z.md vX.Y.Z | sed 's/^title=//')"
@@ -91,7 +106,7 @@ When asked to release, follow this section. Create the GitHub Release with `gh` 
    gh release create vX.Y.Z --title $title --notes-file .github/release-notes/vX.Y.Z.md --target (git rev-parse HEAD)
    ```
 
-5. Confirm the release exists, then wait until CI has **started** (Create Release, Windows Release, Linux Release). Do not wait for macOS Release; this repository does not publish macOS installers.
+6. Confirm the release exists, then wait until CI has **started** (Create Release, Windows Release, Linux Release). Do not wait for macOS Release; this repository does not publish macOS installers.
 
    ```bash
    gh release view vX.Y.Z
