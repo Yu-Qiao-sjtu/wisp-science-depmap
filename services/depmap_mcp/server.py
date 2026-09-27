@@ -79,6 +79,34 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
             for nested in item:
                 yield from walk_mapping_items(nested)
 
+    def drop_duplicate_row_aliases(item: Any) -> tuple[Any, int]:
+        """Remove oversized duplicate tabular aliases before shortening rows."""
+        if isinstance(item, dict):
+            rows = item.get("rows")
+            duplicate_content = (
+                isinstance(rows, list)
+                and isinstance(item.get("content"), list)
+                and item["content"] == rows
+            )
+            output: dict[Any, Any] = {}
+            omitted = 0
+            for key, nested in item.items():
+                if key == "content" and duplicate_content:
+                    omitted += 1
+                    continue
+                output[key], nested_omitted = drop_duplicate_row_aliases(nested)
+                omitted += nested_omitted
+            return output, omitted
+        if isinstance(item, list):
+            output = []
+            omitted = 0
+            for nested in item:
+                projected_nested, nested_omitted = drop_duplicate_row_aliases(nested)
+                output.append(projected_nested)
+                omitted += nested_omitted
+            return output, omitted
+        return item, 0
+
     def project_lists(
         item: Any,
         *,
@@ -233,20 +261,22 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
             "is_bounded_projection": False,
         }
 
+    semantic_base, omitted_fields = drop_duplicate_row_aliases(value)
+    projected = semantic_base
+    projected_bytes = encoded_bytes(projected)
     auxiliary_maximum = max(
         (
             len(nested)
-            for key, nested in walk_mapping_items(value)
+            for key, nested in walk_mapping_items(semantic_base)
             if is_auxiliary_list(key) and isinstance(nested, list)
         ),
         default=0,
     )
-    semantic_base = value
     semantic_omitted = 0
-    if auxiliary_maximum:
+    if projected_bytes > MAX_MODEL_EVIDENCE_BYTES and auxiliary_maximum:
         auxiliary_fit = largest_fitting_width(
             auxiliary_maximum,
-            lambda width: project_lists(value, auxiliary_width=width),
+            lambda width: project_lists(semantic_base, auxiliary_width=width),
             minimum=0,
         )
         if auxiliary_fit is not None:
@@ -331,7 +361,7 @@ def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
             for key in retained_keys
             if key in semantic_base
         }
-        omitted_fields = len(value) - len(reduced)
+        omitted_fields = max(omitted_fields, len(value) - len(reduced))
         projected, truncated_strings = truncate_strings(reduced, 128)
         projected["projection_notice"] = (
             "Evidence was reduced to a bounded scientific result; request a narrower "

@@ -136,6 +136,28 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page["evidence"]["total_row_count"], 8)
         self.assertGreater(page["evidence"]["returned_count"], 1)
 
+    async def test_wide_csv_projection_drops_duplicate_content_before_rows(self):
+        relative = "analysis-modules/wide/table.csv"
+        payload = "gene,detail\n" + "".join(
+            f"GENE{index},{'x' * 700}\n" for index in range(110)
+        )
+        uri = self.index_resource(relative, payload)
+
+        page = await self.service.read_resource(uri, max_rows=100)
+        evidence = page["evidence"]
+
+        self.assertTrue(page["model_projection"]["is_bounded_projection"])
+        self.assertLessEqual(
+            page["model_projection"]["projected_bytes"], MAX_MODEL_EVIDENCE_BYTES
+        )
+        self.assertNotIn("content", evidence)
+        self.assertEqual(len(evidence["rows"]), 100)
+        self.assertEqual(evidence["returned_count"], 100)
+        self.assertNotIn("returned_count_before_projection", evidence)
+        self.assertEqual(evidence["total_row_count"], 110)
+        self.assertEqual(evidence["next_cursor"], 100)
+        self.assertEqual(evidence["uri"], uri)
+
     async def test_compressed_table_reader_types_empty_and_malformed_inputs(self):
         empty_uri = self.index_bytes(
             "depmap-26q1-full/results/empty.csv.gz",

@@ -140,10 +140,12 @@ never performs a sample-level join or creates a synthetic combined score.
 
 Model-facing MCP evidence is projected to a 96 KiB budget. Evidence whose
 canonical JSON already fits is returned intact; there is no fixed row cap below
-the query contract's page size. Oversized evidence first shortens auxiliary
-provenance/catalog URI lists, then applies one shared width to every scientific
-`rows` page. A `lineages` list is shortened only after the remaining lineage
-pages are each down to one row. When projection shortens a page,
+the query contract's page size. Oversized evidence first removes a list-valued
+`content` field when it exactly duplicates the sibling tabular `rows`, then
+shortens auxiliary provenance/catalog URI lists, and then applies one shared
+width to every scientific `rows` page. A `lineages` list is shortened only
+after the remaining lineage pages are each down to one row. When projection
+shortens a page,
 `returned_count` is the serialized row count,
 `returned_count_before_projection` is the query-page count, and
 `matched_row_count` remains the full match count. The analogous lineage fields
