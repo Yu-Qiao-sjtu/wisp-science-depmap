@@ -8,8 +8,193 @@ use crate::trajectory::{
     fold_trajectory, TrajectoryCell, TrajectorySnapshot, TrajectoryStats, TrajectoryUsage,
 };
 use crate::AppState;
+use serde::Serialize;
 use std::fmt::Write as _;
+use std::path::Path;
 use tauri::{AppHandle, State};
+use wisp_core::observability::{TRACE_FORMAT, TRACE_FORMAT_VERSION};
+use wisp_core::{Span, SpanKind, SpanStatus};
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct TraceMetric {
+    /// Exact total when every successful model span reported this metric.
+    value: Option<u64>,
+    /// Sum of the spans that did report it. This is diagnostic only when
+    /// `value` is unavailable and is never presented as the complete total.
+    known_subtotal: u64,
+    omitted_spans: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ExportModelSpan {
+    span_id: String,
+    turn_id: String,
+    model: Option<String>,
+    status: SpanStatus,
+    start_unix_ms: u64,
+    end_unix_ms: u64,
+    latency_ms: Option<u64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct TraceExportSummary {
+    model_spans: Vec<ExportModelSpan>,
+    successful_model_spans: usize,
+    excluded_model_spans: usize,
+    malformed_model_spans: usize,
+    unreadable_trace_files: usize,
+    llm_ms: TraceMetric,
+    input_tokens: TraceMetric,
+    output_tokens: TraceMetric,
+    cached_input_tokens: TraceMetric,
+}
+
+#[derive(Debug, Default)]
+struct TraceDocuments {
+    documents: Vec<String>,
+    unreadable_files: usize,
+}
+
+impl TraceMetric {
+    fn from_values(values: impl IntoIterator<Item = Option<u64>>) -> Self {
+        let mut metric = Self::default();
+        let mut count = 0usize;
+        for value in values {
+            count += 1;
+            match value {
+                Some(value) => metric.known_subtotal = metric.known_subtotal.saturating_add(value),
+                None => metric.omitted_spans += 1,
+            }
+        }
+        if count > 0 && metric.omitted_spans == 0 {
+            metric.value = Some(metric.known_subtotal);
+        }
+        metric
+    }
+}
+
+fn trace_summary_from_jsonl<'a>(
+    frame_id: &str,
+    documents: impl IntoIterator<Item = &'a str>,
+) -> TraceExportSummary {
+    let mut summary = TraceExportSummary::default();
+    for document in documents {
+        for line in document.lines().filter(|line| !line.trim().is_empty()) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let is_selected_model = value.get("record_type").and_then(|v| v.as_str())
+                == Some("span")
+                && value.get("kind").and_then(|v| v.as_str()) == Some("model")
+                && value.get("session_id").and_then(|v| v.as_str()) == Some(frame_id);
+            if !is_selected_model {
+                continue;
+            }
+            if value.get("format").and_then(|v| v.as_str()) != Some(TRACE_FORMAT)
+                || value.get("format_version").and_then(|v| v.as_u64())
+                    != Some(u64::from(TRACE_FORMAT_VERSION))
+            {
+                summary.malformed_model_spans += 1;
+                continue;
+            }
+            let Ok(span) = serde_json::from_value::<Span>(value) else {
+                summary.malformed_model_spans += 1;
+                continue;
+            };
+            if span.kind != SpanKind::Model {
+                continue;
+            }
+            let Some(end_unix_ms) = span.end_unix_ms.filter(|end| *end >= span.start_unix_ms)
+            else {
+                summary.malformed_model_spans += 1;
+                continue;
+            };
+            if span.status == SpanStatus::Ok {
+                summary.successful_model_spans += 1;
+            } else {
+                summary.excluded_model_spans += 1;
+            }
+            summary.model_spans.push(ExportModelSpan {
+                span_id: span.span_id,
+                turn_id: span.turn_id,
+                model: span.attributes.model_id,
+                status: span.status,
+                start_unix_ms: span.start_unix_ms,
+                end_unix_ms,
+                latency_ms: span.latency_ms,
+                input_tokens: span.attributes.input_tokens,
+                output_tokens: span.attributes.output_tokens,
+                cached_input_tokens: span.attributes.cached_input_tokens,
+            });
+        }
+    }
+    summary
+        .model_spans
+        .sort_by_key(|span| (span.start_unix_ms, span.end_unix_ms, span.span_id.clone()));
+    let successful: Vec<_> = summary
+        .model_spans
+        .iter()
+        .filter(|span| span.status == SpanStatus::Ok)
+        .collect();
+    summary.llm_ms = TraceMetric::from_values(successful.iter().map(|span| span.latency_ms));
+    summary.input_tokens =
+        TraceMetric::from_values(successful.iter().map(|span| span.input_tokens));
+    summary.output_tokens =
+        TraceMetric::from_values(successful.iter().map(|span| span.output_tokens));
+    summary.cached_input_tokens =
+        TraceMetric::from_values(successful.iter().map(|span| span.cached_input_tokens));
+    summary
+}
+
+async fn read_trace_documents(project_root: &Path) -> TraceDocuments {
+    let mut result = TraceDocuments::default();
+    for leaf in ["traces", "traces-sensitive"] {
+        let dir = project_root.join(".wisp").join(leaf);
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                result.unreadable_files += 1;
+                continue;
+            }
+        };
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => {
+                    result.unreadable_files += 1;
+                    break;
+                }
+            };
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                continue;
+            }
+            match tokio::fs::read_to_string(&path).await {
+                Ok(body) => result.documents.push(body),
+                Err(_) => result.unreadable_files += 1,
+            }
+        }
+    }
+    result
+}
+
+fn trace_summary_from_documents(frame_id: &str, documents: TraceDocuments) -> TraceExportSummary {
+    let mut trace =
+        trace_summary_from_jsonl(frame_id, documents.documents.iter().map(String::as_str));
+    trace.unreadable_trace_files = documents.unreadable_files;
+    if trace.unreadable_trace_files > 0 {
+        trace.llm_ms.value = None;
+        trace.input_tokens.value = None;
+        trace.output_tokens.value = None;
+        trace.cached_input_tokens.value = None;
+    }
+    trace
+}
 
 const EXPORT_CSS: &str = r#"
 :root {
@@ -135,6 +320,10 @@ struct Labels {
     empty: &'static str,
     raw: &'static str,
     unknown_model: &'static str,
+    model_spans: &'static str,
+    unavailable: &'static str,
+    token_denominator: &'static str,
+    omitted: &'static str,
 }
 
 fn labels(locale: &str) -> Labels {
@@ -165,6 +354,10 @@ fn labels(locale: &str) -> Labels {
             empty: "暂无轨迹事件。",
             raw: "原始快照（JSON）",
             unknown_model: "未知",
+            model_spans: "模型调用跨度",
+            unavailable: "不可用",
+            token_denominator: "缓存占比 = cached input / input",
+            omitted: "缺失",
         }
     } else {
         Labels {
@@ -193,6 +386,10 @@ fn labels(locale: &str) -> Labels {
             empty: "No trajectory events.",
             raw: "Raw snapshot (JSON)",
             unknown_model: "unknown",
+            model_spans: "Model spans",
+            unavailable: "unavailable",
+            token_denominator: "cache share = cached input / input",
+            omitted: "omitted",
         }
     }
 }
@@ -243,14 +440,6 @@ fn format_ts(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
-fn cell_lane(kind: &str) -> &'static str {
-    match kind {
-        "user" => "input",
-        "tool" => "tools",
-        _ => "model",
-    }
-}
-
 fn cell_status<'a>(cell: &'a TrajectoryCell, l: &Labels) -> &'a str {
     if cell.is_error || cell.ok == Some(false) {
         l.error
@@ -271,25 +460,84 @@ fn kind_label<'a>(kind: &'a str, l: &'a Labels) -> &'a str {
     }
 }
 
-fn stats_line(stats: &TrajectoryStats, l: &Labels) -> String {
-    let cache = stats
-        .cache_hit_pct
-        .map(|v| format!("{v:.0}%"))
-        .unwrap_or_else(|| "–".into());
-    let tok_s = stats
-        .tokens_per_sec
-        .map(|v| format!("{v:.1}"))
-        .unwrap_or_else(|| "–".into());
+fn metric_text(
+    metric: &TraceMetric,
+    unreadable_trace_files: usize,
+    l: &Labels,
+    duration: bool,
+) -> String {
+    if unreadable_trace_files == 0 {
+        if let Some(value) = metric.value {
+            return if duration {
+                format_duration_ms(value.min(i64::MAX as u64) as i64)
+            } else {
+                value.to_string()
+            };
+        }
+    }
+    if metric.omitted_spans > 0 || unreadable_trace_files > 0 {
+        let mut details = Vec::new();
+        if metric.known_subtotal > 0 || metric.omitted_spans > 0 {
+            let known = if duration {
+                format_duration_ms(metric.known_subtotal.min(i64::MAX as u64) as i64)
+            } else {
+                metric.known_subtotal.to_string()
+            };
+            details.push(format!("known subtotal {known}"));
+        }
+        if metric.omitted_spans > 0 {
+            details.push(format!("{} {} span(s)", metric.omitted_spans, l.omitted));
+        }
+        if unreadable_trace_files > 0 {
+            details.push(format!("{unreadable_trace_files} unreadable trace file(s)"));
+        }
+        format!("{} ({})", l.unavailable, details.join("; "))
+    } else {
+        l.unavailable.into()
+    }
+}
+
+fn stats_line(stats: &TrajectoryStats, trace: &TraceExportSummary, l: &Labels) -> String {
+    let cache = match (trace.cached_input_tokens.value, trace.input_tokens.value) {
+        (Some(cached), Some(input)) if input > 0 => format!(
+            "{:.1}% ({})",
+            cached as f64 * 100.0 / input as f64,
+            l.token_denominator
+        ),
+        _ => format!("{} ({})", l.unavailable, l.token_denominator),
+    };
+    let tok_s = match (trace.output_tokens.value, trace.llm_ms.value) {
+        (Some(output), Some(llm_ms)) if llm_ms > 0 => {
+            format!("{:.1}", output as f64 / (llm_ms as f64 / 1000.0))
+        }
+        _ => l.unavailable.into(),
+    };
     format!(
-        "{} · {} | LLM {} · {} {} | {} tok/s | cache {cache} | in {} · out {}",
+        "{} · {} successful model spans | LLM {} · {} {} | {} tok/s | cache {cache} | input {} · output {} · cached input {}",
         l.turn.replace("{n}", &stats.turns.to_string()),
-        stats.steps,
-        format_duration_ms(stats.llm_ms),
+        trace.successful_model_spans,
+        metric_text(&trace.llm_ms, trace.unreadable_trace_files, l, true),
         l.tools,
         format_duration_ms(stats.tool_ms),
         tok_s,
-        fmt_tokens(stats.input_tokens),
-        fmt_tokens(stats.output_tokens),
+        metric_text(
+            &trace.input_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
+        metric_text(
+            &trace.output_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
+        metric_text(
+            &trace.cached_input_tokens,
+            trace.unreadable_trace_files,
+            l,
+            false
+        ),
     )
 }
 
@@ -318,60 +566,74 @@ struct GanttSeg {
     error: bool,
 }
 
-fn gantt_segments(snapshot: &TrajectorySnapshot) -> Vec<GanttSeg> {
-    let mut events: Vec<(String, &TrajectoryCell, f64)> = Vec::new();
+fn gantt_segments(snapshot: &TrajectorySnapshot, trace: &TraceExportSummary) -> Vec<GanttSeg> {
+    let mut events: Vec<(String, &'static str, u64, u64, bool)> = Vec::new();
     for turn in &snapshot.turns {
         for (ci, cell) in turn.cells.iter().enumerate() {
-            if cell.kind == "usage" {
+            let lane = match cell.kind.as_str() {
+                "user" => "input",
+                "tool" => "tools",
+                _ => continue,
+            };
+            let Some(start) = cell.ts.and_then(|ts| u64::try_from(ts).ok()) else {
                 continue;
-            }
+            };
+            let duration = cell.duration_ms.unwrap_or(0).max(0) as u64;
             events.push((
                 format!("t{}-c{ci}", turn.index),
-                cell,
-                cell.duration_ms.unwrap_or(0).max(0) as f64,
+                lane,
+                start,
+                start.saturating_add(duration),
+                cell.is_error || cell.ok == Some(false),
             ));
         }
+    }
+    for (index, span) in trace.model_spans.iter().enumerate() {
+        events.push((
+            format!("model-span-{index}"),
+            "model",
+            span.start_unix_ms,
+            span.end_unix_ms,
+            span.status != SpanStatus::Ok,
+        ));
     }
     if events.is_empty() {
         return Vec::new();
     }
-    let positive: Vec<f64> = events
+    events.sort_by_key(|(_, lane, start, end, _)| (*start, *end, *lane));
+    let min_start = events.iter().map(|event| event.2).min().unwrap_or(0);
+    let max_end = events
         .iter()
-        .map(|(_, _, d)| *d)
-        .filter(|d| *d > 0.0)
-        .collect();
-    let weights: Vec<f64> = if positive.is_empty() {
-        events.iter().map(|_| 1.0).collect()
-    } else {
-        let avg = positive.iter().sum::<f64>() / positive.len() as f64;
-        let floor = (avg * 0.5).max(1.0);
-        events
-            .iter()
-            .map(|(_, _, d)| if *d > 0.0 { *d } else { floor })
-            .collect()
-    };
-    let total = weights.iter().copied().sum::<f64>().max(1.0);
-    let mut acc = 0.0;
+        .map(|event| event.3.max(event.2))
+        .max()
+        .unwrap_or(min_start)
+        .max(min_start.saturating_add(1));
+    let elapsed = max_end.saturating_sub(min_start).max(1) as f64;
     events
         .into_iter()
-        .enumerate()
-        .map(|(i, (id, cell, _))| {
-            let w = weights[i];
-            let left = acc / total * 100.0;
-            acc += w;
+        .map(|(id, lane, start, end, error)| {
+            let mut left = start.saturating_sub(min_start) as f64 / elapsed * 100.0;
+            left = left.clamp(0.0, 99.8);
+            let raw_width = end.saturating_sub(start) as f64 / elapsed * 100.0;
+            let width = raw_width.max(0.2).min(100.0 - left);
             GanttSeg {
                 id,
-                lane: cell_lane(&cell.kind),
+                lane,
                 left_pct: left,
-                width_pct: w / total * 100.0,
-                error: cell.is_error || cell.ok == Some(false),
+                width_pct: width,
+                error,
             }
         })
         .collect()
 }
 
-fn write_gantt(out: &mut String, snapshot: &TrajectorySnapshot, l: &Labels) {
-    let segs = gantt_segments(snapshot);
+fn write_gantt(
+    out: &mut String,
+    snapshot: &TrajectorySnapshot,
+    trace: &TraceExportSummary,
+    l: &Labels,
+) {
+    let segs = gantt_segments(snapshot, trace);
     if segs.is_empty() {
         return;
     }
@@ -407,6 +669,63 @@ fn write_gantt(out: &mut String, snapshot: &TrajectorySnapshot, l: &Labels) {
         out.push_str("</div></div>\n");
     }
     out.push_str("</div>\n</section>\n");
+}
+
+fn optional_u64(value: Option<u64>, l: &Labels) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| l.unavailable.into())
+}
+
+fn write_model_spans(out: &mut String, trace: &TraceExportSummary, l: &Labels) {
+    if trace.model_spans.is_empty()
+        && trace.malformed_model_spans == 0
+        && trace.excluded_model_spans == 0
+        && trace.unreadable_trace_files == 0
+    {
+        return;
+    }
+    let _ = write!(
+        out,
+        "<section class=\"turn model-spans\">\n<h2>{}</h2>\n",
+        escape_html(l.model_spans)
+    );
+    if trace.malformed_model_spans > 0
+        || trace.excluded_model_spans > 0
+        || trace.unreadable_trace_files > 0
+    {
+        let _ = write!(
+            out,
+            "<p class=\"stats\">{} malformed model span(s); {} non-successful span(s) excluded from totals; {} unreadable trace file(s).</p>\n",
+            trace.malformed_model_spans,
+            trace.excluded_model_spans,
+            trace.unreadable_trace_files
+        );
+    }
+    for (index, span) in trace.model_spans.iter().enumerate() {
+        let id = format!("model-span-{index}");
+        let model = span.model.as_deref().unwrap_or(l.unknown_model);
+        let duration = span
+            .latency_ms
+            .map(|value| format_duration_ms(value.min(i64::MAX as u64) as i64))
+            .unwrap_or_else(|| l.unavailable.into());
+        let _ = write!(
+            out,
+            "<article class=\"event\" id=\"{}\">\n<div class=\"event-head\"><span class=\"badge usage\">{}</span><span class=\"summary\">{}</span></div>\n<div class=\"kv\"><span>{} {}</span><span>{} {}</span><span>turn {}</span></div>\n<pre>input {} · output {} · cached input {}</pre>\n</article>\n",
+            escape_html(&id),
+            escape_html(l.model_lane),
+            escape_html(model),
+            escape_html(l.status),
+            span.status.as_str(),
+            escape_html(l.duration),
+            escape_html(&duration),
+            escape_html(&span.turn_id),
+            optional_u64(span.input_tokens, l),
+            optional_u64(span.output_tokens, l),
+            optional_u64(span.cached_input_tokens, l),
+        );
+    }
+    out.push_str("</section>\n");
 }
 
 fn write_pre(out: &mut String, label: &str, text: &str) {
@@ -490,8 +809,15 @@ fn write_cell(out: &mut String, turn: i64, index: usize, cell: &TrajectoryCell, 
 }
 
 /// Build a self-contained HTML document for the folded trajectory.
-pub(crate) fn render_trajectory_html(
+#[derive(Serialize)]
+struct RawExport<'a> {
+    trajectory: &'a TrajectorySnapshot,
+    trace: &'a TraceExportSummary,
+}
+
+fn render_trajectory_html(
     snapshot: &TrajectorySnapshot,
+    trace: &TraceExportSummary,
     locale: &str,
     exported_at: &str,
 ) -> String {
@@ -521,9 +847,10 @@ pub(crate) fn render_trajectory_html(
         escape_html(model),
         escape_html(l.exported),
         escape_html(exported_at),
-        escape_html(&stats_line(&snapshot.stats, &l)),
+        escape_html(&stats_line(&snapshot.stats, trace, &l)),
     );
-    write_gantt(&mut out, snapshot, &l);
+    write_gantt(&mut out, snapshot, trace, &l);
+    write_model_spans(&mut out, trace, &l);
     if snapshot.turns.is_empty() {
         let _ = write!(out, "<p class=\"empty\">{}</p>\n", escape_html(l.empty));
     } else {
@@ -541,7 +868,11 @@ pub(crate) fn render_trajectory_html(
             out.push_str("</section>\n");
         }
     }
-    let raw = serde_json::to_string_pretty(snapshot).unwrap_or_else(|_| "{}".into());
+    let raw = serde_json::to_string_pretty(&RawExport {
+        trajectory: snapshot,
+        trace,
+    })
+    .unwrap_or_else(|_| "{}".into());
     let _ = write!(
         out,
         "<details class=\"raw\"><summary>{}</summary>\n<pre>{}</pre>\n</details>\n\
@@ -581,9 +912,15 @@ pub(super) async fn export_session_trajectory(
         .await
         .map_err(|error| error.to_string())?;
     let snapshot = fold_trajectory(&frame_id, model, &messages, &events);
+    let project_root = crate::exploration_commands::working_project_for_frame(&state, &frame_id)
+        .await?
+        .0
+        .root;
+    let documents = read_trace_documents(&project_root).await;
+    let trace = trace_summary_from_documents(&frame_id, documents);
     let locale = locale.unwrap_or_else(|| "en".into());
     let exported_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let html = render_trajectory_html(&snapshot, &locale, &exported_at);
+    let html = render_trajectory_html(&snapshot, &trace, &locale, &exported_at);
     let default_name = trajectory_file_name(&frame_id);
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -625,9 +962,9 @@ mod tests {
                 cells: vec![
                     TrajectoryCell {
                         kind: "user".into(),
-                        summary: "Analyze ESR1".into(),
+                        summary: "Analyze fixture data".into(),
                         detail_output: Some(
-                            "Analyze the ESR1 dataset\nwith fences ```md```".into(),
+                            "Analyze the fixture dataset\nwith fences ```md```".into(),
                         ),
                         ts: Some(1_755_000_000_000),
                         ..Default::default()
@@ -695,6 +1032,303 @@ mod tests {
         }
     }
 
+    fn sample_trace() -> TraceExportSummary {
+        TraceExportSummary {
+            model_spans: vec![ExportModelSpan {
+                span_id: "model-1".into(),
+                turn_id: "turn-1".into(),
+                model: Some("deepseek-v4-pro".into()),
+                status: SpanStatus::Ok,
+                start_unix_ms: 1_755_000_003_200,
+                end_unix_ms: 1_755_000_006_500,
+                latency_ms: Some(3300),
+                input_tokens: Some(12300),
+                output_tokens: Some(1400),
+                cached_input_tokens: Some(9225),
+            }],
+            successful_model_spans: 1,
+            llm_ms: TraceMetric::from_values([Some(3300)]),
+            input_tokens: TraceMetric::from_values([Some(12300)]),
+            output_tokens: TraceMetric::from_values([Some(1400)]),
+            cached_input_tokens: TraceMetric::from_values([Some(9225)]),
+            ..Default::default()
+        }
+    }
+
+    fn model_span_json(
+        span_id: &str,
+        turn_id: &str,
+        status: &str,
+        start: u64,
+        end: u64,
+        latency: Option<u64>,
+        input: Option<u64>,
+        output: Option<u64>,
+        cached: Option<u64>,
+    ) -> String {
+        serde_json::json!({
+            "format": TRACE_FORMAT,
+            "format_version": 1,
+            "record_type": "span",
+            "trace_id": format!("trace-{turn_id}"),
+            "span_id": span_id,
+            "run_id": "run-1",
+            "turn_id": turn_id,
+            "session_id": "session-fixture",
+            "kind": "model",
+            "name": "agent.model",
+            "status": status,
+            "start_unix_ms": start,
+            "end_unix_ms": end,
+            "latency_ms": latency,
+            "attributes": {
+                "component": "test",
+                "retry_count": 0,
+                "model_id": "fixture-model",
+                "input_tokens": input,
+                "output_tokens": output,
+                "cached_input_tokens": cached
+            }
+        })
+        .to_string()
+    }
+
+    fn non_model_span_json(span_id: &str, turn_id: &str, kind: &str, name: &str) -> String {
+        serde_json::json!({
+            "format": TRACE_FORMAT,
+            "format_version": TRACE_FORMAT_VERSION,
+            "record_type": "span",
+            "trace_id": format!("trace-{turn_id}"),
+            "span_id": span_id,
+            "run_id": "run-1",
+            "turn_id": turn_id,
+            "session_id": "session-fixture",
+            "kind": kind,
+            "name": name,
+            "status": "ok",
+            "start_unix_ms": 1_700,
+            "end_unix_ms": 1_800,
+            "latency_ms": 100,
+            "attributes": {"component": "test"}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn two_turn_trace_reconciles_model_latency_tokens_and_resumed_spans() {
+        let turn_one = [
+            model_span_json(
+                "model-1",
+                "turn-before-question",
+                "ok",
+                1_000,
+                1_500,
+                Some(500),
+                Some(100),
+                Some(10),
+                Some(40),
+            ),
+            serde_json::json!({
+                "format": TRACE_FORMAT,
+                "format_version": 1,
+                "record_type": "span",
+                "trace_id": "trace-turn-before-question",
+                "span_id": "ask-user",
+                "run_id": "run-1",
+                "turn_id": "turn-before-question",
+                "session_id": "session-fixture",
+                "kind": "approval",
+                "name": "ask_user",
+                "status": "blocked",
+                "start_unix_ms": 1_600,
+                "end_unix_ms": 1_700,
+                "latency_ms": 100,
+                "attributes": {"component": "test"}
+            })
+            .to_string(),
+            non_model_span_json("tool-1", "turn-before-question", "tool", "read"),
+            non_model_span_json("mcp-1", "turn-before-question", "mcp", "query"),
+        ]
+        .join("\n");
+        let turn_two = [
+            model_span_json(
+                "model-2",
+                "turn-after-question",
+                "ok",
+                2_000,
+                2_750,
+                Some(750),
+                Some(200),
+                Some(20),
+                Some(100),
+            ),
+            model_span_json(
+                "model-error",
+                "turn-after-question",
+                "error",
+                2_100,
+                2_300,
+                Some(200),
+                Some(999),
+                Some(999),
+                Some(999),
+            ),
+        ]
+        .join("\n");
+
+        let trace =
+            trace_summary_from_jsonl("session-fixture", [turn_one.as_str(), turn_two.as_str()]);
+
+        assert_eq!(trace.model_spans.len(), 3);
+        assert_eq!(trace.successful_model_spans, 2);
+        assert_eq!(trace.excluded_model_spans, 1);
+        assert_eq!(trace.llm_ms.value, Some(1_250));
+        assert_eq!(trace.input_tokens.value, Some(300));
+        assert_eq!(trace.output_tokens.value, Some(30));
+        assert_eq!(trace.cached_input_tokens.value, Some(140));
+        assert_eq!(trace.model_spans[1].turn_id, "turn-after-question");
+
+        let html = render_trajectory_html(&sample_snapshot(), &trace, "en", "t");
+        assert_eq!(html.matches("class=\"seg model\"").count(), 2);
+        assert_eq!(html.matches("class=\"seg model error\"").count(), 1);
+        assert!(html.contains("&quot;known_subtotal&quot;: 1250"));
+        assert!(html.contains("input 300 · output 30 · cached input 140"));
+    }
+
+    #[test]
+    fn missing_or_malformed_model_metrics_are_explicitly_unavailable() {
+        let complete = model_span_json(
+            "complete",
+            "turn-1",
+            "ok",
+            1_000,
+            1_500,
+            Some(500),
+            Some(100),
+            Some(10),
+            Some(40),
+        );
+        let legacy = model_span_json(
+            "legacy",
+            "turn-2",
+            "ok",
+            2_000,
+            2_600,
+            None,
+            Some(200),
+            Some(20),
+            None,
+        );
+        let malformed = serde_json::json!({
+            "format": TRACE_FORMAT,
+            "record_type": "span",
+            "kind": "model",
+            "session_id": "session-fixture"
+        })
+        .to_string();
+        let missing_format = serde_json::json!({
+            "record_type": "span",
+            "kind": "model",
+            "session_id": "session-fixture"
+        })
+        .to_string();
+        let incompatible_format = serde_json::json!({
+            "format": "wisp.agent-trace.v0",
+            "format_version": TRACE_FORMAT_VERSION,
+            "record_type": "span",
+            "kind": "model",
+            "session_id": "session-fixture"
+        })
+        .to_string();
+        let incompatible_version = serde_json::json!({
+            "format": TRACE_FORMAT,
+            "format_version": TRACE_FORMAT_VERSION + 1,
+            "record_type": "span",
+            "kind": "model",
+            "session_id": "session-fixture"
+        })
+        .to_string();
+        let other_session = serde_json::json!({
+            "record_type": "span",
+            "kind": "model",
+            "session_id": "another-session"
+        })
+        .to_string();
+        let document = [
+            complete,
+            legacy,
+            malformed,
+            missing_format,
+            incompatible_format,
+            incompatible_version,
+            other_session,
+        ]
+        .join("\n");
+
+        let trace = trace_summary_from_jsonl("session-fixture", [document.as_str()]);
+
+        assert_eq!(trace.malformed_model_spans, 4);
+        assert_eq!(trace.llm_ms.value, None);
+        assert_eq!(trace.llm_ms.known_subtotal, 500);
+        assert_eq!(trace.llm_ms.omitted_spans, 1);
+        assert_eq!(trace.input_tokens.value, Some(300));
+        assert_eq!(trace.cached_input_tokens.value, None);
+        assert_eq!(trace.cached_input_tokens.known_subtotal, 40);
+        assert_eq!(trace.cached_input_tokens.omitted_spans, 1);
+
+        let html = render_trajectory_html(&sample_snapshot(), &trace, "en", "t");
+        assert!(html.contains("LLM unavailable (known subtotal 500ms; 1 omitted span(s))"));
+        assert!(html.contains("cached input unavailable (known subtotal 40; 1 omitted span(s))"));
+        assert!(!html.contains("LLM 0ms"));
+    }
+
+    #[tokio::test]
+    async fn unreadable_trace_file_keeps_export_available_and_totals_fail_closed() {
+        let root = std::env::temp_dir().join(format!(
+            "wisp-trajectory-export-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let trace_dir = root.join(".wisp").join("traces");
+        std::fs::create_dir_all(&trace_dir).unwrap();
+        let readable_path = trace_dir.join("readable.jsonl");
+        let unreadable_path = trace_dir.join("invalid-utf8.jsonl");
+        std::fs::write(
+            &readable_path,
+            model_span_json(
+                "complete",
+                "turn-1",
+                "ok",
+                1_000,
+                1_500,
+                Some(500),
+                Some(100),
+                Some(10),
+                Some(40),
+            ),
+        )
+        .unwrap();
+        std::fs::write(&unreadable_path, [0xff, 0xfe]).unwrap();
+
+        let documents = read_trace_documents(&root).await;
+        assert_eq!(documents.documents.len(), 1);
+        assert_eq!(documents.unreadable_files, 1);
+        let trace = trace_summary_from_documents("session-fixture", documents);
+        assert_eq!(trace.model_spans.len(), 1);
+        assert_eq!(trace.unreadable_trace_files, 1);
+        assert_eq!(trace.llm_ms.value, None);
+        assert_eq!(trace.llm_ms.known_subtotal, 500);
+
+        let html = render_trajectory_html(&sample_snapshot(), &trace, "en", "t");
+        assert!(html.contains("LLM unavailable (known subtotal 500ms; 1 unreadable trace file(s))"));
+        assert!(html.contains("1 unreadable trace file(s)."));
+
+        std::fs::remove_file(readable_path).unwrap();
+        std::fs::remove_file(unreadable_path).unwrap();
+        std::fs::remove_dir(trace_dir).unwrap();
+        std::fs::remove_dir(root.join(".wisp")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn file_name_keeps_only_safe_components() {
         assert_eq!(
@@ -711,15 +1345,20 @@ mod tests {
 
     #[test]
     fn html_includes_session_model_stats_and_timeline() {
-        let html = render_trajectory_html(&sample_snapshot(), "en", "2026-08-24T00:00:00Z");
+        let html = render_trajectory_html(
+            &sample_snapshot(),
+            &sample_trace(),
+            "en",
+            "2026-08-24T00:00:00Z",
+        );
         assert!(html.starts_with("<!doctype html>"));
         assert!(html.contains("lang=\"en\""));
         assert!(html.contains("sess-42"));
         assert!(html.contains("deepseek-v4-pro"));
         assert!(html.contains("2026-08-24T00:00:00Z"));
         assert!(html.contains("Turn 1"));
-        assert!(html.contains("12.5 tok/s"));
-        assert!(html.contains("cache 75%"));
+        assert!(html.contains("424.2 tok/s"));
+        assert!(html.contains("cache 75.0% (cache share = cached input / input)"));
         assert!(html.contains("class=\"gantt\""));
         assert!(html.contains("href=\"#t1-c1\""));
         assert!(html.contains("id=\"t1-c1\""));
@@ -728,8 +1367,8 @@ mod tests {
 
     #[test]
     fn html_keeps_full_payloads_and_escapes_hostile_tool_output() {
-        let html = render_trajectory_html(&sample_snapshot(), "en", "t");
-        assert!(html.contains("Analyze the ESR1 dataset"));
+        let html = render_trajectory_html(&sample_snapshot(), &sample_trace(), "en", "t");
+        assert!(html.contains("Analyze the fixture dataset"));
         assert!(html.contains("Here is the full answer that is longer than the preview."));
         assert!(html.contains(&escape_html(r#"{"code":"df.describe()"}"#)));
         assert!(html.contains("count  612.0"));
@@ -750,7 +1389,7 @@ mod tests {
 
     #[test]
     fn zh_locale_uses_chinese_labels() {
-        let html = render_trajectory_html(&sample_snapshot(), "zh", "t");
+        let html = render_trajectory_html(&sample_snapshot(), &sample_trace(), "zh", "t");
         assert!(html.contains("lang=\"zh\""));
         assert!(html.contains("轨迹"));
         assert!(html.contains("第 1 轮"));
@@ -767,7 +1406,7 @@ mod tests {
         snapshot.turns[0].cells[0].summary = text.into();
         snapshot.turns[0].cells[0].detail_output = Some(text.into());
 
-        let html = render_trajectory_html(&snapshot, "zh-CN", "t");
+        let html = render_trajectory_html(&snapshot, &sample_trace(), "zh-CN", "t");
         assert!(html.contains("<meta charset=\"utf-8\">"));
         assert!(
             html.matches(text).count() >= 3,
@@ -785,6 +1424,7 @@ mod tests {
                 frame_id: "empty".into(),
                 ..Default::default()
             },
+            &TraceExportSummary::default(),
             "en",
             "t",
         );
@@ -797,19 +1437,24 @@ mod tests {
     fn unused_preview_is_not_what_gets_exported() {
         let mut snap = sample_snapshot();
         snap.turns[0].cells[0].summary = "truncated…".into();
-        let html = render_trajectory_html(&snap, "en", "t");
-        assert!(html.contains("Analyze the ESR1 dataset"));
+        let html = render_trajectory_html(&snap, &sample_trace(), "en", "t");
+        assert!(html.contains("Analyze the fixture dataset"));
         assert!(html.contains("truncated…"));
     }
 
     #[test]
     fn gantt_skips_usage_and_marks_errors() {
-        let segs = gantt_segments(&sample_snapshot());
+        let segs = gantt_segments(&sample_snapshot(), &sample_trace());
         assert_eq!(segs.len(), 4);
         assert!(segs.iter().all(|seg| !seg.id.contains("c4")));
         assert!(segs.iter().any(|seg| seg.error && seg.lane == "tools"));
-        let span: f64 = segs.iter().map(|s| s.width_pct).sum();
-        assert!((span - 100.0).abs() < 0.01);
+        assert!(segs.iter().any(|seg| seg.lane == "model"));
+        assert!(segs.iter().all(|seg| {
+            seg.left_pct >= 0.0 && seg.width_pct > 0.0 && seg.left_pct + seg.width_pct <= 100.0001
+        }));
+        assert!(segs
+            .windows(2)
+            .all(|pair| pair[0].left_pct <= pair[1].left_pct));
     }
 
     #[test]

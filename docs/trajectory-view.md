@@ -50,11 +50,22 @@ id, model, aggregate stats, a Gantt timeline, and every turn's full user
 input, assistant reply, tool arguments/results, status, duration, timestamps,
 and token usage. Search filters, the selected row, and inspector tabs do not
 change what is exported — the backend reloads the message log and UI-event
-stream. Cancelling the dialog does nothing.
+stream. It also reconciles the export against every matching completed model
+span in the project's local `wisp.agent-trace.v1` store. Cancelling the dialog
+does nothing.
 
 The footer line aggregates the whole session:
 turns · steps | LLM time · tool time | output tokens/sec | cache hit rate |
-total input/output tokens.
+total input/output/cached-input tokens. Exported LLM time and token totals come
+from the same successful model-span set. The cache percentage states its
+denominator (`cached input / input`). A legacy or malformed span with a missing
+latency or token attribute makes that aggregate **unavailable** and reports the
+known subtotal plus omitted-span count; missing telemetry is never displayed
+as zero. If a retained trace file is concurrently pruned, unreadable, or not
+valid UTF-8, export still succeeds but the affected aggregates are marked
+**unavailable** with an unreadable-file count. Valid model intervals, including
+calls after an `ask_user` resume, remain visible in the model timeline lane
+even when one of their metrics is unavailable.
 
 ## Where the data comes from
 
@@ -65,6 +76,11 @@ still running, the modal shows lightweight live rows with client-side
 timestamps; when the turn finishes, the exact backend snapshot replaces them.
 HTML export always rereads that persisted snapshot, so an in-flight live turn
 appears only after it has been stored.
+
+The interactive inspector continues to use persisted usage events. The HTML
+export additionally reads the bounded local trace store under the project and
+uses matching `session_id` model spans as its timing/token authority. It does
+not read traces from another project or require a model/provider connection.
 
 Timestamps come from the `created_at` column on `session_ui_events`; events
 persisted before this column existed simply render without timing.
