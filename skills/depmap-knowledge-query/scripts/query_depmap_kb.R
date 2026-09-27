@@ -74,6 +74,18 @@ canonical_lineage<-function(x){
 if(!is.null(a$lineage))a$lineage<-canonical_lineage(a$lineage)
 if(a$mode=="normalize_lineage"){emit(list(mode=a$mode,lineage=a$lineage));quit(save="no")}
 kb<-normalizePath(a$kb_root,winslash="/",mustWork=TRUE);full<-file.path(kb,"depmap-26q1-full");core<-file.path(kb,"depmap-26q1-core")
+read_common_essential_symbols<-function(path){
+  warned<-FALSE
+  sidecar<-tryCatch(
+    withCallingHandlers(fread(path),warning=function(w){warned<<-TRUE;invokeRestart("muffleWarning")}),
+    error=function(e)NULL
+  )
+  if(warned||is.null(sidecar))return(character())
+  symbol_column<-intersect(c("symbol","gene","Gene","gene_symbol"),names(sidecar))
+  if(!length(symbol_column))return(character())
+  symbols<-unique(clean(sidecar[[symbol_column[[1L]]]]))
+  symbols[!is.na(symbols)&nzchar(symbols)]
+}
 mutation_module_root<-file.path(kb,"analysis-modules","癌种内突变锚定基因选择","cancer_anchor_catalog_v2","downstream_dependency","05_precomputed_gene_effect_matrices")
 mutation_modules<-c("damaging_mutation_dependency","custom_missense_mutation_dependency","hotspot_mutation_dependency","lineage_damaging_mutation_dependency","lineage_custom_missense_mutation_dependency","lineage_hotspot_mutation_dependency","observational_synthetic_lethal_candidates")
 resolve_module_root<-function(module){
@@ -259,9 +271,8 @@ if(a$mode%in%sparse_modes){
     common_available<-identical(common_source,"depmap_26q1")&&file.exists(common_path)
     common_symbols<-character()
     if(common_available){
-      common_dt<-tryCatch(fread(common_path),error=function(e)NULL)
-      symbol_column<-if(is.null(common_dt))character() else intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt))
-      if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[!is.na(common_symbols)&nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE
+      common_symbols<-read_common_essential_symbols(common_path)
+      common_available<-length(common_symbols)>0L
     }
     tested[,is_common_essential:=if(common_available)clean(symbol)%in%common_symbols else NA]
     tested[,common_essential_source:=if(common_available)common_source else NA_character_]
@@ -300,7 +311,7 @@ if(a$mode%in%sparse_modes){
     exclude_common<-!is.null(a$exclude_common_essential)&&tolower(trimws(as.character(a$exclude_common_essential)))%in%c("true","1","yes")
     common_source<-if(is.null(a$common_essential_source))"depmap_26q1" else trimws(a$common_essential_source)
     common_path<-file.path(core,"common_essential_genes.csv");common_available<-identical(common_source,"depmap_26q1")&&file.exists(common_path);common_symbols<-character()
-    if(common_available){common_dt<-tryCatch(fread(common_path),error=function(e)NULL);symbol_column<-if(is.null(common_dt))character() else intersect(c("symbol","gene","Gene","gene_symbol"),names(common_dt));if(length(symbol_column)){common_symbols<-unique(clean(common_dt[[symbol_column[[1L]]]]));common_symbols<-common_symbols[!is.na(common_symbols)&nzchar(common_symbols)];common_available<-length(common_symbols)>0L}else common_available<-FALSE}
+    if(common_available){common_symbols<-read_common_essential_symbols(common_path);common_available<-length(common_symbols)>0L}
     annotation_status<-if(common_available)"AVAILABLE" else "ANNOTATION_UNAVAILABLE";common_version<-if(!is.null(manifest$release))manifest$release else "26Q1"
     if(exclude_common&&!common_available){emit(evidence("NOT_COMPUTED",a$mode,"common-essential exclusion was requested, but the versioned sidecar is unavailable",ranking=ranking,lineages=list(),lineage_count=0L,cursor=cursor,next_cursor=NA_integer_,exclude_common_essential_requested=TRUE,common_essential_filter_applied=FALSE,common_essential_source=common_source,common_essential_version=NA_character_,common_essential_provenance=character(),common_essential_annotation_status=annotation_status,housekeeping_filter_applied=FALSE,manifest=manifest,provenance=c(manifest_path,paths)));quit(save="no")}
     summaries<-vector("list",length(paths));retained_symbols<-vector("list",length(paths))

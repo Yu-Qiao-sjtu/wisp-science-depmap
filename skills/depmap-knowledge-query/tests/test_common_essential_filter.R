@@ -102,6 +102,20 @@ stopifnot(
   length(missing_value_pan_cancer$lineages) == 0L
 )
 
+writeLines(
+  c("symbol,source", "CE000,DepMap", "CE001"),
+  file.path(root, "depmap-26q1-core", "common_essential_genes.csv"),
+  useBytes = TRUE
+)
+ragged_lineage <- query("lineage_dependency")
+ragged_pan_cancer <- query("pan_cancer_dependency")
+stopifnot(
+  identical(ragged_lineage$status, "NOT_COMPUTED"),
+  length(ragged_lineage$rows) == 0L,
+  identical(ragged_pan_cancer$status, "NOT_COMPUTED"),
+  length(ragged_pan_cancer$lineages) == 0L
+)
+
 unlink(file.path(root, "depmap-26q1-core", "common_essential_genes.csv"))
 missing_lineage <- query("lineage_dependency")
 missing_pan_cancer <- query("pan_cancer_dependency")
