@@ -10,6 +10,9 @@ provider update never blocks the pull request that makes it deployable.
 `src-tauri/src/depmap_agent.rs`, the provider version from
 `services/depmap_api/app.py`, the changed paths, and the pull-request issue
 linkage. It does not open a network connection.
+Changed paths are taken from the pull request's merge base, while compatibility
+is assessed against GitHub's effective merge revision so updates made only on
+the base branch are not attributed to a stale feature branch.
 
 The classifier applies these rules:
 

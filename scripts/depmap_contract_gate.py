@@ -144,6 +144,8 @@ def classify_pr(
     issue_linked = pr_links_issue(body)
     provider_changed = any(_is_provider_path(path) for path in paths)
     client_changed = any(_is_client_path(path) for path in paths)
+    client_boundary_changed = head_client != base_client
+    provider_boundary_changed = head_provider_version != base_provider_version
     reasons: list[str] = []
 
     if not issue_linked:
@@ -156,15 +158,15 @@ def classify_pr(
         merge_allowed = True
         merge_gate = "ordinary_ci"
         live_gate = "none"
-    elif provider_changed and client_changed:
+    elif client_boundary_changed and provider_boundary_changed:
         classification = "mixed_provider_client_boundary"
         merge_allowed = False
         merge_gate = "split_pr"
         live_gate = "not_applicable"
         reasons.append(
-            "provider and client contract boundaries changed in one issue-fix PR"
+            "provider and client contract boundaries moved in one issue-fix PR"
         )
-    elif client_changed:
+    elif client_boundary_changed or client_changed:
         if head_client == base_client:
             classification = "client_current_contract"
             merge_allowed = head_client.contains(head_provider_version)
@@ -183,8 +185,14 @@ def classify_pr(
             classification = "contract_removal_client"
             merge_gate = "fresh_live_attestation"
             live_gate = "pr_and_release"
-            merge_allowed = bool(live_assessment and live_assessment.compatible)
-            if not merge_allowed:
+            repository_compatible = head_client.contains(head_provider_version)
+            live_compatible = bool(live_assessment and live_assessment.compatible)
+            merge_allowed = repository_compatible and live_compatible
+            if not repository_compatible:
+                reasons.append(
+                    "repository provider version is outside the contracted client range"
+                )
+            if not live_compatible:
                 reasons.append(
                     "contract removal requires a fresh compatible live attestation"
                 )
@@ -370,19 +378,31 @@ def _event_pr_body(path: Path) -> str | None:
     return body if isinstance(body, str) else None
 
 
-def inspect_pr(repo: Path, event: Path, base: str, head: str) -> PrImpact:
+def inspect_pr(
+    repo: Path,
+    event: Path,
+    base: str,
+    head: str,
+    effective: str | None = None,
+) -> PrImpact:
+    merge_base = _git(repo, "merge-base", base, head).strip()
+    if not merge_base:
+        raise GateError("git merge-base returned no revision")
     paths = [
         line.strip()
-        for line in _git(repo, "diff", "--name-only", base, head).splitlines()
+        for line in _git(repo, "diff", "--name-only", merge_base, head).splitlines()
         if line.strip()
     ]
     base_client = parse_client_range(_git_file(repo, base, CLIENT_CONTRACT_PATH))
-    head_client = parse_client_range(_git_file(repo, head, CLIENT_CONTRACT_PATH))
+    effective_revision = effective or head
+    head_client = parse_client_range(
+        _git_file(repo, effective_revision, CLIENT_CONTRACT_PATH)
+    )
     base_provider = parse_provider_version(
         _git_file(repo, base, PROVIDER_CONTRACT_PATH)
     )
     head_provider = parse_provider_version(
-        _git_file(repo, head, PROVIDER_CONTRACT_PATH)
+        _git_file(repo, effective_revision, PROVIDER_CONTRACT_PATH)
     )
     live_assessment = None
     attestation_path = repo / LIVE_ATTESTATION_PATH
@@ -484,6 +504,10 @@ def _parser() -> argparse.ArgumentParser:
     pr.add_argument("--event", type=Path, required=True)
     pr.add_argument("--base", required=True)
     pr.add_argument("--head", required=True)
+    pr.add_argument(
+        "--effective",
+        help="effective merge revision (GitHub pull_request GITHUB_SHA)",
+    )
     pr.add_argument("--github-output", type=Path)
 
     compare = sub.add_parser("compare", help="compare status JSON with client range")
@@ -507,7 +531,13 @@ def main(argv: list[str] | None = None) -> int:
             (repo / CLIENT_CONTRACT_PATH).read_text(encoding="utf-8")
         )
         if args.command == "pr":
-            report = inspect_pr(repo, args.event.resolve(), args.base, args.head)
+            report = inspect_pr(
+                repo,
+                args.event.resolve(),
+                args.base,
+                args.head,
+                args.effective,
+            )
             _emit(report, args.github_output)
             return 0 if report.merge_allowed else 1
         if args.command == "compare":

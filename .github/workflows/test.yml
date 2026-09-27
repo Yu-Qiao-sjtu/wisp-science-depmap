@@ -28,6 +28,7 @@ jobs:
           --event "$GITHUB_EVENT_PATH"
           --base "${{ github.event.pull_request.base.sha }}"
           --head "${{ github.event.pull_request.head.sha }}"
+          --effective "$GITHUB_SHA"
           --github-output "$GITHUB_OUTPUT"
 
   depmap-service-contracts:

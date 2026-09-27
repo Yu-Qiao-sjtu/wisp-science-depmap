@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +107,7 @@ class DepMapContractGateTests(unittest.TestCase):
         self.assertTrue(client.merge_allowed)
         provider = classify(
             ["services/depmap_api/app.py"],
+            base_client=(13, 14),
             head_client=(13, 14),
             head_provider=14,
         )
@@ -125,6 +127,13 @@ class DepMapContractGateTests(unittest.TestCase):
         self.assertEqual(report.classification, "mixed_provider_client_boundary")
         self.assertFalse(report.merge_allowed)
 
+    def test_compatible_logic_changes_in_both_areas_do_not_fake_boundary_move(self):
+        report = classify(
+            [gate.CLIENT_CONTRACT_PATH, "services/depmap_mcp/server.py"]
+        )
+        self.assertNotEqual(report.classification, "mixed_provider_client_boundary")
+        self.assertTrue(report.merge_allowed)
+
     def test_contract_removal_requires_fresh_compatible_live_assessment(self):
         without_live = classify(
             [gate.CLIENT_CONTRACT_PATH],
@@ -143,6 +152,57 @@ class DepMapContractGateTests(unittest.TestCase):
             live=assessment(14),
         )
         self.assertTrue(with_live.merge_allowed)
+        stale_repository = classify(
+            [gate.CLIENT_CONTRACT_PATH],
+            base_client=(13, 14),
+            head_client=(14, 14),
+            base_provider=13,
+            head_provider=13,
+            live=assessment(14),
+        )
+        self.assertFalse(stale_repository.merge_allowed)
+        self.assertTrue(
+            any("repository provider" in reason for reason in stale_repository.reasons)
+        )
+
+    def test_pr_paths_use_merge_base_and_contract_uses_effective_merge(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            event = Path(temp_dir) / "event.json"
+            event.write_text(
+                json.dumps({"pull_request": {"body": "Closes #139"}}),
+                encoding="utf-8",
+            )
+
+            def fake_git(_repo, *args):
+                if args == ("merge-base", "base", "head"):
+                    return "common\n"
+                if args == ("diff", "--name-only", "common", "head"):
+                    return "docs/depmap-deployment-contract.md\n"
+                self.fail(f"unexpected git call: {args}")
+
+            def fake_file(_repo, revision, relative):
+                if relative == gate.CLIENT_CONTRACT_PATH:
+                    version = 13 if revision == "base" else 14
+                    return (
+                        f"const DEPMAP_QUERY_CONTRACT_MIN: u64 = {version};\n"
+                        f"const DEPMAP_QUERY_CONTRACT_MAX: u64 = {version};\n"
+                    )
+                version = 13 if revision == "base" else 14
+                return f"QUERY_CONTRACT_VERSION = {version}\n"
+
+            with mock.patch.object(gate, "_git", side_effect=fake_git), mock.patch.object(
+                gate, "_git_file", side_effect=fake_file
+            ):
+                report = gate.inspect_pr(
+                    ROOT,
+                    event,
+                    "base",
+                    "head",
+                    effective="merge",
+                )
+        self.assertEqual(report.classification, "local_only")
+        self.assertEqual(report.head_client, gate.ContractRange(14, 14))
+        self.assertEqual(report.head_provider_version, 14)
 
     def test_status_requires_version_and_all_usable_identities(self):
         document = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -217,6 +277,7 @@ class DepMapContractGateTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'pull_request'", test_workflow)
         self.assertIn("fetch-depth: 0", test_workflow)
         self.assertIn("depmap_contract_gate.py pr", test_workflow)
+        self.assertIn('--effective "$GITHUB_SHA"', test_workflow)
         self.assertNotIn("depmap_contract_gate.py probe", test_workflow)
 
         release_workflow = (
