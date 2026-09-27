@@ -1,0 +1,8 @@
+{
+  "evidence": {
+    "capability_catalog_digest": "sha256:fixture-capability-catalog",
+    "catalog_build_identity": "fixture-catalog-contract-13",
+    "query_contract_version": 13,
+    "server_build_identity": "fixture-server-contract-13"
+  }
+}

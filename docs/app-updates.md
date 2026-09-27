@@ -57,6 +57,10 @@ before CI starts. That command creates the `v*` tag; the tag push starts the
 platform builds. Do not push the tag separately.
 
 The workflows are two steps so platform builds cannot overwrite the notes.
+Before either step, generate and review the fresh DepMap deployment attestation
+described in [depmap-deployment-contract.md](depmap-deployment-contract.md).
+The Create Release workflow fails closed when this attestation is missing,
+incompatible, or more than 72 hours old.
 
 1. **Create Release** (`release-create.yml`) is the fallback if someone only
    pushes a tag. It reads `.github/release-notes/<tag>.md` and publishes the

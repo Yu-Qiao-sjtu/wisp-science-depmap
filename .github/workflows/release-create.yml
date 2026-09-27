@@ -38,6 +38,18 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify live DepMap deployment contract
+        run: >-
+          python scripts/depmap_contract_gate.py compare
+          --repo-root .
+          --status-file .github/depmap-live-contract.json
+          --require-attestation
+          --max-age-hours 72
+
       - name: Read release notes
         id: notes
         run: |
