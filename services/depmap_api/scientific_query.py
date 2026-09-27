@@ -216,10 +216,11 @@ def bound_after_rank(
     *,
     key: Callable[[T], Any],
     limit: int,
+    cursor: int = 0,
 ) -> tuple[list[T], int]:
-    """Rank the full match set, then bound. Returns (page, matched_count)."""
+    """Rank the full match set, then page. Returns (page, matched_count)."""
     ordered = sorted(rows, key=key)
-    return ordered[:limit], len(ordered)
+    return ordered[cursor : cursor + limit], len(ordered)
 
 
 def criteria_failures(

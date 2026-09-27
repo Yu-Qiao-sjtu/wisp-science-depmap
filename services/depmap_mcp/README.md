@@ -93,10 +93,14 @@ ambiguous request cannot accidentally launch a large computation.
 
 `depmap_lineage_dependencies` accepts `exclude_common_essential=true` for
 plain-language requests such as “把所有细胞都需要的基因去掉”. It annotates each
-row from the versioned DepMap 26Q1 common-essential asset, reports counts before
-and after filtering, and returns `ANNOTATION_UNAVAILABLE` without silently
-dropping rows when that asset is missing. Housekeeping-gene annotations remain
-a separate concept and are never inferred from gene names or model memory.
+row from the versioned DepMap 26Q1 common-essential asset, applies that predicate
+to the full retained ranking before `cursor`/`limit`, and reports the complete
+pre-filter and post-filter counts plus the next cursor. The evidence records the
+sidecar source, version, and provenance. When exclusion is requested but the
+sidecar is missing or unreadable, the query fails closed as `NOT_COMPUTED` with
+no ranking rows; it never returns a successful unfiltered page. Housekeeping-gene
+annotations remain a separate concept and are never inferred from gene names or
+model memory.
 
 `depmap_model_gene_effect` returns a bounded per-model Chronos Gene Effect
 slice for one exact gene. Rows are keyed by canonical `ACH-######` ModelID and

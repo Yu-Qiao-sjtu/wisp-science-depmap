@@ -52,6 +52,30 @@ class QueryContractTests(unittest.TestCase):
         self.assertEqual(command[command.index("--exclude-common-essential") + 1], "True")
         self.assertIn("--common-essential-source", command)
 
+    def test_dependency_rankings_accept_a_non_negative_cursor(self):
+        request = QueryRequest(
+            mode="lineage_dependency",
+            lineage="Lung",
+            cursor=100,
+            limit=20,
+        )
+        self.assertEqual(request.bounded_dict()["cursor"], 100)
+        with self.assertRaises(ValueError):
+            QueryRequest(
+                mode="lineage_dependency",
+                lineage="Lung",
+                cursor=-1,
+                limit=20,
+            )
+        with self.assertRaises(ValueError):
+            QueryRequest(
+                mode="lineage_dependency",
+                lineage="Lung",
+                gene="GENE001",
+                cursor=20,
+                limit=20,
+            )
+
     def test_mutation_anchor_has_explicit_lineage_event_and_tier_contract(self):
         request = QueryRequest(
             mode="mutation_anchor", lineage="Lung", event="damaging",
@@ -1369,8 +1393,9 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
         }),
         encoding="utf-8",
     )
+    common_essential_symbols = ["DROPCE", *[f"CE{i:03d}" for i in range(105)]]
     (root / "depmap-26q1-core" / "common_essential_genes.csv").write_text(
-        "symbol\nDROPCE\n", encoding="utf-8"
+        "symbol\n" + "\n".join(common_essential_symbols) + "\n", encoding="utf-8"
     )
     (tests / "dependency_confounder_qc_manifest.json").write_text(
         json.dumps(
@@ -1427,6 +1452,26 @@ def write_lineage_selectivity_fixtures(root: Path) -> None:
             }
         ),
         tests / "02_Breast.parquet",
+    )
+    common_rows = [f"CE{i:03d}" for i in range(105)]
+    late_rows = [f"LATE{i:03d}" for i in range(10)]
+    lung_symbols = [*common_rows, *late_rows]
+    pq.write_table(
+        pa.table(
+            {
+                "symbol": lung_symbols,
+                "lineage": ["Lung"] * len(lung_symbols),
+                "test_status": ["tested"] * len(lung_symbols),
+                "lineage_n": [35] * len(lung_symbols),
+                "rest_n": [205] * len(lung_symbols),
+                "effect_mean_lineage": [-1.0] * len(lung_symbols),
+                "effect_mean_rest": [-0.2] * len(lung_symbols),
+                "effect_mean_difference": [-0.8] * len(lung_symbols),
+                "fdr_lineage_more_dependent": [0.01] * len(lung_symbols),
+                "rank_more_dependent": list(range(1, len(lung_symbols) + 1)),
+            }
+        ),
+        tests / "03_Lung.parquet",
     )
     pq.write_table(
         pa.table(
@@ -1836,6 +1881,87 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         )
         self.assertEqual(excluded["status"], "NOT_RETAINED")
         self.assertTrue(excluded["rows"][0]["is_common_essential"])
+
+    def test_common_essential_filter_precedes_limit_and_reports_pages(self):
+        first = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Lung",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "limit": 5,
+            }
+        )
+        self.assertEqual(first["status"], "FOUND")
+        self.assertEqual(
+            [row["symbol"] for row in first["rows"]],
+            [f"LATE{i:03d}" for i in range(5)],
+        )
+        self.assertGreater(first["rows"][0]["rank_more_dependent"], 100)
+        self.assertEqual(first["matched_row_count"], 10)
+        self.assertEqual(first["summary"]["eligible_before_common_essential_filter"], 115)
+        self.assertEqual(first["summary"]["eligible_after_common_essential_filter"], 10)
+        self.assertEqual(first["next_cursor"], 5)
+        self.assertEqual(first["common_essential_source"], "depmap_26q1")
+        self.assertEqual(first["common_essential_version"], "26Q1")
+        self.assertTrue(
+            first["common_essential_provenance"][0].endswith(
+                "common_essential_genes.csv"
+            )
+        )
+
+        second = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Lung",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "cursor": first["next_cursor"],
+                "limit": 5,
+            }
+        )
+        self.assertEqual(
+            [row["symbol"] for row in second["rows"]],
+            [f"LATE{i:03d}" for i in range(5, 10)],
+        )
+        self.assertIsNone(second["next_cursor"])
+        self.assertEqual(second["matched_row_count"], 10)
+
+    def test_common_essential_exclusion_fails_closed_when_sidecar_is_missing(self):
+        sidecar = (
+            self.settings.knowledge_root
+            / "depmap-26q1-core"
+            / "common_essential_genes.csv"
+        )
+        sidecar.unlink()
+
+        lineage = self._query(
+            {
+                "mode": "lineage_dependency",
+                "lineage": "Lung",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "limit": 5,
+            }
+        )
+        self.assertEqual(lineage["status"], "NOT_COMPUTED")
+        self.assertEqual(lineage["rows"], [])
+        self.assertFalse(lineage["common_essential_filter_applied"])
+        self.assertEqual(
+            lineage["common_essential_annotation_status"],
+            "ANNOTATION_UNAVAILABLE",
+        )
+
+        pan_cancer = self._query(
+            {
+                "mode": "pan_cancer_dependency",
+                "ranking": "selective",
+                "exclude_common_essential": True,
+                "limit": 5,
+            }
+        )
+        self.assertEqual(pan_cancer["status"], "NOT_COMPUTED")
+        self.assertEqual(pan_cancer["lineages"], [])
 
     def test_dependency_confounder_qc_is_typed_and_never_filters(self):
         flagged = self._query(

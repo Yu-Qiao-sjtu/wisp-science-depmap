@@ -1219,6 +1219,7 @@ class DepMapEvidenceService:
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         gene: str | None = None,
+        cursor: int = 0,
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
@@ -1231,6 +1232,8 @@ class DepMapEvidenceService:
         }
         if gene:
             request["gene"] = gene.strip().upper()
+        if cursor:
+            request["cursor"] = cursor
         rejected = limit_violation("lineage_dependency", limit)
         if rejected is not None:
             return self._envelope(
@@ -1246,6 +1249,8 @@ class DepMapEvidenceService:
         }
         if gene:
             query["gene"] = gene.strip().upper()
+        if cursor:
+            query["cursor"] = cursor
         item = await self._execute(query)
         canonical_lineage = item.get("query", {}).get("lineage", lineage)
         request = {
@@ -1257,6 +1262,8 @@ class DepMapEvidenceService:
         }
         if gene:
             request["gene"] = query["gene"]
+        if cursor:
+            request["cursor"] = cursor
         return self._envelope(
             tool="depmap_lineage_dependencies",
             request=request,
@@ -1339,6 +1346,7 @@ class DepMapEvidenceService:
         exclude_common_essential: bool = False,
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         gene: str | None = None,
+        cursor: int = 0,
     ) -> dict[str, Any]:
         if ranking not in {"selective", "mean_dependency"}:
             raise ValueError("ranking must be selective or mean_dependency")
@@ -1351,6 +1359,8 @@ class DepMapEvidenceService:
         }
         if gene:
             query["gene"] = gene.strip().upper()
+        if cursor:
+            query["cursor"] = cursor
         rejected = limit_violation("pan_cancer_dependency", limit)
         if rejected is not None:
             return self._envelope(
@@ -2188,7 +2198,8 @@ def build_mcp_server(
             "NOT_TESTED. Without gene, return a bounded ranking. selective uses the "
             "precomputed one-sided Welch/BH result; mean_dependency is descriptive. "
             "Gene Effect mean difference is not logFC. exclude_common_essential joins "
-            "the DepMap 26Q1 common-essential sidecar once; it is not a housekeeping list."
+            "the DepMap 26Q1 common-essential sidecar on the full ranking before cursor/limit "
+            "and fails closed when that sidecar is unavailable; it is not a housekeeping list."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -2200,6 +2211,7 @@ def build_mcp_server(
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         limit: int = 10,
         gene: str | None = None,
+        cursor: int = 0,
     ) -> dict[str, Any]:
         return await service.lineage_dependencies(
             lineage,
@@ -2208,6 +2220,7 @@ def build_mcp_server(
             exclude_common_essential=exclude_common_essential,
             common_essential_source=common_essential_source,
             gene=gene,
+            cursor=cursor,
         )
 
     @mcp.tool(
@@ -2255,7 +2268,8 @@ def build_mcp_server(
             "Query every completed lineage dependency table in one request. With gene, "
             "return FOUND/NOT_RETAINED/NOT_TESTED per lineage from the full table. "
             "Without gene, the limit applies per lineage after ranking the full "
-            "retained set. Recurrence is not inferred from truncated pages."
+            "retained set and common-essential filtering; cursor advances every lineage "
+            "page consistently. Recurrence is not inferred from truncated pages."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -2266,6 +2280,7 @@ def build_mcp_server(
         common_essential_source: Literal["depmap_26q1"] = "depmap_26q1",
         limit: int = 5,
         gene: str | None = None,
+        cursor: int = 0,
     ) -> dict[str, Any]:
         return await service.pan_cancer_dependencies(
             ranking,
@@ -2273,6 +2288,7 @@ def build_mcp_server(
             exclude_common_essential=exclude_common_essential,
             common_essential_source=common_essential_source,
             gene=gene,
+            cursor=cursor,
         )
 
     @mcp.tool(
