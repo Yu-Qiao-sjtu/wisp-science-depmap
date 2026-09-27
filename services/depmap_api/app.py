@@ -978,10 +978,10 @@ def _read_csv_records(path: Path) -> list[dict[str, Any]]:
     return list(_iter_csv_records(path))
 
 
-def _iter_csv_records(path: Path):
+def _iter_csv_records(path: Path, *, strict: bool = False):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle):
+        for row in csv.DictReader(handle, strict=strict):
             yield {key: _coerce_csv_value(value) for key, value in row.items()}
 
 
@@ -3214,16 +3214,23 @@ def _common_essential_sidecar(
     labels: set[str] = set()
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            headers = next(csv.reader(handle), [])
-        if not headers or len(headers) != len(set(headers)):
+            headers = next(csv.reader(handle, strict=True), [])
+        normalized_headers = [header.strip().casefold() for header in headers]
+        symbol_header_indexes = [
+            index
+            for index, header in enumerate(normalized_headers)
+            if header in {"symbol", "gene", "gene_symbol"}
+        ]
+        if (
+            not headers
+            or any(not header for header in normalized_headers)
+            or len(normalized_headers) != len(set(normalized_headers))
+            or len(symbol_header_indexes) != 1
+        ):
             return None
-        for row in _iter_csv_records(path):
-            symbol = (
-                row.get("symbol")
-                or row.get("gene")
-                or row.get("Gene")
-                or row.get("gene_symbol")
-            )
+        symbol_header = headers[symbol_header_indexes[0]]
+        for row in _iter_csv_records(path, strict=True):
+            symbol = row.get(symbol_header)
             if symbol:
                 normalized = str(symbol).strip().upper()
                 if normalized:
