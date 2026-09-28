@@ -81,9 +81,10 @@ read_common_essential_symbols<-function(path){
     error=function(e)NULL
   )
   if(warned||is.null(sidecar))return(character())
-  symbol_column<-intersect(c("symbol","gene","Gene","gene_symbol"),names(sidecar))
-  if(!length(symbol_column))return(character())
-  symbols<-unique(clean(sidecar[[symbol_column[[1L]]]]))
+  headers<-tolower(trimws(names(sidecar)))
+  symbol_columns<-which(headers%in%c("symbol","gene","gene_symbol"))
+  if(any(is.na(headers)|!nzchar(headers))||anyDuplicated(headers)>0L||length(symbol_columns)!=1L)return(character())
+  symbols<-unique(clean(sidecar[[symbol_columns[[1L]]]]))
   symbols[!is.na(symbols)&nzchar(symbols)]
 }
 mutation_module_root<-file.path(kb,"analysis-modules","癌种内突变锚定基因选择","cancer_anchor_catalog_v2","downstream_dependency","05_precomputed_gene_effect_matrices")
