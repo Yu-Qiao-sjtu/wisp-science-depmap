@@ -456,13 +456,16 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     for mode, _adapter, pattern, _formats in readers:
         likes = []
         for part in pattern.split("|"):
-            like = part.strip().replace("*", "%")
+            like = sqlite_like_pattern(part)
             if not like:
                 continue
             likes.append(like)
             if like.endswith("/%"):
                 likes.append(like[:-2])
-        predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
+        predicates = " OR ".join(
+            "module LIKE ? ESCAPE '\\' OR analysis_unit LIKE ? ESCAPE '\\'"
+            for _ in likes
+        )
         parameters = tuple(value for like in likes for value in (like, like))
         current = db.execute(
             f"SELECT analysis_id FROM analysis_catalog WHERE completion_state='COMPLETE' "
@@ -487,16 +490,17 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             if artifact_likes
             else None
         )
-        if current is None and artifact_likes and quarantined is None:
-            current = db.execute(
+        if artifact_likes and quarantined is None:
+            artifact_current = db.execute(
                 f"SELECT f.analysis_id FROM artifact_catalog f "
                 f"JOIN analysis_catalog a ON a.analysis_id=f.analysis_id "
                 f"WHERE f.integrity_state='VERIFIED' "
-                f"AND a.completion_state='QUARANTINED' "
+                f"AND a.completion_state IN ('COMPLETE','QUARANTINED') "
                 f"AND ({artifact_predicates.replace('artifact_path', 'f.artifact_path')}) "
                 f"ORDER BY f.artifact_path LIMIT 1",
                 tuple(artifact_likes),
             ).fetchone()
+            current = artifact_current or current
         db.execute(
             "INSERT INTO reader_coverage VALUES (?,?,?)",
             (

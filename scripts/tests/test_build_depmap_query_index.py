@@ -464,15 +464,22 @@ class QueryIndexTests(unittest.TestCase):
             sibling = core / "lineage-blocks" / "broken.parquet"
             sibling.parent.mkdir(parents=True)
             sibling.write_bytes(b"PAR1PAR1")
+            descendant = core / "lineage_dependency_tests" / "unit"
+            descendant.mkdir(parents=True)
+            (descendant / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
             output = root / "depmap-26q1-query-index.sqlite"
             build(root, output)
             with closing(sqlite3.connect(output)) as db:
                 self.assertEqual(
                     db.execute(
-                        "SELECT coverage_state FROM reader_coverage "
-                        "WHERE query_mode='core'"
-                    ).fetchone()[0],
-                    "AVAILABLE",
+                        "SELECT rc.coverage_state,a.analysis_unit "
+                        "FROM reader_coverage rc JOIN analysis_catalog a "
+                        "ON a.analysis_id=rc.analysis_id WHERE rc.query_mode='core'"
+                    ).fetchone(),
+                    ("AVAILABLE", "depmap-26q1-core"),
                 )
             summary.write_bytes(_valid_parquet(b"summary-b"))
             called = False
@@ -493,6 +500,42 @@ class QueryIndexTests(unittest.TestCase):
             self.assertFalse(called)
             self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
             self.assertEqual(result["reason_code"], "CHECKSUM_MISMATCH")
+
+    def test_reader_module_patterns_treat_underscores_as_literals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sibling = (
+                root
+                / "depmap-26q1-full"
+                / "lineage-sparse-networks"
+                / "unit"
+            )
+            sibling.mkdir(parents=True)
+            (sibling / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (sibling / "rows.csv").write_text(
+                "label,value\nA,1\n", encoding="utf-8"
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='lineage_network'"
+                    ).fetchone()[0],
+                    "NOT_COMPUTED",
+                )
+            self.assertEqual(
+                CatalogReaderRegistry(root, "26Q1").resolve(
+                    {"mode": "lineage_network"}
+                ).state,
+                "NOT_INDEXED",
+            )
 
     def test_concrete_lineage_readers_track_their_full_artifact_roots(self):
         with tempfile.TemporaryDirectory() as temporary:

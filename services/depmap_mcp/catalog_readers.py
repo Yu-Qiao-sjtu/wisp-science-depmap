@@ -143,20 +143,26 @@ class CatalogReaderRegistry:
                     )
                 likes = []
                 for pattern in str(reader["module_pattern"]).split("|"):
-                    like = pattern.strip().replace("*", "%")
+                    like = sqlite_like_pattern(pattern)
                     if not like:
                         continue
                     like = like if "%" in like else f"%{like}%"
                     likes.append(like)
                     if like.endswith("/%"):
                         likes.append(like[:-2])
-                predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
+                predicates = " OR ".join(
+                    "module LIKE ? ESCAPE '\\' OR analysis_unit LIKE ? ESCAPE '\\'"
+                    for _ in likes
+                )
                 parameters = tuple(value for like in likes for value in (like, like))
                 requested_module = str(query.get("module") or query.get("family") or "").strip()
                 base_predicates, base_parameters = predicates, parameters
                 if requested_module:
-                    predicates = f"({predicates}) AND analysis_unit LIKE ?"
-                    parameters = (*parameters, f"%{requested_module}%")
+                    predicates = f"({predicates}) AND analysis_unit LIKE ? ESCAPE '\\'"
+                    parameters = (
+                        *parameters,
+                        sqlite_like_pattern(f"*{requested_module}*"),
+                    )
                 analyses = db.execute(
                     f"""
                     SELECT analysis_id FROM analysis_catalog
