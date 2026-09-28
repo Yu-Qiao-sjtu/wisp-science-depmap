@@ -33,6 +33,16 @@ def reader_artifact_pattern(query_mode: str, module_pattern: str) -> str:
     return READER_ARTIFACT_PATTERNS.get(query_mode, module_pattern)
 
 
+def sqlite_like_pattern(pattern: str) -> str:
+    """Compile a configured artifact glob to LIKE with literal path names."""
+    return (
+        pattern.strip()
+        .replace("\\", "\\\\")
+        .replace("_", "\\_")
+        .replace("*", "%")
+    )
+
+
 @dataclass(frozen=True)
 class ArtifactIntegrity:
     state: str

@@ -396,6 +396,7 @@ class QueryIndexTests(unittest.TestCase):
             )
             (core / "model_gene_effect.parquet").write_bytes(_valid_parquet(b"e"))
             (core / "model_metadata.parquet").write_bytes(_valid_parquet(b"m"))
+            (core / "model-gene-effect.parquet").write_bytes(b"PAR1PAR1")
             corrupt = core / "lineage_dependency_tests" / "broken.parquet"
             corrupt.parent.mkdir(parents=True)
             corrupt.write_bytes(b"PAR1PAR1")
@@ -445,8 +446,19 @@ class QueryIndexTests(unittest.TestCase):
             summary = core / "gene_core_summary.parquet"
             summary.write_bytes(_valid_parquet(b"summary-a"))
             (blocks / "lineage_a.parquet").write_bytes(_valid_parquet(b"lineage"))
+            sibling = core / "lineage-blocks" / "broken.parquet"
+            sibling.parent.mkdir(parents=True)
+            sibling.write_bytes(b"PAR1PAR1")
             output = root / "depmap-26q1-query-index.sqlite"
             build(root, output)
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='core'"
+                    ).fetchone()[0],
+                    "AVAILABLE",
+                )
             summary.write_bytes(_valid_parquet(b"summary-b"))
             called = False
 

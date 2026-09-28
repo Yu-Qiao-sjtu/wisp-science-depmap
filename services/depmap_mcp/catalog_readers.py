@@ -13,6 +13,7 @@ from services.depmap_mcp.artifact_integrity import (
     VERIFIED,
     index_digest_path,
     reader_artifact_pattern,
+    sqlite_like_pattern,
     verify_cataloged_artifact,
     verify_index_artifact,
 )
@@ -207,7 +208,7 @@ class CatalogReaderRegistry:
                 if analysis_ids:
                     placeholders = ",".join("?" for _ in analysis_ids)
                     artifact_likes = tuple(
-                        part.strip().replace("*", "%")
+                        sqlite_like_pattern(part)
                         for part in reader_artifact_pattern(
                             reader_mode,
                             str(reader["module_pattern"]),
@@ -215,7 +216,8 @@ class CatalogReaderRegistry:
                         if part.strip()
                     )
                     artifact_predicates = " OR ".join(
-                        "f.artifact_path LIKE ?" for _ in artifact_likes
+                        "f.artifact_path LIKE ? ESCAPE '\\'"
+                        for _ in artifact_likes
                     )
                     artifacts = tuple(
                         row[0]

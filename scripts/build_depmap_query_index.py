@@ -25,6 +25,7 @@ from services.depmap_mcp.artifact_integrity import (
     index_digest_path,
     inspect_artifact,
     reader_artifact_pattern,
+    sqlite_like_pattern,
     verify_index_artifact,
     verify_declared_checksum,
     write_index_digest,
@@ -457,12 +458,12 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             parameters,
         ).fetchone() if likes else None
         artifact_likes = [
-            value.strip().replace("*", "%")
+            sqlite_like_pattern(value)
             for value in reader_artifact_pattern(mode, pattern).split("|")
             if value.strip()
         ]
         artifact_predicates = " OR ".join(
-            "artifact_path LIKE ?" for _ in artifact_likes
+            "artifact_path LIKE ? ESCAPE '\\'" for _ in artifact_likes
         )
         quarantined = (
             db.execute(
