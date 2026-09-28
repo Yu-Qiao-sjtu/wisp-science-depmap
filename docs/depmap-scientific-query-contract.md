@@ -13,7 +13,11 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
 
 `lineage_dependency` / `pan_cancer_dependency` add exact-gene statuses
 (`FOUND` / `NOT_RETAINED` / `NOT_TESTED`) and a one-pass common-essential
-sidecar join (`exclude_common_essential`). `tf_dependency` reads the installed
+sidecar join (`exclude_common_essential`). The predicate runs on the complete
+retained ranking before `cursor`/`limit`; pages expose complete pre/post-filter
+counts, `matched_row_count`, and `next_cursor`. A requested exclusion fails
+closed as `NOT_COMPUTED` when the versioned sidecar cannot be read, and the
+envelope records sidecar source/version/provenance. `tf_dependency` reads the installed
 TF-activity module in-process: keys in the frozen `tf_order` universe return
 `FOUND` / `NOT_RETAINED` / `NOT_TESTED` / `NOT_OBSERVED`, never HTTP 500.
 TF-activity queries also page the frozen `tf_order` universe (`view=universe`)

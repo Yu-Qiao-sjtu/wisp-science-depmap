@@ -432,6 +432,8 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("lineage", intents["mutation_to_dependency"]["optional"])
         self.assertIn("lineage", intents["dependency_to_mutation"]["optional"])
         self.assertIn("gene", intents["mutation_anchor_discovery"]["optional"])
+        self.assertIn("cursor", intents["cancer_dependency_ranking"]["optional"])
+        self.assertIn("cursor", intents["pan_cancer_dependency_summary"]["optional"])
         self.assertEqual(
             intents["mutation_anchor_discovery"]["mcp_tool"],
             "depmap_mutation_anchor_evidence",
@@ -881,6 +883,12 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.queries[-1]["exclude_common_essential"])
         self.assertEqual(self.queries[-1]["common_essential_source"], "depmap_26q1")
 
+        paged = await self.service.lineage_dependencies(
+            "乳腺癌", "selective", 10, cursor=20
+        )
+        self.assertEqual(self.queries[-1]["cursor"], 20)
+        self.assertEqual(paged["request"]["cursor"], 20)
+
         breast_cancer = await self.service.lineage_dependencies(
             "Breast Cancer", "selective", 10
         )
@@ -980,6 +988,12 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             result["evidence"]["metric_semantics"]["metric"],
             "chronos_gene_effect_lineage_vs_rest_mean_difference",
         )
+
+        paged = await self.service.pan_cancer_dependencies(
+            "selective", 5, exclude_common_essential=True, cursor=5
+        )
+        self.assertEqual(self.queries[-1]["cursor"], 5)
+        self.assertEqual(paged["request"]["cursor"], 5)
 
     async def test_lineage_resolution_requires_confirmation_for_ambiguity(self):
         exact = await self.service.resolve_lineage("乳腺癌")

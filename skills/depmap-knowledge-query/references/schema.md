@@ -59,7 +59,10 @@ The query may join the versioned `depmap_26q1` common-essential sidecar and
 return `is_common_essential` plus `common_essential_source` per row. Set
 `exclude_common_essential=true` to exclude only those labelled genes. When the
 sidecar is absent, `common_essential_annotation_status` is
-`ANNOTATION_UNAVAILABLE` and no row is silently removed. `selective` still must
+`ANNOTATION_UNAVAILABLE`; a requested exclusion returns `NOT_COMPUTED` and no
+ranking rows. The full retained set is filtered before `cursor`/`limit`, with
+pre/post-filter totals, `matched_row_count`, `next_cursor`, and sidecar
+source/version/provenance in the envelope. `selective` still must
 not be paraphrased as `non-housekeeping`: housekeeping and common-essential
 annotations are distinct.
 
