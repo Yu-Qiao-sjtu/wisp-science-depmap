@@ -723,6 +723,31 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _valid_capability_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    string_fields = (
+        "intent",
+        "description",
+        "precise_prompt_template_zh",
+        "mcp_tool",
+    )
+    list_fields = (
+        "required",
+        "optional",
+        "examples_zh",
+        "confusable_with",
+    )
+    return all(
+        isinstance(value.get(field), str) and bool(value[field].strip())
+        for field in string_fields
+    ) and all(
+        isinstance(value.get(field), list)
+        and all(isinstance(item, str) and bool(item.strip()) for item in value[field])
+        for field in list_fields
+    )
+
+
 class DepMapEvidenceService:
     """Scientific orchestration layer shared by MCP transports and tests."""
 
@@ -755,7 +780,7 @@ class DepMapEvidenceService:
                         item = json.loads(row[0]) if row and row[0] else None
                     except (json.JSONDecodeError, TypeError):
                         item = None
-                    if isinstance(item, dict):
+                    if _valid_capability_payload(item):
                         loaded.append(item)
                     else:
                         invalid_records += 1

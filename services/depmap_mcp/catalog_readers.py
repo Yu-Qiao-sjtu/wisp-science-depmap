@@ -9,6 +9,10 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from services.depmap_mcp.artifact_integrity import (
+    VERIFIED,
+    verify_cataloged_artifact,
+)
 from services.depmap_mcp.portable_refs import PortableReferences
 
 
@@ -26,9 +30,9 @@ MODE_ALIASES = {
     "lineage": "core",
     "pathway": "core",
     "drug": "drug",
-    "lineage_network": "core",
-    "lineage_cnv": "core",
-    "lineage_drug": "drug",
+    "lineage_network": "lineage_network",
+    "lineage_cnv": "lineage_cnv",
+    "lineage_drug": "lineage_drug",
     "enrichment": "enrichment",
     "subtype": "subtype",
     "coamplification": "coamplification",
@@ -235,7 +239,10 @@ class CatalogReaderRegistry:
         if self.enabled:
             resolution, error = self._bind_result_provenance(resolution, result)
             if error:
-                return resolution, {"status": "MODULE_UNAVAILABLE", "reason": error}
+                return resolution, {
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": error,
+                }
         return resolution, result
 
     def _bind_result_provenance(
@@ -270,7 +277,11 @@ class CatalogReaderRegistry:
                 try:
                     path = candidate.resolve().relative_to(self.knowledge_root).as_posix()
                 except (OSError, ValueError):
-                    return resolution, "reader returned provenance outside the knowledge root"
+                    LOGGER.error(
+                        "reader returned provenance outside the knowledge root path=%r",
+                        value,
+                    )
+                    return resolution, "PROVENANCE_OUTSIDE_KNOWLEDGE_ROOT"
             if path == self.index.name:
                 continue
             relative.append(path)
@@ -280,20 +291,42 @@ class CatalogReaderRegistry:
         placeholders = ",".join("?" for _ in unique)
         with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             rows = db.execute(
-                f"""SELECT f.artifact_path,f.analysis_id FROM artifact_catalog f
+                f"""SELECT f.artifact_path,f.analysis_id,f.artifact_kind,
+                            f.integrity_method,f.integrity_value
+                FROM artifact_catalog f
                 JOIN analysis_catalog a ON a.analysis_id=f.analysis_id
                 WHERE f.artifact_path IN ({placeholders})
                   AND f.integrity_state='VERIFIED'
                   AND a.completion_state='COMPLETE'""",
                 unique,
             ).fetchall()
-        found = {row[0]: row[1] for row in rows}
+        found = {row[0]: row for row in rows}
         missing = [path for path in unique if path not in found]
         if missing:
-            return resolution, f"reader used {len(missing)} artifact(s) outside COMPLETE catalog entries"
+            LOGGER.error(
+                "reader used provenance outside COMPLETE catalog entries paths=%r",
+                missing,
+            )
+            return resolution, "PROVENANCE_NOT_CATALOGED"
+        for path in unique:
+            row = found[path]
+            integrity = verify_cataloged_artifact(
+                self.knowledge_root / path,
+                row[2],
+                row[3],
+                row[4],
+            )
+            if integrity.state != VERIFIED:
+                LOGGER.error(
+                    "reader provenance integrity failure path=%s reason=%s diagnostic=%s",
+                    path,
+                    integrity.reason_code,
+                    integrity.diagnostic,
+                )
+                return resolution, integrity.reason_code or "CORRUPT_ARTIFACT"
         return replace(
             resolution,
-            analysis_ids=tuple(dict.fromkeys(found[path] for path in unique)),
+            analysis_ids=tuple(dict.fromkeys(found[path][1] for path in unique)),
             artifact_uris=unique,
             validated_provenance_count=len(unique),
         ), None

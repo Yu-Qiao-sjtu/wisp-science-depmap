@@ -205,6 +205,29 @@ class QueryIndexTests(unittest.TestCase):
                     ("QUARANTINED", "INVALID_TABLE_SCHEMA"),
                 )
 
+    def test_zero_column_table_header_fails_minimum_schema_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "generic" / "results" / "unit"
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "rows.csv").write_text("\n", encoding="utf-8")
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT integrity_state,integrity_reason_code "
+                        "FROM artifact_catalog WHERE artifact_path LIKE '%/rows.csv'"
+                    ).fetchone(),
+                    ("QUARANTINED", "INVALID_TABLE_SCHEMA"),
+                )
+
     def test_declared_checksum_mismatch_is_quarantined_before_advertisement(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -309,6 +332,49 @@ class QueryIndexTests(unittest.TestCase):
                         "WHERE query_mode='drug'"
                     ).fetchone()[0],
                     1,
+                )
+
+    def test_concrete_lineage_readers_track_their_full_artifact_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            healthy = root / "depmap-26q1-core"
+            healthy.mkdir(parents=True)
+            (healthy / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (healthy / "rows.csv").write_text(
+                "label,value\nA,1\n", encoding="utf-8"
+            )
+            roots = {
+                "lineage_network": "lineage_sparse_networks",
+                "lineage_cnv": "lineage_cnv_amplification_dependency",
+                "lineage_drug": "lineage_prism_associations",
+            }
+            compressed = gzip.compress(b"label,value\nA,1\n")
+            for directory in roots.values():
+                path = root / "depmap-26q1-full" / directory / "broken.csv.gz"
+                path.parent.mkdir(parents=True)
+                path.write_bytes(compressed[:-4])
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                coverage = dict(
+                    db.execute(
+                        "SELECT query_mode,coverage_state FROM reader_coverage "
+                        "WHERE query_mode IN ('lineage_network','lineage_cnv','lineage_drug','core')"
+                    )
+                )
+            self.assertEqual(coverage["core"], "AVAILABLE")
+            for mode in roots:
+                self.assertEqual(coverage[mode], "CORRUPT_ARTIFACT")
+                self.assertEqual(
+                    CatalogReaderRegistry(root, "26Q1").resolve(
+                        {"mode": mode}
+                    ).state,
+                    "CORRUPT_ARTIFACT",
                 )
 
     def test_parquet_magic_without_metadata_is_quarantined(self):
@@ -463,6 +529,21 @@ class QueryIndexTests(unittest.TestCase):
             ))
             self.assertEqual(seen["_catalog_reader_id"], "pair_adapter")
             self.assertEqual(len(seen["_catalog_matrix_blocks"]), 1)
+
+            (unit / "blocks" / "block_00001_00001.rds").write_bytes(
+                b"X\nmodified"
+            )
+            with self.assertLogs("depmap_mcp.catalog_readers", level="ERROR"):
+                _bound, changed = asyncio.run(
+                    CatalogReaderRegistry(root, "26Q1").read(
+                        object(),
+                        {"mode": "pair", "source": "ESR1", "target": "FOXA1"},
+                        runner,
+                    )
+                )
+            self.assertEqual(changed["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(changed["reason_code"], "CHECKSUM_MISMATCH")
+            self.assertNotIn(str(root), json.dumps(changed))
 
             settings = Settings(
                 knowledge_root=root,

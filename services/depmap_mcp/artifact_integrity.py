@@ -43,8 +43,10 @@ def _validate_table(path: Path) -> None:
         if header is None:
             raise ValueError("missing header")
         normalized = [value.strip().casefold() for value in header]
-        if any(not value for value in normalized) or len(set(normalized)) != len(
-            normalized
+        if (
+            not normalized
+            or any(not value for value in normalized)
+            or len(set(normalized)) != len(normalized)
         ):
             raise ValueError("blank or duplicate header")
         width = len(header)

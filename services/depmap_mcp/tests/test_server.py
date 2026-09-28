@@ -486,19 +486,33 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_capability_catalog_skips_nullable_or_malformed_records(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
-        valid = {"intent": "provider_status", "mcp_tool": "depmap_status"}
+        valid = {
+            "intent": "provider_status",
+            "description": "Describe provider status.",
+            "required": [],
+            "optional": [],
+            "examples_zh": ["检查状态"],
+            "precise_prompt_template_zh": "检查服务状态。",
+            "confusable_with": [],
+            "mcp_tool": "depmap_status",
+        }
         with closing(sqlite3.connect(index)) as db:
             db.execute("CREATE TABLE capability_catalog (payload_json TEXT)")
             db.executemany(
                 "INSERT INTO capability_catalog VALUES (?)",
-                [(json.dumps(valid),), ("null",), ("{broken",)],
+                [
+                    (json.dumps(valid),),
+                    (json.dumps({}),),
+                    ("null",),
+                    ("{broken",),
+                ],
             )
             db.commit()
 
         result = await self.service.capabilities()
         self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
         self.assertEqual(result["catalog_status"], "PARTIAL")
-        self.assertEqual(result["invalid_record_count"], 2)
+        self.assertEqual(result["invalid_record_count"], 3)
         self.assertEqual(result["capabilities"], [valid])
 
     async def test_empty_indexed_capability_catalog_does_not_restore_static_capabilities(self):
