@@ -20,12 +20,34 @@ from services.depmap_api.app import (
     _coerce_csv_value,
     _coverage_gap_reason,
     _r_query_command,
+    _run_analysis_catalog_query,
     create_app,
     resolve_lineage_term,
 )
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_analysis_catalog_failure_uses_stable_path_free_integrity_reason(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "depmap-26q1-query-index.sqlite").write_bytes(b"not sqlite")
+            settings = Settings(
+                knowledge_root=root,
+                query_script=root / "query.R",
+                api_token="test-token-with-at-least-thirty-two-characters",
+            )
+
+            with self.assertLogs("depmap_api", level="ERROR"):
+                result = _run_analysis_catalog_query(settings, {})
+
+            self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(
+                result["reason_code"], "INTEGRITY_CATALOG_UNAVAILABLE"
+            )
+            serialized = json.dumps(result)
+            self.assertNotIn("DatabaseError", serialized)
+            self.assertNotIn(str(root), serialized)
+
     def test_scientific_csv_values_keep_small_and_threshold_precision(self):
         self.assertEqual(_coerce_csv_value("1.6156e-8"), 1.6156e-8)
         self.assertGreater(_coerce_csv_value("3.2669e-12"), 0.0)
@@ -349,6 +371,37 @@ class DepMapApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.queries[0]["source"], "KRAS")
+
+    def test_artifact_read_failure_is_typed_without_exception_or_path_leak(self):
+        async def failing_runner(_settings, _query):
+            raise EOFError(str(self.settings.knowledge_root / "private" / "rows.csv.gz"))
+
+        with self.assertLogs("depmap_api", level="ERROR") as operator_logs:
+            with TestClient(
+                create_app(self.settings, failing_runner), raise_server_exceptions=False
+            ) as client:
+                response = client.post(
+                    "/api/v1/query",
+                    headers=self.headers,
+                    json={
+                        "mode": "pair",
+                        "module": "effect_correlation",
+                        "source": "FEATURE_A",
+                        "target": "FEATURE_B",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "ARTIFACT_READ_FAILED",
+            },
+        )
+        self.assertNotIn("EOFError", response.text)
+        self.assertNotIn(str(self.settings.knowledge_root), response.text)
+        self.assertIn(str(self.settings.knowledge_root), "\n".join(operator_logs.output))
 
     def test_tcga_query_normalizes_project_and_endpoint_before_forwarding(self):
         response = self.client.post(

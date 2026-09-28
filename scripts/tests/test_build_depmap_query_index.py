@@ -1,5 +1,6 @@
 import json
 import asyncio
+import gzip
 import sqlite3
 import tempfile
 import unittest
@@ -12,7 +13,264 @@ from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
 class QueryIndexTests(unittest.TestCase):
-    def test_v4_catalog_relates_assets_coverage_and_detects_fresh_index(self):
+    def test_corrupt_artifact_is_quarantined_without_disabling_healthy_family(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            corrupt_unit = (
+                root
+                / "analysis-modules"
+                / "通用富集分析"
+                / "results"
+                / "corrupt"
+            )
+            healthy_unit = (
+                root
+                / "analysis-modules"
+                / "通用共依赖分析"
+                / "results"
+                / "healthy"
+            )
+            corrupt_unit.mkdir(parents=True)
+            healthy_unit.mkdir(parents=True)
+            for unit in (corrupt_unit, healthy_unit):
+                (unit / "manifest.json").write_text(
+                    json.dumps({"status": "complete", "release": "26Q1"}),
+                    encoding="utf-8",
+                )
+            compressed = gzip.compress(b"label,value\nA,1\n")
+            (corrupt_unit / "rows.csv.gz").write_bytes(compressed[:-4])
+            (healthy_unit / "rows.csv.gz").write_bytes(compressed)
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            counts = build(root, output)
+
+            self.assertEqual(counts["quarantined_artifacts"], 1)
+            with closing(sqlite3.connect(output)) as db:
+                corrupt = db.execute(
+                    "SELECT integrity_state,integrity_reason_code FROM artifact_catalog "
+                    "WHERE artifact_path LIKE '%/corrupt/rows.csv.gz'"
+                ).fetchone()
+                self.assertEqual(
+                    corrupt,
+                    ("QUARANTINED", "TRUNCATED_COMPRESSED_ARTIFACT"),
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT completion_state FROM analysis_catalog "
+                        "WHERE analysis_unit LIKE '%/corrupt'"
+                    ).fetchone()[0],
+                    "QUARANTINED",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT completion_state FROM analysis_catalog "
+                        "WHERE analysis_unit LIKE '%/healthy'"
+                    ).fetchone()[0],
+                    "COMPLETE",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT storage_completeness,qa_state FROM coverage_registry "
+                        "WHERE analysis_id=(SELECT analysis_id FROM analysis_catalog "
+                        "WHERE analysis_unit LIKE '%/corrupt')"
+                    ).fetchone(),
+                    ("corrupt", "CORRUPT_ARTIFACT"),
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    "CORRUPT_ARTIFACT",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='pair'"
+                    ).fetchone()[0],
+                    "AVAILABLE",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='pair'"
+                    ).fetchone()[0],
+                    1,
+                )
+
+            registry = CatalogReaderRegistry(root, "26Q1")
+            corrupt_resolution = registry.resolve(
+                {"mode": "enrichment", "source": "FEATURE", "lineage": "Lineage"}
+            )
+            healthy_resolution = registry.resolve(
+                {"mode": "pair", "source": "FEATURE_A", "target": "FEATURE_B"}
+            )
+            self.assertEqual(corrupt_resolution.state, "CORRUPT_ARTIFACT")
+            self.assertEqual(healthy_resolution.state, "RESOLVED")
+            called = False
+
+            async def runner(_settings, _query):
+                nonlocal called
+                called = True
+                return {"status": "FOUND"}
+
+            _resolution, result = asyncio.run(
+                registry.read(
+                    object(),
+                    {
+                        "mode": "enrichment",
+                        "source": "FEATURE",
+                        "lineage": "Lineage",
+                    },
+                    runner,
+                )
+            )
+            self.assertFalse(called)
+            self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(result["reason_code"], "CORRUPT_ARTIFACT")
+
+            with closing(sqlite3.connect(output)) as db:
+                first_identity = db.execute(
+                    "SELECT value FROM metadata WHERE key='built_at'"
+                ).fetchone()[0]
+            (corrupt_unit / "rows.csv.gz").write_bytes(compressed)
+            self.assertEqual(
+                registry.resolve(
+                    {
+                        "mode": "enrichment",
+                        "source": "FEATURE",
+                        "lineage": "Lineage",
+                    }
+                ).state,
+                "CORRUPT_ARTIFACT",
+            )
+
+            build(root, output)
+
+            rebuilt = CatalogReaderRegistry(root, "26Q1").resolve(
+                {"mode": "enrichment", "source": "FEATURE", "lineage": "Lineage"}
+            )
+            self.assertEqual(rebuilt.state, "RESOLVED")
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT integrity_state FROM artifact_catalog "
+                        "WHERE artifact_path LIKE '%/corrupt/rows.csv.gz'"
+                    ).fetchone()[0],
+                    "VERIFIED",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertNotEqual(
+                    db.execute(
+                        "SELECT value FROM metadata WHERE key='built_at'"
+                    ).fetchone()[0],
+                    first_identity,
+                )
+
+    def test_duplicate_table_headers_fail_minimum_schema_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "通用富集分析" / "results" / "unit"
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "rows.csv").write_text(
+                "label, Label \nA,B\n", encoding="utf-8"
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT integrity_state,integrity_reason_code "
+                        "FROM artifact_catalog WHERE artifact_path LIKE '%/rows.csv'"
+                    ).fetchone(),
+                    ("QUARANTINED", "INVALID_TABLE_SCHEMA"),
+                )
+
+    def test_declared_checksum_mismatch_is_quarantined_before_advertisement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "通用富集分析" / "results" / "unit"
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "release": "26Q1",
+                        "artifact_checksums": {"rows.csv.gz": "0" * 64},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (unit / "rows.csv.gz").write_bytes(
+                gzip.compress(b"label,value\nA,1\n")
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT integrity_state,integrity_reason_code "
+                        "FROM artifact_catalog WHERE artifact_path LIKE '%/rows.csv.gz'"
+                    ).fetchone(),
+                    ("QUARANTINED", "CHECKSUM_MISMATCH"),
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    0,
+                )
+
+    def test_root_owned_corrupt_artifact_disables_matching_reader_family(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            corrupt = root / "analysis-modules" / "通用富集" / "rows.csv.gz"
+            corrupt.parent.mkdir(parents=True)
+            compressed = gzip.compress(b"label,value\nA,1\n")
+            corrupt.write_bytes(compressed[:-4])
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    "CORRUPT_ARTIFACT",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='enrichment'"
+                    ).fetchone()[0],
+                    0,
+                )
+
+    def test_v6_catalog_relates_assets_coverage_and_detects_fresh_index(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             unit = root / "analysis-modules" / "CRISPR基因-基因共依赖分析" / "results" / "matrix"
@@ -28,7 +286,7 @@ class QueryIndexTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (unit / "gene_order.csv").write_text("gene_index,symbol\n1,ESR1\n", encoding="utf-8")
-            (unit / "blocks" / "block_00001_00001.rds").write_bytes(b"fixture")
+            (unit / "blocks" / "block_00001_00001.rds").write_bytes(b"X\nfixture")
             (root / "public.csv").write_text("key,value\na,1\n", encoding="utf-8")
             for family in ("subtype_dependency", "coamplification_dependency"):
                 family_root = root / "depmap-26q1-full" / family
@@ -41,7 +299,7 @@ class QueryIndexTests(unittest.TestCase):
 
             counts = build(root, output)
 
-            self.assertEqual(counts["capabilities"], 21)
+            self.assertEqual(counts["capabilities"], 22)
             self.assertEqual(counts["matrix_gene_blocks"], 1)
             self.assertEqual(counts["coverage_records"], 3)
             self.assertTrue(is_fresh(root, output))
@@ -185,7 +443,9 @@ class QueryIndexTests(unittest.TestCase):
                 json.dumps({"status": "complete", "release": "26Q1"}),
                 encoding="utf-8",
             )
-            (unit / "significant_enrichment.csv.gz").write_bytes(b"fixture")
+            (unit / "significant_enrichment.csv.gz").write_bytes(
+                gzip.compress(b"term,p_value\nPATHWAY_A,0.01\n")
+            )
             output = root / "depmap-26q1-query-index.sqlite"
             build(root, output)
             with closing(sqlite3.connect(output)) as db:

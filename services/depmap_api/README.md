@@ -22,13 +22,19 @@ files when the index is absent or unreadable. Result files and manifests remain
 authoritative. A biomarker lookup reports eligibility and validated cache state;
 it does not start model training.
 
-Schema v3 also contains a unified directory catalog. `analysis_catalog` records
+Schema v6 also contains a unified directory catalog. `analysis_catalog` records
 every discovered manifest and its completion evidence, `artifact_catalog`
-records files using knowledge-root-relative paths and integrity fingerprints,
-and `capability_catalog` is the runtime source for the 19 Agent intents.
+records files using knowledge-root-relative paths, streamed SHA-256 checksums,
+format validation, and a stable integrity state, and `capability_catalog` is
+the runtime source for Agent intents.
 `reader_registry` records bounded adapters, `analysis_relation` connects scripts,
 data, manifests, and results, and `matrix_block_index` maps genes directly to
 matrix shards. Large matrices remain in their original RDS/Parquet/CSV shards.
+Truncated compressed tables, checksum mismatches, invalid minimum schemas, and
+unreadable expected formats are quarantined per analysis. Affected query
+families are not advertised, unrelated healthy families remain available, and
+read failures return `MODULE_UNAVAILABLE` with a stable reason code while raw
+exceptions and storage paths stay in operator logs.
 
 Use `--if-stale` for scheduled refreshes. The builder compares the newest
 retained source mtime with index metadata, rebuilds through a temporary database,

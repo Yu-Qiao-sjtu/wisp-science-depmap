@@ -1292,10 +1292,12 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
                     "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
                 )
             }
-    except sqlite3.Error as exc:
+    except sqlite3.Error:
+        LOGGER.exception("unified directory index query failed")
         return _evidence_response(
             "MODULE_UNAVAILABLE", mode="analysis_catalog",
-            reason=f"the unified directory index could not be read: {exc}",
+            reason_code="INTEGRITY_CATALOG_UNAVAILABLE",
+            reason="the unified directory index could not be read",
         )
     return _evidence_response(
         "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
@@ -4039,6 +4041,17 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
         return JSONResponse(
             status_code=422,
             content=schema_violation(reason="; ".join(messages) or "invalid provider arguments"),
+        )
+
+    @api.exception_handler(Exception)
+    async def provider_artifact_failure(_request: Request, exc: Exception):
+        LOGGER.exception("bounded provider query failed integrity/read boundary", exc_info=exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "ARTIFACT_READ_FAILED",
+            },
         )
 
     @api.middleware("http")

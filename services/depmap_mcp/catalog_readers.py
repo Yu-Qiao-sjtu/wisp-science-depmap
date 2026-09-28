@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, dataclass, replace
@@ -12,6 +13,7 @@ from services.depmap_mcp.portable_refs import PortableReferences
 
 
 Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any] | None]]
+LOGGER = logging.getLogger("depmap_mcp.catalog_readers")
 
 # API modes are more granular than the public intent catalog. Each one must
 # still enter through a registered reader family before opening retained data.
@@ -101,9 +103,18 @@ class CatalogReaderRegistry:
                 if reader is None:
                     return CatalogResolution("READER_UNAVAILABLE", mode, reader_mode=reader_mode, reason="no registered reader")
                 if reader["coverage_state"] != "AVAILABLE" or not reader["coverage_analysis_id"]:
+                    state = (
+                        "CORRUPT_ARTIFACT"
+                        if reader["coverage_state"] == "CORRUPT_ARTIFACT"
+                        else "NOT_INDEXED"
+                    )
                     return CatalogResolution(
-                        "NOT_INDEXED", mode, reader_mode, reader["adapter"],
-                        reason="registered reader has no current release-scoped coverage record",
+                        state, mode, reader_mode, reader["adapter"],
+                        reason=(
+                            "registered artifact failed integrity validation"
+                            if state == "CORRUPT_ARTIFACT"
+                            else "registered reader has no current release-scoped coverage record"
+                        ),
                     )
                 patterns = [part.strip() for part in str(reader["module_pattern"]).split("|") if part.strip()]
                 likes = []
@@ -144,7 +155,9 @@ class CatalogReaderRegistry:
                             f"""
                             SELECT f.artifact_path FROM artifact_catalog f
                             JOIN analysis_relation r ON r.analysis_id=f.analysis_id AND r.artifact_path=f.artifact_path
-                            WHERE f.analysis_id IN ({placeholders}) AND r.role IN ('result','data','manifest')
+                            WHERE f.analysis_id IN ({placeholders})
+                              AND f.integrity_state='VERIFIED'
+                              AND r.role IN ('result','data','manifest')
                             ORDER BY CASE r.role WHEN 'result' THEN 0 WHEN 'data' THEN 1 ELSE 2 END,
                                      f.mtime_ns DESC LIMIT 32
                             """,
@@ -176,8 +189,14 @@ class CatalogReaderRegistry:
                 if not analyses and not indexed:
                     return CatalogResolution("NOT_INDEXED", mode, reader_mode, reader["adapter"], reason="no COMPLETE matching analysis")
                 return CatalogResolution("RESOLVED", mode, reader_mode, reader["adapter"], analysis_ids, artifacts, blocks)
-        except sqlite3.Error as exc:
-            return CatalogResolution("CATALOG_ERROR", mode, reader_mode=reader_mode, reason=str(exc))
+        except sqlite3.Error:
+            LOGGER.exception("catalog reader resolution failed mode=%s", reader_mode)
+            return CatalogResolution(
+                "CATALOG_ERROR",
+                mode,
+                reader_mode=reader_mode,
+                reason="catalog reader resolution failed",
+            )
 
     async def read(
         self,
@@ -191,7 +210,7 @@ class CatalogReaderRegistry:
         if self.enabled and resolution.state != "RESOLVED":
             return resolution, {
                 "status": "MODULE_UNAVAILABLE",
-                "reason": f"catalog reader resolution failed: {resolution.state}",
+                "reason_code": resolution.state,
             }
         bound_query = {
             **query,
@@ -263,7 +282,9 @@ class CatalogReaderRegistry:
             rows = db.execute(
                 f"""SELECT f.artifact_path,f.analysis_id FROM artifact_catalog f
                 JOIN analysis_catalog a ON a.analysis_id=f.analysis_id
-                WHERE f.artifact_path IN ({placeholders}) AND a.completion_state='COMPLETE'""",
+                WHERE f.artifact_path IN ({placeholders})
+                  AND f.integrity_state='VERIFIED'
+                  AND a.completion_state='COMPLETE'""",
                 unique,
             ).fetchall()
         found = {row[0]: row[1] for row in rows}

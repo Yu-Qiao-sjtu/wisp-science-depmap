@@ -12,6 +12,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
@@ -21,8 +22,14 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from services.depmap_mcp.artifact_integrity import (
+    QUARANTINED,
+    verify_cataloged_artifact,
+)
+
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
 MAX_MODEL_STRING_CHARS = 4096
+LOGGER = logging.getLogger("depmap_mcp")
 
 _AUXILIARY_LIST_KEYS = frozenset(
     {
@@ -750,9 +757,9 @@ class DepMapEvidenceService:
                         loaded.append(item)
                     else:
                         invalid_records += 1
-                if loaded:
-                    capabilities, source = loaded, "sqlite_capability_catalog"
+                capabilities, source = loaded, "sqlite_capability_catalog"
             except (sqlite3.Error, json.JSONDecodeError, OSError):
+                LOGGER.exception("indexed capability catalog could not be read")
                 invalid_records = 0
         else:
             invalid_records = 0
@@ -813,7 +820,11 @@ class DepMapEvidenceService:
         with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(
-                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,f.integrity_method,f.integrity_value,a.module,a.analysis_unit,a.completion_state FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
+                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,"
+                f"f.integrity_method,f.integrity_value,f.integrity_state,"
+                f"f.integrity_reason_code,a.module,a.analysis_unit,a.completion_state "
+                f"FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
             )]
         return self._envelope(tool="depmap_artifact_catalog", request={"module":module,"kind":kind,"path_contains":path_contains,"limit":limit}, evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows})
 
@@ -850,10 +861,15 @@ class DepMapEvidenceService:
                     f"WHERE {' AND '.join('c.' + clause if clause != '1=1' else clause for clause in clauses)} "
                     f"GROUP BY c.analysis_id ORDER BY c.module,c.analysis_id LIMIT ?", params
                 )]
-        except sqlite3.Error as exc:
+        except sqlite3.Error:
+            LOGGER.exception("coverage registry query failed")
             return self._envelope(
                 tool="depmap_data_coverage", request={"module": module},
-                evidence={"status": "MODULE_UNAVAILABLE", "reason": f"coverage registry unavailable: {exc}", "rows": []},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
             )
         return self._envelope(
             tool="depmap_data_coverage",
@@ -866,21 +882,73 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         max_rows = min(max(int(max_rows), 1), 100)
         cursor = max(int(cursor), 0)
+        request = {"uri": uri, "max_rows": max_rows, "cursor": cursor}
+
+        def integrity_failure(reason_code: str) -> dict[str, Any]:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "uri": uri,
+                    "integrity_state": QUARANTINED,
+                    "integrity_reason_code": reason_code,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
+
         relative = self.portable_references.parse_public_uri(uri)
         if relative is None:
             raise ValueError(
                 f"uri must be a valid {self.portable_references.uri_prefix} resource"
             )
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
-        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
-            hit = db.execute("SELECT artifact_kind,size_bytes FROM artifact_catalog WHERE artifact_path=?", (relative,)).fetchone()
+        try:
+            with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                hit = db.execute(
+                    "SELECT artifact_kind,size_bytes,integrity_method,integrity_value,"
+                    "integrity_state,integrity_reason_code FROM artifact_catalog "
+                    "WHERE artifact_path=?",
+                    (relative,),
+                ).fetchone()
+        except (OSError, sqlite3.Error):
+            LOGGER.exception("artifact catalog lookup failed")
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
         if not hit:
             raise ValueError("resource is absent from the indexed catalog")
         path = (self.settings.knowledge_root / relative).resolve()
-        if self.settings.knowledge_root not in path.parents or not path.is_file():
+        if self.settings.knowledge_root not in path.parents:
             raise ValueError("resource path is unavailable")
+        if hit[4] != "VERIFIED":
+            return integrity_failure(hit[5] or "CATALOG_QUARANTINED")
+        if not path.is_file():
+            LOGGER.error("indexed artifact is missing path=%s", path)
+            return integrity_failure("ARTIFACT_UNAVAILABLE")
+        integrity = verify_cataloged_artifact(path, hit[0], hit[2], hit[3])
+        if integrity.state != "VERIFIED":
+            LOGGER.error(
+                "indexed artifact integrity failure path=%s reason=%s diagnostic=%s",
+                path,
+                integrity.reason_code,
+                integrity.diagnostic,
+            )
+            return integrity_failure(integrity.reason_code or "ARTIFACT_INTEGRITY_FAILED")
         if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
-            return self._envelope(tool="depmap_read_resource", request={"uri":uri}, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"content":"binary artifact; use its registered scientific query adapter"})
+            return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"integrity_state":"VERIFIED","content":"binary artifact; use its registered scientific query adapter"})
         if path.name.endswith(".csv.gz") or path.suffix.lower() in {".csv", ".tsv"}:
             try:
                 if path.name.endswith(".csv.gz"):
@@ -910,10 +978,11 @@ class DepMapEvidenceService:
                 )
                 return self._envelope(
                     tool="depmap_read_resource",
-                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
+                    request=request,
                     evidence={
                         "status": "FOUND" if total_row_count else "NOT_RETAINED",
                         "uri": uri,
+                        "integrity_state": "VERIFIED",
                         "content": rows,
                         "rows": rows,
                         "returned_count": returned_count,
@@ -922,22 +991,15 @@ class DepMapEvidenceService:
                         "next_cursor": next_cursor,
                     },
                 )
-            except (OSError, EOFError, UnicodeError, csv.Error) as exc:
-                return self._envelope(
-                    tool="depmap_read_resource",
-                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
-                    evidence={
-                        "status": "ERROR",
-                        "uri": uri,
-                        "reason": f"indexed table could not be decoded: {type(exc).__name__}",
-                        "rows": [],
-                        "returned_count": 0,
-                        "truncated": False,
-                        "next_cursor": None,
-                    },
-                )
+            except (OSError, EOFError, UnicodeError, csv.Error):
+                LOGGER.exception("verified indexed table failed during bounded read")
+                return integrity_failure("ARTIFACT_READ_FAILED")
         else:
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            try:
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                LOGGER.exception("verified indexed text artifact failed during read")
+                return integrity_failure("ARTIFACT_READ_FAILED")
             structured_json = False
             if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
                 try:
@@ -949,7 +1011,7 @@ class DepMapEvidenceService:
                 content = text[:65536]
             if not structured_json:
                 content = self.portable_references.text(content)
-        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows,"cursor":cursor}, evidence={"status":"FOUND","uri":uri,"content":content})
+        return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"integrity_state":"VERIFIED","content":content})
 
     def _portable_string(self, value: str) -> str:
         return self.portable_references.key(value)
@@ -1040,19 +1102,25 @@ class DepMapEvidenceService:
                     self.settings, validated, self.runner
                 )
         except HTTPException as exc:
+            LOGGER.warning(
+                "bounded provider query returned HTTP failure status=%s detail=%r",
+                exc.status_code,
+                exc.detail,
+            )
             return {
                 "query": validated,
                 "metric_semantics": _metric_semantics(validated),
-                "status": "QUERY_ERROR",
-                "reason": str(exc.detail),
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "BOUNDED_READER_FAILED",
                 "http_status": exc.status_code,
             }
-        except Exception as exc:  # keep a bundle honest when one bounded branch fails
+        except Exception:  # keep a bundle honest when one bounded branch fails
+            LOGGER.exception("bounded provider query failed")
             return {
                 "query": validated,
                 "metric_semantics": _metric_semantics(validated),
-                "status": "QUERY_ERROR",
-                "reason": f"{type(exc).__name__}: {exc}",
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "BOUNDED_READER_FAILED",
             }
         if not isinstance(result, dict):
             result = {
