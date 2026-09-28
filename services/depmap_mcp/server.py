@@ -29,6 +29,7 @@ from services.depmap_mcp.artifact_integrity import (
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
 MAX_MODEL_STRING_CHARS = 4096
+QUERY_FAILURE_STATUSES = frozenset({"QUERY_ERROR", "MODULE_UNAVAILABLE"})
 LOGGER = logging.getLogger("depmap_mcp")
 
 _AUXILIARY_LIST_KEYS = frozenset(
@@ -742,6 +743,7 @@ class DepMapEvidenceService:
         capabilities = list(INTENT_CAPABILITIES)
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         source = "code_fallback"
+        catalog_unavailable = False
         if index.is_file():
             try:
                 with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
@@ -760,6 +762,9 @@ class DepMapEvidenceService:
                 capabilities, source = loaded, "sqlite_capability_catalog"
             except (sqlite3.Error, json.JSONDecodeError, OSError):
                 LOGGER.exception("indexed capability catalog could not be read")
+                capabilities = []
+                source = "sqlite_capability_catalog"
+                catalog_unavailable = True
                 invalid_records = 0
         else:
             invalid_records = 0
@@ -769,7 +774,13 @@ class DepMapEvidenceService:
             "state": "CAPABILITY_CATALOG",
             "capabilities": capabilities,
             "catalog_source": source,
-            "catalog_status": "PARTIAL" if invalid_records else "FOUND",
+            "catalog_status": (
+                "UNAVAILABLE"
+                if catalog_unavailable
+                else "PARTIAL"
+                if invalid_records
+                else "FOUND"
+            ),
             "invalid_record_count": invalid_records,
             "routing_policy": {
                 "unknown_or_out_of_scope": "return_no_match",
@@ -1527,7 +1538,9 @@ class DepMapEvidenceService:
                 tcga_query["lineage"] = lineage
             queries.append(tcga_query)
         items = await self._execute_many(queries)
-        failures = sum(item.get("status") == "QUERY_ERROR" for item in items)
+        failures = sum(
+            item.get("status") in QUERY_FAILURE_STATUSES for item in items
+        )
         request = {
             "gene": symbol,
             "lineage": lineage,
@@ -1650,7 +1663,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "items": items,
         }
@@ -1709,7 +1722,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "sections": [
                 {"scope": "global", "evidence": items[0]},
@@ -2126,7 +2139,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "items": items,
         }

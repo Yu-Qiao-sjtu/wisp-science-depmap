@@ -513,6 +513,18 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["catalog_status"], "FOUND")
         self.assertEqual(result["capabilities"], [])
 
+    async def test_unreadable_indexed_capability_catalog_fails_closed(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        index.write_bytes(b"not sqlite")
+
+        with self.assertLogs("depmap_mcp", level="ERROR"):
+            result = await self.service.capabilities()
+
+        self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
+        self.assertEqual(result["catalog_status"], "UNAVAILABLE")
+        self.assertEqual(result["invalid_record_count"], 0)
+        self.assertEqual(result["capabilities"], [])
+
     async def test_data_coverage_is_bounded_and_omits_internal_paths(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
         with closing(sqlite3.connect(index)) as db:
@@ -656,6 +668,27 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "limit": 4,
             },
         )
+
+    async def test_module_unavailable_counts_as_aggregate_query_failure(self):
+        async def failing_runner(_settings, _query):
+            raise RuntimeError("synthetic reader failure")
+
+        service = DepMapEvidenceService(self.settings, failing_runner)
+        with self.assertLogs("depmap_mcp", level="ERROR"):
+            gene = await service.gene_evidence(
+                "GENERIC", sections=["core"], limit=3
+            )
+            pair = await service.pair_evidence("GENERIC_A", "GENERIC_B")
+            codependency = await service.codependency_evidence("GENERIC", limit=3)
+            drug = await service.drug_evidence("generic-drug", "GENERIC", limit=3)
+
+        self.assertEqual(gene["evidence"]["query_error_count"], 1)
+        self.assertFalse(gene["evidence"]["complete"])
+        for result in (pair, codependency, drug):
+            self.assertEqual(
+                result["evidence"]["query_error_count"],
+                result["evidence"]["query_count"],
+            )
 
     async def test_dedicated_tcga_tool_keeps_patient_evidence_separate(self):
         result = await self.service.tcga_expression_survival(

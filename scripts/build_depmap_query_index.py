@@ -434,10 +434,13 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ).fetchone() if likes else None
         if likes and quarantined is None:
             artifact_predicates = " OR ".join("artifact_path LIKE ?" for _ in likes)
+            artifact_patterns = tuple(
+                like if "%" in like else f"{like}/%" for like in likes
+            )
             quarantined = db.execute(
                 f"SELECT analysis_id FROM artifact_catalog WHERE integrity_state='QUARANTINED' "
                 f"AND ({artifact_predicates}) ORDER BY artifact_path LIMIT 1",
-                tuple(likes),
+                artifact_patterns,
             ).fetchone()
         db.execute(
             "INSERT INTO reader_coverage VALUES (?,?,?)",

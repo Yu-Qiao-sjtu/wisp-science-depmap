@@ -69,12 +69,19 @@ def _validate_sqlite(path: Path) -> None:
 
 
 def _validate_parquet(path: Path) -> None:
+    size = path.stat().st_size
+    if size < 12:
+        raise ValueError("parquet file is too short")
     with path.open("rb") as handle:
         if handle.read(4) != b"PAR1":
             raise ValueError("missing parquet header")
-        handle.seek(-4, 2)
-        if handle.read(4) != b"PAR1":
+        handle.seek(-8, 2)
+        footer = handle.read(8)
+        if footer[4:] != b"PAR1":
             raise ValueError("missing parquet footer")
+        metadata_length = int.from_bytes(footer[:4], byteorder="little")
+        if metadata_length <= 0 or metadata_length > size - 12:
+            raise ValueError("invalid parquet metadata length")
 
 
 def _validate_r_object(path: Path) -> None:

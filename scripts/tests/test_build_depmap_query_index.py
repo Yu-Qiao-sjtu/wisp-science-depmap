@@ -270,6 +270,84 @@ class QueryIndexTests(unittest.TestCase):
                     0,
                 )
 
+    def test_root_owned_core_corruption_matches_descendant_artifact_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            corrupt = root / "depmap-26q1-core" / "results" / "broken.parquet"
+            corrupt.parent.mkdir(parents=True)
+            corrupt.write_bytes(b"PAR1PAR1")
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT integrity_state,integrity_reason_code "
+                        "FROM artifact_catalog WHERE artifact_path=?",
+                        ("depmap-26q1-core/results/broken.parquet",),
+                    ).fetchone(),
+                    ("QUARANTINED", "INVALID_PARQUET"),
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='core'"
+                    ).fetchone()[0],
+                    "CORRUPT_ARTIFACT",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='model_gene_effect'"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='drug'"
+                    ).fetchone()[0],
+                    1,
+                )
+
+    def test_parquet_magic_without_metadata_is_quarantined(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "generic" / "results" / "unit"
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "header-only.parquet").write_bytes(b"PAR1")
+            (unit / "header-footer-only.parquet").write_bytes(b"PAR1PAR1")
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                rows = db.execute(
+                    "SELECT artifact_path,integrity_state,integrity_reason_code "
+                    "FROM artifact_catalog WHERE artifact_path LIKE '%.parquet' "
+                    "ORDER BY artifact_path"
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    (
+                        "analysis-modules/generic/results/unit/header-footer-only.parquet",
+                        "QUARANTINED",
+                        "INVALID_PARQUET",
+                    ),
+                    (
+                        "analysis-modules/generic/results/unit/header-only.parquet",
+                        "QUARANTINED",
+                        "INVALID_PARQUET",
+                    ),
+                ],
+            )
+
     def test_v6_catalog_relates_assets_coverage_and_detects_fresh_index(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
