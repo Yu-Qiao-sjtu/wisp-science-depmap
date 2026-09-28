@@ -21,6 +21,14 @@ QUARANTINED = "QUARANTINED"
 LOGGER = logging.getLogger("depmap_mcp.artifact_integrity")
 
 READER_ARTIFACT_PATTERNS = {
+    "lineage_dependency": (
+        "depmap-26q1-core/lineage_dependency_tests/%|"
+        "depmap-26q1-core/common_essential_genes.csv"
+    ),
+    "pan_cancer_dependency": (
+        "depmap-26q1-core/lineage_dependency_tests/%|"
+        "depmap-26q1-core/common_essential_genes.csv"
+    ),
     "core": (
         "depmap-26q1-core/gene_core_summary.parquet|"
         "depmap-26q1-core/lineage_blocks/%"
@@ -39,6 +47,27 @@ READER_ARTIFACT_PATTERNS = {
         "depmap-26q1-core/model_metadata.parquet"
     ),
 }
+
+
+class LeasedIndexPath(type(Path())):
+    """Concrete Path that keeps a cross-boundary snapshot lease while referenced."""
+
+    __slots__ = ("_lease_path",)
+
+    def __new__(cls, path: Path, lease_path: Path):
+        return super().__new__(cls, path)
+
+    def __init__(self, path: Path, lease_path: Path) -> None:
+        super().__init__(path)
+        self._lease_path = lease_path
+
+    def __del__(self) -> None:
+        lease_path = getattr(self, "_lease_path", None)
+        if lease_path is not None:
+            try:
+                lease_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def reader_artifact_pattern(query_mode: str, module_pattern: str) -> str:
@@ -115,8 +144,11 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
             not previous.is_file()
             or previous.name.endswith((".sha256", ".tmp"))
             or ".tmp-" in previous.name
+            or ".lease-" in previous.name
             or previous == keep
         ):
+            continue
+        if any(path.parent.glob(f"{previous.name}.lease-*")):
             continue
         try:
             previous.unlink()
@@ -143,6 +175,19 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
             )
 
 
+def _lease_index_snapshot(path: Path) -> LeasedIndexPath:
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="ascii",
+        dir=path.parent,
+        prefix=f"{path.name}.lease-",
+        delete=False,
+    ) as handle:
+        lease_path = Path(handle.name)
+        handle.write(f"pid={os.getpid()}\n")
+    return LeasedIndexPath(path, lease_path)
+
+
 def _materialize_verified_index_snapshot(
     path: Path, integrity: ArtifactIntegrity
 ) -> tuple[Path, ArtifactIntegrity]:
@@ -153,7 +198,7 @@ def _materialize_verified_index_snapshot(
         snapshot_integrity.state == VERIFIED
         and snapshot_integrity.value == integrity.value
     ):
-        return snapshot, snapshot_integrity
+        return _lease_index_snapshot(snapshot), snapshot_integrity
 
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
@@ -192,7 +237,7 @@ def _materialize_verified_index_snapshot(
         or snapshot_integrity.value != integrity.value
     ):
         return snapshot, snapshot_integrity
-    return snapshot, snapshot_integrity
+    return _lease_index_snapshot(snapshot), snapshot_integrity
 
 
 def resolve_index_artifact(path: Path) -> tuple[Path, ArtifactIntegrity]:
@@ -252,7 +297,7 @@ def resolve_index_artifact(path: Path) -> tuple[Path, ArtifactIntegrity]:
             integrity.reason_code or "INVALID_INDEX_PUBLISH_MARKER",
             integrity.diagnostic,
         )
-    return previous, integrity
+    return _lease_index_snapshot(previous), integrity
 
 
 def publish_index_artifact(temporary: Path, output: Path) -> str:

@@ -1,6 +1,7 @@
 import json
 import asyncio
 import gzip
+import gc
 import io
 import shutil
 import sqlite3
@@ -17,6 +18,7 @@ from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 from services.depmap_mcp.artifact_integrity import (
     index_digest_path,
     index_publish_marker_path,
+    reader_artifact_pattern,
     resolve_index_artifact,
     write_index_digest,
 )
@@ -40,6 +42,13 @@ def _valid_rds(payload: bytes = b"x") -> bytes:
 
 
 class QueryIndexTests(unittest.TestCase):
+    def test_dependency_readers_include_common_essential_sidecar(self):
+        for mode in ("lineage_dependency", "pan_cancer_dependency"):
+            patterns = reader_artifact_pattern(mode, "unused").split("|")
+            self.assertIn(
+                "depmap-26q1-core/common_essential_genes.csv", patterns
+            )
+
     def test_corrupt_artifact_is_quarantined_without_disabling_healthy_family(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -791,6 +800,40 @@ class QueryIndexTests(unittest.TestCase):
                 ).fetchall()
             self.assertTrue(any(row[0].endswith("/old") for row in rows))
             self.assertFalse(any(row[0].endswith("/new") for row in rows))
+
+            manifest = (
+                roots["old"]
+                / "analysis-modules"
+                / "generic"
+                / "results"
+                / "old"
+                / "manifest.json"
+            )
+            for revision in (2, 3):
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "status": "complete",
+                            "release": "26Q1",
+                            "revision": revision,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                build(roots["old"], output)
+            self.assertTrue(resolved.exists())
+
+            leased_snapshot = Path(resolved)
+            del resolved
+            gc.collect()
+            manifest.write_text(
+                json.dumps(
+                    {"status": "complete", "release": "26Q1", "revision": 4}
+                ),
+                encoding="utf-8",
+            )
+            build(roots["old"], output)
+            self.assertFalse(leased_snapshot.exists())
 
     def test_r_serialization_magic_without_payload_is_quarantined(self):
         with tempfile.TemporaryDirectory() as temporary:
