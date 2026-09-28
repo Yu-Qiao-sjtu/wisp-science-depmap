@@ -72,9 +72,11 @@ as `QUARANTINED` catalog records with stable reason codes, while their owning
 analysis is not executable and its affected capability is not advertised.
 Healthy analysis units and query families remain available. Detailed decoder
 exceptions and host paths are written only to operator logs; they never enter
-scientific evidence. Repairing or replacing bytes does not silently clear the
-state: rebuild the index atomically so the verified checksum and catalog build
-identity change before the capability is re-enabled.
+scientific evidence. The result-bearing SQLite index is itself authenticated by
+the detached `depmap-26q1-query-index.sqlite.sha256`; catalog and indexed-content
+reads fail closed if that digest is absent or mismatched. Repairing or replacing
+bytes does not silently clear the state: rebuild the index so the verified
+checksum and catalog build identity change before the capability is re-enabled.
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

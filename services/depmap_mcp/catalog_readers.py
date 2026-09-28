@@ -11,7 +11,9 @@ from typing import Any, Awaitable, Callable
 
 from services.depmap_mcp.artifact_integrity import (
     VERIFIED,
+    index_digest_path,
     verify_cataloged_artifact,
+    verify_index_artifact,
 )
 from services.depmap_mcp.portable_refs import PortableReferences
 
@@ -26,9 +28,9 @@ MODE_ALIASES = {
     "core": "core",
     "model_gene_effect": "core",
     "cross_platform_validation": "cross_platform_validation",
-    "top": "core",
-    "lineage": "core",
-    "pathway": "core",
+    "top": "top",
+    "lineage": "lineage",
+    "pathway": "pathway",
     "drug": "drug",
     "lineage_network": "lineage_network",
     "lineage_cnv": "lineage_cnv",
@@ -85,16 +87,50 @@ class CatalogReaderRegistry:
         self.knowledge_root = knowledge_root.resolve()
         self.release = release
         self.index = self.knowledge_root / "depmap-26q1-query-index.sqlite"
+        self._index_signature: tuple[int, int, int, int] | None = None
+        self._index_integrity: Any = None
 
     @property
     def enabled(self) -> bool:
         return self.index.is_file()
+
+    def _verify_index(self):
+        try:
+            index_stat = self.index.stat()
+            digest_stat = index_digest_path(self.index).stat()
+            signature = (
+                index_stat.st_size,
+                index_stat.st_mtime_ns,
+                digest_stat.st_size,
+                digest_stat.st_mtime_ns,
+            )
+        except OSError:
+            signature = None
+        if signature is not None and signature == self._index_signature:
+            return self._index_integrity
+        integrity = verify_index_artifact(self.index)
+        self._index_signature = signature
+        self._index_integrity = integrity
+        return integrity
 
     def resolve(self, query: dict[str, Any]) -> CatalogResolution:
         mode = str(query.get("mode") or "")
         reader_mode = MODE_ALIASES.get(mode, mode)
         if not self.enabled:
             return CatalogResolution("CATALOG_UNAVAILABLE", mode, reason="query index is not installed")
+        index_integrity = self._verify_index()
+        if index_integrity.state != VERIFIED:
+            LOGGER.error(
+                "query index integrity failure reason=%s diagnostic=%s",
+                index_integrity.reason_code,
+                index_integrity.diagnostic,
+            )
+            return CatalogResolution(
+                "CATALOG_ERROR",
+                mode,
+                reader_mode=reader_mode,
+                reason="query index integrity validation failed",
+            )
         try:
             with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
@@ -120,11 +156,15 @@ class CatalogReaderRegistry:
                             else "registered reader has no current release-scoped coverage record"
                         ),
                     )
-                patterns = [part.strip() for part in str(reader["module_pattern"]).split("|") if part.strip()]
                 likes = []
-                for pattern in patterns:
-                    like = pattern.replace("*", "%")
-                    likes.append(like if "%" in like else f"%{like}%")
+                for pattern in str(reader["module_pattern"]).split("|"):
+                    like = pattern.strip().replace("*", "%")
+                    if not like:
+                        continue
+                    like = like if "%" in like else f"%{like}%"
+                    likes.append(like)
+                    if like.endswith("/%"):
+                        likes.append(like[:-2])
                 predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
                 parameters = tuple(value for like in likes for value in (like, like))
                 requested_module = str(query.get("module") or query.get("family") or "").strip()
@@ -216,6 +256,15 @@ class CatalogReaderRegistry:
                 "status": "MODULE_UNAVAILABLE",
                 "reason_code": resolution.state,
             }
+        if self.enabled:
+            _found, error = self._revalidate_cataloged_paths(
+                resolution.artifact_uris
+            )
+            if error:
+                return resolution, {
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": error,
+                }
         bound_query = {
             **query,
             "_catalog_analysis_ids": list(resolution.analysis_ids),
@@ -268,6 +317,7 @@ class CatalogReaderRegistry:
         if not values:
             return resolution, None
         relative: list[str] = []
+        validated_index_count = 0
         prefix = f"depmap://{self.release}/"
         for value in values:
             if value.startswith(prefix):
@@ -283,11 +333,43 @@ class CatalogReaderRegistry:
                     )
                     return resolution, "PROVENANCE_OUTSIDE_KNOWLEDGE_ROOT"
             if path == self.index.name:
+                index_integrity = self._verify_index()
+                if index_integrity.state != VERIFIED:
+                    LOGGER.error(
+                        "query index provenance integrity failure reason=%s diagnostic=%s",
+                        index_integrity.reason_code,
+                        index_integrity.diagnostic,
+                    )
+                    return (
+                        resolution,
+                        index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE",
+                    )
+                validated_index_count += 1
                 continue
             relative.append(path)
         if not relative:
-            return replace(resolution, validated_provenance_count=len(values)), None
+            return replace(
+                resolution,
+                validated_provenance_count=validated_index_count,
+            ), None
         unique = tuple(dict.fromkeys(relative))
+        found, error = self._revalidate_cataloged_paths(unique)
+        if error:
+            return resolution, error
+        assert found is not None
+        return replace(
+            resolution,
+            analysis_ids=tuple(dict.fromkeys(found[path][1] for path in unique)),
+            artifact_uris=unique,
+            validated_provenance_count=len(unique) + validated_index_count,
+        ), None
+
+    def _revalidate_cataloged_paths(
+        self, paths: tuple[str, ...]
+    ) -> tuple[dict[str, tuple[Any, ...]] | None, str | None]:
+        if not paths:
+            return {}, None
+        unique = tuple(dict.fromkeys(paths))
         placeholders = ",".join("?" for _ in unique)
         with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             rows = db.execute(
@@ -307,7 +389,7 @@ class CatalogReaderRegistry:
                 "reader used provenance outside COMPLETE catalog entries paths=%r",
                 missing,
             )
-            return resolution, "PROVENANCE_NOT_CATALOGED"
+            return None, "PROVENANCE_NOT_CATALOGED"
         for path in unique:
             row = found[path]
             integrity = verify_cataloged_artifact(
@@ -323,10 +405,5 @@ class CatalogReaderRegistry:
                     integrity.reason_code,
                     integrity.diagnostic,
                 )
-                return resolution, integrity.reason_code or "CORRUPT_ARTIFACT"
-        return replace(
-            resolution,
-            analysis_ids=tuple(dict.fromkeys(found[path][1] for path in unique)),
-            artifact_uris=unique,
-            validated_provenance_count=len(unique),
-        ), None
+                return None, integrity.reason_code or "CORRUPT_ARTIFACT"
+        return found, None

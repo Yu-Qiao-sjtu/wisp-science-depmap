@@ -9,6 +9,7 @@ from pathlib import Path
 
 from scripts.build_depmap_query_index import build, is_fresh
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+from services.depmap_mcp.artifact_integrity import write_index_digest
 from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
@@ -266,6 +267,52 @@ class QueryIndexTests(unittest.TestCase):
                     0,
                 )
 
+    def test_index_provenance_is_revalidated_after_the_bounded_query(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = (
+                root
+                / "analysis-modules"
+                / "通用共依赖分析"
+                / "results"
+                / "unit"
+            )
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "rows.csv").write_text(
+                "source,target\nA,B\n", encoding="utf-8"
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+            build(root, output)
+            called = False
+
+            async def runner(_settings, _query):
+                nonlocal called
+                called = True
+                with closing(sqlite3.connect(output)) as db:
+                    db.execute(
+                        "UPDATE metadata SET value='changed' WHERE key='built_at'"
+                    )
+                    db.commit()
+                return {"status": "FOUND", "provenance": [str(output)]}
+
+            with self.assertLogs("depmap_mcp.catalog_readers", level="ERROR"):
+                _resolution, result = asyncio.run(
+                    CatalogReaderRegistry(root, "26Q1").read(
+                        object(),
+                        {"mode": "pair", "source": "A", "target": "B"},
+                        runner,
+                    )
+                )
+
+            self.assertTrue(called)
+            self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(result["reason_code"], "CHECKSUM_MISMATCH")
+            self.assertNotIn(str(root), json.dumps(result))
+
     def test_root_owned_corrupt_artifact_disables_matching_reader_family(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -350,6 +397,8 @@ class QueryIndexTests(unittest.TestCase):
                 "lineage_network": "lineage_sparse_networks",
                 "lineage_cnv": "lineage_cnv_amplification_dependency",
                 "lineage_drug": "lineage_prism_associations",
+                "drug": "prism_auc_effect_correlation",
+                "enrichment": "lineage_gene_enrichment",
             }
             compressed = gzip.compress(b"label,value\nA,1\n")
             for directory in roots.values():
@@ -364,7 +413,8 @@ class QueryIndexTests(unittest.TestCase):
                 coverage = dict(
                     db.execute(
                         "SELECT query_mode,coverage_state FROM reader_coverage "
-                        "WHERE query_mode IN ('lineage_network','lineage_cnv','lineage_drug','core')"
+                        "WHERE query_mode IN "
+                        "('lineage_network','lineage_cnv','lineage_drug','drug','enrichment','core')"
                     )
                 )
             self.assertEqual(coverage["core"], "AVAILABLE")
@@ -580,6 +630,7 @@ class QueryIndexTests(unittest.TestCase):
                     "WHERE intent='true_love_gene_catalog'"
                 )
                 db.commit()
+            write_index_digest(output)
             nullable = _run_analysis_catalog_query(
                 settings,
                 {"mode": "analysis_catalog", "module": "true_love"},

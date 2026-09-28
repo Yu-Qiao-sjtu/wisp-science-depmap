@@ -18,6 +18,7 @@ from services.depmap_api.app import Settings
 from services.depmap_api.app import QueryRequest
 from services.depmap_mcp.catalog_readers import CatalogResolution
 from services.depmap_mcp.catalog_readers import MODE_ALIASES
+from services.depmap_mcp.artifact_integrity import write_index_digest
 from services.depmap_mcp.portable_refs import PortableReferences
 from services.depmap_mcp.server import DepMapEvidenceService
 from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
@@ -99,6 +100,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
             db.commit()
+        write_index_digest(index)
         return f"depmap://26Q1/{relative}"
 
     def index_bytes(self, relative: str, content: bytes) -> str:
@@ -126,6 +128,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
             db.commit()
+        write_index_digest(index)
         return f"depmap://26Q1/{relative}"
 
     async def test_compressed_table_reader_honors_bounds_counts_and_cursor(self):
@@ -497,29 +500,38 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "mcp_tool": "depmap_status",
         }
         with closing(sqlite3.connect(index)) as db:
-            db.execute("CREATE TABLE capability_catalog (payload_json TEXT)")
+            db.execute(
+                "CREATE TABLE capability_catalog "
+                "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+            )
             db.executemany(
-                "INSERT INTO capability_catalog VALUES (?)",
+                "INSERT INTO capability_catalog VALUES (?,?,?)",
                 [
-                    (json.dumps(valid),),
-                    (json.dumps({}),),
-                    ("null",),
-                    ("{broken",),
+                    ("provider_status", "depmap_status", json.dumps(valid)),
+                    ("wrong_intent", "wrong_tool", json.dumps(valid)),
+                    ("missing", "missing", json.dumps({})),
+                    ("null", "null", "null"),
+                    ("broken", "broken", "{broken"),
                 ],
             )
             db.commit()
+        write_index_digest(index)
 
         result = await self.service.capabilities()
         self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
         self.assertEqual(result["catalog_status"], "PARTIAL")
-        self.assertEqual(result["invalid_record_count"], 3)
+        self.assertEqual(result["invalid_record_count"], 4)
         self.assertEqual(result["capabilities"], [valid])
 
     async def test_empty_indexed_capability_catalog_does_not_restore_static_capabilities(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
         with closing(sqlite3.connect(index)) as db:
-            db.execute("CREATE TABLE capability_catalog (payload_json TEXT)")
+            db.execute(
+                "CREATE TABLE capability_catalog "
+                "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+            )
             db.commit()
+        write_index_digest(index)
 
         result = await self.service.capabilities()
 
@@ -569,6 +581,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO reader_coverage VALUES ('lineage_dependency','analysis-1','AVAILABLE')"
             )
             db.commit()
+        write_index_digest(index)
 
         result = await self.service.data_coverage(lineage="Liver", limit=1000)
         self.assertEqual(result["evidence"]["status"], "FOUND")

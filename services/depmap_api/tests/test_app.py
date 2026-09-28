@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 import pyarrow as pa
@@ -24,6 +25,7 @@ from services.depmap_api.app import (
     create_app,
     resolve_lineage_term,
 )
+from services.depmap_mcp.artifact_integrity import write_index_digest
 
 
 class QueryContractTests(unittest.TestCase):
@@ -654,6 +656,7 @@ class DepMapApiTests(unittest.TestCase):
             db.commit()
         finally:
             db.close()
+        write_index_digest(index)
         client = TestClient(create_app(self.settings))
         with client:
             result = client.post(
@@ -663,6 +666,34 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(result["status"], "FOUND")
         self.assertEqual(result["rows"][0]["bootstrap_reciprocal_stability"], 0.99)
         self.assertTrue(any(path.endswith("depmap-26q1-query-index.sqlite") for path in result["provenance"]))
+
+        with closing(sqlite3.connect(index)) as db:
+            changed = {
+                "gene_a": "KRAS",
+                "gene_b": "NRAS",
+                "bootstrap_reciprocal_stability": "0.12",
+                "worst_direction_fdr": "0.5",
+            }
+            db.execute(
+                "UPDATE true_love SET row_json=?",
+                (json.dumps(changed),),
+            )
+            db.commit()
+        with self.assertLogs("depmap_api", level="ERROR"):
+            with TestClient(create_app(self.settings)) as client:
+                changed_result = client.post(
+                    "/api/v1/query",
+                    headers=self.headers,
+                    json={
+                        "mode": "true_love",
+                        "gene": "KRAS",
+                        "partner": "NRAS",
+                        "limit": 5,
+                    },
+                ).json()
+        self.assertEqual(changed_result["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(changed_result["reason_code"], "CHECKSUM_MISMATCH")
+        self.assertNotIn(str(self.settings.knowledge_root), json.dumps(changed_result))
 
     def test_biomarker_intent_reads_indexed_target_and_cache_state(self):
         index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
@@ -674,6 +705,7 @@ class DepMapApiTests(unittest.TestCase):
             db.commit()
         finally:
             db.close()
+        write_index_digest(index)
         client = TestClient(create_app(self.settings))
         with client:
             result = client.post(
@@ -989,6 +1021,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(found.json()["status"], "FOUND")
         self.assertEqual(found.json()["rows"][0]["target_gene"], "RAF1")
         self.assertEqual(found.json()["manifest"]["lineage_sample_n"], 126)
+        self.assertIn(
+            str(root / "source_gene_order.csv"),
+            found.json()["provenance"],
+        )
         self.assertEqual(missing.status_code, 200)
         self.assertEqual(missing.json()["status"], "NOT_RETAINED")
         self.assertEqual(positive.json()["status"], "FOUND")
@@ -1311,6 +1347,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "FOUND")
         self.assertEqual(response.json()["rows"][0]["drug_name"], "Example inhibitor")
         self.assertEqual(response.json()["rows"][0]["n"], 58)
+        self.assertIn(
+            str(root / "drug_metadata.parquet"),
+            response.json()["provenance"],
+        )
 
 
 def write_lineage_mutation_fixtures(root: Path) -> None:

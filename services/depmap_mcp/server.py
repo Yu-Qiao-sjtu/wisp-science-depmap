@@ -24,7 +24,9 @@ from pydantic import Field
 
 from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
+    VERIFIED,
     verify_cataloged_artifact,
+    verify_index_artifact,
 )
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
@@ -763,6 +765,16 @@ class DepMapEvidenceService:
             settings.knowledge_root, settings.release
         )
 
+    def _verify_index(self, index: Path):
+        integrity = verify_index_artifact(index)
+        if integrity.state != VERIFIED:
+            LOGGER.error(
+                "query index integrity failure reason=%s diagnostic=%s",
+                integrity.reason_code,
+                integrity.diagnostic,
+            )
+        return integrity
+
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
         capabilities = list(INTENT_CAPABILITIES)
@@ -770,27 +782,41 @@ class DepMapEvidenceService:
         source = "code_fallback"
         catalog_unavailable = False
         if index.is_file():
-            try:
-                with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
-                    rows = db.execute("SELECT payload_json FROM capability_catalog ORDER BY rowid").fetchall()
-                loaded = []
-                invalid_records = 0
-                for row in rows:
-                    try:
-                        item = json.loads(row[0]) if row and row[0] else None
-                    except (json.JSONDecodeError, TypeError):
-                        item = None
-                    if _valid_capability_payload(item):
-                        loaded.append(item)
-                    else:
-                        invalid_records += 1
-                capabilities, source = loaded, "sqlite_capability_catalog"
-            except (sqlite3.Error, json.JSONDecodeError, OSError):
-                LOGGER.exception("indexed capability catalog could not be read")
+            integrity = self._verify_index(index)
+            if integrity.state != VERIFIED:
                 capabilities = []
                 source = "sqlite_capability_catalog"
                 catalog_unavailable = True
                 invalid_records = 0
+            else:
+                try:
+                    with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                        rows = db.execute(
+                            "SELECT intent,mcp_tool,payload_json "
+                            "FROM capability_catalog ORDER BY rowid"
+                        ).fetchall()
+                    loaded = []
+                    invalid_records = 0
+                    for row in rows:
+                        try:
+                            item = json.loads(row[2]) if row and row[2] else None
+                        except (json.JSONDecodeError, TypeError):
+                            item = None
+                        if (
+                            _valid_capability_payload(item)
+                            and item["intent"] == row[0]
+                            and item["mcp_tool"] == row[1]
+                        ):
+                            loaded.append(item)
+                        else:
+                            invalid_records += 1
+                    capabilities, source = loaded, "sqlite_capability_catalog"
+                except (sqlite3.Error, json.JSONDecodeError, OSError):
+                    LOGGER.exception("indexed capability catalog could not be read")
+                    capabilities = []
+                    source = "sqlite_capability_catalog"
+                    catalog_unavailable = True
+                    invalid_records = 0
         else:
             invalid_records = 0
         return {
@@ -823,6 +849,9 @@ class DepMapEvidenceService:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         if not index.is_file():
             return "catalog-missing"
+        integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return "catalog-unreadable"
         try:
             with closing(
                 sqlite3.connect(
@@ -837,14 +866,24 @@ class DepMapEvidenceService:
                 )
         except (sqlite3.Error, OSError):
             return "catalog-unreadable"
-        digest = hashlib.sha256(_canonical_json(metadata).encode("utf-8")).hexdigest()
-        return f"sha256:{digest}"
+        return f"sha256:{integrity.value}"
 
     async def artifacts(
         self, module: str | None = None, kind: str | None = None,
         path_contains: str | None = None, limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return self._envelope(
+                tool="depmap_artifact_catalog",
+                request={"module": module, "kind": kind, "path_contains": path_contains, "limit": limit},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
+            )
         clauses, params = ["1=1"], []
         if module:
             clauses.append("a.module=?"); params.append(module)
@@ -874,6 +913,17 @@ class DepMapEvidenceService:
         limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return self._envelope(
+                tool="depmap_data_coverage",
+                request={"module": module},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
+            )
         clauses, params = ["1=1"], []
         for column, value in (
             ("module", module), ("scope", scope), ("lineage", lineage),
@@ -942,6 +992,9 @@ class DepMapEvidenceService:
                 f"uri must be a valid {self.portable_references.uri_prefix} resource"
             )
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        index_integrity = self._verify_index(index)
+        if index_integrity.state != VERIFIED:
+            return integrity_failure("INTEGRITY_CATALOG_UNAVAILABLE")
         try:
             with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 hit = db.execute(

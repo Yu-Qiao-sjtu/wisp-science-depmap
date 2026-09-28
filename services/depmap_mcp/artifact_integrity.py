@@ -6,6 +6,7 @@ import csv
 import gzip
 import hashlib
 import json
+import os
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -31,6 +32,53 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def index_digest_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".sha256")
+
+
+def write_index_digest(path: Path) -> str:
+    """Atomically publish the detached digest for one completed SQLite index."""
+    digest = _sha256(path)
+    destination = index_digest_path(path)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_text(digest + "\n", encoding="ascii")
+    os.replace(temporary, destination)
+    return digest
+
+
+def verify_index_artifact(path: Path) -> ArtifactIntegrity:
+    """Validate the SQLite index against its detached build-time digest."""
+    sidecar = index_digest_path(path)
+    try:
+        expected = sidecar.read_text(encoding="ascii").strip().lower()
+    except (OSError, UnicodeError) as exc:
+        return ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INDEX_DIGEST_UNAVAILABLE",
+            str(exc),
+        )
+    if len(expected) != 64 or any(value not in "0123456789abcdef" for value in expected):
+        return ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INVALID_INDEX_DIGEST",
+        )
+    current = inspect_artifact(path, "database")
+    if current.state != VERIFIED:
+        return current
+    if current.value != expected:
+        return ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            current.value,
+            "CHECKSUM_MISMATCH",
+        )
+    return current
 
 
 def _validate_table(path: Path) -> None:

@@ -70,6 +70,33 @@ THREE_D_FAMILIES = {
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 QUERY_CONTRACT_VERSION = 13
+
+
+class _QueryIndexIntegrityError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+def _require_verified_query_index(path: Path) -> None:
+    # Delayed to avoid importing the MCP package's server facade while this
+    # provider module is still initializing.
+    from services.depmap_mcp.artifact_integrity import (
+        VERIFIED,
+        verify_index_artifact,
+    )
+
+    integrity = verify_index_artifact(path)
+    if integrity.state == VERIFIED:
+        return
+    LOGGER.error(
+        "DepMap query index integrity failure reason=%s diagnostic=%s",
+        integrity.reason_code,
+        integrity.diagnostic,
+    )
+    raise _QueryIndexIntegrityError(
+        integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE"
+    )
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
@@ -1159,6 +1186,7 @@ def _indexed_true_love_rows(
     path = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
     if not path.is_file():
         return None
+    _require_verified_query_index(path)
     symbol = gene.strip().upper() if gene else None
     mate = partner.strip().upper() if partner else None
     clauses = ["catalog = ?", "coverage = ?"]
@@ -1193,6 +1221,16 @@ def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> di
     row: dict[str, Any] | None = None
     used_index = False
     if index.is_file():
+        try:
+            _require_verified_query_index(index)
+        except _QueryIndexIntegrityError as exc:
+            return _evidence_response(
+                "MODULE_UNAVAILABLE",
+                mode="biomarker_target",
+                reason="the query index failed integrity validation",
+                reason_code=exc.reason_code,
+                target=target,
+            )
         db: sqlite3.Connection | None = None
         try:
             db = sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)
@@ -1231,6 +1269,16 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
         return _evidence_response(
             "MODULE_UNAVAILABLE", mode="analysis_catalog",
             reason="the unified directory index is not installed",
+        )
+    try:
+        _require_verified_query_index(index)
+    except _QueryIndexIntegrityError:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="analysis_catalog",
+            reason="the unified directory index failed integrity validation",
+            reason_code="INTEGRITY_CATALOG_UNAVAILABLE",
+            rows=[],
         )
     clauses: list[str] = []
     params: list[Any] = []
@@ -2011,10 +2059,23 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
     gene = query.get("gene")
     partner = query.get("partner")
     index_coverage = "all" if catalog == "stable_negative_rank1" else coverage
-    rows = _indexed_true_love_rows(
-        settings, catalog=catalog, coverage=index_coverage,
-        gene=gene, partner=partner, limit=int(query.get("limit", 20)),
-    )
+    try:
+        rows = _indexed_true_love_rows(
+            settings, catalog=catalog, coverage=index_coverage,
+            gene=gene, partner=partner, limit=int(query.get("limit", 20)),
+        )
+    except _QueryIndexIntegrityError as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="true_love",
+            reason="the query index failed integrity validation",
+            reason_code=exc.reason_code,
+            gene=gene,
+            partner=partner,
+            catalog=catalog,
+            coverage=(None if catalog == "stable_negative_rank1" else coverage),
+            rows=[],
+        )
     used_index = rows is not None
     if rows is None:
         rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
@@ -2302,6 +2363,7 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
     target = query.get("target")
     limit = query.get("limit", 20)
     reciprocal = query.get("reciprocal", False)
+    order: Path | None = None
     if reciprocal:
         try:
             import pyarrow.dataset as dataset
@@ -2363,19 +2425,23 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
                 == (direction == "positive")
             ]
         rows = _bounded_rows(rows, "correlation", limit)
+    provenance = [str(lineage_root / "manifest.json")]
+    if order is not None:
+        provenance.append(str(order))
+    provenance.append(str(path))
     if not rows:
         return _evidence_response(
             "NOT_RETAINED", mode="lineage_network",
             reason="the eligible pair was tested but is absent from the retained sparse top-K output",
             family=family, lineage=lineage, source=source, target=target,
             reciprocal=reciprocal, direction=query.get("direction"), manifest=manifest,
-            provenance=[str(lineage_root / "manifest.json"), str(path)],
+            provenance=provenance,
         )
     return _evidence_response(
         "FOUND", mode="lineage_network", reason="bounded precomputed rows found",
         family=family, lineage=lineage, source=source, target=target,
         reciprocal=reciprocal, direction=query.get("direction"), rows=rows, manifest=manifest,
-        provenance=[str(lineage_root / "manifest.json"), str(path)],
+        provenance=provenance,
     )
 
 
@@ -2421,12 +2487,12 @@ def _run_lineage_cnv_query(settings: Settings, query: dict[str, Any]) -> dict[st
             "NOT_RETAINED", mode="lineage_cnv",
             reason="the eligible pair was tested but is absent from the retained sparse top-K output",
             lineage=lineage, source=source, target=target, manifest=manifest,
-            provenance=[str(root / "manifest.json"), str(path)],
+            provenance=[str(root / "manifest.json"), str(order), str(path)],
         )
     return _evidence_response(
         "FOUND", mode="lineage_cnv", reason="bounded precomputed rows found",
         lineage=lineage, source=source, target=target, rows=rows, manifest=manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[str(root / "manifest.json"), str(order), str(path)],
     )
 
 
@@ -2496,13 +2562,22 @@ def _run_lineage_drug_query(settings: Settings, query: dict[str, Any]) -> dict[s
             "NOT_RETAINED", mode="lineage_drug",
             reason="the eligible association is absent from the retained sparse top-K output",
             feature=feature, lineage=lineage, drug=drug, target=target,
-            manifest=manifest, provenance=[str(root / "manifest.json"), str(path)],
+            manifest=manifest,
+            provenance=[
+                str(root / "manifest.json"),
+                str(root / "drug_metadata.parquet"),
+                str(path),
+            ],
         )
     return _evidence_response(
         "FOUND", mode="lineage_drug", reason="bounded precomputed rows found",
         feature=feature, lineage=lineage, drug=drug, target=target,
         rows=rows, manifest=manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[
+            str(root / "manifest.json"),
+            str(root / "drug_metadata.parquet"),
+            str(path),
+        ],
     )
 
 

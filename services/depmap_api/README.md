@@ -16,11 +16,13 @@ python scripts/build_depmap_query_index.py --knowledge-root /path/to/depmap-26q1
 ```
 
 The database indexes TLG pairs on both genes, TF-dependency rows on TF and
-target, and predictive-biomarker eligibility on target gene. The API uses it
-for TLG and `biomarker_target` lookups and falls back to the original CSV/GZIP
-files when the index is absent or unreadable. Result files and manifests remain
-authoritative. A biomarker lookup reports eligibility and validated cache state;
-it does not start model training.
+target, and predictive-biomarker eligibility on target gene. A detached
+`depmap-26q1-query-index.sqlite.sha256` authenticates the result-bearing index;
+indexed reads fail closed when the digest is missing or mismatched instead of
+falling back to source files after an integrity failure. An absent optional
+index may still use the original CSV/GZIP path. Result files and manifests
+remain authoritative. A biomarker lookup reports eligibility and validated
+cache state; it does not start model training.
 
 Schema v6 also contains a unified directory catalog. `analysis_catalog` records
 every discovered manifest and its completion evidence, `artifact_catalog`
@@ -38,7 +40,8 @@ exceptions and storage paths stay in operator logs.
 
 Use `--if-stale` for scheduled refreshes. The builder compares the newest
 retained source mtime with index metadata, rebuilds through a temporary database,
-checks SQLite integrity, and atomically replaces the live index only when needed:
+checks SQLite integrity, replaces the live index, and atomically publishes its
+detached digest only when needed:
 
 ```bash
 python scripts/build_depmap_query_index.py \

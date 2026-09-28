@@ -21,8 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
+    VERIFIED,
+    index_digest_path,
     inspect_artifact,
+    verify_index_artifact,
     verify_declared_checksum,
+    write_index_digest,
 )
 
 
@@ -125,14 +129,23 @@ def _artifact_kind(path: Path) -> str:
 
 
 def _source_max_mtime_ns(root: Path, output: Path) -> int:
+    excluded = {output, index_digest_path(output)}
     return max(
-        (path.stat().st_mtime_ns for path in root.rglob("*") if path.is_file() and path != output and not path.name.endswith(".tmp")),
+        (
+            path.stat().st_mtime_ns
+            for path in root.rglob("*")
+            if path.is_file()
+            and path not in excluded
+            and not path.name.endswith(".tmp")
+        ),
         default=root.stat().st_mtime_ns,
     )
 
 
 def is_fresh(root: Path, output: Path) -> bool:
     if not output.is_file():
+        return False
+    if verify_index_artifact(output).state != VERIFIED:
         return False
     try:
         with closing(sqlite3.connect(f"file:{output.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
@@ -287,8 +300,9 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     artifact_count = 0
     quarantined_artifact_count = 0
     quarantined_analysis_ids: set[str] = set()
+    excluded = {output, index_digest_path(output)}
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path == output or path.name.endswith(".tmp"):
+        if not path.is_file() or path in excluded or path.name.endswith(".tmp"):
             continue
         directory = path.parent
         owner_directory: Path | None = None
@@ -356,18 +370,22 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         )
 
     reader_rows = [
-        ("core", "gene_evidence", "depmap-26q1-core", 0),
-        ("model_gene_effect", "model_gene_effect_slice", "depmap-26q1-core", 0),
-        ("cross_platform_validation", "cross_platform_dependency_validation", "depmap-26q1-full", 0),
-        ("lineage_catalog", "cancer_inventory", "depmap-26q1-full", 0),
-        ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-full", 0),
-        ("pan_cancer_dependency", "pan_cancer_dependency_summary", "depmap-26q1-core", 0),
-        ("lineage_directions", "cancer_direction_discovery", "analysis-modules", 0),
+        ("core", "gene_evidence", "depmap-26q1-core/%", 0),
+        ("model_gene_effect", "model_gene_effect_slice", "depmap-26q1-core/%", 0),
+        ("cross_platform_validation", "cross_platform_dependency_validation", "depmap-26q1-full/cross_platform_validation/%", 0),
+        ("lineage_catalog", "cancer_inventory", "depmap-26q1-full/lineage_sparse_networks/%|depmap-26q1-full/lineage_cnv_amplification_dependency/%|depmap-26q1-full/lineage_prism_associations/%|depmap-26q1-full/lineage_gene_enrichment/%|depmap-26q1-full/subtype_dependency/%|depmap-26q1-tcga/%", 0),
+        ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-core/lineage_dependency_tests/%", 0),
+        ("pan_cancer_dependency", "pan_cancer_dependency_summary", "depmap-26q1-core/lineage_dependency_tests/%", 0),
+        ("lineage_directions", "cancer_direction_discovery", "depmap-26q1-full/lineage_sparse_networks/%|depmap-26q1-full/lineage_cnv_amplification_dependency/%|depmap-26q1-full/lineage_prism_associations/%|depmap-26q1-full/lineage_gene_enrichment/%", 0),
         ("lineage_network", "lineage_network", "depmap-26q1-full/lineage_sparse_networks/%", 0),
         ("lineage_cnv", "lineage_cnv", "depmap-26q1-full/lineage_cnv_amplification_dependency/%", 0),
         ("lineage_drug", "lineage_drug", "depmap-26q1-full/lineage_prism_associations/%", 0),
-        ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*", 0),
-        ("enrichment", "pathway_enrichment", "*富集*", 0),
+        ("top", "top", "depmap-26q1-full/effect_correlation/%|depmap-26q1-full/expression_correlation/%|depmap-26q1-full/expression_dependency/%|depmap-26q1-full/damaging_mutation_dependency/%|depmap-26q1-full/custom_missense_mutation_dependency/%|depmap-26q1-full/hotspot_mutation_dependency/%|depmap-26q1-full/cnv_amplification_dependency/%|analysis-modules/%/downstream_dependency/%", 0),
+        ("lineage", "lineage", "depmap-26q1-full/lineage_%_mutation_dependency/%|analysis-modules/%突变锚定基因选择%/cancer_anchor_catalog_v2/downstream_dependency/lineage_%_mutation_dependency/%", 0),
+        ("pathway", "pathway", "depmap-26q1-full/progeny_dependency/%", 0),
+        ("drug", "drug_gene_evidence", "depmap-26q1-full/prism_auc_%_correlation/%", 0),
+        ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*|depmap-26q1-full/effect_correlation/%|depmap-26q1-full/expression_correlation/%|depmap-26q1-full/expression_dependency/%|depmap-26q1-full/damaging_mutation_dependency/%|depmap-26q1-full/custom_missense_mutation_dependency/%|depmap-26q1-full/hotspot_mutation_dependency/%|depmap-26q1-full/cnv_amplification_dependency/%", 0),
+        ("enrichment", "pathway_enrichment", "*富集*|depmap-26q1-full/lineage_gene_enrichment/%", 0),
         ("mutation_anchor", "mutation_anchor_discovery", "*突变锚定基因选择*", 0),
         ("lineage_mutation_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
         ("mutation_to_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
@@ -375,12 +393,12 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ("codependency", "codependency_evidence", "*共依赖分析*", 0),
         ("tf_dependency", "tf_activity_to_dependency", "*转录因子活性*", 1),
         ("biomarker_target", "expression_biomarker_model", "*表达基因-CRISPR*", 1),
-        ("true_love", "true_love_gene_catalog", "*共依赖分析*", 1),
-        ("subtype", "subtype_evidence", "depmap-26q1-full", 0),
-        ("coamplification", "coamplification_evidence", "depmap-26q1-full", 0),
-        ("synthetic_lethal", "synthetic_lethal_evidence", "*突变锚定基因选择*", 0),
-        ("three_d", "three_d_evidence", "depmap-26q1-3d", 0),
-        ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga", 0),
+        ("true_love", "true_love_gene_catalog", "*共依赖分析*|depmap-26q1-full/true_love_gene/%", 1),
+        ("subtype", "subtype_evidence", "depmap-26q1-full/subtype_dependency/%", 0),
+        ("coamplification", "coamplification_evidence", "depmap-26q1-full/coamplification_dependency/%", 0),
+        ("synthetic_lethal", "synthetic_lethal_evidence", "*突变锚定基因选择*|depmap-26q1-full/observational_synthetic_lethal_candidates/%", 0),
+        ("three_d", "three_d_evidence", "depmap-26q1-3d/%", 0),
+        ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga/%", 0),
     ]
     try:
         from services.depmap_mcp.capability_catalog import INTENT_CAPABILITIES
@@ -422,7 +440,14 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         readers.append((mode, f"{mode}_adapter", base[2], "csv,csv.gz,parquet,rds,json"))
     db.executemany("INSERT INTO reader_registry VALUES (?,?,?,?)", readers)
     for mode, _adapter, pattern, _formats in readers:
-        likes = [part.strip().replace("*", "%") for part in pattern.split("|") if part.strip()]
+        likes = []
+        for part in pattern.split("|"):
+            like = part.strip().replace("*", "%")
+            if not like:
+                continue
+            likes.append(like)
+            if like.endswith("/%"):
+                likes.append(like[:-2])
         predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
         parameters = tuple(value for like in likes for value in (like, like))
         current = db.execute(
@@ -635,6 +660,7 @@ def build(root: Path, output: Path) -> dict:
     db.commit(); db.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     os.replace(temporary, output)
+    write_index_digest(output)
     return counts
 
 
