@@ -77,6 +77,8 @@ the detached `depmap-26q1-query-index.sqlite.sha256`; catalog and indexed-conten
 reads fail closed if that digest is absent or mismatched. Repairing or replacing
 bytes does not silently clear the state: rebuild the index so the verified
 checksum and catalog build identity change before the capability is re-enabled.
+An in-progress rebuild keeps readers on the previous verified index/digest pair
+until both new canonical files have been published.
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`

@@ -40,8 +40,10 @@ exceptions and storage paths stay in operator logs.
 
 Use `--if-stale` for scheduled refreshes. The builder compares the newest
 retained source mtime with index metadata, rebuilds through a temporary database,
-checks SQLite integrity, replaces the live index, and atomically publishes its
-detached digest only when needed:
+checks SQLite integrity, prepares the new detached digest, and publishes the
+pair only when needed. During the two-file switch, a small atomic marker keeps
+readers on the previous verified index/digest pair; readers move to the new pair
+only after both canonical files are in place:
 
 ```bash
 python scripts/build_depmap_query_index.py \

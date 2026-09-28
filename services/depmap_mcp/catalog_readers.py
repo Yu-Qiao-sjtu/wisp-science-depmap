@@ -11,11 +11,10 @@ from typing import Any, Awaitable, Callable
 
 from services.depmap_mcp.artifact_integrity import (
     VERIFIED,
-    index_digest_path,
     reader_artifact_pattern,
+    resolve_index_artifact,
     sqlite_like_pattern,
     verify_cataloged_artifact,
-    verify_index_artifact,
 )
 from services.depmap_mcp.portable_refs import PortableReferences
 
@@ -89,38 +88,20 @@ class CatalogReaderRegistry:
         self.knowledge_root = knowledge_root.resolve()
         self.release = release
         self.index = self.knowledge_root / "depmap-26q1-query-index.sqlite"
-        self._index_signature: tuple[int, int, int, int] | None = None
-        self._index_integrity: Any = None
 
     @property
     def enabled(self) -> bool:
         return self.index.is_file()
 
     def _verify_index(self):
-        try:
-            index_stat = self.index.stat()
-            digest_stat = index_digest_path(self.index).stat()
-            signature = (
-                index_stat.st_size,
-                index_stat.st_mtime_ns,
-                digest_stat.st_size,
-                digest_stat.st_mtime_ns,
-            )
-        except OSError:
-            signature = None
-        if signature is not None and signature == self._index_signature:
-            return self._index_integrity
-        integrity = verify_index_artifact(self.index)
-        self._index_signature = signature
-        self._index_integrity = integrity
-        return integrity
+        return resolve_index_artifact(self.index)
 
     def resolve(self, query: dict[str, Any]) -> CatalogResolution:
         mode = str(query.get("mode") or "")
         reader_mode = MODE_ALIASES.get(mode, mode)
         if not self.enabled:
             return CatalogResolution("CATALOG_UNAVAILABLE", mode, reason="query index is not installed")
-        index_integrity = self._verify_index()
+        active_index, index_integrity = self._verify_index()
         if index_integrity.state != VERIFIED:
             LOGGER.error(
                 "query index integrity failure reason=%s diagnostic=%s",
@@ -134,7 +115,7 @@ class CatalogReaderRegistry:
                 reason="query index integrity validation failed",
             )
         try:
-            with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 reader = db.execute(
                     "SELECT r.query_mode,r.adapter,r.module_pattern,"
@@ -358,7 +339,7 @@ class CatalogReaderRegistry:
                     )
                     return resolution, "PROVENANCE_OUTSIDE_KNOWLEDGE_ROOT"
             if path == self.index.name:
-                index_integrity = self._verify_index()
+                _active_index, index_integrity = self._verify_index()
                 if index_integrity.state != VERIFIED:
                     LOGGER.error(
                         "query index provenance integrity failure reason=%s diagnostic=%s",
@@ -410,7 +391,15 @@ class CatalogReaderRegistry:
                 f"OR f.analysis_id IN ({allowed_placeholders}))"
             )
             parameters = (*unique, *allowed_analysis_ids)
-        with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+        active_index, index_integrity = self._verify_index()
+        if index_integrity.state != VERIFIED:
+            LOGGER.error(
+                "query index integrity failure reason=%s diagnostic=%s",
+                index_integrity.reason_code,
+                index_integrity.diagnostic,
+            )
+            return None, index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE"
+        with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             rows = db.execute(
                 f"""SELECT f.artifact_path,f.analysis_id,f.artifact_kind,
                             f.integrity_method,f.integrity_value

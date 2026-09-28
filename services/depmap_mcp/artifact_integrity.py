@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -64,14 +65,125 @@ def index_digest_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".sha256")
 
 
-def write_index_digest(path: Path) -> str:
+def index_publish_marker_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".publishing.json")
+
+
+def write_index_digest(path: Path, digest: str | None = None) -> str:
     """Atomically publish the detached digest for one completed SQLite index."""
-    digest = _sha256(path)
+    digest = digest or _sha256(path)
     destination = index_digest_path(path)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(digest + "\n", encoding="ascii")
     os.replace(temporary, destination)
     return digest
+
+
+def _previous_index_path(path: Path, digest: str) -> Path:
+    return path.with_name(f"{path.name}.previous-{digest}")
+
+
+def resolve_index_artifact(path: Path) -> tuple[Path, ArtifactIntegrity]:
+    """Resolve the last complete index/digest pair during an atomic publication."""
+    marker = index_publish_marker_path(path)
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return path, verify_index_artifact(path)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return path, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INVALID_INDEX_PUBLISH_MARKER",
+            str(exc),
+        )
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        return path, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INVALID_INDEX_PUBLISH_MARKER",
+        )
+    previous_name = value.get("previous_name")
+    previous_digest = value.get("previous_sha256")
+    if previous_name is None and previous_digest is None:
+        return path, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INDEX_PUBLISH_IN_PROGRESS",
+        )
+    if (
+        not isinstance(previous_name, str)
+        or not isinstance(previous_digest, str)
+        or len(previous_digest) != 64
+        or any(value not in "0123456789abcdef" for value in previous_digest)
+        or previous_name != _previous_index_path(path, previous_digest).name
+    ):
+        return path, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INVALID_INDEX_PUBLISH_MARKER",
+        )
+    previous = path.parent / previous_name
+    integrity = verify_index_artifact(previous)
+    if integrity.state != VERIFIED or integrity.value != previous_digest:
+        return previous, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            integrity.value,
+            integrity.reason_code or "INVALID_INDEX_PUBLISH_MARKER",
+            integrity.diagnostic,
+        )
+    return previous, integrity
+
+
+def publish_index_artifact(temporary: Path, output: Path) -> str:
+    """Publish an index/digest pair while readers retain the prior verified pair."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    new_digest = write_index_digest(temporary)
+    active, active_integrity = resolve_index_artifact(output)
+    previous: Path | None = None
+    if active_integrity.state == VERIFIED:
+        previous = _previous_index_path(output, active_integrity.value)
+        if previous != active:
+            previous_integrity = verify_index_artifact(previous)
+            if (
+                previous_integrity.state != VERIFIED
+                or previous_integrity.value != active_integrity.value
+            ):
+                previous_temporary = previous.with_suffix(previous.suffix + ".tmp")
+                shutil.copyfile(active, previous_temporary)
+                os.replace(previous_temporary, previous)
+                write_index_digest(previous, active_integrity.value)
+                previous_integrity = verify_index_artifact(previous)
+                if (
+                    previous_integrity.state != VERIFIED
+                    or previous_integrity.value != active_integrity.value
+                ):
+                    raise OSError("could not preserve the previous verified index pair")
+
+    marker = index_publish_marker_path(output)
+    marker_temporary = marker.with_suffix(marker.suffix + ".tmp")
+    marker_temporary.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "previous_name": previous.name if previous else None,
+                "previous_sha256": active_integrity.value if previous else None,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(marker_temporary, marker)
+    os.replace(temporary, output)
+    os.replace(index_digest_path(temporary), index_digest_path(output))
+    marker.unlink()
+    return new_digest
 
 
 def verify_index_artifact(path: Path) -> ArtifactIntegrity:
@@ -162,17 +274,35 @@ def _validate_parquet(path: Path) -> None:
 
 def _validate_r_object(path: Path) -> None:
     with path.open("rb") as handle:
-        prefix = handle.read(5)
-    if prefix.startswith(b"\x1f\x8b"):
+        data = handle.read(128)
+    if data.startswith(b"\x1f\x8b"):
         with gzip.open(path, "rb") as handle:
-            prefix = handle.read(5)
-    valid = (
-        prefix.startswith((b"X\n", b"A\n"))
-        if path.suffix.lower() == ".rds"
-        else prefix.startswith((b"RDX2\n", b"RDX3\n", b"RDA2\n", b"RDA3\n"))
-    )
-    if not valid:
+            data = handle.read(128)
+    if path.suffix.lower() == ".rds":
+        serialization = data
+    elif data.startswith((b"RDX2\n", b"RDX3\n", b"RDA2\n", b"RDA3\n")):
+        serialization = data[5:]
+    else:
         raise ValueError("invalid R serialization header")
+    if serialization.startswith(b"X\n"):
+        if len(serialization) <= 14:
+            raise ValueError("truncated R serialization")
+        format_version = int.from_bytes(serialization[2:6], byteorder="big")
+        if format_version not in (2, 3):
+            raise ValueError("invalid R serialization version")
+        return
+    if serialization.startswith(b"A\n"):
+        fields = serialization[2:].split(b"\n", 3)
+        if len(fields) != 4 or not fields[3]:
+            raise ValueError("truncated R serialization")
+        try:
+            versions = tuple(int(value) for value in fields[:3])
+        except ValueError as exc:
+            raise ValueError("invalid R serialization version") from exc
+        if versions[0] not in (2, 3):
+            raise ValueError("invalid R serialization version")
+        return
+    raise ValueError("invalid R serialization header")
 
 
 def _validate_format(path: Path, artifact_kind: str) -> None:

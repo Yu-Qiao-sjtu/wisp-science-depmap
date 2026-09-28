@@ -9,7 +9,6 @@ import gzip
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -23,12 +22,13 @@ from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
     VERIFIED,
     index_digest_path,
+    index_publish_marker_path,
     inspect_artifact,
+    publish_index_artifact,
     reader_artifact_pattern,
+    resolve_index_artifact,
     sqlite_like_pattern,
-    verify_index_artifact,
     verify_declared_checksum,
-    write_index_digest,
 )
 
 
@@ -130,14 +130,22 @@ def _artifact_kind(path: Path) -> str:
     return "file"
 
 
+def _is_index_publication_file(path: Path, output: Path) -> bool:
+    if path.parent != output.parent:
+        return False
+    return path in {output, index_digest_path(output), index_publish_marker_path(output)} or (
+        path.name.startswith(f"{output.name}.previous-")
+        or path.name.startswith(f"{output.name}.tmp")
+    )
+
+
 def _source_max_mtime_ns(root: Path, output: Path) -> int:
-    excluded = {output, index_digest_path(output)}
     return max(
         (
             path.stat().st_mtime_ns
             for path in root.rglob("*")
             if path.is_file()
-            and path not in excluded
+            and not _is_index_publication_file(path, output)
             and not path.name.endswith(".tmp")
         ),
         default=root.stat().st_mtime_ns,
@@ -147,10 +155,11 @@ def _source_max_mtime_ns(root: Path, output: Path) -> int:
 def is_fresh(root: Path, output: Path) -> bool:
     if not output.is_file():
         return False
-    if verify_index_artifact(output).state != VERIFIED:
+    active, integrity = resolve_index_artifact(output)
+    if integrity.state != VERIFIED:
         return False
     try:
-        with closing(sqlite3.connect(f"file:{output.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+        with closing(sqlite3.connect(f"file:{active.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             metadata = dict(db.execute("SELECT key,value FROM metadata"))
         return (
             metadata.get("schema_version") == CATALOG_SCHEMA_VERSION
@@ -302,9 +311,12 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     artifact_count = 0
     quarantined_artifact_count = 0
     quarantined_analysis_ids: set[str] = set()
-    excluded = {output, index_digest_path(output)}
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path in excluded or path.name.endswith(".tmp"):
+        if (
+            not path.is_file()
+            or _is_index_publication_file(path, output)
+            or path.name.endswith(".tmp")
+        ):
             continue
         directory = path.parent
         owner_directory: Path | None = None
@@ -673,9 +685,7 @@ def build(root: Path, output: Path) -> dict:
     if integrity != "ok":
         raise RuntimeError(f"SQLite integrity check failed: {integrity}")
     db.commit(); db.close()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(temporary, output)
-    write_index_digest(output)
+    publish_index_artifact(temporary, output)
     return counts
 
 

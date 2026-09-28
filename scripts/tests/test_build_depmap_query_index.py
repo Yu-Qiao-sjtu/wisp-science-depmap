@@ -1,6 +1,7 @@
 import json
 import asyncio
 import gzip
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -9,12 +10,26 @@ from pathlib import Path
 
 from scripts.build_depmap_query_index import build, is_fresh
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
-from services.depmap_mcp.artifact_integrity import write_index_digest
+from services.depmap_mcp.artifact_integrity import (
+    index_digest_path,
+    index_publish_marker_path,
+    write_index_digest,
+)
 from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
 def _valid_parquet(marker: bytes = b"x") -> bytes:
     return b"PAR1" + marker + len(marker).to_bytes(4, "little") + b"PAR1"
+
+
+def _valid_rds(payload: bytes = b"x") -> bytes:
+    return (
+        b"X\n"
+        + (3).to_bytes(4, "big")
+        + (0x040500).to_bytes(4, "big")
+        + (0x030500).to_bytes(4, "big")
+        + payload
+    )
 
 
 class QueryIndexTests(unittest.TestCase):
@@ -562,6 +577,55 @@ class QueryIndexTests(unittest.TestCase):
                 ],
             )
 
+    def test_r_serialization_magic_without_payload_is_quarantined(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "generic" / "results" / "unit"
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "binary-header-only.rds").write_bytes(b"X\n")
+            (unit / "ascii-header-only.rds").write_bytes(b"A\n")
+            (unit / "workspace-header-only.rdata").write_bytes(b"RDX3\n")
+            (unit / "valid.rds").write_bytes(_valid_rds())
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                rows = db.execute(
+                    "SELECT artifact_path,integrity_state,integrity_reason_code "
+                    "FROM artifact_catalog WHERE artifact_path LIKE '%.rds' "
+                    "OR artifact_path LIKE '%.rdata' ORDER BY artifact_path"
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    (
+                        "analysis-modules/generic/results/unit/ascii-header-only.rds",
+                        "QUARANTINED",
+                        "INVALID_R_OBJECT",
+                    ),
+                    (
+                        "analysis-modules/generic/results/unit/binary-header-only.rds",
+                        "QUARANTINED",
+                        "INVALID_R_OBJECT",
+                    ),
+                    (
+                        "analysis-modules/generic/results/unit/valid.rds",
+                        "VERIFIED",
+                        None,
+                    ),
+                    (
+                        "analysis-modules/generic/results/unit/workspace-header-only.rdata",
+                        "QUARANTINED",
+                        "INVALID_R_OBJECT",
+                    ),
+                ],
+            )
+
     def test_v6_catalog_relates_assets_coverage_and_detects_fresh_index(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -578,7 +642,9 @@ class QueryIndexTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (unit / "gene_order.csv").write_text("gene_index,symbol\n1,ESR1\n", encoding="utf-8")
-            (unit / "blocks" / "block_00001_00001.rds").write_bytes(b"X\nfixture")
+            (unit / "blocks" / "block_00001_00001.rds").write_bytes(
+                _valid_rds(b"fixture")
+            )
             (root / "public.csv").write_text("key,value\na,1\n", encoding="utf-8")
             for family in ("subtype_dependency", "coamplification_dependency"):
                 family_root = root / "depmap-26q1-full" / family
@@ -679,7 +745,7 @@ class QueryIndexTests(unittest.TestCase):
             self.assertEqual(len(seen["_catalog_matrix_blocks"]), 1)
 
             (unit / "blocks" / "block_00001_00001.rds").write_bytes(
-                b"X\nmodified"
+                _valid_rds(b"modified")
             )
             with self.assertLogs("depmap_mcp.catalog_readers", level="ERROR"):
                 _bound, changed = asyncio.run(
@@ -741,6 +807,59 @@ class QueryIndexTests(unittest.TestCase):
             # A changed source invalidates the release-scoped coverage snapshot.
             (unit / "new-result.csv").write_text("gene,value\nESR1,1\n", encoding="utf-8")
             self.assertFalse(is_fresh(root, output))
+
+    def test_readers_keep_the_previous_verified_pair_until_publish_completes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            roots = {name: base / name for name in ("old", "new")}
+            for name, root in roots.items():
+                unit = root / "analysis-modules" / "generic" / "results" / name
+                unit.mkdir(parents=True)
+                (unit / "manifest.json").write_text(
+                    json.dumps({"status": "complete", "release": "26Q1"}),
+                    encoding="utf-8",
+                )
+                build(root, root / "depmap-26q1-query-index.sqlite")
+
+            root = roots["old"]
+            output = root / "depmap-26q1-query-index.sqlite"
+            replacement = roots["new"] / output.name
+            old_digest = index_digest_path(output).read_text(encoding="ascii").strip()
+            previous = output.with_name(f"{output.name}.previous-{old_digest}")
+            shutil.copyfile(output, previous)
+            write_index_digest(previous, old_digest)
+            index_publish_marker_path(output).write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "previous_name": previous.name,
+                        "previous_sha256": old_digest,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            shutil.copyfile(replacement, output)
+
+            settings = Settings(
+                knowledge_root=root,
+                query_script=root / "query_depmap_kb.R",
+                api_token="test-token",
+            )
+
+            def analysis_units() -> list[str]:
+                result = _run_analysis_catalog_query(settings, {})
+                self.assertEqual(result["status"], "FOUND")
+                return [row["analysis_unit"] for row in result["rows"]]
+
+            self.assertTrue(any(value.endswith("/old") for value in analysis_units()))
+            shutil.copyfile(
+                index_digest_path(replacement), index_digest_path(output)
+            )
+            self.assertTrue(any(value.endswith("/old") for value in analysis_units()))
+            index_publish_marker_path(output).unlink()
+            units = analysis_units()
+            self.assertTrue(any(value.endswith("/new") for value in units))
+            self.assertFalse(any(value.endswith("/old") for value in units))
 
     def test_enrichment_reader_resolves_only_with_a_complete_registered_artifact(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -25,8 +25,8 @@ from pydantic import Field
 from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
     VERIFIED,
+    resolve_index_artifact,
     verify_cataloged_artifact,
-    verify_index_artifact,
 )
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
@@ -766,14 +766,14 @@ class DepMapEvidenceService:
         )
 
     def _verify_index(self, index: Path):
-        integrity = verify_index_artifact(index)
+        active_index, integrity = resolve_index_artifact(index)
         if integrity.state != VERIFIED:
             LOGGER.error(
                 "query index integrity failure reason=%s diagnostic=%s",
                 integrity.reason_code,
                 integrity.diagnostic,
             )
-        return integrity
+        return active_index, integrity
 
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
@@ -782,7 +782,7 @@ class DepMapEvidenceService:
         source = "code_fallback"
         catalog_unavailable = False
         if index.is_file():
-            integrity = self._verify_index(index)
+            active_index, integrity = self._verify_index(index)
             if integrity.state != VERIFIED:
                 capabilities = []
                 source = "sqlite_capability_catalog"
@@ -790,7 +790,7 @@ class DepMapEvidenceService:
                 invalid_records = 0
             else:
                 try:
-                    with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                    with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                         rows = db.execute(
                             "SELECT intent,mcp_tool,payload_json "
                             "FROM capability_catalog ORDER BY rowid"
@@ -849,13 +849,13 @@ class DepMapEvidenceService:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         if not index.is_file():
             return "catalog-missing"
-        integrity = self._verify_index(index)
+        active_index, integrity = self._verify_index(index)
         if integrity.state != VERIFIED:
             return "catalog-unreadable"
         try:
             with closing(
                 sqlite3.connect(
-                    f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                    f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
                 )
             ) as db:
                 metadata = dict(
@@ -873,7 +873,7 @@ class DepMapEvidenceService:
         path_contains: str | None = None, limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
-        integrity = self._verify_index(index)
+        active_index, integrity = self._verify_index(index)
         if integrity.state != VERIFIED:
             return self._envelope(
                 tool="depmap_artifact_catalog",
@@ -892,7 +892,7 @@ class DepMapEvidenceService:
         if path_contains:
             clauses.append("f.artifact_path LIKE ?"); params.append(f"%{path_contains}%")
         params.append(min(max(limit, 1), 100))
-        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+        with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(
                 f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,"
@@ -913,7 +913,7 @@ class DepMapEvidenceService:
         limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
-        integrity = self._verify_index(index)
+        active_index, integrity = self._verify_index(index)
         if integrity.state != VERIFIED:
             return self._envelope(
                 tool="depmap_data_coverage",
@@ -935,7 +935,7 @@ class DepMapEvidenceService:
         limit = min(max(int(limit), 1), 100)
         params.append(limit)
         try:
-            with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 rows = [dict(row) for row in db.execute(
                     f"SELECT c.analysis_id,c.module,c.release,c.scope,c.lineage,c.modality,c.model_count,"
@@ -992,11 +992,11 @@ class DepMapEvidenceService:
                 f"uri must be a valid {self.portable_references.uri_prefix} resource"
             )
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
-        index_integrity = self._verify_index(index)
+        active_index, index_integrity = self._verify_index(index)
         if index_integrity.state != VERIFIED:
             return integrity_failure("INTEGRITY_CATALOG_UNAVAILABLE")
         try:
-            with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 hit = db.execute(
                     "SELECT artifact_kind,size_bytes,integrity_method,integrity_value,"
                     "integrity_state,integrity_reason_code FROM artifact_catalog "

@@ -2,6 +2,7 @@ import json
 import gzip
 import hashlib
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -18,7 +19,11 @@ from services.depmap_api.app import Settings
 from services.depmap_api.app import QueryRequest
 from services.depmap_mcp.catalog_readers import CatalogResolution
 from services.depmap_mcp.catalog_readers import MODE_ALIASES
-from services.depmap_mcp.artifact_integrity import write_index_digest
+from services.depmap_mcp.artifact_integrity import (
+    index_digest_path,
+    index_publish_marker_path,
+    write_index_digest,
+)
 from services.depmap_mcp.portable_refs import PortableReferences
 from services.depmap_mcp.server import DepMapEvidenceService
 from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
@@ -538,6 +543,66 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
         self.assertEqual(result["catalog_status"], "FOUND")
         self.assertEqual(result["capabilities"], [])
+
+    async def test_capabilities_use_previous_pair_while_index_publish_is_in_progress(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+
+        def capability(name: str) -> dict:
+            return {
+                "intent": name,
+                "description": f"Describe {name}.",
+                "required": [],
+                "optional": [],
+                "examples_zh": [name],
+                "precise_prompt_template_zh": name,
+                "confusable_with": [],
+                "mcp_tool": "depmap_status",
+            }
+
+        def create_catalog(path: Path, name: str) -> None:
+            with closing(sqlite3.connect(path)) as db:
+                db.execute(
+                    "CREATE TABLE capability_catalog "
+                    "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+                )
+                db.execute(
+                    "INSERT INTO capability_catalog VALUES (?,?,?)",
+                    (name, "depmap_status", json.dumps(capability(name))),
+                )
+                db.commit()
+            write_index_digest(path)
+
+        create_catalog(index, "old_catalog")
+        old_digest = index_digest_path(index).read_text(encoding="ascii").strip()
+        previous = index.with_name(f"{index.name}.previous-{old_digest}")
+        shutil.copyfile(index, previous)
+        write_index_digest(previous, old_digest)
+        replacement = self.root / "replacement.sqlite"
+        create_catalog(replacement, "new_catalog")
+        index_publish_marker_path(index).write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "previous_name": previous.name,
+                    "previous_sha256": old_digest,
+                }
+            ),
+            encoding="utf-8",
+        )
+        shutil.copyfile(replacement, index)
+
+        during_database_switch = await self.service.capabilities()
+        self.assertEqual(
+            during_database_switch["capabilities"][0]["intent"], "old_catalog"
+        )
+        shutil.copyfile(index_digest_path(replacement), index_digest_path(index))
+        during_digest_switch = await self.service.capabilities()
+        self.assertEqual(
+            during_digest_switch["capabilities"][0]["intent"], "old_catalog"
+        )
+        index_publish_marker_path(index).unlink()
+        after_publish = await self.service.capabilities()
+        self.assertEqual(after_publish["capabilities"][0]["intent"], "new_catalog")
 
     async def test_unreadable_indexed_capability_catalog_fails_closed(self):
         index = self.root / "depmap-26q1-query-index.sqlite"

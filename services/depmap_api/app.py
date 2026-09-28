@@ -78,17 +78,17 @@ class _QueryIndexIntegrityError(RuntimeError):
         self.reason_code = reason_code
 
 
-def _require_verified_query_index(path: Path) -> None:
+def _require_verified_query_index(path: Path) -> Path:
     # Delayed to avoid importing the MCP package's server facade while this
     # provider module is still initializing.
     from services.depmap_mcp.artifact_integrity import (
         VERIFIED,
-        verify_index_artifact,
+        resolve_index_artifact,
     )
 
-    integrity = verify_index_artifact(path)
+    active_path, integrity = resolve_index_artifact(path)
     if integrity.state == VERIFIED:
-        return
+        return active_path
     LOGGER.error(
         "DepMap query index integrity failure reason=%s diagnostic=%s",
         integrity.reason_code,
@@ -1186,7 +1186,7 @@ def _indexed_true_love_rows(
     path = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
     if not path.is_file():
         return None
-    _require_verified_query_index(path)
+    active_path = _require_verified_query_index(path)
     symbol = gene.strip().upper() if gene else None
     mate = partner.strip().upper() if partner else None
     clauses = ["catalog = ?", "coverage = ?"]
@@ -1198,7 +1198,7 @@ def _indexed_true_love_rows(
         clauses.append("(gene_a = ? OR gene_b = ?)")
         params.extend((mate, mate))
     params.append(limit)
-    uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
+    uri = f"file:{active_path.as_posix()}?mode=ro&immutable=1"
     db: sqlite3.Connection | None = None
     try:
         db = sqlite3.connect(uri, uri=True)
@@ -1222,7 +1222,7 @@ def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> di
     used_index = False
     if index.is_file():
         try:
-            _require_verified_query_index(index)
+            active_index = _require_verified_query_index(index)
         except _QueryIndexIntegrityError as exc:
             return _evidence_response(
                 "MODULE_UNAVAILABLE",
@@ -1233,7 +1233,9 @@ def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> di
             )
         db: sqlite3.Connection | None = None
         try:
-            db = sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)
+            db = sqlite3.connect(
+                f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
+            )
             hit = db.execute(
                 "SELECT row_json FROM biomarker_target WHERE target_gene = ?", (target,)
             ).fetchone()
@@ -1271,7 +1273,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
             reason="the unified directory index is not installed",
         )
     try:
-        _require_verified_query_index(index)
+        active_index = _require_verified_query_index(index)
     except _QueryIndexIntegrityError:
         return _evidence_response(
             "MODULE_UNAVAILABLE",
@@ -1289,7 +1291,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
         module_patterns: list[str] = []
         try:
             with closing(sqlite3.connect(
-                f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
             )) as catalog_db:
                 row = catalog_db.execute(
                     "SELECT payload_json FROM capability_catalog "
@@ -1330,7 +1332,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     params.append(limit)
     try:
         with closing(sqlite3.connect(
-            f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+            f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
         )) as db:
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(sql, params)]
