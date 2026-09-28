@@ -3011,7 +3011,7 @@ def _lineage_catalog_item(label: str, module_root: Path, lineage: str) -> dict[s
             "status": "MODULE_UNAVAILABLE",
             "reason": "the requested precomputed module is not installed",
             "manifest": None,
-            "provenance": [str(module_root)],
+            "provenance": [],
         }
     lineage_root = module_root / _lineage_key(lineage)
     manifest = _load_manifest(lineage_root) if lineage_root.is_dir() else None
@@ -3021,7 +3021,7 @@ def _lineage_catalog_item(label: str, module_root: Path, lineage: str) -> dict[s
             "status": "NOT_COMPUTED",
             "reason": "no lineage output manifest exists for this module",
             "manifest": None,
-            "provenance": [str(module_root)],
+            "provenance": [],
         }
     complete = manifest.get("status") == "complete"
     return {
@@ -3248,7 +3248,11 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
         "contrast_count": len(subtype_rows),
         "contrasts": [row.get("contrast_id") for row in subtype_rows],
         "manifest": subtype_manifest,
-        "provenance": [str(subtype_root / "manifest.json"), str(subtype_catalog)],
+        "provenance": [
+            str(path)
+            for path in (subtype_root / "manifest.json", subtype_catalog)
+            if path.is_file()
+        ],
     })
     tcga_projects = [
         row for row in _tcga_project_catalog(settings)
@@ -3263,7 +3267,11 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
         ),
         "projects": [row.get("tcga_project") for row in tcga_projects],
         "manifest": {"project_count": len(tcga_projects)},
-        "provenance": [str(_tcga_module_root(settings) / "project_catalog.csv")],
+        "provenance": [
+            str(path)
+            for path in (_tcga_module_root(settings) / "project_catalog.csv",)
+            if path.is_file()
+        ],
     })
     available = sum(item["status"] == "FOUND" for item in modules)
     return {
@@ -4088,11 +4096,19 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
 def create_app(settings: Settings | None = None, runner: Runner = run_bounded_query) -> FastAPI:
     @asynccontextmanager
     async def lifespan(api: FastAPI):
+        # Delay importing the MCP package until this provider module is fully
+        # initialized; the MCP server imports the shared provider contract.
+        from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+
         if api.state.settings is None:
             api.state.settings = Settings.from_env()
         qa = verify_installation(api.state.settings)
         api.state.qa = qa
         api.state.semaphore = asyncio.Semaphore(api.state.settings.max_concurrency)
+        api.state.catalog_readers = CatalogReaderRegistry(
+            api.state.settings.knowledge_root,
+            api.state.settings.release,
+        )
         yield
 
     api = FastAPI(
@@ -4106,6 +4122,7 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     api.state.settings = settings
     api.state.runner = runner
     api.state.semaphore = None
+    api.state.catalog_readers = None
 
     @api.exception_handler(RequestValidationError)
     async def provider_schema_validation(_request: Request, exc: RequestValidationError):
@@ -4167,7 +4184,12 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     @api.post("/api/v1/query", dependencies=[Depends(authorize)])
     async def query(payload: QueryRequest) -> dict[str, Any]:
         async with api.state.semaphore:
-            return await api.state.runner(api.state.settings, payload.bounded_dict())
+            _resolution, result = await api.state.catalog_readers.read(
+                api.state.settings,
+                payload.bounded_dict(),
+                api.state.runner,
+            )
+            return result
 
     return api
 

@@ -305,6 +305,18 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         manifests.append((path.parent, analysis_id, state))
         declared_checksums[path.parent] = _declared_artifact_checksums(manifest)
 
+    eligible_analysis_ids = tuple(
+        sorted(
+            {root_id}
+            | {
+                analysis_id
+                for _directory, analysis_id, state in manifests
+                if state == "COMPLETE"
+            }
+        )
+    )
+    eligible_placeholders = ",".join("?" for _ in eligible_analysis_ids)
+
     # Assign each file to its nearest manifest ancestor. Paths are always
     # knowledge-root relative, so the catalog reveals no host/server layout.
     owner = {directory: analysis_id for directory, analysis_id, _ in manifests}
@@ -482,10 +494,12 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         )
         quarantined = (
             db.execute(
-                f"SELECT analysis_id FROM artifact_catalog "
-                f"WHERE integrity_state='QUARANTINED' AND ({artifact_predicates}) "
-                f"ORDER BY artifact_path LIMIT 1",
-                tuple(artifact_likes),
+                f"SELECT f.analysis_id FROM artifact_catalog f "
+                f"WHERE f.integrity_state='QUARANTINED' "
+                f"AND f.analysis_id IN ({eligible_placeholders}) "
+                f"AND ({artifact_predicates.replace('artifact_path', 'f.artifact_path')}) "
+                f"ORDER BY f.artifact_path LIMIT 1",
+                (*eligible_analysis_ids, *artifact_likes),
             ).fetchone()
             if artifact_likes
             else None
@@ -496,9 +510,10 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
                 f"JOIN analysis_catalog a ON a.analysis_id=f.analysis_id "
                 f"WHERE f.integrity_state='VERIFIED' "
                 f"AND a.completion_state IN ('COMPLETE','QUARANTINED') "
+                f"AND f.analysis_id IN ({eligible_placeholders}) "
                 f"AND ({artifact_predicates.replace('artifact_path', 'f.artifact_path')}) "
                 f"ORDER BY f.artifact_path LIMIT 1",
-                tuple(artifact_likes),
+                (*eligible_analysis_ids, *artifact_likes),
             ).fetchone()
             current = artifact_current or current
         db.execute(

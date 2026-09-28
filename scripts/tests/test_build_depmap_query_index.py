@@ -537,6 +537,78 @@ class QueryIndexTests(unittest.TestCase):
                 "NOT_INDEXED",
             )
 
+    def test_archived_corruption_does_not_disable_complete_reader(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            module = root / "depmap-26q1-full" / "lineage_sparse_networks"
+            complete = module / "effect_correlation" / "Lineage"
+            complete.mkdir(parents=True)
+            (complete / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (complete / "rows.csv").write_text(
+                "label,value\nA,1\n", encoding="utf-8"
+            )
+            archived = module / "archive-copy"
+            archived.mkdir(parents=True)
+            (archived / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (archived / "broken.csv.gz").write_bytes(
+                gzip.compress(b"label,value\nA,1\n")[:-4]
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT completion_state FROM analysis_catalog "
+                        "WHERE analysis_unit LIKE '%archive-copy'"
+                    ).fetchone()[0],
+                    "QUARANTINED",
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT coverage_state FROM reader_coverage "
+                        "WHERE query_mode='lineage_network'"
+                    ).fetchone()[0],
+                    "AVAILABLE",
+                )
+
+    def test_lineage_catalog_tracks_manifests_not_network_blocks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = (
+                root
+                / "depmap-26q1-full"
+                / "lineage_sparse_networks"
+                / "effect_correlation"
+                / "Lineage"
+            )
+            unit.mkdir(parents=True)
+            (unit / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "broken.parquet").write_bytes(b"PAR1PAR1")
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                coverage = dict(
+                    db.execute(
+                        "SELECT query_mode,coverage_state FROM reader_coverage "
+                        "WHERE query_mode IN ('lineage_catalog','lineage_network')"
+                    )
+                )
+            self.assertEqual(coverage["lineage_catalog"], "AVAILABLE")
+            self.assertEqual(coverage["lineage_network"], "CORRUPT_ARTIFACT")
+
     def test_concrete_lineage_readers_track_their_full_artifact_roots(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

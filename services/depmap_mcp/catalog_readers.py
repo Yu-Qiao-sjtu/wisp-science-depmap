@@ -263,9 +263,17 @@ class CatalogReaderRegistry:
         # Tests and local development may run without the optional index. In a
         # deployed indexed knowledge base, missing/broken routing is terminal.
         if self.enabled and resolution.state != "RESOLVED":
+            reason_code = resolution.state
+            if resolution.state == "CATALOG_ERROR":
+                _active_index, index_integrity = self._verify_index()
+                if index_integrity.state != VERIFIED:
+                    reason_code = (
+                        index_integrity.reason_code
+                        or "INTEGRITY_CATALOG_UNAVAILABLE"
+                    )
             return resolution, {
                 "status": "MODULE_UNAVAILABLE",
-                "reason_code": resolution.state,
+                "reason_code": reason_code,
             }
         if self.enabled:
             _found, error = self._revalidate_cataloged_paths(

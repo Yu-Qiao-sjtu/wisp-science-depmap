@@ -22,6 +22,15 @@ READER_ARTIFACT_PATTERNS = {
         "depmap-26q1-core/gene_core_summary.parquet|"
         "depmap-26q1-core/lineage_blocks/%"
     ),
+    "lineage_catalog": (
+        "depmap-26q1-full/lineage_sparse_networks/%/%/manifest.json|"
+        "depmap-26q1-full/lineage_cnv_amplification_dependency/%/manifest.json|"
+        "depmap-26q1-full/lineage_prism_associations/%/%/manifest.json|"
+        "depmap-26q1-full/lineage_gene_enrichment/%/manifest.json|"
+        "depmap-26q1-full/subtype_dependency/manifest.json|"
+        "depmap-26q1-full/subtype_dependency/contrast_catalog.csv|"
+        "depmap-26q1-tcga/project_catalog.csv"
+    ),
     "model_gene_effect": (
         "depmap-26q1-core/model_gene_effect.parquet|"
         "depmap-26q1-core/model_metadata.parquet"
