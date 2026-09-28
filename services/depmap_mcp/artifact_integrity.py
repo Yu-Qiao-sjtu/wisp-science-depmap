@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import tempfile
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,9 +85,21 @@ def write_index_digest(path: Path, digest: str | None = None) -> str:
     """Atomically publish the detached digest for one completed SQLite index."""
     digest = digest or _sha256(path)
     destination = index_digest_path(path)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(digest + "\n", encoding="ascii")
-    os.replace(temporary, destination)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="ascii",
+            dir=destination.parent,
+            prefix=f"{path.name}.tmp-digest-",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(digest + "\n")
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return digest
 
 
@@ -101,6 +114,7 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
         if (
             not previous.is_file()
             or previous.name.endswith((".sha256", ".tmp"))
+            or ".tmp-" in previous.name
             or previous == keep
         ):
             continue
@@ -129,13 +143,68 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
             )
 
 
+def _materialize_verified_index_snapshot(
+    path: Path, integrity: ArtifactIntegrity
+) -> tuple[Path, ArtifactIntegrity]:
+    """Bind verified canonical bytes to an immutable content-addressed path."""
+    snapshot = _previous_index_path(path, integrity.value)
+    snapshot_integrity = verify_index_artifact(snapshot)
+    if (
+        snapshot_integrity.state == VERIFIED
+        and snapshot_integrity.value == integrity.value
+    ):
+        return snapshot, snapshot_integrity
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f"{path.name}.tmp-snapshot-",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        shutil.copyfile(path, temporary)
+        copied = inspect_artifact(temporary, "database")
+        if copied.state != VERIFIED:
+            return path, copied
+        if copied.value != integrity.value:
+            return path, ArtifactIntegrity(
+                QUARANTINED,
+                "sha256",
+                copied.value,
+                "CHECKSUM_MISMATCH",
+            )
+        os.replace(temporary, snapshot)
+        write_index_digest(snapshot, integrity.value)
+    except OSError as exc:
+        return path, ArtifactIntegrity(
+            QUARANTINED,
+            "sha256",
+            "",
+            "INDEX_SNAPSHOT_UNAVAILABLE",
+            str(exc),
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    snapshot_integrity = verify_index_artifact(snapshot)
+    if (
+        snapshot_integrity.state != VERIFIED
+        or snapshot_integrity.value != integrity.value
+    ):
+        return snapshot, snapshot_integrity
+    return snapshot, snapshot_integrity
+
+
 def resolve_index_artifact(path: Path) -> tuple[Path, ArtifactIntegrity]:
     """Resolve the last complete index/digest pair during an atomic publication."""
     marker = index_publish_marker_path(path)
     try:
         value = json.loads(marker.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return path, verify_index_artifact(path)
+        integrity = verify_index_artifact(path)
+        if integrity.state != VERIFIED:
+            return path, integrity
+        return _materialize_verified_index_snapshot(path, integrity)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return path, ArtifactIntegrity(
             QUARANTINED,

@@ -17,6 +17,7 @@ from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 from services.depmap_mcp.artifact_integrity import (
     index_digest_path,
     index_publish_marker_path,
+    resolve_index_artifact,
     write_index_digest,
 )
 from services.depmap_api.app import Settings, _run_analysis_catalog_query
@@ -757,6 +758,39 @@ class QueryIndexTests(unittest.TestCase):
             self.assertFalse(first_rollback.exists())
             self.assertFalse(index_digest_path(first_rollback).exists())
             self.assertTrue(index_digest_path(retained[0]).is_file())
+
+    def test_resolved_index_is_bound_to_an_immutable_verified_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            roots = {name: base / name for name in ("old", "new")}
+            for name, root in roots.items():
+                unit = root / "analysis-modules" / "generic" / "results" / name
+                unit.mkdir(parents=True)
+                (unit / "manifest.json").write_text(
+                    json.dumps({"status": "complete", "release": "26Q1"}),
+                    encoding="utf-8",
+                )
+                build(root, root / "depmap-26q1-query-index.sqlite")
+
+            output = roots["old"] / "depmap-26q1-query-index.sqlite"
+            replacement = roots["new"] / output.name
+            resolved, integrity = resolve_index_artifact(output)
+            self.assertNotEqual(resolved, output)
+            self.assertEqual(integrity.state, "VERIFIED")
+
+            shutil.copyfile(replacement, output)
+            shutil.copyfile(index_digest_path(replacement), index_digest_path(output))
+
+            with closing(
+                sqlite3.connect(
+                    f"file:{resolved.as_posix()}?mode=ro&immutable=1", uri=True
+                )
+            ) as db:
+                rows = db.execute(
+                    "SELECT analysis_unit FROM analysis_catalog"
+                ).fetchall()
+            self.assertTrue(any(row[0].endswith("/old") for row in rows))
+            self.assertFalse(any(row[0].endswith("/new") for row in rows))
 
     def test_r_serialization_magic_without_payload_is_quarantined(self):
         with tempfile.TemporaryDirectory() as temporary:
