@@ -1,12 +1,16 @@
 import json
 import asyncio
 import gzip
+import io
 import shutil
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from scripts.build_depmap_query_index import build, is_fresh
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
@@ -19,7 +23,9 @@ from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
 def _valid_parquet(marker: bytes = b"x") -> bytes:
-    return b"PAR1" + marker + len(marker).to_bytes(4, "little") + b"PAR1"
+    output = io.BytesIO()
+    pq.write_table(pa.table({"marker": [marker]}), output)
+    return output.getvalue()
 
 
 def _valid_rds(payload: bytes = b"x") -> bytes:
@@ -666,6 +672,9 @@ class QueryIndexTests(unittest.TestCase):
             )
             (unit / "header-only.parquet").write_bytes(b"PAR1")
             (unit / "header-footer-only.parquet").write_bytes(b"PAR1PAR1")
+            (unit / "invalid-metadata.parquet").write_bytes(
+                b"PAR1" + b"x" + (1).to_bytes(4, "little") + b"PAR1"
+            )
             output = root / "depmap-26q1-query-index.sqlite"
 
             build(root, output)
@@ -689,7 +698,41 @@ class QueryIndexTests(unittest.TestCase):
                         "QUARANTINED",
                         "INVALID_PARQUET",
                     ),
+                    (
+                        "analysis-modules/generic/results/unit/invalid-metadata.parquet",
+                        "QUARANTINED",
+                        "INVALID_PARQUET",
+                    ),
                 ],
+            )
+
+    def test_successful_rebuild_removes_obsolete_rollback_pairs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unit = root / "analysis-modules" / "generic" / "results" / "unit"
+            unit.mkdir(parents=True)
+            manifest = unit / "manifest.json"
+            manifest.write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (unit / "rows.csv").write_text(
+                "label,value\nA,1\n", encoding="utf-8"
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+            manifest.write_text(
+                json.dumps(
+                    {"status": "complete", "release": "26Q1", "revision": 2}
+                ),
+                encoding="utf-8",
+            )
+            build(root, output)
+
+            self.assertEqual(
+                list(root.glob(f"{output.name}.previous-*")),
+                [],
             )
 
     def test_r_serialization_magic_without_payload_is_quarantined(self):

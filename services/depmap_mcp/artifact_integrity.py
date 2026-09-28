@@ -6,6 +6,7 @@ import csv
 import gzip
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -16,6 +17,7 @@ from pathlib import Path
 
 VERIFIED = "VERIFIED"
 QUARANTINED = "QUARANTINED"
+LOGGER = logging.getLogger("depmap_mcp.artifact_integrity")
 
 READER_ARTIFACT_PATTERNS = {
     "core": (
@@ -90,6 +92,40 @@ def write_index_digest(path: Path, digest: str | None = None) -> str:
 
 def _previous_index_path(path: Path, digest: str) -> Path:
     return path.with_name(f"{path.name}.previous-{digest}")
+
+
+def _cleanup_previous_index_pairs(path: Path) -> None:
+    """Remove rollback pairs after the canonical pair is fully published."""
+    prefix = f"{path.name}.previous-"
+    for previous in path.parent.glob(f"{prefix}*"):
+        if (
+            not previous.is_file()
+            or previous.name.endswith((".sha256", ".tmp"))
+        ):
+            continue
+        try:
+            previous.unlink()
+            index_digest_path(previous).unlink(missing_ok=True)
+        except OSError:
+            # A Windows reader may still have the previous DB open. A later
+            # successful publication retries the same bounded cleanup.
+            LOGGER.warning(
+                "could not remove obsolete query-index rollback pair name=%s",
+                previous.name,
+                exc_info=True,
+            )
+    for sidecar in path.parent.glob(f"{prefix}*.sha256"):
+        database = sidecar.with_suffix("")
+        if database.exists():
+            continue
+        try:
+            sidecar.unlink()
+        except OSError:
+            LOGGER.warning(
+                "could not remove orphan query-index rollback digest name=%s",
+                sidecar.name,
+                exc_info=True,
+            )
 
 
 def resolve_index_artifact(path: Path) -> tuple[Path, ArtifactIntegrity]:
@@ -192,6 +228,7 @@ def publish_index_artifact(temporary: Path, output: Path) -> str:
     os.replace(temporary, output)
     os.replace(index_digest_path(temporary), index_digest_path(output))
     marker.unlink()
+    _cleanup_previous_index_pairs(output)
     return new_digest
 
 
@@ -279,6 +316,12 @@ def _validate_parquet(path: Path) -> None:
         metadata_length = int.from_bytes(footer[:4], byteorder="little")
         if metadata_length <= 0 or metadata_length > size - 12:
             raise ValueError("invalid parquet metadata length")
+    try:
+        import pyarrow.parquet as parquet
+
+        parquet.read_metadata(path)
+    except Exception as exc:
+        raise ValueError("invalid parquet metadata") from exc
 
 
 def _validate_r_object(path: Path) -> None:
