@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from services.depmap_mcp.artifact_integrity import (
     VERIFIED,
     index_digest_path,
+    reader_artifact_pattern,
     verify_cataloged_artifact,
     verify_index_artifact,
 )
@@ -26,7 +27,7 @@ LOGGER = logging.getLogger("depmap_mcp.catalog_readers")
 MODE_ALIASES = {
     "catalog": "core",
     "core": "core",
-    "model_gene_effect": "core",
+    "model_gene_effect": "model_gene_effect",
     "cross_platform_validation": "cross_platform_validation",
     "top": "top",
     "lineage": "lineage",
@@ -135,9 +136,11 @@ class CatalogReaderRegistry:
             with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 reader = db.execute(
-                    "SELECT r.query_mode,r.adapter,r.module_pattern,rc.analysis_id AS coverage_analysis_id,"
+                    "SELECT r.query_mode,r.adapter,r.module_pattern,"
+                    "rc.analysis_id AS coverage_analysis_id,ca.release AS coverage_release,"
                     "rc.coverage_state FROM reader_registry r LEFT JOIN reader_coverage rc "
-                    "ON rc.query_mode=r.query_mode WHERE r.query_mode=?",
+                    "ON rc.query_mode=r.query_mode LEFT JOIN analysis_catalog ca "
+                    "ON ca.analysis_id=rc.analysis_id WHERE r.query_mode=?",
                     (reader_mode,),
                 ).fetchone()
                 if reader is None:
@@ -189,23 +192,42 @@ class CatalogReaderRegistry:
                         ORDER BY manifest_mtime_ns DESC LIMIT 32""",
                         (self.release, *base_parameters),
                     ).fetchall()
-                analysis_ids = tuple(row[0] for row in analyses)
+                analysis_ids = tuple(
+                    dict.fromkeys(
+                        (
+                            [reader["coverage_analysis_id"]]
+                            if reader["coverage_analysis_id"]
+                            and reader["coverage_release"] in (None, self.release)
+                            else []
+                        )
+                        + [row[0] for row in analyses]
+                    )
+                )
                 artifacts: tuple[str, ...] = ()
                 if analysis_ids:
                     placeholders = ",".join("?" for _ in analysis_ids)
+                    artifact_likes = tuple(
+                        part.strip().replace("*", "%")
+                        for part in reader_artifact_pattern(
+                            reader_mode,
+                            str(reader["module_pattern"]),
+                        ).split("|")
+                        if part.strip()
+                    )
+                    artifact_predicates = " OR ".join(
+                        "f.artifact_path LIKE ?" for _ in artifact_likes
+                    )
                     artifacts = tuple(
                         row[0]
                         for row in db.execute(
                             f"""
                             SELECT f.artifact_path FROM artifact_catalog f
-                            JOIN analysis_relation r ON r.analysis_id=f.analysis_id AND r.artifact_path=f.artifact_path
                             WHERE f.analysis_id IN ({placeholders})
                               AND f.integrity_state='VERIFIED'
-                              AND r.role IN ('result','data','manifest')
-                            ORDER BY CASE r.role WHEN 'result' THEN 0 WHEN 'data' THEN 1 ELSE 2 END,
-                                     f.mtime_ns DESC LIMIT 32
+                              AND ({artifact_predicates})
+                            ORDER BY f.artifact_path
                             """,
-                            analysis_ids,
+                            (*analysis_ids, *artifact_likes),
                         )
                     )
                 genes = {
@@ -230,7 +252,7 @@ class CatalogReaderRegistry:
                 # Indexed-content readers legitimately query SQLite content tables
                 # and do not need a file candidate for each returned row.
                 indexed = reader_mode in {"true_love", "tf_dependency", "biomarker_target"}
-                if not analyses and not indexed:
+                if not analysis_ids and not indexed:
                     return CatalogResolution("NOT_INDEXED", mode, reader_mode, reader["adapter"], reason="no COMPLETE matching analysis")
                 return CatalogResolution("RESOLVED", mode, reader_mode, reader["adapter"], analysis_ids, artifacts, blocks)
         except sqlite3.Error:
@@ -258,7 +280,8 @@ class CatalogReaderRegistry:
             }
         if self.enabled:
             _found, error = self._revalidate_cataloged_paths(
-                resolution.artifact_uris
+                resolution.artifact_uris,
+                resolution.analysis_ids,
             )
             if error:
                 return resolution, {
@@ -353,7 +376,10 @@ class CatalogReaderRegistry:
                 validated_provenance_count=validated_index_count,
             ), None
         unique = tuple(dict.fromkeys(relative))
-        found, error = self._revalidate_cataloged_paths(unique)
+        found, error = self._revalidate_cataloged_paths(
+            unique,
+            resolution.analysis_ids,
+        )
         if error:
             return resolution, error
         assert found is not None
@@ -365,12 +391,23 @@ class CatalogReaderRegistry:
         ), None
 
     def _revalidate_cataloged_paths(
-        self, paths: tuple[str, ...]
+        self,
+        paths: tuple[str, ...],
+        allowed_analysis_ids: tuple[str, ...] = (),
     ) -> tuple[dict[str, tuple[Any, ...]] | None, str | None]:
         if not paths:
             return {}, None
         unique = tuple(dict.fromkeys(paths))
         placeholders = ",".join("?" for _ in unique)
+        completion_predicate = "a.completion_state='COMPLETE'"
+        parameters: tuple[Any, ...] = unique
+        if allowed_analysis_ids:
+            allowed_placeholders = ",".join("?" for _ in allowed_analysis_ids)
+            completion_predicate = (
+                f"(a.completion_state='COMPLETE' "
+                f"OR f.analysis_id IN ({allowed_placeholders}))"
+            )
+            parameters = (*unique, *allowed_analysis_ids)
         with closing(sqlite3.connect(f"file:{self.index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             rows = db.execute(
                 f"""SELECT f.artifact_path,f.analysis_id,f.artifact_kind,
@@ -379,8 +416,8 @@ class CatalogReaderRegistry:
                 JOIN analysis_catalog a ON a.analysis_id=f.analysis_id
                 WHERE f.artifact_path IN ({placeholders})
                   AND f.integrity_state='VERIFIED'
-                  AND a.completion_state='COMPLETE'""",
-                unique,
+                  AND {completion_predicate}""",
+                parameters,
             ).fetchall()
         found = {row[0]: row for row in rows}
         missing = [path for path in unique if path not in found]

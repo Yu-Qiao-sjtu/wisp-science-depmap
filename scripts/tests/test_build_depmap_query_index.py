@@ -13,6 +13,10 @@ from services.depmap_mcp.artifact_integrity import write_index_digest
 from services.depmap_api.app import Settings, _run_analysis_catalog_query
 
 
+def _valid_parquet(marker: bytes = b"x") -> bytes:
+    return b"PAR1" + marker + len(marker).to_bytes(4, "little") + b"PAR1"
+
+
 class QueryIndexTests(unittest.TestCase):
     def test_corrupt_artifact_is_quarantined_without_disabling_healthy_family(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -340,10 +344,10 @@ class QueryIndexTests(unittest.TestCase):
                     0,
                 )
 
-    def test_root_owned_core_corruption_matches_descendant_artifact_paths(self):
+    def test_core_corruption_is_scoped_to_concrete_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            corrupt = root / "depmap-26q1-core" / "results" / "broken.parquet"
+            corrupt = root / "depmap-26q1-core" / "gene_core_summary.parquet"
             corrupt.parent.mkdir(parents=True)
             corrupt.write_bytes(b"PAR1PAR1")
             output = root / "depmap-26q1-query-index.sqlite"
@@ -355,7 +359,7 @@ class QueryIndexTests(unittest.TestCase):
                     db.execute(
                         "SELECT integrity_state,integrity_reason_code "
                         "FROM artifact_catalog WHERE artifact_path=?",
-                        ("depmap-26q1-core/results/broken.parquet",),
+                        ("depmap-26q1-core/gene_core_summary.parquet",),
                     ).fetchone(),
                     ("QUARANTINED", "INVALID_PARQUET"),
                 )
@@ -371,7 +375,7 @@ class QueryIndexTests(unittest.TestCase):
                         "SELECT COUNT(*) FROM capability_catalog "
                         "WHERE query_mode='model_gene_effect'"
                     ).fetchone()[0],
-                    0,
+                    1,
                 )
                 self.assertEqual(
                     db.execute(
@@ -380,6 +384,88 @@ class QueryIndexTests(unittest.TestCase):
                     ).fetchone()[0],
                     1,
                 )
+
+    def test_model_gene_effect_ignores_unrelated_core_subtree_corruption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core = root / "depmap-26q1-core"
+            core.mkdir(parents=True)
+            (core / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (core / "model_gene_effect.parquet").write_bytes(_valid_parquet(b"e"))
+            (core / "model_metadata.parquet").write_bytes(_valid_parquet(b"m"))
+            corrupt = core / "lineage_dependency_tests" / "broken.parquet"
+            corrupt.parent.mkdir(parents=True)
+            corrupt.write_bytes(b"PAR1PAR1")
+            output = root / "depmap-26q1-query-index.sqlite"
+
+            build(root, output)
+
+            with closing(sqlite3.connect(output)) as db:
+                coverage = dict(
+                    db.execute(
+                        "SELECT query_mode,coverage_state FROM reader_coverage "
+                        "WHERE query_mode IN ('model_gene_effect','lineage_dependency')"
+                    )
+                )
+                self.assertEqual(coverage["model_gene_effect"], "AVAILABLE")
+                self.assertEqual(coverage["lineage_dependency"], "CORRUPT_ARTIFACT")
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM capability_catalog "
+                        "WHERE query_mode='model_gene_effect'"
+                    ).fetchone()[0],
+                    1,
+                )
+
+            resolution = CatalogReaderRegistry(root, "26Q1").resolve(
+                {"mode": "model_gene_effect", "gene": "GENE_A"}
+            )
+            self.assertEqual(resolution.state, "RESOLVED")
+            self.assertEqual(
+                set(resolution.artifact_uris),
+                {
+                    "depmap-26q1-core/model_gene_effect.parquet",
+                    "depmap-26q1-core/model_metadata.parquet",
+                },
+            )
+
+    def test_core_root_assets_are_verified_before_runner_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            core = root / "depmap-26q1-core"
+            blocks = core / "lineage_blocks"
+            blocks.mkdir(parents=True)
+            (core / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            summary = core / "gene_core_summary.parquet"
+            summary.write_bytes(_valid_parquet(b"summary-a"))
+            (blocks / "lineage_a.parquet").write_bytes(_valid_parquet(b"lineage"))
+            output = root / "depmap-26q1-query-index.sqlite"
+            build(root, output)
+            summary.write_bytes(_valid_parquet(b"summary-b"))
+            called = False
+
+            async def runner(_settings, _query):
+                nonlocal called
+                called = True
+                return {"status": "not_testable"}
+
+            _resolution, result = asyncio.run(
+                CatalogReaderRegistry(root, "26Q1").read(
+                    object(),
+                    {"mode": "core", "gene": "GENE_A"},
+                    runner,
+                )
+            )
+
+            self.assertFalse(called)
+            self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(result["reason_code"], "CHECKSUM_MISMATCH")
 
     def test_concrete_lineage_readers_track_their_full_artifact_roots(self):
         with tempfile.TemporaryDirectory() as temporary:

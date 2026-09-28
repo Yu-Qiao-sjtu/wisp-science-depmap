@@ -16,6 +16,22 @@ from pathlib import Path
 VERIFIED = "VERIFIED"
 QUARANTINED = "QUARANTINED"
 
+READER_ARTIFACT_PATTERNS = {
+    "core": (
+        "depmap-26q1-core/gene_core_summary.parquet|"
+        "depmap-26q1-core/lineage_blocks/%"
+    ),
+    "model_gene_effect": (
+        "depmap-26q1-core/model_gene_effect.parquet|"
+        "depmap-26q1-core/model_metadata.parquet"
+    ),
+}
+
+
+def reader_artifact_pattern(query_mode: str, module_pattern: str) -> str:
+    """Return the concrete inputs a reader is allowed to consume."""
+    return READER_ARTIFACT_PATTERNS.get(query_mode, module_pattern)
+
 
 @dataclass(frozen=True)
 class ArtifactIntegrity:
