@@ -94,13 +94,14 @@ def _previous_index_path(path: Path, digest: str) -> Path:
     return path.with_name(f"{path.name}.previous-{digest}")
 
 
-def _cleanup_previous_index_pairs(path: Path) -> None:
-    """Remove rollback pairs after the canonical pair is fully published."""
+def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
+    """Remove rollback pairs older than the pair reserved for this publication."""
     prefix = f"{path.name}.previous-"
     for previous in path.parent.glob(f"{prefix}*"):
         if (
             not previous.is_file()
             or previous.name.endswith((".sha256", ".tmp"))
+            or previous == keep
         ):
             continue
         try:
@@ -116,7 +117,7 @@ def _cleanup_previous_index_pairs(path: Path) -> None:
             )
     for sidecar in path.parent.glob(f"{prefix}*.sha256"):
         database = sidecar.with_suffix("")
-        if database.exists():
+        if database.exists() or database == keep:
             continue
         try:
             sidecar.unlink()
@@ -210,6 +211,12 @@ def publish_index_artifact(temporary: Path, output: Path) -> str:
                 ):
                     raise OSError("could not preserve the previous verified index pair")
 
+    # A reader may have selected the rollback path while the prior publication
+    # marker was visible but not opened it yet. Keep this publication's pair
+    # for the full interval; prune only pairs left by older publications before
+    # exposing the next marker.
+    _cleanup_previous_index_pairs(output, previous)
+
     marker = index_publish_marker_path(output)
     marker_temporary = marker.with_suffix(marker.suffix + ".tmp")
     marker_temporary.write_text(
@@ -228,7 +235,6 @@ def publish_index_artifact(temporary: Path, output: Path) -> str:
     os.replace(temporary, output)
     os.replace(index_digest_path(temporary), index_digest_path(output))
     marker.unlink()
-    _cleanup_previous_index_pairs(output)
     return new_digest
 
 

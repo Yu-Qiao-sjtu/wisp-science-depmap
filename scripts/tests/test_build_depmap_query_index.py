@@ -706,7 +706,7 @@ class QueryIndexTests(unittest.TestCase):
                 ],
             )
 
-    def test_successful_rebuild_removes_obsolete_rollback_pairs(self):
+    def test_successful_rebuild_defers_then_removes_obsolete_rollback_pairs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             unit = root / "analysis-modules" / "generic" / "results" / "unit"
@@ -730,10 +730,33 @@ class QueryIndexTests(unittest.TestCase):
             )
             build(root, output)
 
-            self.assertEqual(
-                list(root.glob(f"{output.name}.previous-*")),
-                [],
+            retained = sorted(
+                path
+                for path in root.glob(f"{output.name}.previous-*")
+                if not path.name.endswith(".sha256")
             )
+            self.assertEqual(len(retained), 1)
+            first_rollback = retained[0]
+            self.assertTrue(index_digest_path(first_rollback).is_file())
+
+            manifest.write_text(
+                json.dumps(
+                    {"status": "complete", "release": "26Q1", "revision": 3}
+                ),
+                encoding="utf-8",
+            )
+            build(root, output)
+
+            retained = sorted(
+                path
+                for path in root.glob(f"{output.name}.previous-*")
+                if not path.name.endswith(".sha256")
+            )
+            self.assertEqual(len(retained), 1)
+            self.assertNotEqual(retained[0], first_rollback)
+            self.assertFalse(first_rollback.exists())
+            self.assertFalse(index_digest_path(first_rollback).exists())
+            self.assertTrue(index_digest_path(retained[0]).is_file())
 
     def test_r_serialization_magic_without_payload_is_quarantined(self):
         with tempfile.TemporaryDirectory() as temporary:
