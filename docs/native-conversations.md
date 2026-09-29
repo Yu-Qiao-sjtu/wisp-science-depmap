@@ -178,7 +178,7 @@ user choice. Attachments, ACP composers and PNG share export remain follow-ups.
 
 ## Verification and manual smoke
 
-The [2026-09-26 reliability acceptance record](design-qa/native-reliability-2026-09-26/README.md)
+The 2026-09-26 reliability acceptance run
 contains a reusable legacy 35-turn fixture, paired native/WebView screenshots,
 loopback HTTP evidence for both send preferences and rapid paste, and warm
 conversation-switch measurements. In-process session/window draft recovery was

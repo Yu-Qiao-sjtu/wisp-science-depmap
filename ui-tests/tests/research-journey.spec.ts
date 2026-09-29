@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tauriMock } from "./mock-tauri";
 
@@ -259,32 +259,23 @@ test("research journey design matches the selected desktop layout and fits narro
   await expect(journey.getByTestId("journey-source")).toContainText("归一化方法比较");
   await page.evaluate(()=>document.fonts.ready);
   await expect(journey.locator(".journey-headline").first()).toHaveCSS("font-size","18px");
-  mkdirSync(resolve(__dirname,"../../docs/design-qa/research-journey"),{recursive:true});
-  await page.screenshot({path:resolve(__dirname,"../../docs/design-qa/research-journey/desktop.png")});
-  const comparison=await page.context().newPage();
-  await comparison.setViewportSize({width:2976,height:1090});
-  const before=readFileSync(resolve(__dirname,"../../docs/design-qa/research-journey/reference.png")).toString("base64");
-  const after=readFileSync(resolve(__dirname,"../../docs/design-qa/research-journey/desktop.png")).toString("base64");
-  await comparison.setContent(`<body style="margin:0;background:white"><div style="display:grid;grid-template-columns:1fr 1fr;font:16px sans-serif"><section><div>Selected reference</div><img style="width:100%;display:block" src="data:image/png;base64,${before}"></section><section><div>Implemented research journey</div><img style="width:100%;display:block" src="data:image/png;base64,${after}"></section></div></body>`);
-  await comparison.locator("img").evaluateAll(imgs=>Promise.all(imgs.map(img=>(img as HTMLImageElement).decode())));
-  await comparison.screenshot({path:resolve(__dirname,"../../docs/design-qa/research-journey/comparison.png")});
-  await comparison.close();
+  await page.screenshot({path:test.info().outputPath("desktop.png")});
   await page.setViewportSize({width:800,height:900});
   let bounds=await journey.boundingBox();expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(800);
   await expect.poll(async()=>Math.round((await page.locator(".sidebar").boundingBox())!.width)).toBe(56);
   expect(bounds!.x).toBe(56);
   await expect(page.locator(".sidebar .side-btn.active")).toHaveCSS("color","rgba(0, 0, 0, 0)");
   expect(await journey.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
-  await page.screenshot({path:resolve(__dirname,"../../docs/design-qa/research-journey/narrow.png")});
+  await page.screenshot({path:test.info().outputPath("narrow.png")});
   await page.setViewportSize({width:390,height:844});
   bounds=await journey.boundingBox();expect(bounds!.x).toBe(0);expect(bounds!.width).toBeLessThanOrEqual(390);
   expect(await journey.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
   await expect(journey.locator(".journey-day").first()).toBeInViewport();
-  await page.screenshot({path:resolve(__dirname,"../../docs/design-qa/research-journey/mobile.png")});
+  await page.screenshot({path:test.info().outputPath("mobile.png")});
   await page.setViewportSize({width:1488,height:1058});
   await expect.poll(async()=>Math.abs((await page.locator(".sidebar").boundingBox())!.width-(await journey.boundingBox())!.x)).toBeLessThan(1);
   await page.evaluate(()=>document.documentElement.setAttribute("data-theme","dark"));
-  await page.screenshot({path:resolve(__dirname,"../../docs/design-qa/research-journey/dark.png")});
+  await page.screenshot({path:test.info().outputPath("dark.png")});
   expect(errors).toEqual([]);
 });
 

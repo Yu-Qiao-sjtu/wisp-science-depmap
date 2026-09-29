@@ -455,7 +455,7 @@ WinUI provides the corresponding native form, folder picker, standard-layout con
 
 ## Importing a project
 
-The [2026-09-26 reliability acceptance record](design-qa/native-reliability-2026-09-26/README.md)
+The 2026-09-26 reliability acceptance run
 verifies legacy directory registration and readable history, immediate Escape
 from the macOS directory picker, and explicit local/remote conflict resolution
 with different-content synthetic revisions. It includes failure/retry evidence

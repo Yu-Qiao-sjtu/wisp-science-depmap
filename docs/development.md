@@ -98,6 +98,10 @@ storage from content sent to configured model or data services.
 
 ## Build from source
 
+Clone with `git clone --filter=blob:none https://github.com/xuzhougeng/wisp-science.git`
+to skip downloading old screenshots and other large files from history; Git
+fetches past file versions on demand.
+
 Prerequisites:
 
 - **Rust** (stable, 1.88+) with `wasm32-unknown-unknown`:
