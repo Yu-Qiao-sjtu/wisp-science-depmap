@@ -94,7 +94,10 @@ Consult the current [Go](https://opencode.ai/docs/go/#api-endpoints) or
 model ID and protocol supported by your chosen service.
 
 **ChatGPT** lives in **Settings → Models → Subscription accounts**. Sign in to your account,
-save the account, then use **Add model**. Each model only asks for its model ID
+save the account, then use **Add model**. After authorization, **Save account** is the primary
+action beside **Cancel** and **Sign in again**. It shows **Saving account…**
+and disables the actions while saving; a save failure keeps authorization
+available so you can retry without signing in again. Each model asks for its ID
 and an optional alias. You can add multiple models using the same account. The account card reports saved credentials; it
 does not guarantee current entitlement or network access. Subscription models
 are listed here and in the conversation model picker, separately from API models.
@@ -113,6 +116,13 @@ token automatically, and sends chat requests to
 that subscription can call, such as `gpt-5.5`. A sign-in from
 `wisp-science login codex` is stored on the same machine and can be reused
 from this page.
+
+On Windows, long ChatGPT and xAI credentials are split across protected
+Credential Manager entries to stay within its per-entry size limit. Saving
+and token refresh publish the new credential only after every fragment is
+written; existing short credentials remain readable. No token is stored in
+the project database. If a saved credential is incomplete or damaged, sign in
+again to replace it.
 
 Canceling or leaving the sign-in page cancels the attempt. An HTML 403 is
 reported as a web access/verification response with network and proxy guidance,

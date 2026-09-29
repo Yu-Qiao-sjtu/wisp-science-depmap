@@ -2,6 +2,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tauriMock, parallelMock, parallelReplyTailText } from "./mock-tauri";
+import { expectPrimaryButton } from "./button-style";
 
 const officeFixtures = {
   xlsxBase64: readFileSync(resolve(__dirname, "../fixtures/office-preview.xlsx")).toString("base64"),
@@ -4351,7 +4352,7 @@ test("side chat stays at the latest message after sending and switching tabs", a
   await expect.poll(bottomGap).toBeLessThan(8);
 });
 
-test("clicking a PNG path opens the image preview without the selection popup", async ({ page }) => {
+test("clicking a verified PNG path opens the image preview without the selection popup", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("CLIPBOARDIMAGE");
   await page.getByRole("button", { name: "Send" }).click();
@@ -4360,8 +4361,11 @@ test("clicking a PNG path opens the image preview without the selection popup", 
   await expect(reply).toBeVisible({ timeout: 10_000 });
   const pathLink = reply.locator("a", { hasText: "clipboard-preview.png" }).first();
   await expect(pathLink).toBeVisible();
+  // An unbound temporary file outside this project is not a verified path.
+  await expect(reply.locator("a", { hasText: "clipboard-preview-2.png" })).toHaveCount(0);
+  await expect(reply.locator("code", { hasText: "clipboard-preview-2.png" })).toBeVisible();
 
-  // Clicking a long Windows path often selects the link label. mouseup used to
+  // Clicking a file path can select the link label. mouseup used to
   // treat that leftover selection as a quote and stack the popup on the preview.
   await pathLink.evaluate((el) => {
     const range = document.createRange();
@@ -5204,12 +5208,12 @@ test("Generated artifacts survive follow-up tool commentary and ignore mentioned
   });
 
   // Ordinary project-directory Markdown links share the same route.
-  const directoryPath = reply.locator('a[href="results/"]');
+  const directoryPath = reply.locator('a[data-workspace-kind="directory"][href="results"]');
   await directoryPath.click({ button: "right" });
-  await expect(pathMenu.getByRole("button", { name: "Open with default app" })).toBeVisible();
-  await pathMenu.getByRole("button", { name: "Show in file manager" }).click();
-  await expect.poll(() => lastInvokeArgs(page, "reveal_in_file_manager")).toMatchObject({
-    path: "results/",
+  await expect(pathMenu.getByRole("button", { name: "Open in Files", exact: true })).toBeVisible();
+  await pathMenu.getByRole("button", { name: "Open in file manager", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "open_workspace_path")).toMatchObject({
+    path: "results",
   });
 
   await pathLink.click();
@@ -6810,6 +6814,8 @@ test("settings edits an existing SSH server with its saved values", async ({ pag
 test("Escape closes the topmost environment modal before settings", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Environments");
+  await expectPrimaryButton(page.getByRole("button", { name: "Add SSH host" }));
+  await expectPrimaryButton(page.getByRole("button", { name: "Add SSH host" }), true);
   await page.getByRole("button", { name: "Add SSH host" }).click();
   await expect(page.locator(".host-modal")).toBeVisible();
 
@@ -7197,6 +7203,8 @@ test("method-search Run reviews the frozen contract before start and exposes con
   await expect(details).toContainText("Candidate reachability");
   await expect(details).toContainText("runtime_seconds lte 120");
   await expect(details.getByTestId("method-search-start")).toBeVisible();
+  await expectPrimaryButton(details.getByTestId("method-search-start"));
+  await expectPrimaryButton(details.getByTestId("method-search-start"), true);
   await expect(details.getByTestId("method-search-lineage")).toContainText("Candidate lineage (2)");
   await expect(details.getByTestId("method-search-outputs")).toContainText("selected_method");
 
@@ -7208,6 +7216,7 @@ test("method-search Run reviews the frozen contract before start and exposes con
   await expect.poll(() => lastInvokeArgs(page, "pause_method_search"))
     .toMatchObject({ runId: "method-search-001" });
   await expect(details.getByTestId("method-search-resume")).toBeVisible();
+  await expectPrimaryButton(details.getByTestId("method-search-resume"));
   await details.getByTestId("method-search-resume").click();
   await expect.poll(() => lastInvokeArgs(page, "resume_method_search"))
     .toMatchObject({ runId: "method-search-001" });
@@ -11174,11 +11183,13 @@ test("plugin settings diagnose, launch, install, and remove a feature plugin", a
   section = page.getByTestId("plugin-settings");
   const localInstall = section.getByRole("button", { name: "Install plugin", exact: true });
   await expect(localInstall).toBeDisabled();
+  await expectPrimaryButton(localInstall);
   await section.getByRole("button", { name: "Choose ZIP", exact: true }).click();
   await expect(section.getByRole("textbox", { name: "Plugin ZIP" }))
     .toHaveValue("/downloads/motif-update.zip");
   await expect.poll(() => lastInvokeArgs(page, "install_plugin")).toBeNull();
   await expect(localInstall).toBeEnabled();
+  await expectPrimaryButton(localInstall, true);
   await localInstall.click();
   await expect.poll(() => lastInvokeArgs(page, "install_plugin")).toMatchObject({
     srcPath: "/downloads/motif-update.zip",
@@ -11192,6 +11203,7 @@ test("plugin settings diagnose, launch, install, and remove a feature plugin", a
   await section.getByRole("tab", { name: "Release URL" }).click();
   await section.locator('input[type="url"]').fill("https://example.test/motif.zip");
   await section.locator('input[placeholder*="64 hexadecimal"]').fill("b".repeat(64));
+  await expectPrimaryButton(section.getByRole("button", { name: "Download & install" }));
   await section.getByRole("button", { name: "Download & install" }).click();
   await expect.poll(() => lastInvokeArgs(page, "install_plugin_url")).toMatchObject({
     sourceUrl: "https://example.test/motif.zip",
