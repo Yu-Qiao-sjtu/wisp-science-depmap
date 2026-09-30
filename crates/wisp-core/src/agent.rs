@@ -707,6 +707,30 @@ async fn agent_loop_execute(
                     }
                     anyhow::bail!(reason);
                 }
+                GuardrailDecision::Transform { value, .. } => {
+                    let content = value.as_str().unwrap_or(comp.content.as_str()).to_string();
+                    sink.flush_assistant_text();
+                    ctx.append_assistant(content, comp.tool_calls.clone(), comp.reasoning.clone());
+                    if let Some(m) = ctx.messages.last() {
+                        output.on_message(m);
+                    }
+                    if let Some(span) = completion_span {
+                        span.end(SpanStatus::Ok);
+                    }
+                    let context_usage = ctx.context_usage(&schemas, &schema_origins);
+                    let context_tokens = context_usage.total();
+                    output.usage(
+                        iteration,
+                        comp.usage.input_tokens,
+                        comp.usage.output_tokens,
+                        comp.usage.reasoning_tokens,
+                        comp.usage.cached_input_tokens,
+                        context_tokens,
+                        ctx.max_context,
+                        context_usage,
+                    );
+                    return Ok(AgentLoopOutcome::Completed);
+                }
                 _ => {
                     if let Some(output) = &output_value {
                         if let Ok(claims) = crate::claim_record::claims_from_output(output) {

@@ -3,7 +3,9 @@
 //! Host stages run in a fixed order. A later stage cannot turn a denial into
 //! an allow, reuse a stale approval, or execute before required approval.
 
-use crate::claim_record::{claims_from_output, validate_claims, ClaimGroundingCatalog};
+use crate::claim_record::{
+    claims_from_output, rewrite_manual_enrichment_prose, validate_claims, ClaimGroundingCatalog,
+};
 use crate::observability::SpanGuard;
 use crate::scientific_intent::validate_discovered_schema;
 use serde::{Deserialize, Serialize};
@@ -387,6 +389,15 @@ impl Guardrail for ClaimGroundingRail {
         let Some(output) = &ctx.output else {
             return GuardrailDecision::Allow;
         };
+        if let Some(text) = output.as_str() {
+            let rewritten = rewrite_manual_enrichment_prose(text);
+            if rewritten != text {
+                return GuardrailDecision::Transform {
+                    reason: "ungrounded enrichment wording rewritten as a manual grouping".into(),
+                    value: serde_json::Value::String(rewritten),
+                };
+            }
+        }
         let claims = match claims_from_output(output) {
             Ok(claims) => claims,
             Err(reason) => {
