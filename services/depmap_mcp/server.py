@@ -35,6 +35,33 @@ _AUXILIARY_LIST_KEYS = frozenset(
     }
 )
 
+_EXPANDED_MODEL_KEYS = frozenset(
+    {
+        "provenance",
+        "provenance_uris",
+        "manifest",
+        "catalog_resolution",
+        "index_path",
+        "knowledge_root",
+        "artifact_path",
+        "source_path",
+        "resolved_path",
+    }
+)
+
+
+def _default_model_evidence(value: Any) -> Any:
+    """Omit expanded provenance and server locations from model context."""
+    if isinstance(value, dict):
+        return {
+            key: _default_model_evidence(item)
+            for key, item in value.items()
+            if key not in _EXPANDED_MODEL_KEYS
+        }
+    if isinstance(value, list):
+        return [_default_model_evidence(item) for item in value]
+    return value
+
 
 def _bounded_model_projection(value: Any) -> tuple[Any, dict[str, Any]]:
     """Bound model-facing evidence while retained artifacts remain addressable."""
@@ -990,7 +1017,9 @@ class DepMapEvidenceService:
             "evidence": portable,
         }
         digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
-        model_evidence, projection = _bounded_model_projection(portable)
+        model_evidence, projection = _bounded_model_projection(
+            _default_model_evidence(portable)
+        )
         inventory_only = tool == "depmap_analysis_catalog"
         return {
             "schema_version": 1,
