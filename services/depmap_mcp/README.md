@@ -155,7 +155,10 @@ An out-of-range `limit` therefore returns the normal evidence envelope with
 execution error.
 
 Every response is an evidence envelope with a deterministic `evidence_id`,
-release, request, metric semantics, coverage states, and normalized provenance.
+release, request, metric semantics, and coverage states. `evidence_id` is
+hashed from the complete portable record, including provenance. The model-facing
+`evidence` object omits expanded provenance, manifests, catalog resolution, and
+server-location fields.
 The combined gene tool returns TCGA and DepMap as separate evidence items. It
 never performs a sample-level join or creates a synthetic combined score.
 
