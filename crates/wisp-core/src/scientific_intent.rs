@@ -246,9 +246,13 @@ pub struct IntentSpec {
     #[serde(default)]
     pub arguments: Vec<ArgumentBinding>,
     /// `exact` is a named-entity lookup. `bulk_ranking` is one bounded page
-    /// across an advertised universe.
-    #[serde(default)]
+    /// across an advertised universe. Omitted means the capability is unchanged.
+    #[serde(default, skip_serializing_if = "query_shape_is_unspecified")]
     pub query_shape: QueryShape,
+}
+
+fn query_shape_is_unspecified(shape: &QueryShape) -> bool {
+    *shape == QueryShape::Unspecified
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
