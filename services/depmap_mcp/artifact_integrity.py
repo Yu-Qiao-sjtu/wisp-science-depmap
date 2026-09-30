@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import gzip
 import hashlib
 import json
@@ -148,7 +149,7 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
             or previous == keep
         ):
             continue
-        if any(path.parent.glob(f"{previous.name}.lease-*")):
+        if _snapshot_has_live_lease(path.parent, previous.name):
             continue
         try:
             previous.unlink()
@@ -173,6 +174,62 @@ def _cleanup_previous_index_pairs(path: Path, keep: Path | None) -> None:
                 sidecar.name,
                 exc_info=True,
             )
+
+
+def _pid_is_running(pid: int) -> bool:
+    """Return whether pid is a live process. A dead or reused-unreadable pid is not."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        # Access denied means the process exists but this user cannot inspect it.
+        return ctypes.get_last_error() == 5
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _lease_file_is_live(lease_path: Path) -> bool:
+    try:
+        text = lease_path.read_text(encoding="ascii")
+    except OSError:
+        return False
+    pid_text = ""
+    for line in text.splitlines():
+        if line.startswith("pid="):
+            pid_text = line.removeprefix("pid=").strip()
+            break
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    return _pid_is_running(pid)
+
+
+def _snapshot_has_live_lease(directory: Path, snapshot_name: str) -> bool:
+    """Drop leases whose owner process is gone so a crash cannot pin a snapshot."""
+    live = False
+    for lease in directory.glob(f"{snapshot_name}.lease-*"):
+        if _lease_file_is_live(lease):
+            live = True
+            continue
+        try:
+            lease.unlink()
+        except OSError:
+            LOGGER.warning(
+                "could not remove stale query-index lease name=%s",
+                lease.name,
+                exc_info=True,
+            )
+            live = True
+    return live
 
 
 def _lease_index_snapshot(path: Path) -> LeasedIndexPath:

@@ -3,6 +3,7 @@ import asyncio
 import gzip
 import gc
 import io
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -16,6 +17,7 @@ import pyarrow.parquet as pq
 from scripts.build_depmap_query_index import build, is_fresh
 from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
 from services.depmap_mcp.artifact_integrity import (
+    _cleanup_previous_index_pairs,
     index_digest_path,
     index_publish_marker_path,
     reader_artifact_pattern,
@@ -834,6 +836,32 @@ class QueryIndexTests(unittest.TestCase):
             )
             build(roots["old"], output)
             self.assertFalse(leased_snapshot.exists())
+
+    def test_dead_owner_lease_does_not_pin_a_rollback_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "depmap-26q1-query-index.sqlite"
+            output.write_bytes(b"")
+            dead = output.with_name(f"{output.name}.previous-{'ab' * 32}")
+            kept = output.with_name(f"{output.name}.previous-{'cd' * 32}")
+            dead.write_bytes(b"dead")
+            kept.write_bytes(b"kept")
+            index_digest_path(dead).write_text(f"{'ab' * 32}\n", encoding="ascii")
+            lease = root / f"{dead.name}.lease-stale"
+            lease.write_text("pid=4294967294\n", encoding="ascii")
+            live_snapshot = output.with_name(f"{output.name}.previous-{'ef' * 32}")
+            live_snapshot.write_bytes(b"live")
+            live_lease = root / f"{live_snapshot.name}.lease-live"
+            live_lease.write_text(f"pid={os.getpid()}\n", encoding="ascii")
+
+            _cleanup_previous_index_pairs(output, kept)
+
+            self.assertFalse(dead.exists())
+            self.assertFalse(lease.exists())
+            self.assertFalse(index_digest_path(dead).exists())
+            self.assertTrue(kept.exists())
+            self.assertTrue(live_snapshot.exists())
+            self.assertTrue(live_lease.exists())
 
     def test_r_serialization_magic_without_payload_is_quarantined(self):
         with tempfile.TemporaryDirectory() as temporary:
