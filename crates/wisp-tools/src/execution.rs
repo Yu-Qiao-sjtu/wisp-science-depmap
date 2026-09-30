@@ -237,6 +237,9 @@ impl ToolEnv for SharedFlightEnv<'_> {
     fn artifact_requested(&self) -> bool {
         self.inner.artifact_requested()
     }
+    fn artifact_presentation(&self) -> crate::presentation::ArtifactPresentation {
+        self.inner.artifact_presentation()
+    }
     fn danger_auto_approve(&self) -> bool {
         self.inner.danger_auto_approve()
     }

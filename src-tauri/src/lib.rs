@@ -3105,6 +3105,7 @@ struct TauriOutput {
     project_write_locked: bool,
     /// DepMap query-only turns keep answers in chat; report paths are forbidden.
     artifact_requested: bool,
+    artifact_presentation: wisp_tools::presentation::ArtifactPresentation,
     approval_grants: Arc<StdMutex<ApprovalGrants>>,
     /// Shared live set so enabling Full Permission can take effect during a
     /// running turn, including while it is approaching an approval boundary.
@@ -3568,6 +3569,9 @@ impl Output for TauriOutput {
     }
     fn artifact_requested(&self) -> bool {
         self.artifact_requested
+    }
+    fn artifact_presentation(&self) -> wisp_tools::presentation::ArtifactPresentation {
+        self.artifact_presentation
     }
     fn on_message(&self, msg: &Message) {
         if msg.role == wisp_llm::Role::User {

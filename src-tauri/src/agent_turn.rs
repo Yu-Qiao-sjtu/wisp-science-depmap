@@ -24,6 +24,17 @@ impl TurnOrigin {
     }
 }
 
+fn depmap_artifact_presentation(
+    specialist: Option<&specialists::Specialist>,
+    message: &str,
+) -> wisp_tools::presentation::ArtifactPresentation {
+    if specialist.is_some_and(|item| item.id == specialists::DEPMAP_SPECIALIST_ID) {
+        wisp_tools::presentation::depmap_turn_presentation(message)
+    } else {
+        wisp_tools::presentation::ArtifactPresentation::Unrestricted
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn send_message(
     state: State<'_, AppState>,
@@ -1236,9 +1247,9 @@ pub(crate) async fn send_message_inner(
         approvals: state.approvals.clone(),
         plan_mode: plan_mode_enabled,
         project_write_locked,
-        artifact_requested: !specialist
-            .as_ref()
-            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID),
+        artifact_requested: depmap_artifact_presentation(specialist.as_ref(), &message)
+            .allows_project_writes(),
+        artifact_presentation: depmap_artifact_presentation(specialist.as_ref(), &message),
         approval_grants: state.approval_grants.clone(),
         full_permission_sessions: state.full_permission_sessions.clone(),
         persist: Some(persist_tx),

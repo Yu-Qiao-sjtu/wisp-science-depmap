@@ -119,6 +119,13 @@ pub trait Output: Send + Sync {
     fn artifact_requested(&self) -> bool {
         true
     }
+    fn artifact_presentation(&self) -> wisp_tools::presentation::ArtifactPresentation {
+        if self.artifact_requested() {
+            wisp_tools::presentation::ArtifactPresentation::Unrestricted
+        } else {
+            wisp_tools::presentation::ArtifactPresentation::ChatOnly
+        }
+    }
     /// Fired once per message appended to the context during a turn (user,
     /// assistant, tool). Lets the host persist incrementally so a crash or a
     /// mid-turn "new session" doesn't lose the whole turn. Default: no-op.
@@ -317,6 +324,9 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
     }
     fn artifact_requested(&self) -> bool {
         self.out.artifact_requested()
+    }
+    fn artifact_presentation(&self) -> wisp_tools::presentation::ArtifactPresentation {
+        self.out.artifact_presentation()
     }
     fn is_cancelled(&self) -> bool {
         self.cancel

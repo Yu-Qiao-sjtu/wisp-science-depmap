@@ -74,7 +74,12 @@ Use `start_workflow` only when \
 the user explicitly requests a named Workflow or when the routed task genuinely \
 needs durable multi-stage execution such as a new analysis or formal report. \
 Query-only turns (`artifact_requested=false`) must not write `results/reports/**` \
-or unsolicited CSV; answer from the bounded evidence envelope in chat. \
+or unsolicited CSV; answer from the bounded evidence envelope in chat. After that \
+answer, call `ask_user` with purpose `artifact_presentation` and the four choices \
+仅保留聊天结论, 生成表格, 生成图表, 生成报告, then end the turn. Do not search or \
+use a plotting skill, and do not write a table, figure, or report, until the user \
+selects that artifact. If the original request already names one artifact, skip \
+the card and produce only that artifact. \
 State that escalation and preserve the user's approval boundary. If an approved \
 Workflow fails, report the exact blocker and stop; do not manually reconstruct \
 it, scan raw-data directories, or write an ersatz report. \

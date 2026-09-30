@@ -468,18 +468,16 @@ async fn run_runtime(
     language: &'static str,
     env: &dyn ToolEnv,
 ) -> ToolResult {
-    if !env.artifact_requested() {
-        let script_path = source
-            .script
-            .as_ref()
-            .map(|script| script.path.as_str())
-            .unwrap_or("");
-        if let Some(path) = wisp_tools::presentation::query_only_forbidden_target(&format!(
-            "{script_path}\n{}",
-            source.code
-        )) {
-            return ToolResult::fail(wisp_tools::presentation::query_only_write_error(&path));
-        }
+    let script_path = source
+        .script
+        .as_ref()
+        .map(|script| script.path.as_str())
+        .unwrap_or("");
+    if let Some(path) = wisp_tools::presentation::presentation_forbidden_target(
+        env.artifact_presentation(),
+        &format!("{script_path}\n{}", source.code),
+    ) {
+        return ToolResult::fail(wisp_tools::presentation::query_only_write_error(&path));
     }
     if key.context_id == LOCAL_CONTEXT_ID || key.context_id.starts_with("wsl:") {
         if let Err(error) = env.preflight_local_execution(&source.code).await {
