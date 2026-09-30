@@ -70,6 +70,33 @@ THREE_D_FAMILIES = {
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
 QUERY_CONTRACT_VERSION = 13
+
+
+class _QueryIndexIntegrityError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+def _require_verified_query_index(path: Path) -> Path:
+    # Delayed to avoid importing the MCP package's server facade while this
+    # provider module is still initializing.
+    from services.depmap_mcp.artifact_integrity import (
+        VERIFIED,
+        resolve_index_artifact,
+    )
+
+    active_path, integrity = resolve_index_artifact(path)
+    if integrity.state == VERIFIED:
+        return active_path
+    LOGGER.error(
+        "DepMap query index integrity failure reason=%s diagnostic=%s",
+        integrity.reason_code,
+        integrity.diagnostic,
+    )
+    raise _QueryIndexIntegrityError(
+        integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE"
+    )
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
@@ -1159,6 +1186,7 @@ def _indexed_true_love_rows(
     path = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
     if not path.is_file():
         return None
+    active_path = _require_verified_query_index(path)
     symbol = gene.strip().upper() if gene else None
     mate = partner.strip().upper() if partner else None
     clauses = ["catalog = ?", "coverage = ?"]
@@ -1170,7 +1198,7 @@ def _indexed_true_love_rows(
         clauses.append("(gene_a = ? OR gene_b = ?)")
         params.extend((mate, mate))
     params.append(limit)
-    uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
+    uri = f"file:{active_path.as_posix()}?mode=ro&immutable=1"
     db: sqlite3.Connection | None = None
     try:
         db = sqlite3.connect(uri, uri=True)
@@ -1193,9 +1221,21 @@ def _run_biomarker_target_query(settings: Settings, query: dict[str, Any]) -> di
     row: dict[str, Any] | None = None
     used_index = False
     if index.is_file():
+        try:
+            active_index = _require_verified_query_index(index)
+        except _QueryIndexIntegrityError as exc:
+            return _evidence_response(
+                "MODULE_UNAVAILABLE",
+                mode="biomarker_target",
+                reason="the query index failed integrity validation",
+                reason_code=exc.reason_code,
+                target=target,
+            )
         db: sqlite3.Connection | None = None
         try:
-            db = sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)
+            db = sqlite3.connect(
+                f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
+            )
             hit = db.execute(
                 "SELECT row_json FROM biomarker_target WHERE target_gene = ?", (target,)
             ).fetchone()
@@ -1232,6 +1272,16 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
             "MODULE_UNAVAILABLE", mode="analysis_catalog",
             reason="the unified directory index is not installed",
         )
+    try:
+        active_index = _require_verified_query_index(index)
+    except _QueryIndexIntegrityError:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="analysis_catalog",
+            reason="the unified directory index failed integrity validation",
+            reason_code="INTEGRITY_CATALOG_UNAVAILABLE",
+            rows=[],
+        )
     clauses: list[str] = []
     params: list[Any] = []
     module = query.get("module")
@@ -1241,7 +1291,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
         module_patterns: list[str] = []
         try:
             with closing(sqlite3.connect(
-                f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
             )) as catalog_db:
                 row = catalog_db.execute(
                     "SELECT payload_json FROM capability_catalog "
@@ -1282,7 +1332,7 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
     params.append(limit)
     try:
         with closing(sqlite3.connect(
-            f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+            f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
         )) as db:
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(sql, params)]
@@ -1292,10 +1342,12 @@ def _run_analysis_catalog_query(settings: Settings, query: dict[str, Any]) -> di
                     "SELECT completion_state,COUNT(*) FROM analysis_catalog GROUP BY completion_state"
                 )
             }
-    except sqlite3.Error as exc:
+    except sqlite3.Error:
+        LOGGER.exception("unified directory index query failed")
         return _evidence_response(
             "MODULE_UNAVAILABLE", mode="analysis_catalog",
-            reason=f"the unified directory index could not be read: {exc}",
+            reason_code="INTEGRITY_CATALOG_UNAVAILABLE",
+            reason="the unified directory index could not be read",
         )
     return _evidence_response(
         "FOUND" if rows else "NOT_RETAINED", mode="analysis_catalog",
@@ -2009,10 +2061,23 @@ def _run_true_love_query(settings: Settings, query: dict[str, Any]) -> dict[str,
     gene = query.get("gene")
     partner = query.get("partner")
     index_coverage = "all" if catalog == "stable_negative_rank1" else coverage
-    rows = _indexed_true_love_rows(
-        settings, catalog=catalog, coverage=index_coverage,
-        gene=gene, partner=partner, limit=int(query.get("limit", 20)),
-    )
+    try:
+        rows = _indexed_true_love_rows(
+            settings, catalog=catalog, coverage=index_coverage,
+            gene=gene, partner=partner, limit=int(query.get("limit", 20)),
+        )
+    except _QueryIndexIntegrityError as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE",
+            mode="true_love",
+            reason="the query index failed integrity validation",
+            reason_code=exc.reason_code,
+            gene=gene,
+            partner=partner,
+            catalog=catalog,
+            coverage=(None if catalog == "stable_negative_rank1" else coverage),
+            rows=[],
+        )
     used_index = rows is not None
     if rows is None:
         rows = _filter_pair_rows(_read_csv_records(path), gene, partner)
@@ -2300,6 +2365,7 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
     target = query.get("target")
     limit = query.get("limit", 20)
     reciprocal = query.get("reciprocal", False)
+    order: Path | None = None
     if reciprocal:
         try:
             import pyarrow.dataset as dataset
@@ -2361,19 +2427,23 @@ def _run_lineage_network_query(settings: Settings, query: dict[str, Any]) -> dic
                 == (direction == "positive")
             ]
         rows = _bounded_rows(rows, "correlation", limit)
+    provenance = [str(lineage_root / "manifest.json")]
+    if order is not None:
+        provenance.append(str(order))
+    provenance.append(str(path))
     if not rows:
         return _evidence_response(
             "NOT_RETAINED", mode="lineage_network",
             reason="the eligible pair was tested but is absent from the retained sparse top-K output",
             family=family, lineage=lineage, source=source, target=target,
             reciprocal=reciprocal, direction=query.get("direction"), manifest=manifest,
-            provenance=[str(lineage_root / "manifest.json"), str(path)],
+            provenance=provenance,
         )
     return _evidence_response(
         "FOUND", mode="lineage_network", reason="bounded precomputed rows found",
         family=family, lineage=lineage, source=source, target=target,
         reciprocal=reciprocal, direction=query.get("direction"), rows=rows, manifest=manifest,
-        provenance=[str(lineage_root / "manifest.json"), str(path)],
+        provenance=provenance,
     )
 
 
@@ -2419,12 +2489,12 @@ def _run_lineage_cnv_query(settings: Settings, query: dict[str, Any]) -> dict[st
             "NOT_RETAINED", mode="lineage_cnv",
             reason="the eligible pair was tested but is absent from the retained sparse top-K output",
             lineage=lineage, source=source, target=target, manifest=manifest,
-            provenance=[str(root / "manifest.json"), str(path)],
+            provenance=[str(root / "manifest.json"), str(order), str(path)],
         )
     return _evidence_response(
         "FOUND", mode="lineage_cnv", reason="bounded precomputed rows found",
         lineage=lineage, source=source, target=target, rows=rows, manifest=manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[str(root / "manifest.json"), str(order), str(path)],
     )
 
 
@@ -2494,13 +2564,22 @@ def _run_lineage_drug_query(settings: Settings, query: dict[str, Any]) -> dict[s
             "NOT_RETAINED", mode="lineage_drug",
             reason="the eligible association is absent from the retained sparse top-K output",
             feature=feature, lineage=lineage, drug=drug, target=target,
-            manifest=manifest, provenance=[str(root / "manifest.json"), str(path)],
+            manifest=manifest,
+            provenance=[
+                str(root / "manifest.json"),
+                str(root / "drug_metadata.parquet"),
+                str(path),
+            ],
         )
     return _evidence_response(
         "FOUND", mode="lineage_drug", reason="bounded precomputed rows found",
         feature=feature, lineage=lineage, drug=drug, target=target,
         rows=rows, manifest=manifest,
-        provenance=[str(root / "manifest.json"), str(path)],
+        provenance=[
+            str(root / "manifest.json"),
+            str(root / "drug_metadata.parquet"),
+            str(path),
+        ],
     )
 
 
@@ -2932,7 +3011,7 @@ def _lineage_catalog_item(label: str, module_root: Path, lineage: str) -> dict[s
             "status": "MODULE_UNAVAILABLE",
             "reason": "the requested precomputed module is not installed",
             "manifest": None,
-            "provenance": [str(module_root)],
+            "provenance": [],
         }
     lineage_root = module_root / _lineage_key(lineage)
     manifest = _load_manifest(lineage_root) if lineage_root.is_dir() else None
@@ -2942,7 +3021,7 @@ def _lineage_catalog_item(label: str, module_root: Path, lineage: str) -> dict[s
             "status": "NOT_COMPUTED",
             "reason": "no lineage output manifest exists for this module",
             "manifest": None,
-            "provenance": [str(module_root)],
+            "provenance": [],
         }
     complete = manifest.get("status") == "complete"
     return {
@@ -3169,7 +3248,11 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
         "contrast_count": len(subtype_rows),
         "contrasts": [row.get("contrast_id") for row in subtype_rows],
         "manifest": subtype_manifest,
-        "provenance": [str(subtype_root / "manifest.json"), str(subtype_catalog)],
+        "provenance": [
+            str(path)
+            for path in (subtype_root / "manifest.json", subtype_catalog)
+            if path.is_file()
+        ],
     })
     tcga_projects = [
         row for row in _tcga_project_catalog(settings)
@@ -3184,7 +3267,11 @@ def _run_lineage_catalog_query(settings: Settings, query: dict[str, Any]) -> dic
         ),
         "projects": [row.get("tcga_project") for row in tcga_projects],
         "manifest": {"project_count": len(tcga_projects)},
-        "provenance": [str(_tcga_module_root(settings) / "project_catalog.csv")],
+        "provenance": [
+            str(path)
+            for path in (_tcga_module_root(settings) / "project_catalog.csv",)
+            if path.is_file()
+        ],
     })
     available = sum(item["status"] == "FOUND" for item in modules)
     return {
@@ -4009,11 +4096,19 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
 def create_app(settings: Settings | None = None, runner: Runner = run_bounded_query) -> FastAPI:
     @asynccontextmanager
     async def lifespan(api: FastAPI):
+        # Delay importing the MCP package until this provider module is fully
+        # initialized; the MCP server imports the shared provider contract.
+        from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+
         if api.state.settings is None:
             api.state.settings = Settings.from_env()
         qa = verify_installation(api.state.settings)
         api.state.qa = qa
         api.state.semaphore = asyncio.Semaphore(api.state.settings.max_concurrency)
+        api.state.catalog_readers = CatalogReaderRegistry(
+            api.state.settings.knowledge_root,
+            api.state.settings.release,
+        )
         yield
 
     api = FastAPI(
@@ -4027,6 +4122,7 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     api.state.settings = settings
     api.state.runner = runner
     api.state.semaphore = None
+    api.state.catalog_readers = None
 
     @api.exception_handler(RequestValidationError)
     async def provider_schema_validation(_request: Request, exc: RequestValidationError):
@@ -4039,6 +4135,17 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
         return JSONResponse(
             status_code=422,
             content=schema_violation(reason="; ".join(messages) or "invalid provider arguments"),
+        )
+
+    @api.exception_handler(Exception)
+    async def provider_artifact_failure(_request: Request, exc: Exception):
+        LOGGER.exception("bounded provider query failed integrity/read boundary", exc_info=exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "ARTIFACT_READ_FAILED",
+            },
         )
 
     @api.middleware("http")
@@ -4077,7 +4184,12 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
     @api.post("/api/v1/query", dependencies=[Depends(authorize)])
     async def query(payload: QueryRequest) -> dict[str, Any]:
         async with api.state.semaphore:
-            return await api.state.runner(api.state.settings, payload.bounded_dict())
+            _resolution, result = await api.state.catalog_readers.read(
+                api.state.settings,
+                payload.bounded_dict(),
+                api.state.runner,
+            )
+            return result
 
     return api
 

@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 import pyarrow as pa
@@ -20,12 +21,36 @@ from services.depmap_api.app import (
     _coerce_csv_value,
     _coverage_gap_reason,
     _r_query_command,
+    _run_analysis_catalog_query,
     create_app,
     resolve_lineage_term,
 )
+from services.depmap_mcp.artifact_integrity import write_index_digest
+from scripts.build_depmap_query_index import build
 
 
 class QueryContractTests(unittest.TestCase):
+    def test_analysis_catalog_failure_uses_stable_path_free_integrity_reason(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "depmap-26q1-query-index.sqlite").write_bytes(b"not sqlite")
+            settings = Settings(
+                knowledge_root=root,
+                query_script=root / "query.R",
+                api_token="test-token-with-at-least-thirty-two-characters",
+            )
+
+            with self.assertLogs("depmap_api", level="ERROR"):
+                result = _run_analysis_catalog_query(settings, {})
+
+            self.assertEqual(result["status"], "MODULE_UNAVAILABLE")
+            self.assertEqual(
+                result["reason_code"], "INTEGRITY_CATALOG_UNAVAILABLE"
+            )
+            serialized = json.dumps(result)
+            self.assertNotIn("DatabaseError", serialized)
+            self.assertNotIn(str(root), serialized)
+
     def test_scientific_csv_values_keep_small_and_threshold_precision(self):
         self.assertEqual(_coerce_csv_value("1.6156e-8"), 1.6156e-8)
         self.assertGreater(_coerce_csv_value("3.2669e-12"), 0.0)
@@ -350,6 +375,80 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.queries[0]["source"], "KRAS")
 
+    def test_artifact_read_failure_is_typed_without_exception_or_path_leak(self):
+        async def failing_runner(_settings, _query):
+            raise EOFError(str(self.settings.knowledge_root / "private" / "rows.csv.gz"))
+
+        with self.assertLogs("depmap_api", level="ERROR") as operator_logs:
+            with TestClient(
+                create_app(self.settings, failing_runner), raise_server_exceptions=False
+            ) as client:
+                response = client.post(
+                    "/api/v1/query",
+                    headers=self.headers,
+                    json={
+                        "mode": "pair",
+                        "module": "effect_correlation",
+                        "source": "FEATURE_A",
+                        "target": "FEATURE_B",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "ARTIFACT_READ_FAILED",
+            },
+        )
+        self.assertNotIn("EOFError", response.text)
+        self.assertNotIn(str(self.settings.knowledge_root), response.text)
+        self.assertIn(str(self.settings.knowledge_root), "\n".join(operator_logs.output))
+
+    def test_provider_revalidates_well_formed_artifact_replacements(self):
+        core = self.settings.knowledge_root / "depmap-26q1-core"
+        (core / "manifest.json").write_text(
+            json.dumps({"status": "complete", "release": "26Q1"}),
+            encoding="utf-8",
+        )
+        summary = core / "gene_core_summary.parquet"
+        pq.write_table(
+            pa.table({"symbol": ["GENE_A"], "effect_n": [10]}),
+            summary,
+        )
+        build(
+            self.settings.knowledge_root,
+            self.settings.knowledge_root / "depmap-26q1-query-index.sqlite",
+        )
+
+        with TestClient(create_app(self.settings)) as client:
+            initial = client.post(
+                "/api/v1/query",
+                headers=self.headers,
+                json={"mode": "core", "gene": "GENE_A"},
+            )
+            self.assertEqual(initial.status_code, 200)
+            self.assertEqual(initial.json()["summary"][0]["effect_n"], 10)
+
+            pq.write_table(
+                pa.table({"symbol": ["GENE_A"], "effect_n": [11]}),
+                summary,
+            )
+            with self.assertLogs("depmap_mcp.catalog_readers", level="ERROR"):
+                changed = client.post(
+                    "/api/v1/query",
+                    headers=self.headers,
+                    json={"mode": "core", "gene": "GENE_A"},
+                )
+
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.json()["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(changed.json()["reason_code"], "CHECKSUM_MISMATCH")
+        self.assertNotIn(
+            str(self.settings.knowledge_root), json.dumps(changed.json())
+        )
+
     def test_tcga_query_normalizes_project_and_endpoint_before_forwarding(self):
         response = self.client.post(
             "/api/v1/query",
@@ -584,11 +683,10 @@ class DepMapApiTests(unittest.TestCase):
 
     def test_true_love_prefers_bounded_sqlite_index(self):
         index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
+        build(self.settings.knowledge_root, index)
         db = sqlite3.connect(index)
         try:
-            db.execute(
-                "CREATE TABLE true_love (catalog TEXT, coverage TEXT, gene_a TEXT, gene_b TEXT, sort_1 REAL, sort_2 REAL, row_json TEXT)"
-            )
+            db.execute("DELETE FROM true_love")
             indexed = {
                 "gene_a": "KRAS", "gene_b": "NRAS",
                 "bootstrap_reciprocal_stability": "0.99",
@@ -601,6 +699,7 @@ class DepMapApiTests(unittest.TestCase):
             db.commit()
         finally:
             db.close()
+        write_index_digest(index)
         client = TestClient(create_app(self.settings))
         with client:
             result = client.post(
@@ -611,16 +710,59 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["bootstrap_reciprocal_stability"], 0.99)
         self.assertTrue(any(path.endswith("depmap-26q1-query-index.sqlite") for path in result["provenance"]))
 
+        with closing(sqlite3.connect(index)) as db:
+            changed = {
+                "gene_a": "KRAS",
+                "gene_b": "NRAS",
+                "bootstrap_reciprocal_stability": "0.12",
+                "worst_direction_fdr": "0.5",
+            }
+            db.execute(
+                "UPDATE true_love SET row_json=?",
+                (json.dumps(changed),),
+            )
+            db.commit()
+        with self.assertLogs("depmap_mcp.catalog_readers", level="ERROR"):
+            with TestClient(create_app(self.settings)) as client:
+                changed_result = client.post(
+                    "/api/v1/query",
+                    headers=self.headers,
+                    json={
+                        "mode": "true_love",
+                        "gene": "KRAS",
+                        "partner": "NRAS",
+                        "limit": 5,
+                    },
+                ).json()
+        self.assertEqual(changed_result["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(changed_result["reason_code"], "CHECKSUM_MISMATCH")
+        self.assertNotIn(str(self.settings.knowledge_root), json.dumps(changed_result))
+
     def test_biomarker_intent_reads_indexed_target_and_cache_state(self):
         index = Path(self.temp.name) / "depmap-26q1-query-index.sqlite"
-        db = sqlite3.connect(index)
-        try:
-            db.execute("CREATE TABLE biomarker_target (target_gene TEXT PRIMARY KEY, eligible INTEGER, row_json TEXT)")
-            row = {"target_gene": "GPX4", "sample_n": "1208", "sd_gene_effect": "0.21", "eligible_for_nested_model": "TRUE"}
-            db.execute("INSERT INTO biomarker_target VALUES (?,?,?)", ("GPX4", 1, json.dumps(row)))
-            db.commit()
-        finally:
-            db.close()
+        module = (
+            self.settings.knowledge_root
+            / "analysis-modules"
+            / "表达基因-CRISPR基因依赖相关性分析"
+        )
+        catalog = (
+            module
+            / "results"
+            / "predictive_biomarker"
+            / "target_eligibility_26Q1"
+            / "target_eligibility_catalog.csv"
+        )
+        catalog.parent.mkdir(parents=True)
+        (module / "manifest.json").write_text(
+            json.dumps({"status": "complete", "release": "26Q1"}),
+            encoding="utf-8",
+        )
+        catalog.write_text(
+            "target_gene,sample_n,sd_gene_effect,eligible_for_nested_model\n"
+            "GPX4,1208,0.21,TRUE\n",
+            encoding="utf-8",
+        )
+        build(self.settings.knowledge_root, index)
         client = TestClient(create_app(self.settings))
         with client:
             result = client.post(
@@ -936,6 +1078,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(found.json()["status"], "FOUND")
         self.assertEqual(found.json()["rows"][0]["target_gene"], "RAF1")
         self.assertEqual(found.json()["manifest"]["lineage_sample_n"], 126)
+        self.assertIn(
+            str(root / "source_gene_order.csv"),
+            found.json()["provenance"],
+        )
         self.assertEqual(missing.status_code, 200)
         self.assertEqual(missing.json()["status"], "NOT_RETAINED")
         self.assertEqual(positive.json()["status"], "FOUND")
@@ -1164,6 +1310,11 @@ class DepMapApiTests(unittest.TestCase):
             lineage_sample_n=63,
             family="effect_correlation",
         )
+        (network / "broken.parquet").write_bytes(b"PAR1PAR1")
+        build(
+            self.settings.knowledge_root,
+            self.settings.knowledge_root / "depmap-26q1-query-index.sqlite",
+        )
         with TestClient(create_app(self.settings)) as client:
             response = client.post(
                 "/api/v1/query",
@@ -1258,6 +1409,10 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "FOUND")
         self.assertEqual(response.json()["rows"][0]["drug_name"], "Example inhibitor")
         self.assertEqual(response.json()["rows"][0]["n"], 58)
+        self.assertIn(
+            str(root / "drug_metadata.parquet"),
+            response.json()["provenance"],
+        )
 
 
 def write_lineage_mutation_fixtures(root: Path) -> None:
