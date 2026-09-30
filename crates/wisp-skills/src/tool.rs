@@ -335,7 +335,18 @@ impl Tool for SearchSkillsTool {
             .unwrap_or_default()
             .to_string()
     }
-    async fn run(&self, args: &serde_json::Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &serde_json::Value, env: &dyn ToolEnv) -> ToolResult {
+        let query = args
+            .get("query")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if !env.artifact_presentation().allows_plotting_skill()
+            && wisp_tools::presentation::plotting_skill_request(query)
+        {
+            return ToolResult::fail(
+                "plotting skills stay unavailable until the user selects a figure",
+            );
+        }
         self.search(args)
     }
 }
@@ -364,11 +375,18 @@ impl Tool for UseSkillTool {
             .unwrap_or("")
             .to_string()
     }
-    async fn run(&self, args: &serde_json::Value, _env: &dyn ToolEnv) -> ToolResult {
+    async fn run(&self, args: &serde_json::Value, env: &dyn ToolEnv) -> ToolResult {
         let name = match args.get("name").and_then(|v| v.as_str()) {
             Some(n) => n.to_string(),
             None => return ToolResult::fail("missing required argument 'name'"),
         };
+        if !env.artifact_presentation().allows_plotting_skill()
+            && wisp_tools::presentation::plotting_skill_request(&name)
+        {
+            return ToolResult::fail(
+                "plotting skills stay unavailable until the user selects a figure",
+            );
+        }
         let Some(skill) = self.skills.get(&name) else {
             return ToolResult::fail(format!("skill '{name}' not found"));
         };

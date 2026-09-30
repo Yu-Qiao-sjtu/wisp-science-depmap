@@ -61,14 +61,21 @@ pub fn question_body(args: &Value) -> Result<Value, String> {
             "ask_user error: a question with no options must allow a freeform answer".into(),
         );
     }
-    Ok(json!({
+    let mut body = json!({
         "v": 1,
         "source": "native",
         "question": question,
         "options": options,
         "allow_freeform": allow_freeform,
         "note": ASK_USER_NOTE,
-    }))
+    });
+    if let Some(purpose) = args.get("purpose").and_then(|value| value.as_str()) {
+        let purpose = purpose.trim();
+        if !purpose.is_empty() {
+            body["purpose"] = json!(purpose);
+        }
+    }
+    Ok(body)
 }
 
 /// Registered for every built-in session, not just plan mode: a fork mid-
@@ -111,6 +118,10 @@ impl Tool for AskUserTool {
                     "allow_freeform": {
                         "type": "boolean",
                         "description": "Let the user type their own answer. Defaults to true."
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "Machine-readable card purpose. Use artifact_presentation for the post-analysis deliverable choice."
                     }
                 },
                 "required": ["question"]

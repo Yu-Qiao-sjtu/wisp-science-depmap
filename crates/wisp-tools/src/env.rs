@@ -276,6 +276,15 @@ pub trait ToolEnv: Send + Sync {
     fn artifact_requested(&self) -> bool {
         true
     }
+    /// Which project artifacts this turn may materialize. Defaults from
+    /// `artifact_requested` so existing hosts stay unrestricted or chat-only.
+    fn artifact_presentation(&self) -> crate::presentation::ArtifactPresentation {
+        if self.artifact_requested() {
+            crate::presentation::ArtifactPresentation::Unrestricted
+        } else {
+            crate::presentation::ArtifactPresentation::ChatOnly
+        }
+    }
     /// Whether the "full" approval scope is active — auto-approve everything,
     /// dangerous commands included. Only the shell danger check consults this;
     /// default `false` keeps the CLI and tests prompting on dangerous commands.

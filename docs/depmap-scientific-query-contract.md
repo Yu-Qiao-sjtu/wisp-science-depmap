@@ -33,10 +33,12 @@ request does not filter the pan-cancer catalog; a missing lineage table is
 `NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
 merged with direction-discovery or effect-correlation lists.
 
-Query-only turns default to `artifact_requested=false`. `write`/`edit`, shell,
-and Python/R must not create `results/reports/**` or unsolicited CSV; the
-answer stays a bounded envelope in chat. An explicit artifact request sets
-`artifact_requested=true` and is the only way those writes proceed.
+Query-only turns default to chat-only presentation. `write`/`edit`, shell,
+and Python/R must not create `results/reports/**` or unsolicited CSV, and
+plotting skills stay unavailable. After the chat answer, the agent asks with
+`ask_user` purpose `artifact_presentation` (chat, table, figure, or report).
+An explicit artifact request in the original message skips that card and
+authorizes only the named kind.
 
 New computation is a gated Run behind a non-exfiltrating remote-compute
 gateway. Tests use fakes; missing knowledge context or MCP dropout is
