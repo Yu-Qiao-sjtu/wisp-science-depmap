@@ -230,10 +230,9 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["evidence"]["query_count"], 11)
         self.assertTrue(result["evidence_id"].startswith("depmap-26q1-"))
         self.assertEqual(self.queries[1]["lineage"], "Breast")
-        provenance = result["evidence"]["items"][0]["result"]["provenance"][0]
-        self.assertEqual(
-            provenance, "depmap://26Q1/depmap-26q1-full/fixture.parquet"
-        )
+        item = result["evidence"]["items"][0]["result"]
+        self.assertNotIn("provenance", item)
+        self.assertNotIn("manifest", item)
 
         tcga = result["evidence"]["items"][-1]
         self.assertEqual(
@@ -250,6 +249,39 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             tcga["metric_semantics"]["metric"],
             "tcga_expression_and_survival_association",
         )
+
+    def test_default_model_evidence_omits_provenance_and_server_locations(self):
+        shared = {
+            "status": "FOUND",
+            "rows": [
+                {
+                    "symbol": "ESR1",
+                    "artifact_path": "depmap-26q1-full/results/esr1.csv",
+                },
+                {
+                    "symbol": "TP53",
+                    "artifact_path": r"D:\srv\private.tsv",
+                },
+            ],
+        }
+        first = self.service._envelope(
+            tool="depmap_status",
+            request={"mode": "status"},
+            evidence={**shared, "provenance": ["source-alpha"], "index_path": r"D:\srv\a"},
+        )
+        second = self.service._envelope(
+            tool="depmap_status",
+            request={"mode": "status"},
+            evidence={**shared, "provenance": ["source-beta"], "index_path": r"D:\srv\b"},
+        )
+        self.assertEqual(
+            first["evidence"]["rows"][0]["artifact_path"],
+            "depmap-26q1-full/results/esr1.csv",
+        )
+        self.assertNotIn("artifact_path", first["evidence"]["rows"][1])
+        self.assertNotIn("provenance", first["evidence"])
+        self.assertNotIn("index_path", first["evidence"])
+        self.assertNotEqual(first["evidence_id"], second["evidence_id"])
 
     async def test_status_publishes_deployment_contract_identity(self):
         first = await self.service.status()
@@ -1080,7 +1112,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             result["evidence"]["result"]["result"]["rows"][0]["symbol"],
             "ESR1",
         )
-        self.assertGreater(result["model_projection"]["omitted_items"], 0)
+        self.assertNotIn("provenance", result["evidence"]["result"])
 
     async def test_cancer_only_direction_discovery_needs_no_anchor_gene(self):
         result = await self.service.lineage_directions("结肠癌", 20)
