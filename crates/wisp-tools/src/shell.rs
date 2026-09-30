@@ -83,6 +83,11 @@ async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duratio
     if let Err(error) = env.preflight_shell(&cmd).await {
         return ToolResult::fail(error);
     }
+    if !env.artifact_requested() {
+        if let Some(path) = crate::presentation::query_only_forbidden_target(&cmd) {
+            return ToolResult::fail(crate::presentation::query_only_write_error(&path));
+        }
+    }
     // In the "full" scope dangerous commands run without a prompt; otherwise
     // ("auto" and "ask") a dangerous command still asks.
     if !env.danger_auto_approve() {
