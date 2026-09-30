@@ -407,7 +407,6 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "tf_activity_to_dependency",
                 "expression_biomarker_model",
                 "true_love_gene_catalog",
-                "gene_evidence",
                 "tcga_expression_survival",
                 "drug_gene_evidence",
                 "subtype_evidence",
@@ -459,6 +458,52 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["catalog_status"], "PARTIAL")
         self.assertEqual(result["invalid_record_count"], 2)
         self.assertEqual(result["capabilities"], [valid])
+
+    async def test_enrichment_is_advertised_only_with_an_executable_reader(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        payload = {
+            "intent": "gene_evidence",
+            "mcp_tool": "depmap_gene_evidence",
+            "description": "pathway enrichment",
+        }
+        with closing(sqlite3.connect(index)) as db:
+            db.executescript(
+                """
+                CREATE TABLE capability_catalog (payload_json TEXT);
+                CREATE TABLE reader_registry (
+                  query_mode TEXT PRIMARY KEY, adapter TEXT, module_pattern TEXT,
+                  supported_formats TEXT
+                );
+                CREATE TABLE reader_coverage (
+                  query_mode TEXT PRIMARY KEY, analysis_id TEXT, coverage_state TEXT
+                );
+                """
+            )
+            db.execute(
+                "INSERT INTO capability_catalog VALUES (?)",
+                (json.dumps(payload),),
+            )
+            db.execute(
+                "INSERT INTO reader_registry VALUES ('enrichment','enrichment_adapter','*富集*','parquet')"
+            )
+            db.execute(
+                "INSERT INTO reader_coverage VALUES ('enrichment', NULL, 'NOT_COMPUTED')"
+            )
+            db.commit()
+        hidden = await self.service.capabilities()
+        self.assertNotIn(
+            "gene_evidence",
+            {item["intent"] for item in hidden["capabilities"]},
+        )
+
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "UPDATE reader_coverage SET analysis_id='analysis-1', coverage_state='AVAILABLE' "
+                "WHERE query_mode='enrichment'"
+            )
+            db.commit()
+        shown = await self.service.capabilities()
+        self.assertEqual(shown["capabilities"], [payload])
 
     async def test_data_coverage_is_bounded_and_omits_internal_paths(self):
         index = self.root / "depmap-26q1-query-index.sqlite"

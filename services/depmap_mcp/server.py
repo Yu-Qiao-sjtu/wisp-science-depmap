@@ -730,6 +730,29 @@ class DepMapEvidenceService:
             settings.knowledge_root, settings.release
         )
 
+    def _enrichment_reader_executable(self, index: Path) -> bool:
+        """Enrichment is advertised only when a completed artifact has a Reader."""
+        if not index.is_file():
+            return False
+        try:
+            with closing(
+                sqlite3.connect(
+                    f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                )
+            ) as db:
+                row = db.execute(
+                    "SELECT 1 FROM reader_coverage AS coverage "
+                    "JOIN reader_registry AS reader "
+                    "ON reader.query_mode = coverage.query_mode "
+                    "WHERE coverage.query_mode = 'enrichment' "
+                    "AND coverage.coverage_state = 'AVAILABLE' "
+                    "AND coverage.analysis_id IS NOT NULL "
+                    "LIMIT 1"
+                ).fetchone()
+        except (sqlite3.Error, OSError):
+            return False
+        return row is not None
+
     async def capabilities(self) -> dict[str, Any]:
         """Return the routing contract without touching result data."""
         capabilities = list(INTENT_CAPABILITIES)
@@ -756,6 +779,12 @@ class DepMapEvidenceService:
                 invalid_records = 0
         else:
             invalid_records = 0
+        if not self._enrichment_reader_executable(index):
+            capabilities = [
+                item
+                for item in capabilities
+                if item.get("intent") != "gene_evidence"
+            ]
         return {
             "schema_version": 1,
             "release": self.settings.release,
