@@ -244,3 +244,45 @@ async fn unchanged_connector_reconnects_after_transport_shutdown() {
     assert_eq!(state.initializations.load(Ordering::SeqCst), 2);
     server.abort();
 }
+
+#[tokio::test]
+async fn shutdown_during_handshake_does_not_hand_out_the_new_client() {
+    let (state, url, server) = fixture().await;
+    let entered = Arc::new(Notify::new());
+    let entered_factory = entered.clone();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let launches_factory = launches.clone();
+    let factory: ClientFactory = Arc::new(move || {
+        let url = url.clone();
+        let entered_factory = entered_factory.clone();
+        let launches_factory = launches_factory.clone();
+        Box::pin(async move {
+            let launch = launches_factory.fetch_add(1, Ordering::SeqCst);
+            if launch == 0 {
+                entered_factory.notify_one();
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            McpClient::connect_http_with_proxy(&url, &[], "none").await
+        })
+    });
+    let client = Arc::new(McpClient::managed(ManagedConnection::new(factory)));
+    let caller = client.clone();
+    let call = tokio::spawn(async move { caller.tool_call("echo", &json!({})).await });
+    entered.notified().await;
+    let shutting_down = client.clone();
+    let shutdown = tokio::spawn(async move { shutting_down.shutdown().await });
+    let call = tokio::time::timeout(Duration::from_secs(2), call)
+        .await
+        .expect("handshake should stop when shutdown starts")
+        .unwrap()
+        .unwrap_err();
+    assert!(call.to_string().contains("closed during initialization"));
+    tokio::time::timeout(Duration::from_secs(2), shutdown)
+        .await
+        .expect("shutdown should finish after the handshake stops")
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(client.tool_call("echo", &json!({})).await.unwrap(), "ok");
+    server.abort();
+}

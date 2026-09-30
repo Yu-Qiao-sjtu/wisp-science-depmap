@@ -31,8 +31,10 @@ not terminate the remote service.
 
 - A disconnected connector, including one whose live transport was shut down
   while the saved descriptor stayed enabled, reconnects on the next explicit
-  use. Concurrent recovery attempts are coalesced. The lost request is not
-  replayed. Failure is reported; there is no endless retry loop.
+  use. Concurrent recovery attempts are coalesced. A handshake already in
+  progress when shutdown starts is discarded and is not handed to the caller.
+  The lost request is not replayed. Failure is reported; there is no endless
+  retry loop.
 - Disable, descriptor replacement, conversation retirement, and Host exit
   retire the connector. The next call stays closed and does not reconnect.
 - Opening a saved conversation reconnects its currently enabled plugins. No
