@@ -154,8 +154,9 @@ impl ManagedConnection {
         }
     }
     pub async fn shutdown(&self) -> Result<()> {
-        // Reject new requests before waiting for a concurrent bounded initialization.
-        self.closed.store(true, Ordering::SeqCst);
+        // Drop the live transport only. The next explicit request revalidates
+        // the saved connector through the factory and may reconnect. Disable,
+        // replacement, conversation retirement, and Host exit use `retire`.
         self.connecting.store(false, Ordering::SeqCst);
         let _connect = self.connect.lock().await;
         let client = self.current.write().unwrap().take();
@@ -164,5 +165,10 @@ impl ManagedConnection {
             Box::pin(client.shutdown()).await?;
         }
         Ok(())
+    }
+
+    pub async fn retire(&self) -> Result<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        self.shutdown().await
     }
 }

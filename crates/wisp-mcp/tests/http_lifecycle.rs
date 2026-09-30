@@ -193,7 +193,54 @@ async fn reconnect_coalesces_and_never_replays_ambiguous_write() {
         .to_string()
         .contains("stale-instance"));
     client.shutdown().await.unwrap();
-    assert!(client.tool_call("echo", &json!({})).await.is_err());
+    assert_eq!(client.tool_call("echo", &json!({})).await.unwrap(), "ok");
+    assert_eq!(state.initializations.load(Ordering::SeqCst), 3);
+    client.retire().await.unwrap();
+    let retired = client.tool_call("echo", &json!({})).await.unwrap_err();
+    assert!(retired.to_string().contains("disabled or replaced"));
+    assert_eq!(state.initializations.load(Ordering::SeqCst), 3);
+    server.abort();
+}
+
+#[tokio::test]
+async fn unchanged_connector_reconnects_after_transport_shutdown() {
+    let (state, url, server) = fixture().await;
+    let enabled = Arc::new(AtomicBool::new(true));
+    let gate = enabled.clone();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observed = launches.clone();
+    let factory: ClientFactory = Arc::new(move || {
+        let url = url.clone();
+        let gate = gate.clone();
+        observed.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            if !gate.load(Ordering::SeqCst) {
+                anyhow::bail!("MCP connector disabled or replaced; request not sent");
+            }
+            McpClient::connect_http_with_proxy(&url, &[], "none").await
+        })
+    });
+    let client = Arc::new(McpClient::managed(ManagedConnection::new(factory)));
+    assert_eq!(client.tool_call("echo", &json!({})).await.unwrap(), "ok");
+    client.shutdown().await.unwrap();
+    assert!(!client.is_connected());
+
+    let mut calls = tokio::task::JoinSet::new();
+    for _ in 0..6 {
+        let client = client.clone();
+        calls.spawn(async move { client.tool_call("echo", &json!({})).await });
+    }
+    while let Some(result) = calls.join_next().await {
+        assert_eq!(result.unwrap().unwrap(), "ok");
+    }
+    assert_eq!(launches.load(Ordering::SeqCst), 2);
+    assert_eq!(state.initializations.load(Ordering::SeqCst), 2);
+
+    enabled.store(false, Ordering::SeqCst);
+    client.shutdown().await.unwrap();
+    let disabled = client.tool_call("echo", &json!({})).await.unwrap_err();
+    assert!(disabled.to_string().contains("disabled or replaced"));
+    assert_eq!(launches.load(Ordering::SeqCst), 3);
     assert_eq!(state.initializations.load(Ordering::SeqCst), 2);
     server.abort();
 }

@@ -1015,6 +1015,14 @@ impl McpClient {
             Transport::Managed(m) => m.shutdown().instrument(m.span()).await,
         }
     }
+
+    /// Permanently close a managed connector. A later call must not reconnect.
+    pub async fn retire(&self) -> Result<()> {
+        match &self.transport {
+            Transport::Managed(m) => m.retire().instrument(m.span()).await,
+            _ => self.shutdown().await,
+        }
+    }
 }
 
 impl Drop for McpClient {
