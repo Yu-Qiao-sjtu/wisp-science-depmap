@@ -191,6 +191,7 @@ pub enum ClaimCheckCode {
     SampleCountMismatch,
     CoverageStatusMisread,
     KindMasquerade,
+    UngroundedEnrichment,
     EntityMismatch,
     MetricMismatch,
     EvidenceNotFound,
@@ -210,6 +211,7 @@ impl ClaimCheckCode {
             Self::SampleCountMismatch => "sample_count_mismatch",
             Self::CoverageStatusMisread => "coverage_status_misread",
             Self::KindMasquerade => "kind_masquerade",
+            Self::UngroundedEnrichment => "ungrounded_enrichment",
             Self::EntityMismatch => "entity_mismatch",
             Self::MetricMismatch => "metric_mismatch",
             Self::EvidenceNotFound => "evidence_not_found",
@@ -276,6 +278,28 @@ pub fn claims_from_output(output: &Value) -> Result<Vec<ClaimRecord>, String> {
     Ok(out)
 }
 
+pub fn enrichment_wording_is_statistical(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    ["nes", "gsea", "fdr", "p-value", "p_value", "enrichment_z", "检验"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+        || text.contains("p值")
+}
+
+pub fn mentions_enrichment(text: &str) -> bool {
+    text.contains("富集") || text.to_ascii_lowercase().contains("enrichment")
+}
+
+/// Statistical enrichment keeps its wording. A manual grouping must not say 富集.
+pub fn rewrite_manual_enrichment_prose(text: &str) -> String {
+    if !mentions_enrichment(text) || enrichment_wording_is_statistical(text) {
+        return text.to_string();
+    }
+    text.replace("富集", "人工归类")
+        .replace("Enrichment", "Manual grouping")
+        .replace("enrichment", "manual grouping")
+}
+
 pub fn validate_claims(
     claims: &[ClaimRecord],
     catalog: &ClaimGroundingCatalog,
@@ -308,11 +332,16 @@ pub fn rewrite_unsupported_claims(
                     rewritten.value = None;
                     rewritten.p_value = None;
                     rewritten.direction = None;
-                    rewritten.text = Some(format!(
-                        "Unsupported claim {} withheld ({})",
-                        claim.claim_id,
-                        check.code.as_str()
-                    ));
+                    rewritten.text = Some(match check.code {
+                        ClaimCheckCode::UngroundedEnrichment => rewrite_manual_enrichment_prose(
+                            claim.text.as_deref().unwrap_or("富集"),
+                        ),
+                        _ => format!(
+                            "Unsupported claim {} withheld ({})",
+                            claim.claim_id,
+                            check.code.as_str()
+                        ),
+                    });
                     rewritten
                 }
                 None => claim.clone(),
@@ -331,6 +360,22 @@ fn validate_one(claim: &ClaimRecord, catalog: &ClaimGroundingCatalog) -> ClaimCh
             );
         }
         return ok(claim);
+    }
+
+    if mentions_enrichment(&format!(
+        "{} {}",
+        claim.text.as_deref().unwrap_or(""),
+        claim.predicate.as_deref().unwrap_or("")
+    )) && !enrichment_wording_is_statistical(&format!(
+        "{} {}",
+        claim.metric.as_deref().unwrap_or(""),
+        claim.text.as_deref().unwrap_or("")
+    )) {
+        return fail(
+            claim,
+            ClaimCheckCode::UngroundedEnrichment,
+            "enrichment wording requires an enrichment statistic; otherwise label it as a manual grouping",
+        );
     }
 
     if claim.kind == ClaimKind::LiteratureStatement {
@@ -816,6 +861,29 @@ mod tests {
         claim.text = Some("this may suggest a follow-up experiment".into());
         let report = validate_claims(&[claim], &catalog());
         assert!(report.typed_reason().is_none());
+    }
+
+    #[test]
+    fn manual_class_enrichment_wording_is_relabeled() {
+        let prose = rewrite_manual_enrichment_prose("这些基因富集在黏附/极性/囊泡运输轴");
+        assert_eq!(prose, "这些基因人工归类在黏附/极性/囊泡运输轴");
+        assert_eq!(
+            rewrite_manual_enrichment_prose("Hallmark GSEA NES=1.8 shows enrichment"),
+            "Hallmark GSEA NES=1.8 shows enrichment"
+        );
+        let mut claim = ClaimRecord::new("c-class", ClaimKind::MeasuredFact);
+        claim.text = Some("这些基因富集在黏附轴".into());
+        let report = validate_claims(&[claim.clone()], &catalog());
+        assert!(report
+            .typed_reason()
+            .unwrap()
+            .contains("ungrounded_enrichment"));
+        let rewritten = rewrite_unsupported_claims(&[claim], &report);
+        assert_eq!(
+            rewritten[0].text.as_deref(),
+            Some("这些基因人工归类在黏附轴")
+        );
+        assert_eq!(rewritten[0].kind, ClaimKind::Interpretation);
     }
 
     #[test]
