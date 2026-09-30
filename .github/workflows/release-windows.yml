@@ -2,7 +2,7 @@ name: Windows Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "depmap-v*"]
   workflow_dispatch:
     inputs:
       tag:
