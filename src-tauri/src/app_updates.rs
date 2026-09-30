@@ -40,7 +40,7 @@ pub(super) fn update_check_from_release(
 ) -> Result<UpdateCheck, String> {
     let current = semver::Version::parse(current_version)
         .map_err(|error| format!("Invalid current version {current_version}: {error}"))?;
-    let latest_text = release.tag_name.trim_start_matches(['v', 'V']);
+    let latest_text = version_from_release_tag(&release.tag_name);
     let latest = semver::Version::parse(latest_text).map_err(|error| {
         format!(
             "Invalid GitHub release version {}: {error}",
@@ -84,8 +84,23 @@ impl PendingUpdate {
     }
 }
 
+pub(super) fn version_from_release_tag(tag: &str) -> &str {
+    let without_product = tag.strip_prefix("depmap-").unwrap_or(tag);
+    without_product.trim_start_matches(['v', 'V'])
+}
+
 fn release_url(version: &str) -> String {
-    format!("{RELEASES_URL}/tag/v{version}")
+    format!("{RELEASES_URL}/tag/{}", product_release_tag(version))
+}
+
+/// Historical public tags stay `v*`. Later product tags use `depmap-v*` so a
+/// clone that also tracks upstream Wisp Science cannot resolve the wrong commit.
+pub(super) fn product_release_tag(version: &str) -> String {
+    let historical = semver::Version::new(0, 13, 0);
+    match semver::Version::parse(version) {
+        Ok(parsed) if parsed <= historical => format!("v{version}"),
+        _ => format!("depmap-v{version}"),
+    }
 }
 
 fn install_is_blocked(
@@ -302,6 +317,25 @@ pub(super) async fn install_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_tags_keep_historical_v0_13_0_and_prefix_later_releases() {
+        assert_eq!(version_from_release_tag("v0.13.0"), "0.13.0");
+        assert_eq!(version_from_release_tag("depmap-v0.14.0"), "0.14.0");
+        assert_eq!(product_release_tag("0.13.0"), "v0.13.0");
+        assert_eq!(product_release_tag("0.14.0"), "depmap-v0.14.0");
+        let check = update_check_from_release(
+            "0.13.0",
+            GithubRelease {
+                tag_name: "depmap-v0.14.0".into(),
+                html_url: "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases/tag/depmap-v0.14.0".into(),
+                body: String::new(),
+            },
+        )
+        .unwrap();
+        assert!(check.update_available);
+        assert_eq!(check.latest_version, "0.14.0");
+    }
 
     #[test]
     fn install_waits_for_every_kind_of_active_work() {

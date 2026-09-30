@@ -6,7 +6,7 @@ name: Create Release
 # unless overwrite_notes is set.
 on:
   push:
-    tags: ["v*"]
+    tags: ["depmap-v*", "v0.13.0"]
   workflow_dispatch:
     inputs:
       tag:
@@ -54,7 +54,12 @@ jobs:
         id: notes
         run: |
           set -euo pipefail
-          FILE=".github/release-notes/${RELEASE_TAG}.md"
+          case "$RELEASE_TAG" in
+            depmap-v*|v0.13.0) ;;
+            *) echo "unsupported release tag: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          NOTES_TAG="${RELEASE_TAG#depmap-}"
+          FILE=".github/release-notes/${NOTES_TAG}.md"
           echo "notes_file=$FILE" >> "$GITHUB_OUTPUT"
           bash scripts/github_release_notes.sh "$FILE" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
