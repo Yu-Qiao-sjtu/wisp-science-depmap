@@ -26,6 +26,7 @@ pub struct ManagedConnection {
     registered_generation: AtomicU64,
     catalog_changed: AtomicBool,
     connecting: AtomicBool,
+    shutting_down: AtomicBool,
     last_error: RwLock<Option<String>>,
     closed: AtomicBool,
 }
@@ -41,6 +42,7 @@ impl ManagedConnection {
             registered_generation: AtomicU64::new(0),
             catalog_changed: AtomicBool::new(false),
             connecting: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
             last_error: RwLock::new(None),
             closed: AtomicBool::new(false),
         }
@@ -125,7 +127,9 @@ impl ManagedConnection {
                 Ok::<_,anyhow::Error>(client)
             }.instrument(self.span()) => result,
             _ = async { loop {
-                if self.closed.load(Ordering::SeqCst) { break; }
+                if self.closed.load(Ordering::SeqCst) || self.shutting_down.load(Ordering::SeqCst) {
+                    break;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             } } => Err(anyhow!("MCP connector closed during initialization")),
         };
@@ -133,7 +137,7 @@ impl ManagedConnection {
         self.connecting.store(false, Ordering::SeqCst);
         match result {
             Ok(client) => {
-                if self.closed.load(Ordering::SeqCst) {
+                if self.closed.load(Ordering::SeqCst) || self.shutting_down.load(Ordering::SeqCst) {
                     let _ = Box::pin(client.shutdown()).await;
                     return Err(anyhow!("MCP connector closed during initialization"));
                 }
@@ -154,15 +158,29 @@ impl ManagedConnection {
         }
     }
     pub async fn shutdown(&self) -> Result<()> {
-        // Reject new requests before waiting for a concurrent bounded initialization.
-        self.closed.store(true, Ordering::SeqCst);
+        // Drop the live transport only. The next explicit request revalidates
+        // the saved connector through the factory and may reconnect. Disable,
+        // replacement, conversation retirement, and Host exit use `retire`.
+        // The fence is set before waiting for `connect`, so a handshake that
+        // already holds the lock cannot hand the new client to a caller.
+        self.shutting_down.store(true, Ordering::SeqCst);
         self.connecting.store(false, Ordering::SeqCst);
-        let _connect = self.connect.lock().await;
-        let client = self.current.write().unwrap().take();
-        tracing::info!(target: "wisp", generation=self.generation(), "mcp.connection.shutdown");
-        if let Some(client) = client {
-            Box::pin(client.shutdown()).await?;
+        let outcome = async {
+            let _connect = self.connect.lock().await;
+            let client = self.current.write().unwrap().take();
+            tracing::info!(target: "wisp", generation=self.generation(), "mcp.connection.shutdown");
+            if let Some(client) = client {
+                Box::pin(client.shutdown()).await?;
+            }
+            Ok(())
         }
-        Ok(())
+        .await;
+        self.shutting_down.store(false, Ordering::SeqCst);
+        outcome
+    }
+
+    pub async fn retire(&self) -> Result<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        self.shutdown().await
     }
 }
