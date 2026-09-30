@@ -7904,6 +7904,7 @@ pub fn run() {
             network::set_network_settings,
             settings_commands::get_settings,
             settings_commands::set_settings,
+            settings_commands::set_locale,
             configure::get_appearance_prefs,
             configure::set_appearance_prefs,
             settings_commands::get_storage_usage,

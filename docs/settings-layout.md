@@ -4,6 +4,10 @@ Settings use a bounded content column, compact controls and content-sized cards.
 Wide windows show related collections side by side; narrower windows stack them
 under the same page heading. These layouts use the existing light/dark palettes.
 
+The language control on General writes the saved locale immediately. Closing
+Settings without Save keeps that language, and the next launch restores it.
+Other General fields still wait for Save. An empty saved locale stays English.
+
 The sidebar groups the existing pages by purpose:
 
 | Group | Pages |

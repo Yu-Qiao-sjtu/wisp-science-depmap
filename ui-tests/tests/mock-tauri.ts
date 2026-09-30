@@ -4737,6 +4737,14 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             artifacts.unshift(artifact);
             return artifact;
           }
+          case "set_locale": {
+            const locale = String(arg("locale") ?? "");
+            if (locale === "en" || locale === "zh") mockLocale = locale;
+            const writes = ((window as any).__localeWrites ??= []) as string[];
+            writes.push(locale);
+            (window as any).__lastSetLocale = locale;
+            return null;
+          }
           case "set_settings": {
             const next = plain(arg("settings") ?? {});
             mockPetEnabled = Boolean(next.pet_enabled);

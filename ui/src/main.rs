@@ -281,7 +281,7 @@ fn request_turn_memory_proposal(
 
 #[component]
 fn App() -> impl IntoView {
-    let locale = create_rw_signal(Locale::detect_browser());
+    let locale = create_rw_signal(Locale::En);
     provide_context(locale.read_only());
     let theme_mode = create_rw_signal(load_theme_mode());
     create_effect(move |_| apply_theme_mode(&theme_mode.get()));

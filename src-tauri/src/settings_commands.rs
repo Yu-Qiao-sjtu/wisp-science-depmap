@@ -218,6 +218,38 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
     })
 }
 
+pub(crate) fn normalized_locale(raw: &str) -> &str {
+    match raw.trim() {
+        "zh" | "zh-CN" | "zh-TW" => "zh",
+        other if !other.is_empty() => other,
+        _ => "en",
+    }
+}
+
+#[tauri::command]
+pub(super) async fn set_locale(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    locale: String,
+) -> Result<(), String> {
+    let locale = match normalized_locale(&locale) {
+        "en" | "zh" => normalized_locale(&locale),
+        _ => return Err("Locale must be en or zh.".into()),
+    };
+    state
+        .store
+        .set_setting("locale", locale)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    #[cfg(target_os = "macos")]
+    super::install_macos_app_menu(&app, locale)?;
+    #[cfg(target_os = "windows")]
+    super::desktop_lifecycle::apply_windows_tray_locale(&app, locale)?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = app;
+    Ok(())
+}
+
 #[tauri::command]
 pub(super) async fn set_settings(
     app: tauri::AppHandle,
@@ -286,11 +318,7 @@ pub(super) async fn set_settings(
         settings.label.trim(),
     )
     .await?;
-    let locale = match settings.locale.trim() {
-        "zh" | "zh-CN" | "zh-TW" => "zh",
-        other if !other.is_empty() => other,
-        _ => "en",
-    };
+    let locale = normalized_locale(&settings.locale);
     state
         .store
         .set_setting("locale", locale)
@@ -745,13 +773,21 @@ fn vision_probe_message() -> Message {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_storage_usage, merged_scimaster_config, sync_scimaster_config_at,
-        validate_max_iter, vision_probe_message,
+        collect_storage_usage, merged_scimaster_config, normalized_locale,
+        sync_scimaster_config_at, validate_max_iter, vision_probe_message,
     };
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn saved_locale_normalizes_chinese_tags_and_keeps_english_default() {
+        assert_eq!(normalized_locale("zh-CN"), "zh");
+        assert_eq!(normalized_locale(" zh "), "zh");
+        assert_eq!(normalized_locale("en"), "en");
+        assert_eq!(normalized_locale("  "), "en");
+    }
 
     #[tokio::test]
     async fn explicit_image_validation_routes_custom_ids_to_metadata_not_chat_or_generation() {
