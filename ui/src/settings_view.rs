@@ -1981,7 +1981,15 @@ pub(super) fn SettingsView(
                                     let loc = Locale::from_code(&code);
                                     locale.set(loc);
                                     set_document_lang(loc);
-                                    settings.update(|s| s.locale = code);
+                                    settings.update(|s| s.locale = loc.code().into());
+                                    spawn_local(async move {
+                                        let _ = invoke(
+                                            "set_locale",
+                                            to_value(&serde_json::json!({ "locale": loc.code() }))
+                                                .unwrap_or(JsValue::NULL),
+                                        )
+                                        .await;
+                                    });
                                 }
                                 // Bind `selected` on the options instead of `value` on the
                                 // select: the select's `value` property is applied before the
