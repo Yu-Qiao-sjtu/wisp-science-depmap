@@ -1,5 +1,13 @@
 # App updates
 
+Release tags from this fork are `depmap-vX.Y.Z`. Upstream Wisp Science uses
+`vX.Y.Z` for a different product line, so a clone with both `origin` and
+`upstream` must not treat a bare `v*` name as this product. The published
+`v0.13.0` tag is historical and remains
+`79ad378c724a397f9b39ccf1b7db90d92622ceae` (`Release v0.13.0 (#136)`).
+Verify it with `git rev-parse origin/v0.13.0` when a local `v0.13.0` already
+points at upstream. Do not move that tag.
+
 This wisp-depmap repository **does not publish macOS installers**. Tagged
 releases attach Windows and Linux packages only. The macOS Release workflow is
 a no-op so missing Developer ID secrets cannot fail a tag.

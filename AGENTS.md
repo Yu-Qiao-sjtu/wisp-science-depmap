@@ -66,6 +66,8 @@ cargo run -p wisp-mcp --example smoke
 
 When asked to release, follow this section. Create the GitHub Release with `gh` **before** CI uploads installers, so platform jobs never write the title or notes.
 
+Future git tags are `depmap-vX.Y.Z`. That name does not collide with upstream Wisp Science `vX.Y.Z` tags in a clone that has both remotes. The already published `v0.13.0` tag stays where it is and must resolve to `79ad378c724a397f9b39ccf1b7db90d92622ceae`. Do not move it. If a local `v0.13.0` points somewhere else, use `origin`'s tag rather than the local name.
+
 1. Bump `workspace.package.version` in `Cargo.toml`, `ui/Cargo.toml`, and `src-tauri/tauri.conf.json`. Update workspace package versions in `Cargo.lock` and `ui/Cargo.lock` (only `name = "wisp-*"` entries — do not bump third-party crates that happen to share the same version).
 2. Write bilingual notes at `.github/release-notes/vX.Y.Z.md`. Put the GitHub title in an HTML comment on the first line:
 
@@ -93,7 +95,7 @@ When asked to release, follow this section. Create the GitHub Release with `gh` 
 
    ```bash
    TITLE="$(scripts/github_release_notes.sh .github/release-notes/vX.Y.Z.md vX.Y.Z | sed 's/^title=//')"
-   gh release create vX.Y.Z \
+   gh release create depmap-vX.Y.Z \
      --title "$TITLE" \
      --notes-file .github/release-notes/vX.Y.Z.md \
      --target "$(git rev-parse HEAD)"
@@ -103,24 +105,24 @@ When asked to release, follow this section. Create the GitHub Release with `gh` 
 
    ```powershell
    $title = (bash scripts/github_release_notes.sh .github/release-notes/vX.Y.Z.md vX.Y.Z) -replace '^title=',''
-   gh release create vX.Y.Z --title $title --notes-file .github/release-notes/vX.Y.Z.md --target (git rev-parse HEAD)
+   gh release create depmap-vX.Y.Z --title $title --notes-file .github/release-notes/vX.Y.Z.md --target (git rev-parse HEAD)
    ```
 
 6. Confirm the release exists, then wait until CI has **started** (Create Release, Windows Release, Linux Release). Do not wait for macOS Release; this repository does not publish macOS installers.
 
    ```bash
-   gh release view vX.Y.Z
-   gh run list --branch vX.Y.Z
+   gh release view depmap-vX.Y.Z
+   gh run list --branch depmap-vX.Y.Z
    ```
 
    Create Release is a no-op when the release already exists. Platform workflows attach installers only; they must not be given a release body. Only watch those runs to completion when the user asked to ship or verify the published assets.
 
-Do not `git push origin vX.Y.Z` after `gh release create` — the tag already exists on GitHub. To fix notes on an existing release, edit the notes file and run the Create Release workflow with `overwrite_notes`, or `gh release edit`. Never use `tauri-action` / `action-gh-release` with a body on a published release.
+Do not `git push origin depmap-vX.Y.Z` after `gh release create` — the tag already exists on GitHub. To fix notes on an existing release, edit the notes file and run the Create Release workflow with `overwrite_notes`, or `gh release edit`. Never use `tauri-action` / `action-gh-release` with a body on a published release.
 
 To rebuild one platform for an existing tag, dispatch that workflow **from `main`** (so the upload-only YAML is used) with the tag input. Do not `gh run rerun` a tag-push job whose workflow still rewrites the release body:
 
 ```bash
-gh workflow run "Windows Release" --ref main -f tag=vX.Y.Z -f signing_policy=release-signing -f publish=true
+gh workflow run "Windows Release" --ref main -f tag=depmap-vX.Y.Z -f signing_policy=release-signing -f publish=true
 ```
 
 Details: [docs/app-updates.md](docs/app-updates.md).
