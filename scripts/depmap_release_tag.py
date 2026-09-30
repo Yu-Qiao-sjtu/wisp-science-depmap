@@ -11,6 +11,18 @@ class ReleaseTagError(Exception):
     """The requested tag does not identify one wisp-depmap release commit."""
 
 
+def release_tag_allowed(tag: str) -> bool:
+    """Future tags are depmap-v*. Only the published historical tag stays bare."""
+    return tag.startswith("depmap-v") or tag in HISTORICAL_DEP_MAP_TAGS
+
+
+def release_notes_tag(tag: str) -> str:
+    """Release notes stay vX.Y.Z.md even when the git tag is depmap-vX.Y.Z."""
+    if tag.startswith("depmap-"):
+        return tag.removeprefix("depmap-")
+    return tag
+
+
 def select_release_commit(
     tag: str,
     origin_commit: str | None,
