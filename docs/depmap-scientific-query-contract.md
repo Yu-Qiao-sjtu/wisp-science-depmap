@@ -22,7 +22,10 @@ TF-activity module in-process: keys in the frozen `tf_order` universe return
 `FOUND` / `NOT_RETAINED` / `NOT_TESTED` / `NOT_OBSERVED`, never HTTP 500.
 TF-activity queries also page the frozen `tf_order` universe (`view=universe`)
 and bulk `top_hits` rankings, reporting `matched_row_count` separately from the
-bounded page. DoRothEA is not reconstructed from the browser.
+bounded page. A universe-wide intent with an advertised `bulk_ranking` capability
+plans that one page. `NOT_RETAINED` stays absence from the retained set. Without
+a bulk capability the planner returns a typed fallback instead of an exact lookup
+per entity. DoRothEA is not reconstructed from the browser.
 
 Provider schema (`services/depmap_api/provider_schema.py`): MCP advertised
 arguments match runtime validators. `coverage` is catalog-conditional. Each

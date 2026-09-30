@@ -245,6 +245,41 @@ pub struct IntentSpec {
     pub require_any_roles: Vec<String>,
     #[serde(default)]
     pub arguments: Vec<ArgumentBinding>,
+    /// `exact` is a named-entity lookup. `bulk_ranking` is one bounded page
+    /// across an advertised universe. Omitted means the capability is unchanged.
+    #[serde(default, skip_serializing_if = "query_shape_is_unspecified")]
+    pub query_shape: QueryShape,
+}
+
+fn query_shape_is_unspecified(shape: &QueryShape) -> bool {
+    *shape == QueryShape::Unspecified
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryShape {
+    #[default]
+    Unspecified,
+    Exact,
+    BulkRanking,
+}
+
+/// `NOT_RETAINED` means the row is absent from a sparse retained set.
+pub fn absence_is_biological_null(status: &str) -> bool {
+    !matches!(status, "NOT_RETAINED" | "NOT_OBSERVED" | "NOT_TESTED")
+}
+
+pub fn compact_page_checkpoint(
+    matched_row_count: u64,
+    returned_count: u64,
+    cursor: Option<&str>,
+) -> Value {
+    json!({
+        "matched_row_count": matched_row_count,
+        "returned_count": returned_count,
+        "truncated": matched_row_count > returned_count,
+        "cursor": cursor,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -906,6 +941,17 @@ impl BridgePlanner<'_> {
             .iter()
             .filter(|spec| spec_matches(spec, &canonical))
             .collect();
+        let matches = match narrow_universe_matches(&matches, &canonical) {
+            Ok(matches) => matches,
+            Err(reason) => {
+                return outcome(
+                    PlannerDecision::UnsupportedIntent { reason },
+                    canonical,
+                    Vec::new(),
+                    rejected_model_claims,
+                );
+            }
+        };
         let matched_ids = matches
             .iter()
             .map(|spec| spec.id.clone())
@@ -1090,6 +1136,41 @@ fn clarification(
         competing_interpretations,
         reason: reason.into(),
     }
+}
+
+fn universe_wide(intent: &ScientificIntent) -> bool {
+    intent
+        .entities
+        .iter()
+        .all(|entity| entity.identifier.trim().is_empty())
+}
+
+fn narrow_universe_matches<'a>(
+    matches: &[&'a IntentSpec],
+    intent: &ScientificIntent,
+) -> Result<Vec<&'a IntentSpec>, String> {
+    if !universe_wide(intent) {
+        return Ok(matches.to_vec());
+    }
+    let bulk: Vec<&IntentSpec> = matches
+        .iter()
+        .copied()
+        .filter(|spec| spec.query_shape == QueryShape::BulkRanking)
+        .collect();
+    if bulk.len() == 1 {
+        return Ok(bulk);
+    }
+    if bulk.is_empty()
+        && matches
+            .iter()
+            .any(|spec| spec.query_shape == QueryShape::Exact)
+    {
+        return Err(
+            "bulk ranking is not advertised; exact entity lookup is not a universe scan. Paginate only with a compact checkpoint of matched_row_count, returned_count, and cursor."
+                .into(),
+        );
+    }
+    Ok(matches.to_vec())
 }
 
 fn spec_matches(spec: &IntentSpec, intent: &ScientificIntent) -> bool {
@@ -2094,6 +2175,112 @@ mod tests {
                 assert_eq!(arguments["target"], "GENEB");
                 assert!(arguments.get("source_gene").is_none());
                 assert!(arguments.get("limit").is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn ranking_catalog(include_bulk: bool) -> IntentCatalog {
+        let bulk = if include_bulk {
+            r#",{
+              "id": "universe_bulk_ranking",
+              "tool": "fake_bulk_tool",
+              "relation": "dependency",
+              "action": "retrieve_evidence",
+              "scopes": ["global"],
+              "query_shape": "bulk_ranking",
+              "arguments": [
+                {"from": "constraint.limit", "to": "limit", "optional": true, "default": 20}
+              ]
+            }"#
+        } else {
+            ""
+        };
+        IntentCatalog::from_json(&format!(
+            r#"{{
+              "schema_version": 1,
+              "id": "ranking.intent",
+              "manifest_version": "1.0.0",
+              "capabilities": [{{
+                "id": "universe_exact_lookup",
+                "tool": "fake_exact_tool",
+                "relation": "dependency",
+                "action": "retrieve_evidence",
+                "scopes": ["global"],
+                "query_shape": "exact",
+                "arguments": [
+                  {{"from": "entity.gene", "to": "gene", "optional": true}}
+                ]
+              }}{bulk}]
+            }}"#
+        ))
+        .unwrap()
+    }
+
+    fn universe_intent() -> ScientificIntent {
+        ScientificIntent {
+            schema_version: INTENT_SCHEMA_VERSION,
+            entities: Vec::new(),
+            relation: "dependency".into(),
+            data_modality: None,
+            metric: None,
+            scope: IntentScope::Global,
+            direction: None,
+            action: RequestedAction::RetrieveEvidence,
+            release: None,
+            constraints: BTreeMap::new(),
+            ambiguity: AmbiguityMetadata::default(),
+            proposed_capability: None,
+            proposed_coverage: None,
+        }
+    }
+
+    #[test]
+    fn universe_scan_uses_one_bulk_ranking_instead_of_exact_lookups() {
+        let mut tools = ToolCatalog::default();
+        tools.ensure_available("fake_bulk_tool");
+        tools.ensure_available("fake_exact_tool");
+        let outcome = plan_scientific_intent(
+            universe_intent(),
+            &ranking_catalog(true),
+            &tools,
+            &PlannerHostPolicy::default(),
+        );
+        match outcome.decision {
+            PlannerDecision::Execute {
+                capability_id,
+                arguments,
+                ..
+            } => {
+                assert_eq!(capability_id, "universe_bulk_ranking");
+                assert_eq!(arguments["limit"], 20);
+                assert!(arguments.get("gene").is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+        let page = compact_page_checkpoint(40, 20, Some("cursor-2"));
+        assert_eq!(page["matched_row_count"], 40);
+        assert_eq!(page["returned_count"], 20);
+        assert_eq!(page["truncated"], true);
+        assert!(!absence_is_biological_null("NOT_RETAINED"));
+    }
+
+    #[test]
+    fn universe_scan_without_bulk_is_a_typed_fallback() {
+        let mut tools = ToolCatalog::default();
+        tools.ensure_available("fake_exact_tool");
+        let outcome = plan_scientific_intent(
+            universe_intent(),
+            &ranking_catalog(false),
+            &tools,
+            &PlannerHostPolicy::default(),
+        );
+        match outcome.decision {
+            PlannerDecision::UnsupportedIntent { reason } => {
+                assert!(
+                    reason.contains("bulk ranking is not advertised"),
+                    "{reason}"
+                );
             }
             other => panic!("{other:?}"),
         }
