@@ -24,7 +24,7 @@ pub(crate) fn privacy_host_args(active: bool, projects: &HashSet<String>) -> ser
     project_ids.sort_unstable();
     serde_json::json!({
         "active": active && !project_ids.is_empty(),
-        "project_ids": project_ids,
+        "projectIds": project_ids,
     })
 }
 
@@ -802,14 +802,14 @@ mod tests {
         projects.insert("research-1".into());
         let args = privacy_host_args(true, &projects);
         assert_eq!(args["active"], true);
-        assert_eq!(args["project_ids"][0], "hidden");
-        assert_eq!(args["project_ids"][1], "research-1");
+        assert_eq!(args["projectIds"][0], "hidden");
+        assert_eq!(args["projectIds"][1], "research-1");
         let off = privacy_host_args(false, &projects);
         assert_eq!(off["active"], false);
-        assert_eq!(off["project_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(off["projectIds"].as_array().unwrap().len(), 2);
         let empty = privacy_host_args(true, &HashSet::new());
         assert_eq!(empty["active"], false);
-        assert!(empty["project_ids"].as_array().unwrap().is_empty());
+        assert!(empty["projectIds"].as_array().unwrap().is_empty());
     }
 }
 

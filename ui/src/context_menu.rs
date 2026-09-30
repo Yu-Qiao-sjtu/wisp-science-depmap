@@ -1397,7 +1397,7 @@ pub fn ContextMenuPortal(
             return;
         };
         request_animation_frame(move || {
-            let Some(el) = menu_el.get() else { return };
+            let Some(el) = menu_el.get_untracked() else { return };
             let Some((viewport_width, viewport_height)) = viewport_size() else {
                 return;
             };
@@ -1423,7 +1423,7 @@ pub fn ContextMenuPortal(
             return;
         };
         request_animation_frame(move || {
-            let Some(el) = submenu_el.get() else { return };
+            let Some(el) = submenu_el.get_untracked() else { return };
             let Some((viewport_width, viewport_height)) = viewport_size() else {
                 return;
             };

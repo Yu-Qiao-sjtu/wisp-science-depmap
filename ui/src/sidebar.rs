@@ -225,7 +225,6 @@ pub(super) fn Sidebar(
     // Short windows fold the tail of the nav into a "More" flyout instead of
     // scrolling it. Holds the flyout's viewport (left, top) while open.
     let nav_more_at = create_rw_signal::<Option<(f64, f64)>>(None);
-    let nav_more_ref = create_node_ref::<html::Button>();
     window_capture_escape(move || {
         if nav_more_at.get_untracked().is_none() {
             return false;
@@ -308,40 +307,44 @@ pub(super) fn Sidebar(
                     </div>
                 </div>
             })}
-            {move || (!demo_mode.get()).then(|| view! {
-                <nav class="nav">
-                    <button class="side-btn primary" title=move || t(locale.get(), "sidebar.new_session")
-                        aria-label=move || t(locale.get(), "sidebar.new_session")
-                        on:click=move |ev| new_session.call(ev)>
-                        {compose_icon("plus")}
-                        <span class="side-btn-label">{move || t(locale.get(), "sidebar.new_session")}</span>
-                        <kbd class="side-shortcut" aria-hidden="true">{new_session_shortcut}</kbd>
-                    </button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.search_sessions")
-                        aria-label=move || t(locale.get(), "sidebar.search_sessions")
-                        on:click=move |ev| open_search.call(ev)>
-                        {compose_icon("search")}
-                        <span class="side-btn-label">{move || t(locale.get(), "sidebar.search")}</span>
-                        <kbd class="side-shortcut" aria-hidden="true">{search_shortcut}</kbd>
-                    </button>
-                    {nav_entries.into_iter().map(|entry| nav_entry_button(locale, entry)).collect_view()}
-                    <button type="button" class="side-btn nav-more"
-                        class:open=move || nav_more_at.get().is_some()
-                        aria-haspopup="menu"
-                        aria-expanded=move || nav_more_at.get().is_some().to_string()
-                        title=move || t(locale.get(), "sidebar.more")
-                        aria-label=move || t(locale.get(), "sidebar.more")
-                        node_ref=nav_more_ref
-                        // While open, the backdrop covers this button and closes the menu.
-                        on:click=move |_| if let Some(el) = nav_more_ref.get_untracked() {
-                            let rect = el.get_bounding_client_rect();
-                            nav_more_at.set(Some((rect.right() + 6.0, rect.top())));
-                        }>
-                        {compose_icon("more")}
-                        <span class="side-btn-label">{move || t(locale.get(), "sidebar.more")}</span>
-                        <span class="nav-more-caret" aria-hidden="true">{compose_icon("chevron-right")}</span>
-                    </button>
-                </nav>
+            {move || (!demo_mode.get()).then(|| {
+                // Fresh per render: this closure rebuilds the nav whenever demo_mode is set.
+                let nav_more_ref = create_node_ref::<html::Button>();
+                view! {
+                    <nav class="nav">
+                        <button class="side-btn primary" title=move || t(locale.get(), "sidebar.new_session")
+                            aria-label=move || t(locale.get(), "sidebar.new_session")
+                            on:click=move |ev| new_session.call(ev)>
+                            {compose_icon("plus")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.new_session")}</span>
+                            <kbd class="side-shortcut" aria-hidden="true">{new_session_shortcut}</kbd>
+                        </button>
+                        <button class="side-btn" title=move || t(locale.get(), "sidebar.search_sessions")
+                            aria-label=move || t(locale.get(), "sidebar.search_sessions")
+                            on:click=move |ev| open_search.call(ev)>
+                            {compose_icon("search")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.search")}</span>
+                            <kbd class="side-shortcut" aria-hidden="true">{search_shortcut}</kbd>
+                        </button>
+                        {nav_entries.into_iter().map(|entry| nav_entry_button(locale, entry)).collect_view()}
+                        <button type="button" class="side-btn nav-more"
+                            class:open=move || nav_more_at.get().is_some()
+                            aria-haspopup="menu"
+                            aria-expanded=move || nav_more_at.get().is_some().to_string()
+                            title=move || t(locale.get(), "sidebar.more")
+                            aria-label=move || t(locale.get(), "sidebar.more")
+                            node_ref=nav_more_ref
+                            // While open, the backdrop covers this button and closes the menu.
+                            on:click=move |_| if let Some(el) = nav_more_ref.get_untracked() {
+                                let rect = el.get_bounding_client_rect();
+                                nav_more_at.set(Some((rect.right() + 6.0, rect.top())));
+                            }>
+                            {compose_icon("more")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.more")}</span>
+                            <span class="nav-more-caret" aria-hidden="true">{compose_icon("chevron-right")}</span>
+                        </button>
+                    </nav>
+                }
             })}
             {move || (!demo_mode.get()).then(|| {
                 let loc = locale.get();
