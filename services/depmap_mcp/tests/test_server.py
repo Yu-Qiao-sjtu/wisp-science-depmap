@@ -253,7 +253,16 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     def test_default_model_evidence_omits_provenance_and_server_locations(self):
         shared = {
             "status": "FOUND",
-            "rows": [{"symbol": "ESR1"}],
+            "rows": [
+                {
+                    "symbol": "ESR1",
+                    "artifact_path": "depmap-26q1-full/results/esr1.csv",
+                },
+                {
+                    "symbol": "TP53",
+                    "artifact_path": r"D:\srv\private.tsv",
+                },
+            ],
         }
         first = self.service._envelope(
             tool="depmap_status",
@@ -265,7 +274,11 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             request={"mode": "status"},
             evidence={**shared, "provenance": ["source-beta"], "index_path": r"D:\srv\b"},
         )
-        self.assertEqual(first["evidence"]["rows"], [{"symbol": "ESR1"}])
+        self.assertEqual(
+            first["evidence"]["rows"][0]["artifact_path"],
+            "depmap-26q1-full/results/esr1.csv",
+        )
+        self.assertNotIn("artifact_path", first["evidence"]["rows"][1])
         self.assertNotIn("provenance", first["evidence"])
         self.assertNotIn("index_path", first["evidence"])
         self.assertNotEqual(first["evidence_id"], second["evidence_id"])

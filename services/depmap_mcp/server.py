@@ -53,21 +53,35 @@ _EXPANDED_MODEL_KEYS = frozenset(
         "catalog_resolution",
         "index_path",
         "knowledge_root",
-        "artifact_path",
         "source_path",
         "resolved_path",
     }
 )
 
 
+def _catalog_artifact_identifier(value: Any) -> bool:
+    """Relative catalog paths and public URIs identify an artifact. Absolute paths do not."""
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    if not stripped or stripped.startswith("depmap://"):
+        return bool(stripped)
+    if stripped.startswith("\\\\") or stripped.startswith("/"):
+        return False
+    return not (len(stripped) > 2 and stripped[1] == ":")
+
+
 def _default_model_evidence(value: Any) -> Any:
     """Omit expanded provenance and server locations from model context."""
     if isinstance(value, dict):
-        return {
-            key: _default_model_evidence(item)
-            for key, item in value.items()
-            if key not in _EXPANDED_MODEL_KEYS
-        }
+        projected: dict[Any, Any] = {}
+        for key, item in value.items():
+            if key in _EXPANDED_MODEL_KEYS:
+                continue
+            if key == "artifact_path" and not _catalog_artifact_identifier(item):
+                continue
+            projected[key] = _default_model_evidence(item)
+        return projected
     if isinstance(value, list):
         return [_default_model_evidence(item) for item in value]
     return value
