@@ -8,7 +8,7 @@ import csv
 import gzip
 import hashlib
 import json
-import os
+import logging
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -18,10 +18,22 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from services.depmap_mcp.artifact_integrity import (
+    QUARANTINED,
+    VERIFIED,
+    index_digest_path,
+    index_publish_marker_path,
+    inspect_artifact,
+    publish_index_artifact,
+    reader_artifact_pattern,
+    resolve_index_artifact,
+    sqlite_like_pattern,
+    verify_declared_checksum,
+)
 
-CATALOG_SCHEMA_VERSION = "5"
-FULL_HASH_MAX_BYTES = 8 * 1024 * 1024
-FULL_HASH_SUFFIXES = {".json", ".md", ".r", ".py", ".sh", ".ps1", ".toml", ".yaml", ".yml"}
+
+CATALOG_SCHEMA_VERSION = "6"
+LOGGER = logging.getLogger("depmap_query_index")
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -71,6 +83,36 @@ def _completion(manifest: dict[str, Any], directory: Path) -> tuple[str, str]:
     return "INCOMPLETE", "no_terminal_evidence"
 
 
+def _declared_artifact_checksums(manifest: dict[str, Any]) -> dict[str, str]:
+    """Read output checksums without treating external input hashes as outputs."""
+    declared: dict[str, str] = {}
+    for field in ("artifact_checksums", "output_checksums", "checksums"):
+        value = manifest.get(field)
+        if isinstance(value, dict):
+            for raw_path, raw_checksum in value.items():
+                checksum = (
+                    raw_checksum.get("sha256") or raw_checksum.get("checksum")
+                    if isinstance(raw_checksum, dict)
+                    else raw_checksum
+                )
+                if isinstance(raw_path, str) and isinstance(checksum, str):
+                    declared[raw_path.replace("\\", "/").removeprefix("./")] = checksum
+        elif isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                raw_path = (
+                    item.get("path")
+                    or item.get("artifact_path")
+                    or item.get("file")
+                    or item.get("name")
+                )
+                checksum = item.get("sha256") or item.get("checksum")
+                if isinstance(raw_path, str) and isinstance(checksum, str):
+                    declared[raw_path.replace("\\", "/").removeprefix("./")] = checksum
+    return declared
+
+
 def _artifact_kind(path: Path) -> str:
     name = path.name.lower()
     if name == "manifest.json":
@@ -88,21 +130,24 @@ def _artifact_kind(path: Path) -> str:
     return "file"
 
 
-def _integrity(path: Path, stat: os.stat_result) -> tuple[str, str]:
-    """Use content SHA-256 for small artifacts and a cheap identity for large data."""
-    if stat.st_size <= FULL_HASH_MAX_BYTES and path.suffix.lower() in FULL_HASH_SUFFIXES:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return "sha256", digest.hexdigest()
-    value = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()
-    return "size_mtime_sha256", value
+def _is_index_publication_file(path: Path, output: Path) -> bool:
+    if path.parent != output.parent:
+        return False
+    return path in {output, index_digest_path(output), index_publish_marker_path(output)} or (
+        path.name.startswith(f"{output.name}.previous-")
+        or path.name.startswith(f"{output.name}.tmp")
+    )
 
 
 def _source_max_mtime_ns(root: Path, output: Path) -> int:
     return max(
-        (path.stat().st_mtime_ns for path in root.rglob("*") if path.is_file() and path != output and not path.name.endswith(".tmp")),
+        (
+            path.stat().st_mtime_ns
+            for path in root.rglob("*")
+            if path.is_file()
+            and not _is_index_publication_file(path, output)
+            and not path.name.endswith(".tmp")
+        ),
         default=root.stat().st_mtime_ns,
     )
 
@@ -110,8 +155,11 @@ def _source_max_mtime_ns(root: Path, output: Path) -> int:
 def is_fresh(root: Path, output: Path) -> bool:
     if not output.is_file():
         return False
+    active, integrity = resolve_index_artifact(output)
+    if integrity.state != VERIFIED:
+        return False
     try:
-        with closing(sqlite3.connect(f"file:{output.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+        with closing(sqlite3.connect(f"file:{active.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             metadata = dict(db.execute("SELECT key,value FROM metadata"))
         return (
             metadata.get("schema_version") == CATALOG_SCHEMA_VERSION
@@ -136,6 +184,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
           artifact_kind TEXT NOT NULL, extension TEXT NOT NULL,
           size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
           integrity_method TEXT NOT NULL, integrity_value TEXT NOT NULL,
+          integrity_state TEXT NOT NULL, integrity_reason_code TEXT,
           FOREIGN KEY(analysis_id) REFERENCES analysis_catalog(analysis_id)
         );
         CREATE TABLE capability_catalog (
@@ -180,7 +229,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         (root_id, "_knowledge_root", ".", "COMPLETE", "catalog.root", None, "knowledge_root_assets", None, None, ".catalog", root.stat().st_mtime_ns),
     )
     manifests: list[tuple[Path, str, str]] = []
-    complete = 0
+    declared_checksums: dict[Path, dict[str, str]] = {}
     for path in sorted(root.rglob("manifest.json")):
         if path == output or output in path.parents:
             continue
@@ -194,7 +243,6 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         unit = relative.parent.as_posix()
         analysis_id = hashlib.sha256(unit.encode("utf-8")).hexdigest()[:24]
         state, basis = _completion(manifest, path.parent)
-        complete += state == "COMPLETE"
         stat = path.stat()
         db.execute(
             "INSERT INTO analysis_catalog VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -255,19 +303,40 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             ),
         )
         manifests.append((path.parent, analysis_id, state))
+        declared_checksums[path.parent] = _declared_artifact_checksums(manifest)
+
+    eligible_analysis_ids = tuple(
+        sorted(
+            {root_id}
+            | {
+                analysis_id
+                for _directory, analysis_id, state in manifests
+                if state == "COMPLETE"
+            }
+        )
+    )
+    eligible_placeholders = ",".join("?" for _ in eligible_analysis_ids)
 
     # Assign each file to its nearest manifest ancestor. Paths are always
     # knowledge-root relative, so the catalog reveals no host/server layout.
     owner = {directory: analysis_id for directory, analysis_id, _ in manifests}
     artifact_count = 0
+    quarantined_artifact_count = 0
+    quarantined_analysis_ids: set[str] = set()
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path == output or path.name.endswith(".tmp"):
+        if (
+            not path.is_file()
+            or _is_index_publication_file(path, output)
+            or path.name.endswith(".tmp")
+        ):
             continue
         directory = path.parent
+        owner_directory: Path | None = None
         analysis_id = None
         while directory == root or root in directory.parents:
             if directory in owner:
                 analysis_id = owner[directory]
+                owner_directory = directory
                 break
             if directory == root:
                 break
@@ -275,37 +344,87 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         stat = path.stat()
         analysis_id = analysis_id or root_id
         relative_path = _relative(path, root)
-        integrity_method, fingerprint = _integrity(path, stat)
+        artifact_kind = _artifact_kind(path)
+        integrity = inspect_artifact(path, artifact_kind)
+        if owner_directory is not None and path.name != "manifest.json":
+            relative_to_owner = path.relative_to(owner_directory).as_posix()
+            checksums = declared_checksums.get(owner_directory, {})
+            expected_checksum = checksums.get(relative_to_owner)
+            if expected_checksum is None:
+                expected_checksum = checksums.get(path.name)
+            integrity = verify_declared_checksum(integrity, expected_checksum)
         db.execute(
-            "INSERT INTO artifact_catalog VALUES (?,?,?,?,?,?,?,?)",
-            (relative_path, analysis_id, _artifact_kind(path), path.suffix.lower(), stat.st_size, stat.st_mtime_ns, integrity_method, fingerprint),
+            "INSERT INTO artifact_catalog VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                relative_path,
+                analysis_id,
+                artifact_kind,
+                path.suffix.lower(),
+                stat.st_size,
+                stat.st_mtime_ns,
+                integrity.method,
+                integrity.value,
+                integrity.state,
+                integrity.reason_code,
+            ),
         )
         role = "script" if "/scripts/" in f"/{relative_path}" or path.suffix.lower() in {".r", ".py", ".sh", ".ps1"} else "manifest" if path.name == "manifest.json" else "result" if "/results/" in f"/{relative_path}" else "data" if "/data/" in f"/{relative_path}" else "asset"
         db.execute("INSERT INTO analysis_relation VALUES (?,?,?)", (analysis_id, relative_path, role))
+        if integrity.state == QUARANTINED:
+            quarantined_artifact_count += 1
+            quarantined_analysis_ids.add(analysis_id)
+            LOGGER.warning(
+                "quarantined indexed artifact path=%s reason=%s diagnostic=%s",
+                relative_path,
+                integrity.reason_code,
+                integrity.diagnostic,
+            )
         artifact_count += 1
 
+    quarantined_analysis_ids.discard(root_id)
+    if quarantined_analysis_ids:
+        placeholders = ",".join("?" for _ in quarantined_analysis_ids)
+        db.execute(
+            f"UPDATE analysis_catalog SET completion_state='QUARANTINED', "
+            f"completion_basis='artifact.integrity' WHERE analysis_id IN ({placeholders})",
+            tuple(sorted(quarantined_analysis_ids)),
+        )
+        db.execute(
+            f"UPDATE coverage_registry SET storage_completeness='corrupt', "
+            f"qa_state='CORRUPT_ARTIFACT' WHERE analysis_id IN ({placeholders})",
+            tuple(sorted(quarantined_analysis_ids)),
+        )
+
     reader_rows = [
-        ("core", "gene_evidence", "depmap-26q1-core", 0),
-        ("model_gene_effect", "model_gene_effect_slice", "depmap-26q1-core", 0),
-        ("cross_platform_validation", "cross_platform_dependency_validation", "depmap-26q1-full", 0),
-        ("lineage_catalog", "cancer_inventory", "depmap-26q1-full", 0),
-        ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-full", 0),
-        ("pan_cancer_dependency", "pan_cancer_dependency_summary", "depmap-26q1-core", 0),
-        ("lineage_directions", "cancer_direction_discovery", "analysis-modules", 0),
-        ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*", 0),
-        ("enrichment", "pathway_enrichment", "*富集*", 0),
+        ("core", "gene_evidence", "depmap-26q1-core/%", 0),
+        ("model_gene_effect", "model_gene_effect_slice", "depmap-26q1-core/%", 0),
+        ("cross_platform_validation", "cross_platform_dependency_validation", "depmap-26q1-full/cross_platform_validation/%", 0),
+        ("lineage_catalog", "cancer_inventory", "depmap-26q1-full/lineage_sparse_networks/%|depmap-26q1-full/lineage_cnv_amplification_dependency/%|depmap-26q1-full/lineage_prism_associations/%|depmap-26q1-full/lineage_gene_enrichment/%|depmap-26q1-full/subtype_dependency/%|depmap-26q1-tcga/%", 0),
+        ("lineage_dependency", "cancer_dependency_ranking", "depmap-26q1-core/lineage_dependency_tests/%", 0),
+        ("pan_cancer_dependency", "pan_cancer_dependency_summary", "depmap-26q1-core/lineage_dependency_tests/%", 0),
+        ("lineage_directions", "cancer_direction_discovery", "depmap-26q1-full/lineage_sparse_networks/%|depmap-26q1-full/lineage_cnv_amplification_dependency/%|depmap-26q1-full/lineage_prism_associations/%|depmap-26q1-full/lineage_gene_enrichment/%", 0),
+        ("lineage_network", "lineage_network", "depmap-26q1-full/lineage_sparse_networks/%", 0),
+        ("lineage_cnv", "lineage_cnv", "depmap-26q1-full/lineage_cnv_amplification_dependency/%", 0),
+        ("lineage_drug", "lineage_drug", "depmap-26q1-full/lineage_prism_associations/%", 0),
+        ("top", "top", "depmap-26q1-full/effect_correlation/%|depmap-26q1-full/expression_correlation/%|depmap-26q1-full/expression_dependency/%|depmap-26q1-full/damaging_mutation_dependency/%|depmap-26q1-full/custom_missense_mutation_dependency/%|depmap-26q1-full/hotspot_mutation_dependency/%|depmap-26q1-full/cnv_amplification_dependency/%|analysis-modules/%/downstream_dependency/%", 0),
+        ("lineage", "lineage", "depmap-26q1-full/lineage_%_mutation_dependency/%|analysis-modules/%突变锚定基因选择%/cancer_anchor_catalog_v2/downstream_dependency/lineage_%_mutation_dependency/%", 0),
+        ("pathway", "pathway", "depmap-26q1-full/progeny_dependency/%", 0),
+        ("drug", "drug_gene_evidence", "depmap-26q1-full/prism_auc_%_correlation/%", 0),
+        ("pair", "gene_pair_evidence", "*相关性分析*|*共依赖分析*|depmap-26q1-full/effect_correlation/%|depmap-26q1-full/expression_correlation/%|depmap-26q1-full/expression_dependency/%|depmap-26q1-full/damaging_mutation_dependency/%|depmap-26q1-full/custom_missense_mutation_dependency/%|depmap-26q1-full/hotspot_mutation_dependency/%|depmap-26q1-full/cnv_amplification_dependency/%", 0),
+        ("enrichment", "pathway_enrichment", "*富集*|depmap-26q1-full/lineage_gene_enrichment/%", 0),
         ("mutation_anchor", "mutation_anchor_discovery", "*突变锚定基因选择*", 0),
         ("lineage_mutation_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
         ("mutation_to_dependency", "mutation_to_dependency", "*突变锚定基因选择*", 0),
         ("dependency_to_mutation", "dependency_to_mutation", "*突变锚定基因选择*", 0),
+        ("codependency", "codependency_evidence", "*共依赖分析*", 0),
         ("tf_dependency", "tf_activity_to_dependency", "*转录因子活性*", 1),
         ("biomarker_target", "expression_biomarker_model", "*表达基因-CRISPR*", 1),
-        ("true_love", "true_love_gene_catalog", "*共依赖分析*", 1),
-        ("subtype", "subtype_evidence", "depmap-26q1-full", 0),
-        ("coamplification", "coamplification_evidence", "depmap-26q1-full", 0),
-        ("synthetic_lethal", "synthetic_lethal_evidence", "*突变锚定基因选择*", 0),
-        ("three_d", "three_d_evidence", "depmap-26q1-3d", 0),
-        ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga", 0),
+        ("true_love", "true_love_gene_catalog", "*共依赖分析*|depmap-26q1-full/true_love_gene/%", 1),
+        ("subtype", "subtype_evidence", "depmap-26q1-full/subtype_dependency/%", 0),
+        ("coamplification", "coamplification_evidence", "depmap-26q1-full/coamplification_dependency/%", 0),
+        ("synthetic_lethal", "synthetic_lethal_evidence", "*突变锚定基因选择*|depmap-26q1-full/observational_synthetic_lethal_candidates/%", 0),
+        ("three_d", "three_d_evidence", "depmap-26q1-3d/%", 0),
+        ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga/%", 0),
     ]
     try:
         from services.depmap_mcp.capability_catalog import INTENT_CAPABILITIES
@@ -327,6 +446,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             "cancer_inventory":"lineage_catalog", "cancer_direction_discovery":"lineage_directions",
             "analysis_inventory":"analysis_catalog", "mutation_anchor_discovery":"mutation_anchor",
             "mutation_to_dependency":"synthetic_lethal", "dependency_to_mutation":"synthetic_lethal",
+            "codependency_evidence":"codependency",
             "gene_pair_evidence":"pair", "cancer_dependency_ranking":"lineage_dependency",
             "pan_cancer_dependency_summary":"pan_cancer_dependency",
             "model_gene_effect_slice":"model_gene_effect",
@@ -346,29 +466,82 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         readers.append((mode, f"{mode}_adapter", base[2], "csv,csv.gz,parquet,rds,json"))
     db.executemany("INSERT INTO reader_registry VALUES (?,?,?,?)", readers)
     for mode, _adapter, pattern, _formats in readers:
-        likes = [part.strip().replace("*", "%") for part in pattern.split("|") if part.strip()]
-        predicates = " OR ".join("module LIKE ? OR analysis_unit LIKE ?" for _ in likes)
+        likes = []
+        for part in pattern.split("|"):
+            like = sqlite_like_pattern(part)
+            if not like:
+                continue
+            likes.append(like)
+            if like.endswith("/%"):
+                likes.append(like[:-2])
+        predicates = " OR ".join(
+            "module LIKE ? ESCAPE '\\' OR analysis_unit LIKE ? ESCAPE '\\'"
+            for _ in likes
+        )
         parameters = tuple(value for like in likes for value in (like, like))
         current = db.execute(
             f"SELECT analysis_id FROM analysis_catalog WHERE completion_state='COMPLETE' "
             f"AND ({predicates}) ORDER BY manifest_mtime_ns DESC LIMIT 1",
             parameters,
         ).fetchone() if likes else None
+        artifact_likes = [
+            sqlite_like_pattern(value)
+            for value in reader_artifact_pattern(mode, pattern).split("|")
+            if value.strip()
+        ]
+        artifact_predicates = " OR ".join(
+            "artifact_path LIKE ? ESCAPE '\\'" for _ in artifact_likes
+        )
+        quarantined = (
+            db.execute(
+                f"SELECT f.analysis_id FROM artifact_catalog f "
+                f"WHERE f.integrity_state='QUARANTINED' "
+                f"AND f.analysis_id IN ({eligible_placeholders}) "
+                f"AND ({artifact_predicates.replace('artifact_path', 'f.artifact_path')}) "
+                f"ORDER BY f.artifact_path LIMIT 1",
+                (*eligible_analysis_ids, *artifact_likes),
+            ).fetchone()
+            if artifact_likes
+            else None
+        )
+        if artifact_likes and quarantined is None:
+            artifact_current = db.execute(
+                f"SELECT f.analysis_id FROM artifact_catalog f "
+                f"JOIN analysis_catalog a ON a.analysis_id=f.analysis_id "
+                f"WHERE f.integrity_state='VERIFIED' "
+                f"AND a.completion_state IN ('COMPLETE','QUARANTINED') "
+                f"AND f.analysis_id IN ({eligible_placeholders}) "
+                f"AND ({artifact_predicates.replace('artifact_path', 'f.artifact_path')}) "
+                f"ORDER BY f.artifact_path LIMIT 1",
+                (*eligible_analysis_ids, *artifact_likes),
+            ).fetchone()
+            current = artifact_current or current
         db.execute(
             "INSERT INTO reader_coverage VALUES (?,?,?)",
-            (mode, current[0] if current else None, "AVAILABLE" if current else "NOT_COMPUTED"),
+            (
+                mode,
+                quarantined[0] if quarantined else current[0] if current else None,
+                "CORRUPT_ARTIFACT" if quarantined else "AVAILABLE" if current else "NOT_COMPUTED",
+            ),
         )
     db.execute(
-        "DELETE FROM capability_catalog WHERE query_mode='enrichment' AND NOT EXISTS ("
+        "DELETE FROM capability_catalog WHERE query_mode IN ("
+        "SELECT query_mode FROM reader_coverage WHERE coverage_state='CORRUPT_ARTIFACT') "
+        "OR (query_mode='enrichment' AND NOT EXISTS ("
         "SELECT 1 FROM reader_coverage WHERE query_mode='enrichment' "
-        "AND coverage_state='AVAILABLE' AND analysis_id IS NOT NULL)"
+        "AND coverage_state='AVAILABLE' AND analysis_id IS NOT NULL))"
     )
 
     # Map every ordered gene to its declared matrix block without opening RDS files.
     for directory, analysis_id, state in manifests:
         order = directory / "gene_order.csv"
         blocks = directory / "blocks"
-        if state != "COMPLETE" or not order.is_file() or not blocks.is_dir():
+        if (
+            state != "COMPLETE"
+            or analysis_id in quarantined_analysis_ids
+            or not order.is_file()
+            or not blocks.is_dir()
+        ):
             continue
         genes = []
         for row in records(order):
@@ -406,8 +579,13 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     )
     return {
         "analysis_units": len(manifests),
-        "completed_analysis_units": complete,
+        "completed_analysis_units": db.execute(
+            "SELECT COUNT(*) FROM analysis_catalog "
+            "WHERE analysis_id<>? AND completion_state='COMPLETE'",
+            (root_id,),
+        ).fetchone()[0],
         "artifacts": artifact_count,
+        "quarantined_artifacts": quarantined_artifact_count,
         "capabilities": db.execute("SELECT COUNT(*) FROM capability_catalog").fetchone()[0],
         "readers": len(readers),
         "coverage_records": db.execute("SELECT COUNT(*) FROM coverage_registry").fetchone()[0],
@@ -419,7 +597,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
 def records(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
-        yield from csv.DictReader(handle)
+        yield from csv.DictReader(handle, strict=True)
 
 
 def build(root: Path, output: Path) -> dict:
@@ -448,6 +626,16 @@ def build(root: Path, output: Path) -> dict:
         """
     )
     counts = {"true_love": 0, "tf_dependency": 0, "biomarker_target": 0}
+    counts.update(build_directory_catalog(db, root, output))
+
+    def cataloged_and_verified(path: Path) -> bool:
+        if not path.is_file():
+            return False
+        row = db.execute(
+            "SELECT integrity_state FROM artifact_catalog WHERE artifact_path=?",
+            (_relative(path, root),),
+        ).fetchone()
+        return bool(row and row[0] == "VERIFIED")
 
     tlg = root / "depmap-26q1-full" / "true_love_gene"
     sources = [
@@ -458,7 +646,7 @@ def build(root: Path, output: Path) -> dict:
         ("positive_reciprocal_top20", "quality", tlg / "tm00_derived_catalogs_26Q1" / "positive_reciprocal_top20_n500.csv.gz"),
     ]
     for catalog, coverage, path in sources:
-        if not path.is_file():
+        if not cataloged_and_verified(path):
             continue
         batch = []
         for row in records(path):
@@ -481,7 +669,7 @@ def build(root: Path, output: Path) -> dict:
         counts["true_love"] += len(batch)
 
     tf_path = root / "analysis-modules" / "转录因子活性-CRISPR基因依赖相关性分析" / "results" / "tf_activity_dependency_26Q1_v2" / "top_hits.csv.gz"
-    if tf_path.is_file():
+    if cataloged_and_verified(tf_path):
         rows = []
         for row in records(tf_path):
             rows.append((str(row.get("TF") or "").upper(), str(row.get("target_gene") or "").upper(), row.get("direction"), int(float(row.get("rank") or 0)), json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
@@ -489,7 +677,7 @@ def build(root: Path, output: Path) -> dict:
         counts["tf_dependency"] = len(rows)
 
     eligibility = root / "analysis-modules" / "表达基因-CRISPR基因依赖相关性分析" / "results" / "predictive_biomarker" / "target_eligibility_26Q1" / "target_eligibility_catalog.csv"
-    if eligibility.is_file():
+    if cataloged_and_verified(eligibility):
         rows = []
         for row in records(eligibility):
             eligible = str(row.get("eligible_for_nested_model", "")).upper() == "TRUE"
@@ -507,8 +695,6 @@ def build(root: Path, output: Path) -> dict:
         CREATE INDEX idx_biomarker_eligible ON biomarker_target(eligible, target_gene);
         """
     )
-    catalog_counts = build_directory_catalog(db, root, output)
-    counts.update(catalog_counts)
     db.execute("INSERT INTO metadata VALUES (?,?)", ("schema_version", CATALOG_SCHEMA_VERSION))
     db.execute("INSERT INTO metadata VALUES (?,?)", ("counts", json.dumps(counts, sort_keys=True)))
     db.execute("INSERT INTO metadata VALUES (?,?)", ("source_max_mtime_ns", str(source_max_mtime_ns)))
@@ -518,8 +704,7 @@ def build(root: Path, output: Path) -> dict:
     if integrity != "ok":
         raise RuntimeError(f"SQLite integrity check failed: {integrity}")
     db.commit(); db.close()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(temporary, output)
+    publish_index_artifact(temporary, output)
     return counts
 
 
