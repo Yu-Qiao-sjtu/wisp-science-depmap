@@ -29,8 +29,14 @@ not terminate the remote service.
 
 ## Recovery and historical Apps
 
-- A disconnected connector reconnects on the next use. Concurrent recovery
-  attempts are coalesced. Failure is reported; there is no endless retry loop.
+- A disconnected connector, including one whose live transport was shut down
+  while the saved descriptor stayed enabled, reconnects on the next explicit
+  use. Concurrent recovery attempts are coalesced. A handshake already in
+  progress when shutdown starts is discarded and is not handed to the caller.
+  The lost request is not replayed. Failure is reported; there is no endless
+  retry loop.
+- Disable, descriptor replacement, conversation retirement, and Host exit
+  retire the connector. The next call stays closed and does not reconnect.
 - Opening a saved conversation reconnects its currently enabled plugins. No
   previously unfinished tool request is resumed or replayed.
 - A lost response produces an **unknown outcome**. Check the external state or

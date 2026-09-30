@@ -16,23 +16,34 @@ python scripts/build_depmap_query_index.py --knowledge-root /path/to/depmap-26q1
 ```
 
 The database indexes TLG pairs on both genes, TF-dependency rows on TF and
-target, and predictive-biomarker eligibility on target gene. The API uses it
-for TLG and `biomarker_target` lookups and falls back to the original CSV/GZIP
-files when the index is absent or unreadable. Result files and manifests remain
-authoritative. A biomarker lookup reports eligibility and validated cache state;
-it does not start model training.
+target, and predictive-biomarker eligibility on target gene. A detached
+`depmap-26q1-query-index.sqlite.sha256` authenticates the result-bearing index;
+indexed reads fail closed when the digest is missing or mismatched instead of
+falling back to source files after an integrity failure. An absent optional
+index may still use the original CSV/GZIP path. Result files and manifests
+remain authoritative. A biomarker lookup reports eligibility and validated
+cache state; it does not start model training.
 
-Schema v3 also contains a unified directory catalog. `analysis_catalog` records
+Schema v6 also contains a unified directory catalog. `analysis_catalog` records
 every discovered manifest and its completion evidence, `artifact_catalog`
-records files using knowledge-root-relative paths and integrity fingerprints,
-and `capability_catalog` is the runtime source for the 19 Agent intents.
+records files using knowledge-root-relative paths, streamed SHA-256 checksums,
+format validation, and a stable integrity state, and `capability_catalog` is
+the runtime source for Agent intents.
 `reader_registry` records bounded adapters, `analysis_relation` connects scripts,
 data, manifests, and results, and `matrix_block_index` maps genes directly to
 matrix shards. Large matrices remain in their original RDS/Parquet/CSV shards.
+Truncated compressed tables, checksum mismatches, invalid minimum schemas, and
+unreadable expected formats are quarantined per analysis. Affected query
+families are not advertised, unrelated healthy families remain available, and
+read failures return `MODULE_UNAVAILABLE` with a stable reason code while raw
+exceptions and storage paths stay in operator logs.
 
 Use `--if-stale` for scheduled refreshes. The builder compares the newest
 retained source mtime with index metadata, rebuilds through a temporary database,
-checks SQLite integrity, and atomically replaces the live index only when needed:
+checks SQLite integrity, prepares the new detached digest, and publishes the
+pair only when needed. During the two-file switch, a small atomic marker keeps
+readers on the previous verified index/digest pair; readers move to the new pair
+only after both canonical files are in place:
 
 ```bash
 python scripts/build_depmap_query_index.py \

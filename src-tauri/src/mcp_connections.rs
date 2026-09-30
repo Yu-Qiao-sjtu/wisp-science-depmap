@@ -206,7 +206,7 @@ impl Connections {
             .collect();
         drop(entries);
         for entry in old {
-            let _ = entry.client.shutdown().await;
+            let _ = entry.client.retire().await;
         }
     }
     pub(crate) async fn restart_frame(&self, frame: &str) {
@@ -223,7 +223,7 @@ impl Connections {
             .collect();
         drop(entries);
         for entry in old {
-            let _ = entry.client.shutdown().await;
+            let _ = entry.client.retire().await;
         }
     }
     pub(crate) async fn retire_frame(&self, frame: &str) {
@@ -246,7 +246,7 @@ impl Connections {
             .into_iter()
             .map(|entry| {
                 tokio::spawn(async move {
-                    let _ = entry.client.shutdown().await;
+                    let _ = entry.client.retire().await;
                 })
             })
             .collect();
@@ -338,7 +338,7 @@ impl Connections {
                     }
                     let client = factory().await?;
                     if !valid().await {
-                        let _ = client.shutdown().await;
+                        let _ = client.retire().await;
                         anyhow::bail!("MCP configuration changed while connecting");
                     }
                     Ok(client)
@@ -357,7 +357,7 @@ impl Connections {
             (client, old)
         };
         if let Some(old) = old {
-            let _ = old.client.shutdown().await;
+            let _ = old.client.retire().await;
         }
         Ok(client)
     }
@@ -408,7 +408,7 @@ impl Connections {
             drop(entries);
             if let Some(old) = old {
                 tracing::info!(target: "wisp", connector=%key.connector, frame=%key.frame, reason="disabled-or-config-changed", "mcp.scope.close");
-                let _ = old.client.shutdown().await;
+                let _ = old.client.retire().await;
             }
         }
     }
@@ -419,7 +419,7 @@ impl Connections {
         let mut tasks = tokio::task::JoinSet::new();
         for (_, entry) in entries {
             tasks.spawn(async move {
-                let _ = entry.client.shutdown().await;
+                let _ = entry.client.retire().await;
             });
         }
         while tasks.join_next().await.is_some() {}

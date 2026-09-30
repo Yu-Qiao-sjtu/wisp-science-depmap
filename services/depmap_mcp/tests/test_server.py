@@ -1,6 +1,8 @@
 import json
 import gzip
+import hashlib
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -17,6 +19,11 @@ from services.depmap_api.app import Settings
 from services.depmap_api.app import QueryRequest
 from services.depmap_mcp.catalog_readers import CatalogResolution
 from services.depmap_mcp.catalog_readers import MODE_ALIASES
+from services.depmap_mcp.artifact_integrity import (
+    index_digest_path,
+    index_publish_marker_path,
+    write_index_digest,
+)
 from services.depmap_mcp.portable_refs import PortableReferences
 from services.depmap_mcp.server import DepMapEvidenceService
 from services.depmap_mcp.server import MAX_MODEL_EVIDENCE_BYTES
@@ -81,13 +88,24 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         with closing(sqlite3.connect(index)) as db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS artifact_catalog "
-                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER)"
+                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER, "
+                "integrity_method TEXT, integrity_value TEXT, integrity_state TEXT, "
+                "integrity_reason_code TEXT)"
             )
             db.execute(
-                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?)",
-                (relative, "manifest", path.stat().st_size),
+                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?,?,?,?,?)",
+                (
+                    relative,
+                    "manifest",
+                    path.stat().st_size,
+                    "sha256",
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "VERIFIED",
+                    None,
+                ),
             )
             db.commit()
+        write_index_digest(index)
         return f"depmap://26Q1/{relative}"
 
     def index_bytes(self, relative: str, content: bytes) -> str:
@@ -98,13 +116,24 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         with closing(sqlite3.connect(index)) as db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS artifact_catalog "
-                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER)"
+                "(artifact_path TEXT PRIMARY KEY, artifact_kind TEXT, size_bytes INTEGER, "
+                "integrity_method TEXT, integrity_value TEXT, integrity_state TEXT, "
+                "integrity_reason_code TEXT)"
             )
             db.execute(
-                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?)",
-                (relative, "result", path.stat().st_size),
+                "INSERT OR REPLACE INTO artifact_catalog VALUES (?,?,?,?,?,?,?)",
+                (
+                    relative,
+                    "result",
+                    path.stat().st_size,
+                    "sha256",
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "VERIFIED",
+                    None,
+                ),
             )
             db.commit()
+        write_index_digest(index)
         return f"depmap://26Q1/{relative}"
 
     async def test_compressed_table_reader_honors_bounds_counts_and_cursor(self):
@@ -172,8 +201,28 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
             "depmap-26q1-full/results/broken.csv.gz", b"not gzip"
         )
         broken = await self.service.read_resource(bad_uri, max_rows=20)
-        self.assertEqual(broken["evidence"]["status"], "ERROR")
+        self.assertEqual(broken["evidence"]["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(
+            broken["evidence"]["integrity_reason_code"],
+            "TRUNCATED_COMPRESSED_ARTIFACT",
+        )
         self.assertEqual(broken["evidence"]["returned_count"], 0)
+
+    async def test_checksum_mismatch_fails_closed_without_leaking_storage_details(self):
+        relative = "depmap-26q1-full/results/checksum.csv.gz"
+        original = gzip.compress(b"label,value\nA,1\n")
+        uri = self.index_bytes(relative, original)
+        (self.root / relative).write_bytes(gzip.compress(b"label,value\nB,2\n"))
+
+        result = await self.service.read_resource(uri, max_rows=20)
+        evidence = result["evidence"]
+
+        self.assertEqual(evidence["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(evidence["integrity_reason_code"], "CHECKSUM_MISMATCH")
+        self.assertEqual(evidence["rows"], [])
+        serialized = json.dumps(result)
+        self.assertNotIn("EOFError", serialized)
+        self.assertNotIn(str(self.root), serialized)
 
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
@@ -464,20 +513,127 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_capability_catalog_skips_nullable_or_malformed_records(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
-        valid = {"intent": "provider_status", "mcp_tool": "depmap_status"}
+        valid = {
+            "intent": "provider_status",
+            "description": "Describe provider status.",
+            "required": [],
+            "optional": [],
+            "examples_zh": ["检查状态"],
+            "precise_prompt_template_zh": "检查服务状态。",
+            "confusable_with": [],
+            "mcp_tool": "depmap_status",
+        }
         with closing(sqlite3.connect(index)) as db:
-            db.execute("CREATE TABLE capability_catalog (payload_json TEXT)")
+            db.execute(
+                "CREATE TABLE capability_catalog "
+                "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+            )
             db.executemany(
-                "INSERT INTO capability_catalog VALUES (?)",
-                [(json.dumps(valid),), ("null",), ("{broken",)],
+                "INSERT INTO capability_catalog VALUES (?,?,?)",
+                [
+                    ("provider_status", "depmap_status", json.dumps(valid)),
+                    ("wrong_intent", "wrong_tool", json.dumps(valid)),
+                    ("missing", "missing", json.dumps({})),
+                    ("null", "null", "null"),
+                    ("broken", "broken", "{broken"),
+                ],
             )
             db.commit()
+        write_index_digest(index)
 
         result = await self.service.capabilities()
         self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
         self.assertEqual(result["catalog_status"], "PARTIAL")
-        self.assertEqual(result["invalid_record_count"], 2)
+        self.assertEqual(result["invalid_record_count"], 4)
         self.assertEqual(result["capabilities"], [valid])
+
+    async def test_empty_indexed_capability_catalog_does_not_restore_static_capabilities(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE capability_catalog "
+                "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+            )
+            db.commit()
+        write_index_digest(index)
+
+        result = await self.service.capabilities()
+
+        self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
+        self.assertEqual(result["catalog_status"], "FOUND")
+        self.assertEqual(result["capabilities"], [])
+
+    async def test_capabilities_use_previous_pair_while_index_publish_is_in_progress(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+
+        def capability(name: str) -> dict:
+            return {
+                "intent": name,
+                "description": f"Describe {name}.",
+                "required": [],
+                "optional": [],
+                "examples_zh": [name],
+                "precise_prompt_template_zh": name,
+                "confusable_with": [],
+                "mcp_tool": "depmap_status",
+            }
+
+        def create_catalog(path: Path, name: str) -> None:
+            with closing(sqlite3.connect(path)) as db:
+                db.execute(
+                    "CREATE TABLE capability_catalog "
+                    "(intent TEXT,mcp_tool TEXT,payload_json TEXT)"
+                )
+                db.execute(
+                    "INSERT INTO capability_catalog VALUES (?,?,?)",
+                    (name, "depmap_status", json.dumps(capability(name))),
+                )
+                db.commit()
+            write_index_digest(path)
+
+        create_catalog(index, "old_catalog")
+        old_digest = index_digest_path(index).read_text(encoding="ascii").strip()
+        previous = index.with_name(f"{index.name}.previous-{old_digest}")
+        shutil.copyfile(index, previous)
+        write_index_digest(previous, old_digest)
+        replacement = self.root / "replacement.sqlite"
+        create_catalog(replacement, "new_catalog")
+        index_publish_marker_path(index).write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "previous_name": previous.name,
+                    "previous_sha256": old_digest,
+                }
+            ),
+            encoding="utf-8",
+        )
+        shutil.copyfile(replacement, index)
+
+        during_database_switch = await self.service.capabilities()
+        self.assertEqual(
+            during_database_switch["capabilities"][0]["intent"], "old_catalog"
+        )
+        shutil.copyfile(index_digest_path(replacement), index_digest_path(index))
+        during_digest_switch = await self.service.capabilities()
+        self.assertEqual(
+            during_digest_switch["capabilities"][0]["intent"], "old_catalog"
+        )
+        index_publish_marker_path(index).unlink()
+        after_publish = await self.service.capabilities()
+        self.assertEqual(after_publish["capabilities"][0]["intent"], "new_catalog")
+
+    async def test_unreadable_indexed_capability_catalog_fails_closed(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        index.write_bytes(b"not sqlite")
+
+        with self.assertLogs("depmap_mcp", level="ERROR"):
+            result = await self.service.capabilities()
+
+        self.assertEqual(result["catalog_source"], "sqlite_capability_catalog")
+        self.assertEqual(result["catalog_status"], "UNAVAILABLE")
+        self.assertEqual(result["invalid_record_count"], 0)
+        self.assertEqual(result["capabilities"], [])
 
     async def test_data_coverage_is_bounded_and_omits_internal_paths(self):
         index = self.root / "depmap-26q1-query-index.sqlite"
@@ -509,6 +665,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO reader_coverage VALUES ('lineage_dependency','analysis-1','AVAILABLE')"
             )
             db.commit()
+        write_index_digest(index)
 
         result = await self.service.data_coverage(lineage="Liver", limit=1000)
         self.assertEqual(result["evidence"]["status"], "FOUND")
@@ -517,6 +674,22 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         serialized = json.dumps(result)
         self.assertNotIn("private_path", serialized)
         self.assertNotIn("/srv/secret", serialized)
+
+    async def test_data_coverage_failure_uses_stable_path_free_integrity_reason(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        index.write_bytes(b"not sqlite")
+
+        with self.assertLogs("depmap_mcp", level="ERROR"):
+            result = await self.service.data_coverage()
+
+        evidence = result["evidence"]
+        self.assertEqual(evidence["status"], "MODULE_UNAVAILABLE")
+        self.assertEqual(
+            evidence["reason_code"], "INTEGRITY_CATALOG_UNAVAILABLE"
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn("DatabaseError", serialized)
+        self.assertNotIn(str(self.root), serialized)
 
     async def test_analysis_catalog_uses_completed_directory_index(self):
         result = await self.service.analysis_catalog("癌种内突变锚定基因选择", 25)
@@ -606,6 +779,27 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "limit": 4,
             },
         )
+
+    async def test_module_unavailable_counts_as_aggregate_query_failure(self):
+        async def failing_runner(_settings, _query):
+            raise RuntimeError("synthetic reader failure")
+
+        service = DepMapEvidenceService(self.settings, failing_runner)
+        with self.assertLogs("depmap_mcp", level="ERROR"):
+            gene = await service.gene_evidence(
+                "GENERIC", sections=["core"], limit=3
+            )
+            pair = await service.pair_evidence("GENERIC_A", "GENERIC_B")
+            codependency = await service.codependency_evidence("GENERIC", limit=3)
+            drug = await service.drug_evidence("generic-drug", "GENERIC", limit=3)
+
+        self.assertEqual(gene["evidence"]["query_error_count"], 1)
+        self.assertFalse(gene["evidence"]["complete"])
+        for result in (pair, codependency, drug):
+            self.assertEqual(
+                result["evidence"]["query_error_count"],
+                result["evidence"]["query_count"],
+            )
 
     async def test_dedicated_tcga_tool_keeps_patient_evidence_separate(self):
         result = await self.service.tcga_expression_survival(
