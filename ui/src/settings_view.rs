@@ -20,6 +20,7 @@ use crate::text::{
 use crate::window_capture_escape;
 use leptos::*;
 use serde_wasm_bindgen::to_value;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wasm_bindgen::JsValue;
 
@@ -1298,6 +1299,53 @@ fn ProjectApprovalSettings(
     }
 }
 
+struct LocalePersistQueue {
+    pending: RefCell<Option<Locale>>,
+    running: Cell<bool>,
+}
+
+thread_local! {
+    static LOCALE_PERSIST: LocalePersistQueue = LocalePersistQueue {
+        pending: RefCell::new(None),
+        running: Cell::new(false),
+    };
+}
+
+fn enqueue_locale_persist(locale: Locale) {
+    let start = LOCALE_PERSIST.with(|queue| {
+        *queue.pending.borrow_mut() = Some(locale);
+        if queue.running.get() {
+            false
+        } else {
+            queue.running.set(true);
+            true
+        }
+    });
+    if !start {
+        return;
+    }
+    spawn_local(async move {
+        loop {
+            let next = LOCALE_PERSIST.with(|queue| {
+                let next = queue.pending.borrow_mut().take();
+                if next.is_none() {
+                    queue.running.set(false);
+                }
+                next
+            });
+            let Some(selected) = next else {
+                break;
+            };
+            let _ = invoke(
+                "set_locale",
+                to_value(&serde_json::json!({ "locale": selected.code() }))
+                    .unwrap_or(JsValue::NULL),
+            )
+            .await;
+        }
+    });
+}
+
 #[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
@@ -1982,14 +2030,7 @@ pub(super) fn SettingsView(
                                     locale.set(loc);
                                     set_document_lang(loc);
                                     settings.update(|s| s.locale = loc.code().into());
-                                    spawn_local(async move {
-                                        let _ = invoke(
-                                            "set_locale",
-                                            to_value(&serde_json::json!({ "locale": loc.code() }))
-                                                .unwrap_or(JsValue::NULL),
-                                        )
-                                        .await;
-                                    });
+                                    enqueue_locale_persist(loc);
                                 }
                                 // Bind `selected` on the options instead of `value` on the
                                 // select: the select's `value` property is applied before the

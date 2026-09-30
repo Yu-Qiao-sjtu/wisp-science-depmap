@@ -655,6 +655,22 @@ test("Usage groups workspaces, charts activity and models, and paginates session
   await expect(page.getByTestId("usage-workspace-row")).toHaveCount(2);
 });
 
+test("language select persists without Save and keeps the latest choice", async ({ page }) => {
+  await page.goto("/?mockLocale=en");
+  await page.locator(".proj-card-main").first().click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "General", exact: true }).click();
+  const language = page.getByTestId("settings-language");
+  await language.selectOption("zh");
+  await language.selectOption("en");
+  await expect.poll(() =>
+    page.evaluate(() => (window as any).__localeWrites)
+  ).toEqual(["zh", "en"]);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-language")).toHaveCount(0);
+  await expect(page.locator(".sidebar").getByRole("button", { name: "New session" })).toBeVisible();
+});
+
 test("language select shows the saved locale so Chinese can switch to English directly (#431)", async ({ page }) => {
   await page.goto("/?mockLocale=zh");
   await page.locator(".proj-card-main").first().click();
