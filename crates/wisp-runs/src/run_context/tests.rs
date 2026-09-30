@@ -3132,7 +3132,8 @@ async fn ssh_harvest_collect_renew_failure_aborts() {
         manifest: remote_only_manifest("run-steal"),
         files: Vec::new(),
         commands: StdMutex::new(Vec::new()),
-        collect_hold: Some(Duration::from_millis(80)),
+        // Outlasts the first renewal tick (harvest_lease_interval) with margin.
+        collect_hold: Some(Duration::from_millis(1000)),
     };
     let remote = harvest_test_remote("run-steal", &tmp, remote_only_harvest_spec());
 
