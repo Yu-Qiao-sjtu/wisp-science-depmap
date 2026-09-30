@@ -12,6 +12,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
@@ -21,8 +22,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from services.depmap_mcp.artifact_integrity import (
+    QUARANTINED,
+    VERIFIED,
+    resolve_index_artifact,
+    verify_cataloged_artifact,
+)
+
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
 MAX_MODEL_STRING_CHARS = 4096
+QUERY_FAILURE_STATUSES = frozenset({"QUERY_ERROR", "MODULE_UNAVAILABLE"})
+LOGGER = logging.getLogger("depmap_mcp")
 
 _AUXILIARY_LIST_KEYS = frozenset(
     {
@@ -715,6 +725,31 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _valid_capability_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    string_fields = (
+        "intent",
+        "description",
+        "precise_prompt_template_zh",
+        "mcp_tool",
+    )
+    list_fields = (
+        "required",
+        "optional",
+        "examples_zh",
+        "confusable_with",
+    )
+    return all(
+        isinstance(value.get(field), str) and bool(value[field].strip())
+        for field in string_fields
+    ) and all(
+        isinstance(value.get(field), list)
+        and all(isinstance(item, str) and bool(item.strip()) for item in value[field])
+        for field in list_fields
+    )
+
+
 class DepMapEvidenceService:
     """Scientific orchestration layer shared by MCP transports and tests."""
 
@@ -730,8 +765,18 @@ class DepMapEvidenceService:
             settings.knowledge_root, settings.release
         )
 
+    def _verify_index(self, index: Path):
+        active_index, integrity = resolve_index_artifact(index)
+        if integrity.state != VERIFIED:
+            LOGGER.error(
+                "query index integrity failure reason=%s diagnostic=%s",
+                integrity.reason_code,
+                integrity.diagnostic,
+            )
+        return active_index, integrity
+
     def _enrichment_reader_executable(self, index: Path) -> bool:
-        """Enrichment is advertised only when a completed artifact has a Reader."""
+        """Enrichment is advertised only for a Reader on the active release."""
         if not index.is_file():
             return False
         try:
@@ -744,10 +789,15 @@ class DepMapEvidenceService:
                     "SELECT 1 FROM reader_coverage AS coverage "
                     "JOIN reader_registry AS reader "
                     "ON reader.query_mode = coverage.query_mode "
+                    "JOIN analysis_catalog AS analysis "
+                    "ON analysis.analysis_id = coverage.analysis_id "
                     "WHERE coverage.query_mode = 'enrichment' "
                     "AND coverage.coverage_state = 'AVAILABLE' "
                     "AND coverage.analysis_id IS NOT NULL "
-                    "LIMIT 1"
+                    "AND analysis.completion_state = 'COMPLETE' "
+                    "AND (analysis.release = ? OR analysis.release IS NULL) "
+                    "LIMIT 1",
+                    (self.settings.release,),
                 ).fetchone()
         except (sqlite3.Error, OSError):
             return False
@@ -758,25 +808,43 @@ class DepMapEvidenceService:
         capabilities = list(INTENT_CAPABILITIES)
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         source = "code_fallback"
+        catalog_unavailable = False
         if index.is_file():
-            try:
-                with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
-                    rows = db.execute("SELECT payload_json FROM capability_catalog ORDER BY rowid").fetchall()
-                loaded = []
+            active_index, integrity = self._verify_index(index)
+            if integrity.state != VERIFIED:
+                capabilities = []
+                source = "sqlite_capability_catalog"
+                catalog_unavailable = True
                 invalid_records = 0
-                for row in rows:
-                    try:
-                        item = json.loads(row[0]) if row and row[0] else None
-                    except (json.JSONDecodeError, TypeError):
-                        item = None
-                    if isinstance(item, dict):
-                        loaded.append(item)
-                    else:
-                        invalid_records += 1
-                if loaded:
+            else:
+                try:
+                    with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                        rows = db.execute(
+                            "SELECT intent,mcp_tool,payload_json "
+                            "FROM capability_catalog ORDER BY rowid"
+                        ).fetchall()
+                    loaded = []
+                    invalid_records = 0
+                    for row in rows:
+                        try:
+                            item = json.loads(row[2]) if row and row[2] else None
+                        except (json.JSONDecodeError, TypeError):
+                            item = None
+                        if (
+                            _valid_capability_payload(item)
+                            and item["intent"] == row[0]
+                            and item["mcp_tool"] == row[1]
+                        ):
+                            loaded.append(item)
+                        else:
+                            invalid_records += 1
                     capabilities, source = loaded, "sqlite_capability_catalog"
-            except (sqlite3.Error, json.JSONDecodeError, OSError):
-                invalid_records = 0
+                except (sqlite3.Error, json.JSONDecodeError, OSError):
+                    LOGGER.exception("indexed capability catalog could not be read")
+                    capabilities = []
+                    source = "sqlite_capability_catalog"
+                    catalog_unavailable = True
+                    invalid_records = 0
         else:
             invalid_records = 0
         if not self._enrichment_reader_executable(index):
@@ -791,7 +859,13 @@ class DepMapEvidenceService:
             "state": "CAPABILITY_CATALOG",
             "capabilities": capabilities,
             "catalog_source": source,
-            "catalog_status": "PARTIAL" if invalid_records else "FOUND",
+            "catalog_status": (
+                "UNAVAILABLE"
+                if catalog_unavailable
+                else "PARTIAL"
+                if invalid_records
+                else "FOUND"
+            ),
             "invalid_record_count": invalid_records,
             "routing_policy": {
                 "unknown_or_out_of_scope": "return_no_match",
@@ -809,10 +883,13 @@ class DepMapEvidenceService:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
         if not index.is_file():
             return "catalog-missing"
+        active_index, integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return "catalog-unreadable"
         try:
             with closing(
                 sqlite3.connect(
-                    f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True
+                    f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
                 )
             ) as db:
                 metadata = dict(
@@ -823,14 +900,24 @@ class DepMapEvidenceService:
                 )
         except (sqlite3.Error, OSError):
             return "catalog-unreadable"
-        digest = hashlib.sha256(_canonical_json(metadata).encode("utf-8")).hexdigest()
-        return f"sha256:{digest}"
+        return f"sha256:{integrity.value}"
 
     async def artifacts(
         self, module: str | None = None, kind: str | None = None,
         path_contains: str | None = None, limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        active_index, integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return self._envelope(
+                tool="depmap_artifact_catalog",
+                request={"module": module, "kind": kind, "path_contains": path_contains, "limit": limit},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
+            )
         clauses, params = ["1=1"], []
         if module:
             clauses.append("a.module=?"); params.append(module)
@@ -839,10 +926,14 @@ class DepMapEvidenceService:
         if path_contains:
             clauses.append("f.artifact_path LIKE ?"); params.append(f"%{path_contains}%")
         params.append(min(max(limit, 1), 100))
-        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+        with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(
-                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,f.integrity_method,f.integrity_value,a.module,a.analysis_unit,a.completion_state FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
+                f"SELECT f.artifact_path,f.artifact_kind,f.extension,f.size_bytes,"
+                f"f.integrity_method,f.integrity_value,f.integrity_state,"
+                f"f.integrity_reason_code,a.module,a.analysis_unit,a.completion_state "
+                f"FROM artifact_catalog f JOIN analysis_catalog a ON a.analysis_id=f.analysis_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY a.module,f.artifact_path LIMIT ?", params
             )]
         return self._envelope(tool="depmap_artifact_catalog", request={"module":module,"kind":kind,"path_contains":path_contains,"limit":limit}, evidence={"status":"FOUND" if rows else "NOT_RETAINED","rows":rows})
 
@@ -856,6 +947,17 @@ class DepMapEvidenceService:
         limit: int = 50,
     ) -> dict[str, Any]:
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+        active_index, integrity = self._verify_index(index)
+        if integrity.state != VERIFIED:
+            return self._envelope(
+                tool="depmap_data_coverage",
+                request={"module": module},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
+            )
         clauses, params = ["1=1"], []
         for column, value in (
             ("module", module), ("scope", scope), ("lineage", lineage),
@@ -867,7 +969,7 @@ class DepMapEvidenceService:
         limit = min(max(int(limit), 1), 100)
         params.append(limit)
         try:
-            with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 rows = [dict(row) for row in db.execute(
                     f"SELECT c.analysis_id,c.module,c.release,c.scope,c.lineage,c.modality,c.model_count,"
@@ -879,10 +981,15 @@ class DepMapEvidenceService:
                     f"WHERE {' AND '.join('c.' + clause if clause != '1=1' else clause for clause in clauses)} "
                     f"GROUP BY c.analysis_id ORDER BY c.module,c.analysis_id LIMIT ?", params
                 )]
-        except sqlite3.Error as exc:
+        except sqlite3.Error:
+            LOGGER.exception("coverage registry query failed")
             return self._envelope(
                 tool="depmap_data_coverage", request={"module": module},
-                evidence={"status": "MODULE_UNAVAILABLE", "reason": f"coverage registry unavailable: {exc}", "rows": []},
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                },
             )
         return self._envelope(
             tool="depmap_data_coverage",
@@ -895,21 +1002,76 @@ class DepMapEvidenceService:
     ) -> dict[str, Any]:
         max_rows = min(max(int(max_rows), 1), 100)
         cursor = max(int(cursor), 0)
+        request = {"uri": uri, "max_rows": max_rows, "cursor": cursor}
+
+        def integrity_failure(reason_code: str) -> dict[str, Any]:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "uri": uri,
+                    "integrity_state": QUARANTINED,
+                    "integrity_reason_code": reason_code,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
+
         relative = self.portable_references.parse_public_uri(uri)
         if relative is None:
             raise ValueError(
                 f"uri must be a valid {self.portable_references.uri_prefix} resource"
             )
         index = self.settings.knowledge_root / "depmap-26q1-query-index.sqlite"
-        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
-            hit = db.execute("SELECT artifact_kind,size_bytes FROM artifact_catalog WHERE artifact_path=?", (relative,)).fetchone()
+        active_index, index_integrity = self._verify_index(index)
+        if index_integrity.state != VERIFIED:
+            return integrity_failure("INTEGRITY_CATALOG_UNAVAILABLE")
+        try:
+            with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                hit = db.execute(
+                    "SELECT artifact_kind,size_bytes,integrity_method,integrity_value,"
+                    "integrity_state,integrity_reason_code FROM artifact_catalog "
+                    "WHERE artifact_path=?",
+                    (relative,),
+                ).fetchone()
+        except (OSError, sqlite3.Error):
+            LOGGER.exception("artifact catalog lookup failed")
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "MODULE_UNAVAILABLE",
+                    "reason_code": "INTEGRITY_CATALOG_UNAVAILABLE",
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
         if not hit:
             raise ValueError("resource is absent from the indexed catalog")
         path = (self.settings.knowledge_root / relative).resolve()
-        if self.settings.knowledge_root not in path.parents or not path.is_file():
+        if self.settings.knowledge_root not in path.parents:
             raise ValueError("resource path is unavailable")
+        if hit[4] != "VERIFIED":
+            return integrity_failure(hit[5] or "CATALOG_QUARANTINED")
+        if not path.is_file():
+            LOGGER.error("indexed artifact is missing path=%s", path)
+            return integrity_failure("ARTIFACT_UNAVAILABLE")
+        integrity = verify_cataloged_artifact(path, hit[0], hit[2], hit[3])
+        if integrity.state != "VERIFIED":
+            LOGGER.error(
+                "indexed artifact integrity failure path=%s reason=%s diagnostic=%s",
+                path,
+                integrity.reason_code,
+                integrity.diagnostic,
+            )
+            return integrity_failure(integrity.reason_code or "ARTIFACT_INTEGRITY_FAILED")
         if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
-            return self._envelope(tool="depmap_read_resource", request={"uri":uri}, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"content":"binary artifact; use its registered scientific query adapter"})
+            return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"integrity_state":"VERIFIED","content":"binary artifact; use its registered scientific query adapter"})
         if path.name.endswith(".csv.gz") or path.suffix.lower() in {".csv", ".tsv"}:
             try:
                 if path.name.endswith(".csv.gz"):
@@ -939,10 +1101,11 @@ class DepMapEvidenceService:
                 )
                 return self._envelope(
                     tool="depmap_read_resource",
-                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
+                    request=request,
                     evidence={
                         "status": "FOUND" if total_row_count else "NOT_RETAINED",
                         "uri": uri,
+                        "integrity_state": "VERIFIED",
                         "content": rows,
                         "rows": rows,
                         "returned_count": returned_count,
@@ -951,22 +1114,15 @@ class DepMapEvidenceService:
                         "next_cursor": next_cursor,
                     },
                 )
-            except (OSError, EOFError, UnicodeError, csv.Error) as exc:
-                return self._envelope(
-                    tool="depmap_read_resource",
-                    request={"uri": uri, "max_rows": max_rows, "cursor": cursor},
-                    evidence={
-                        "status": "ERROR",
-                        "uri": uri,
-                        "reason": f"indexed table could not be decoded: {type(exc).__name__}",
-                        "rows": [],
-                        "returned_count": 0,
-                        "truncated": False,
-                        "next_cursor": None,
-                    },
-                )
+            except (OSError, EOFError, UnicodeError, csv.Error):
+                LOGGER.exception("verified indexed table failed during bounded read")
+                return integrity_failure("ARTIFACT_READ_FAILED")
         else:
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            try:
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                LOGGER.exception("verified indexed text artifact failed during read")
+                return integrity_failure("ARTIFACT_READ_FAILED")
             structured_json = False
             if path.suffix.lower() == ".json" and len(text.encode("utf-8")) <= 65536:
                 try:
@@ -978,7 +1134,7 @@ class DepMapEvidenceService:
                 content = text[:65536]
             if not structured_json:
                 content = self.portable_references.text(content)
-        return self._envelope(tool="depmap_read_resource", request={"uri":uri,"max_rows":max_rows,"cursor":cursor}, evidence={"status":"FOUND","uri":uri,"content":content})
+        return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"integrity_state":"VERIFIED","content":content})
 
     def _portable_string(self, value: str) -> str:
         return self.portable_references.key(value)
@@ -1069,19 +1225,25 @@ class DepMapEvidenceService:
                     self.settings, validated, self.runner
                 )
         except HTTPException as exc:
+            LOGGER.warning(
+                "bounded provider query returned HTTP failure status=%s detail=%r",
+                exc.status_code,
+                exc.detail,
+            )
             return {
                 "query": validated,
                 "metric_semantics": _metric_semantics(validated),
-                "status": "QUERY_ERROR",
-                "reason": str(exc.detail),
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "BOUNDED_READER_FAILED",
                 "http_status": exc.status_code,
             }
-        except Exception as exc:  # keep a bundle honest when one bounded branch fails
+        except Exception:  # keep a bundle honest when one bounded branch fails
+            LOGGER.exception("bounded provider query failed")
             return {
                 "query": validated,
                 "metric_semantics": _metric_semantics(validated),
-                "status": "QUERY_ERROR",
-                "reason": f"{type(exc).__name__}: {exc}",
+                "status": "MODULE_UNAVAILABLE",
+                "reason_code": "BOUNDED_READER_FAILED",
             }
         if not isinstance(result, dict):
             result = {
@@ -1488,7 +1650,9 @@ class DepMapEvidenceService:
                 tcga_query["lineage"] = lineage
             queries.append(tcga_query)
         items = await self._execute_many(queries)
-        failures = sum(item.get("status") == "QUERY_ERROR" for item in items)
+        failures = sum(
+            item.get("status") in QUERY_FAILURE_STATUSES for item in items
+        )
         request = {
             "gene": symbol,
             "lineage": lineage,
@@ -1611,7 +1775,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "items": items,
         }
@@ -1670,7 +1834,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "sections": [
                 {"scope": "global", "evidence": items[0]},
@@ -2087,7 +2251,7 @@ class DepMapEvidenceService:
         evidence = {
             "query_count": len(items),
             "query_error_count": sum(
-                item.get("status") == "QUERY_ERROR" for item in items
+                item.get("status") in QUERY_FAILURE_STATUSES for item in items
             ),
             "items": items,
         }

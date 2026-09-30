@@ -45,8 +45,10 @@ The exposed tools are intentionally small:
   without returning internal paths or raw matrices;
 - `depmap_read_resource`: resolve an indexed `depmap://26Q1/...` URI and return
   a bounded table/text preview or binary artifact metadata. Compressed tables
-  report total and returned row counts and accept a bounded cursor; malformed
-  tables return a typed error instead of terminating the MCP call;
+  report total and returned row counts and accept a bounded cursor. The reader
+  rechecks the cataloged SHA-256 and format before returning content; a changed,
+  truncated, or malformed artifact fails closed as `MODULE_UNAVAILABLE` with a
+  path-free integrity state and reason code instead of terminating the MCP call;
 
 Resource content is sanitized recursively before it crosses the MCP boundary.
 Paths inside the configured knowledge root become percent-encoded, stable
@@ -62,6 +64,21 @@ Reader. Enrichment is advertised only when the active release has both a
 compatible Reader and a complete indexed artifact. A missing Reader or
 artifact is returned as `MODULE_UNAVAILABLE`/`NOT_COMPUTED`; it is a service
 coverage condition and must never be interpreted as biological absence.
+
+Index schema v6 streams a SHA-256 over every retained artifact and validates
+the expected minimum format for CSV/TSV (including compressed tables), JSON,
+SQLite, Parquet, and R serialization files. Invalid files remain represented
+as `QUARANTINED` catalog records with stable reason codes, while their owning
+analysis is not executable and its affected capability is not advertised.
+Healthy analysis units and query families remain available. Detailed decoder
+exceptions and host paths are written only to operator logs; they never enter
+scientific evidence. The result-bearing SQLite index is itself authenticated by
+the detached `depmap-26q1-query-index.sqlite.sha256`; catalog and indexed-content
+reads fail closed if that digest is absent or mismatched. Repairing or replacing
+bytes does not silently clear the state: rebuild the index so the verified
+checksum and catalog build identity change before the capability is re-enabled.
+An in-progress rebuild keeps readers on the previous verified index/digest pair
+until both new canonical files have been published.
 - `depmap_status`
 - `depmap_resolve_lineage`
 - `depmap_lineage_catalog`
@@ -179,7 +196,7 @@ service, and call `depmap_status`. Confirm that the advertised contract version
 matches the desktop-supported range and record both catalog identities before
 running scientific queries.
 
-`depmap_capabilities` reads its 20 intent contracts from SQLite
+`depmap_capabilities` reads its intent contracts from SQLite
 `capability_catalog`. `services/depmap_mcp/capability_catalog.py` is the single
 build-time definition used to populate that table; code fallback is used only
 when the index is absent. Result adapters and gene-to-shard locations are
