@@ -14195,6 +14195,16 @@ fn App() -> impl IntoView {
                                         <span class="composer-attachment-icon">{compose_icon("doc")}</span>
                                     }.into_view())
                                 };
+                                // Full-card overlay rather than a wrapping button, so the remove
+                                // button stays a sibling and needs no propagation guard.
+                                let open = path.filter(|_| is_image).map(|path| {
+                                    let name = name.clone();
+                                    view! {
+                                        <button type="button" class="composer-attachment-open"
+                                            aria-label=name.clone()
+                                            on:click=move |_| modal_artifact.set(Some((path.clone(), name.clone(), "image".into())))></button>
+                                    }
+                                });
                                 view! {
                                     <div class=format!("composer-attachment-row {state} {kind}")
                                         title=hover>
@@ -14203,6 +14213,7 @@ fn App() -> impl IntoView {
                                             <span class=format!("composer-attachment {state}")>{name}</span>
                                             <span class="composer-attachment-meta">{move || t(locale.get(), meta_key)}</span>
                                         </span>
+                                        {open}
                                         <button type="button" class="composer-attachment-remove"
                                             title=move || t(locale.get(), "composer.remove_attachment")
                                             aria-label=move || t(locale.get(), "composer.remove_attachment")

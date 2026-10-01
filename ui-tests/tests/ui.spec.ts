@@ -6458,6 +6458,11 @@ test("pasted image attaches to the composer", async ({ page }) => {
 
   await expect(page.locator(".composer-attachment.ready")).toHaveText(/pasted_image_\d+_1\.png/);
   await expect(page.locator(".composer-attachment-row.image img")).toBeVisible();
+  await page.locator(".composer-attachment-open").click();
+  await expect(page.locator(".artifact-modal")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".artifact-modal")).toHaveCount(0);
+  await expect(page.locator(".composer-attachment-row.image")).toBeVisible();
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
   await expect.poll(async () => page.evaluate(() => {
