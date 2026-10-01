@@ -36,6 +36,8 @@ request does not filter the pan-cancer catalog; a missing lineage table is
 `NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
 merged with direction-discovery or effect-correlation lists.
 
+Completed evidence is folded into a checkpoint that keeps the evidence id, release, and status. Superseded tool payloads and repeated read/grep/edit copies leave later prompts. Spilled `.wisp/tool-output` files and the app database under `.wisp` cannot be read back to reconstruct those rows; the next step is a narrower query.
+
 Query-only turns default to chat-only presentation. `write`/`edit`, shell,
 and Python/R must not create `results/reports/**` or unsolicited CSV, and
 plotting skills stay unavailable. After the chat answer, the agent asks with

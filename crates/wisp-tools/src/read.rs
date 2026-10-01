@@ -88,6 +88,11 @@ impl Tool for ReadTool {
             Ok(path) => path,
             Err(error) => return ToolResult::fail(format!("read {requested_path} error: {error}")),
         };
+        if crate::presentation::closed_evidence_spill(&path.to_string_lossy())
+            || crate::presentation::closed_evidence_spill(&requested_path)
+        {
+            return ToolResult::fail(crate::presentation::CLOSED_EVIDENCE_SPILL_ERROR);
+        }
         if crate::image::is_supported_image(&path)
             && arg_int_opt(args, "offset").is_none()
             && arg_int_opt(args, "limit").is_none()

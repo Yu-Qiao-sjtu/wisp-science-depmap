@@ -159,7 +159,7 @@ fn budget_tool_result_with_limit(
     let half = budget / 2;
     let marker = if spill_path.is_file() {
         format!(
-            "[... ~{} bytes omitted from {tool_name}; full output at {} — read/grep narrow ranges; do not load the whole file ...]",
+            "[... ~{} bytes omitted from {tool_name}; full output retained outside model context at {}. Do not read or grep the spill file or the app database; issue a narrower query for omitted rows. ...]",
             text.len().saturating_sub(budget),
             spill_path.display()
         )
@@ -176,7 +176,7 @@ fn budget_tool_result_with_limit(
 /// results; leftover LM Studio / local transcripts can still be huge and
 /// must not blow the next send (#1070).
 pub fn bound_tool_results_in_history(root: &Path, messages: &mut [Message]) {
-    for message in messages {
+    for message in &mut *messages {
         if message.role != wisp_llm::Role::Tool {
             continue;
         }
@@ -184,6 +184,7 @@ pub fn bound_tool_results_in_history(root: &Path, messages: &mut [Message]) {
         let content = std::mem::replace(&mut message.content, Content::text(""));
         message.content = budget_tool_result(root, &name, content, None);
     }
+    crate::context::fold_superseded_evidence(messages);
 }
 
 /// Mid-turn guidance queue: `(id, text)` pairs pushed by the host while a turn
@@ -1623,7 +1624,8 @@ mod tests {
         let text = bounded.as_text();
 
         assert!(text.len() < original_len);
-        assert!(text.contains("full output at"));
+        assert!(text.contains("retained outside model context"));
+        assert!(!text.contains("read/grep narrow ranges"));
         assert!(text.starts_with("BEGIN"));
         assert!(text.ends_with("END"));
         assert!(
@@ -1636,6 +1638,43 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read_to_string(spill.path()).unwrap(), raw);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn superseded_evidence_and_repeated_reads_collapse_to_checkpoints() {
+        let payload = format!(
+            "{{\"evidence_id\":\"ev-1\",\"release\":\"26Q1\",\"status\":\"COMPLETE\",\"rows\":[\"{}\"]}}",
+            "x".repeat(8_000)
+        );
+        let mut messages = vec![
+            Message::tool("c1", "depmap_query", payload.clone()),
+            Message::tool("c2", "read", "same-table"),
+            Message::tool("c3", "read", "same-table"),
+            Message::tool("c4", "depmap_query", payload),
+        ];
+        let before: usize = messages
+            .iter()
+            .map(|message| message.content.as_text().len())
+            .sum();
+        crate::context::fold_superseded_evidence(&mut messages);
+        let after: usize = messages
+            .iter()
+            .map(|message| message.content.as_text().len())
+            .sum();
+        assert!(after + 4_000 < before, "before {before} after {after}");
+        assert!(messages[0]
+            .content
+            .as_text()
+            .contains("Evidence checkpoint ev-1"));
+        assert!(messages[0].content.as_text().contains("release=26Q1"));
+        assert!(messages[1]
+            .content
+            .as_text()
+            .contains("Repeated read/grep/edit omitted"));
+        assert!(messages[3]
+            .content
+            .as_text()
+            .contains("\"evidence_id\":\"ev-1\""));
     }
 
     #[test]
@@ -2790,7 +2829,7 @@ mod tests {
         };
         assert_eq!(parts.len(), 3);
         assert!(
-            matches!(&parts[0], Part::Text { text, .. } if text.len() < 2000 && text.contains("full output at"))
+            matches!(&parts[0], Part::Text { text, .. } if text.len() < 2000 && text.contains("retained outside model context"))
         );
         std::fs::remove_dir_all(root).unwrap();
     }

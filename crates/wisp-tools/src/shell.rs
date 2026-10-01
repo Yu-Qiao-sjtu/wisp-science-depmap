@@ -88,6 +88,9 @@ async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duratio
     {
         return ToolResult::fail(crate::presentation::query_only_write_error(&path));
     }
+    if crate::presentation::closed_evidence_spill(&cmd) {
+        return ToolResult::fail(crate::presentation::CLOSED_EVIDENCE_SPILL_ERROR);
+    }
     // In the "full" scope dangerous commands run without a prompt; otherwise
     // ("auto" and "ask") a dangerous command still asks.
     if !env.danger_auto_approve() {

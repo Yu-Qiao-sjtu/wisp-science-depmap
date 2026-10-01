@@ -133,6 +133,20 @@ pub fn query_only_forbidden_target(text: &str) -> Option<String> {
     None
 }
 
+/// Spilled tool output and the app database are not a second scientific API.
+pub fn closed_evidence_spill(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    if normalized.contains(".wisp/tool-output") {
+        return true;
+    }
+    normalized.contains(".wisp/")
+        && (normalized.ends_with(".sqlite")
+            || normalized.ends_with(".sqlite3")
+            || normalized.ends_with(".db"))
+}
+
+pub const CLOSED_EVIDENCE_SPILL_ERROR: &str = "structured evidence stays outside model context; issue a narrower query instead of reading spilled tool output or the app database";
+
 pub fn query_only_write_error(path: &str) -> String {
     format!(
         "query-only turn forbids writing `{path}` (artifact_requested=false); answer from the bounded evidence envelope in chat"
