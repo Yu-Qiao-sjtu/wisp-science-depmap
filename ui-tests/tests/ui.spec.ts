@@ -4970,7 +4970,7 @@ for (const branchFrom of ["assistant", "user"] as const) {
     await enterApp(page);
     await composer(page).fill("completed convention");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    const reply = page.locator(".msg.assistant").filter({ hasText: "Hello from mock wisp-science." }).first();
+    const reply = page.locator(".msg.assistant").filter({ hasText: "Hello from mock wisp-depmap." }).first();
     await expect(reply.getByRole("button", { name: "Memory", exact: true })).toBeVisible();
     const sourceId = (await lastInvokeArgs(page, "send_message"))!.sessionId;
     await composer(page).fill("MONITORRUN continue working");
@@ -4996,7 +4996,7 @@ for (const branchFrom of ["assistant", "user"] as const) {
       });
     });
     await reply.getByRole("button", { name: "Copy message", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).__copiedHistory)).toBe("Hello from mock wisp-science.");
+    await expect.poll(() => page.evaluate(() => (window as any).__copiedHistory)).toBe("Hello from mock wisp-depmap.");
     await oldUser.hover();
     await oldUser.getByRole("button", { name: "Copy", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as any).__copiedHistory)).toBe("completed convention");
