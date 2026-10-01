@@ -52,6 +52,11 @@ impl Tool for GrepTool {
             Ok(path) => path,
             Err(error) => return ToolResult::fail(format!("grep error: {error}")),
         };
+        if crate::presentation::closed_evidence_spill(&base.to_string_lossy())
+            || crate::presentation::closed_evidence_spill(&requested_base)
+        {
+            return ToolResult::fail(crate::presentation::CLOSED_EVIDENCE_SPILL_ERROR);
+        }
         let mut hits: Vec<String> = vec![];
         let mut hit_bytes = 0;
         let mut truncated = false;
@@ -64,6 +69,9 @@ impl Tool for GrepTool {
             .filter_map(|e| e.ok())
         {
             if !entry.file_type().is_file() {
+                continue;
+            }
+            if crate::presentation::closed_evidence_spill(&entry.path().to_string_lossy()) {
                 continue;
             }
             // ponytail: flat 10MB skip like code-search tools; no override knob

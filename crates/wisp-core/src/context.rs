@@ -1802,12 +1802,103 @@ impl ContextManager {
                 Self::age_images(m, IMAGE_UNSUPPORTED_NOTE);
             }
         }
+        if evidence_fold_needed(&prepared) {
+            let mut owned = prepared.into_owned();
+            fold_superseded_evidence(&mut owned);
+            return std::borrow::Cow::Owned(owned);
+        }
         prepared
     }
 
     fn has_image(m: &Message) -> bool {
         matches!(&m.content, Content::Parts(parts) if parts.iter().any(|p| matches!(p, Part::Image { .. })))
     }
+}
+
+/// Keep the latest payload for each evidence id and each repeated read/grep/edit.
+/// Earlier copies become a typed checkpoint so later model prompts do not replay them.
+pub fn fold_superseded_evidence(messages: &mut [Message]) {
+    let mut last_evidence = std::collections::HashMap::<String, usize>::new();
+    let mut last_repeat = std::collections::HashMap::<String, usize>::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message.role != Role::Tool {
+            continue;
+        }
+        let text = message.content.as_text();
+        if let Some(evidence_id) = json_string_field(&text, "evidence_id") {
+            last_evidence.insert(evidence_id, index);
+        }
+        if let Some(key) = repeated_tool_key(message) {
+            last_repeat.insert(key, index);
+        }
+    }
+    for (index, message) in messages.iter_mut().enumerate() {
+        if message.role != Role::Tool {
+            continue;
+        }
+        let text = message.content.as_text();
+        if let Some(evidence_id) = json_string_field(&text, "evidence_id") {
+            if last_evidence.get(&evidence_id) != Some(&index) {
+                message.content = Content::text(evidence_checkpoint(&evidence_id, &text));
+                continue;
+            }
+        }
+        if let Some(key) = repeated_tool_key(message) {
+            if last_repeat.get(&key) != Some(&index) {
+                message.content = Content::text(
+                    "Repeated read/grep/edit omitted; the latest copy is the one in context.",
+                );
+            }
+        }
+    }
+}
+
+fn evidence_fold_needed(messages: &[Message]) -> bool {
+    let mut evidence = std::collections::HashSet::<String>::new();
+    let mut repeats = std::collections::HashSet::<String>::new();
+    for message in messages {
+        if message.role != Role::Tool {
+            continue;
+        }
+        let text = message.content.as_text();
+        if let Some(evidence_id) = json_string_field(&text, "evidence_id") {
+            if !evidence.insert(evidence_id) {
+                return true;
+            }
+        }
+        if let Some(key) = repeated_tool_key(message) {
+            if !repeats.insert(key) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn repeated_tool_key(message: &Message) -> Option<String> {
+    let name = message.tool_name.as_deref()?;
+    if !matches!(name, "read" | "grep" | "edit") {
+        return None;
+    }
+    Some(format!("{name}:{}", message.content.as_text()))
+}
+
+fn evidence_checkpoint(evidence_id: &str, text: &str) -> String {
+    let release = json_string_field(text, "release").unwrap_or_else(|| "unknown".into());
+    let status = json_string_field(text, "status").unwrap_or_else(|| "unspecified".into());
+    format!(
+        "Evidence checkpoint {evidence_id}: release={release} status={status}. Superseded tool payload omitted; issue a narrower query instead of replaying it."
+    )
+}
+
+fn json_string_field(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let start = text.find(&needle)?;
+    let after = &text[start + needle.len()..];
+    let value = after.trim_start().strip_prefix(':')?.trim_start();
+    let value = value.strip_prefix('"')?;
+    let end = value.find('"')?;
+    Some(value[..end].to_string())
 }
 
 /// A minimal JSON helper for tool-result content when carrying an image.
