@@ -1223,7 +1223,14 @@ mod art_ref_marker_tests {
     fn only_image_embeds_count_as_embedded_resources() {
         let render = |markdown: &str| {
             let resource = message_resource("figures/plot.png", "image", true);
-            enrich_md_html(md_to_html(markdown), &[], &[resource], Locale::En, None, None)
+            enrich_md_html(
+                md_to_html(markdown),
+                &[],
+                &[resource],
+                Locale::En,
+                None,
+                None,
+            )
         };
         let linked = render("| file |\n|-|\n| [plot](figures/plot.png)（pdf） |");
         assert!(linked.contains(r#"data-resource-id="resource-link""#));

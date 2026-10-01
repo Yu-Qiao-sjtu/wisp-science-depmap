@@ -910,7 +910,6 @@ pub(super) fn refresh_agent_workflows(state: AgentPanelState) {
     });
 }
 
-
 #[derive(Clone)]
 struct AgentWorkflowGroup {
     frame_id: String,

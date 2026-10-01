@@ -57,18 +57,33 @@ pub(crate) fn HooksSettingsView(
     let project_error = create_rw_signal(None::<String>);
     spawn_local(async move {
         // No session id: the default new conversations inherit.
-        let default = invoke_checked("get_auto_review_enabled", to_value(&serde_json::json!({})).unwrap()).await;
+        let default = invoke_checked(
+            "get_auto_review_enabled",
+            to_value(&serde_json::json!({})).unwrap(),
+        )
+        .await;
         let saved = invoke_checked("get_command_hooks", wasm_bindgen::JsValue::UNDEFINED).await;
-        let project_file = invoke_checked("get_project_hooks", wasm_bindgen::JsValue::UNDEFINED).await;
+        let project_file =
+            invoke_checked("get_project_hooks", wasm_bindgen::JsValue::UNDEFINED).await;
         if hooks.try_get_untracked().is_none() {
             return;
         }
-        auto_review_default.set(default.ok().and_then(|value| value.as_bool()).unwrap_or(false));
+        auto_review_default.set(
+            default
+                .ok()
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+        );
         match saved {
             Ok(value) => hooks.set(from_value(value).unwrap_or_default()),
             Err(e) => error.set(Some(js_error_text(e))),
         }
-        project.set(project_file.ok().and_then(|value| from_value(value).ok()).flatten());
+        project.set(
+            project_file
+                .ok()
+                .and_then(|value| from_value(value).ok())
+                .flatten(),
+        );
     });
     // Trust exactly the content shown (its hash), or revoke with None.
     let set_project_trust = move |sha256: Option<String>| {
@@ -101,7 +116,12 @@ pub(crate) fn HooksSettingsView(
         spawn_local(async move {
             let args = to_value(&serde_json::json!({ "enabled": enabled })).unwrap();
             let saved = invoke_checked("set_auto_review_enabled", args).await;
-            auto_review_default.set(saved.ok().and_then(|value| value.as_bool()).unwrap_or(!enabled));
+            auto_review_default.set(
+                saved
+                    .ok()
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(!enabled),
+            );
         });
     };
     let open_editor = move |index: Option<usize>, hook: CommandHook| {

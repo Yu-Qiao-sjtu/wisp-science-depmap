@@ -1970,10 +1970,10 @@ fn App() -> impl IntoView {
     let sel_artifact = create_rw_signal(0usize);
     let show_art_preview = create_rw_signal(false);
     let modal_artifact = create_rw_signal(None::<ModalArtifact>); // (path, name, kind)
-    // Background output updates change navigation, not the mounted viewer.
-    // Reading `artifacts` in the modal's render closure remounts the image and
-    // provenance on every change, replaying the overlay animation and losing
-    // zoom, the selected provenance tab, and unsent code edits.
+                                                                  // Background output updates change navigation, not the mounted viewer.
+                                                                  // Reading `artifacts` in the modal's render closure remounts the image and
+                                                                  // provenance on every change, replaying the overlay animation and losing
+                                                                  // zoom, the selected provenance tab, and unsent code edits.
     let modal_image_nav = create_memo(move |_| {
         let Some((path, _, kind)) = modal_artifact.get() else {
             return (None, None);
@@ -3896,7 +3896,11 @@ fn App() -> impl IntoView {
                     status_cb.set(t(locale, "hooks.project_notice"));
                 } else if HookEvent::ALL.iter().any(|event| event.as_str() == hook) {
                     // User command hooks; built-in follow-ups stay silent.
-                    status_cb.set(tf(locale, "hooks.failed", &[("hook", &hook), ("msg", &message)]));
+                    status_cb.set(tf(
+                        locale,
+                        "hooks.failed",
+                        &[("hook", &hook), ("msg", &message)],
+                    ));
                 }
             }
             AgentEvent::Review { frame_id, report } => {
@@ -11320,7 +11324,10 @@ fn App() -> impl IntoView {
     // streaming text updates.
     let latest_user_item = create_memo(move |_| {
         let _ = transcript_projection_epoch.get();
-        items.with_untracked(|rows| rows.iter().rposition(|item| matches!(item, ChatItem::User(_))))
+        items.with_untracked(|rows| {
+            rows.iter()
+                .rposition(|item| matches!(item, ChatItem::User(_)))
+        })
     });
     // Undo eligibility changes at turn boundaries, but the assistant Markdown
     // does not. Publish the one eligible index separately so adding/removing
