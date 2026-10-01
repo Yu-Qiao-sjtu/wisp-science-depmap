@@ -13,6 +13,7 @@ mod ask_user_requests;
 mod bridge_checkpoints;
 mod claim_records;
 mod codex_imports;
+mod context_epochs;
 mod execution_contexts;
 mod explorations;
 mod external_session_cache;
@@ -25,7 +26,9 @@ mod method_search;
 mod models;
 mod persist_seq;
 mod plugins;
+mod project_snapshots;
 mod project_state_revisions;
+mod project_storage;
 mod project_sync;
 mod project_transfer;
 mod projects;
@@ -34,6 +37,7 @@ mod publication_sources;
 mod publications;
 mod remote_staging;
 mod research;
+mod research_archives;
 mod research_journey;
 mod resources;
 mod runs;
@@ -59,6 +63,7 @@ pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
 pub use bridge_checkpoints::BridgeCheckpointRecord;
 pub use claim_records::ClaimRecordRow;
+pub use context_epochs::{ContextEpochRecord, OpenContextEpoch};
 pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
@@ -79,7 +84,9 @@ pub use method_search::{
 };
 pub use models::*;
 pub use persist_seq::{join_or_abort_persist, persist_seq_loop, PersistJoinError};
+pub use project_snapshots::{FolderSyncOutcome, FOLDER_WAITING, WORKSPACE_TRANSPORT};
 pub use project_state_revisions::{ProjectStateRevision, ProjectStateRevisionSummary};
+pub use project_storage::{PROJECT_DATABASE, PROJECT_METADATA};
 pub use project_sync::ProjectSyncState;
 pub use project_transfer::ProjectTransferStats;
 pub use projects::{is_scratch_project_id, SCRATCH_PROJECT_PREFIX};
@@ -89,10 +96,10 @@ pub use schedules::{next_slot_after, ScheduleRecord, ScheduleRunRecord};
 pub use scientific_evidence::{NewScientificEvidence, ScientificEvidenceRecord};
 pub use session_imports::RecoveredWorkspaceSession;
 pub use sessions::{
-    ModelTokenUsage, ProjectTokenUsage, SessionBranchDeltaMessage, SessionBranchLink,
-    SessionBranchMerge, SessionBranchMergeCard, SessionBranchMergePreview, SessionTokenUsage,
-    SessionTokenUsagePage, SessionTranscriptPage, SessionUiEventRecord, SessionUiEventSnapshot,
-    TokenUsageDay, ToolCallUsage,
+    is_compaction_checkpoint, ModelTokenUsage, ProjectTokenUsage, SessionBranchDeltaMessage,
+    SessionBranchLink, SessionBranchMerge, SessionBranchMergeCard, SessionBranchMergePreview,
+    SessionTokenUsage, SessionTokenUsagePage, SessionTranscriptPage, SessionUiEventRecord,
+    SessionUiEventSnapshot, TokenUsageDay, ToolCallUsage,
 };
 pub use storage_prefs::{
     validate_local_results_dir, validate_remote_data_root, validate_remote_workdir_root,
@@ -192,24 +199,72 @@ const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION: &str = "0057_scientific_evidence_led
 const SCIENTIFIC_EVIDENCE_LEDGER_MIGRATION_SQL: &str =
     include_str!("../migrations/0057_scientific_evidence_ledger.sql");
 // The DepMap fork already shipped migrations 0056 and 0057 before the
-// upstream project-stars migration arrived. Give the upstream migration a
-// new durable id so existing fork databases do not mistake it for 0056.
+// upstream project-stars migration arrived. Later upstream migrations keep
+// new ids so existing fork databases do not skip them.
 const PROJECT_STARS_MIGRATION: &str = "0058_project_stars";
 const BRIDGE_CHECKPOINTS_MIGRATION: &str = "0059_bridge_checkpoints";
 const BRIDGE_CHECKPOINTS_MIGRATION_SQL: &str =
     include_str!("../migrations/0059_bridge_checkpoints.sql");
 const CLAIM_RECORDS_MIGRATION: &str = "0060_claim_records";
 const CLAIM_RECORDS_MIGRATION_SQL: &str = include_str!("../migrations/0060_claim_records.sql");
+const RESEARCH_ARCHIVES_MIGRATION: &str = "0061_research_archives";
+const CONTEXT_EPOCHS_MIGRATION: &str = "0062_context_epochs";
+const CONTEXT_EPOCH_IDENTITY_MIGRATION: &str = "0063_context_epoch_identity";
+const ACP_AGENT_SELECTION_MIGRATION: &str = "0064_acp_agent_selection";
 
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
+    registry: Option<std::sync::Arc<project_storage::ProjectRegistry>>,
+    project_scope: Option<String>,
 }
 
 impl Store {
+    /// Open an existing database for queries without creating it or running
+    /// migrations. Native previews use this while the desktop owns the store.
+    pub async fn open_read_only(path: &Path) -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await?;
+        let mut store = Self {
+            pool,
+            registry: None,
+            project_scope: None,
+        };
+        store.enable_project_registry(true).await?;
+        Ok(store)
+    }
+
+    /// Open an existing database for explicit native commands. Never creates,
+    /// migrates, or changes journal mode; the desktop still owns schema upgrades.
+    pub async fn open_existing_for_commands(path: &Path) -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        let mut store = Self {
+            pool,
+            registry: None,
+            project_scope: None,
+        };
+        store.enable_project_registry(false).await?;
+        Ok(store)
+    }
+
     /// Open (or create) the SQLite database at `path` and run migrations.
     pub async fn open(path: &Path) -> Result<Self> {
-        Self::open_with_journal(path, true).await
+        let mut store = Self::open_with_journal(path, true).await?;
+        store.enable_project_registry(false).await?;
+        Ok(store)
     }
 
     /// Close the underlying connection pool and wait for SQLite file handles
@@ -254,7 +309,11 @@ impl Store {
                 .await?;
         }
         Self::migrate(&pool).await?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            registry: None,
+            project_scope: None,
+        };
         store.ensure_local_execution_context().await?;
         Ok(store)
     }
@@ -793,6 +852,11 @@ impl Store {
             Self::execute_sql_script(pool, CLAIM_RECORDS_MIGRATION_SQL).await?;
             Self::record_migration(pool, CLAIM_RECORDS_MIGRATION).await?;
         }
+        if !Self::migration_applied(pool, ACP_AGENT_SELECTION_MIGRATION).await? {
+            Self::add_columns_if_missing(pool, "frames", &[("acp_agent_selection", "TEXT")])
+                .await?;
+            Self::record_migration(pool, ACP_AGENT_SELECTION_MIGRATION).await?;
+        }
         // Re-apply additive DDL even when a migration marker is already
         // recorded. Jumping many releases can leave a table/column that was
         // later folded into 0000_init.sql (or into an already-shipped apply_*
@@ -804,6 +868,20 @@ impl Store {
     /// Idempotent repair for schema objects that numbered migrations can miss
     /// after a large version skip. Only CREATE IF NOT EXISTS / ADD COLUMN.
     async fn ensure_schema_compat(pool: &SqlitePool) -> Result<()> {
+        // Partial legacy stores may contain only run tables. Install the
+        // notebook triggers only when their target tables exist; retry this
+        // additive migration on every open until the notebook schema exists.
+        let notebook_tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('frames','messages','session_ui_events')",
+        )
+        .fetch_one(pool)
+        .await?;
+        if notebook_tables == 3 {
+            sqlx::raw_sql(include_str!("../migrations/0057_research_archives.sql"))
+                .execute(pool)
+                .await?;
+            Self::record_migration(pool, RESEARCH_ARCHIVES_MIGRATION).await?;
+        }
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS folders (\
              id TEXT PRIMARY KEY, \
@@ -842,6 +920,7 @@ impl Store {
                 ("branched_from", "TEXT"),
                 ("reasoning_effort", "TEXT"),
                 ("service_tier", "TEXT"),
+                ("acp_agent_selection", "TEXT"),
                 ("branch_point_user_index", "INTEGER"),
                 ("branch_point_kind", "TEXT"),
                 ("exploration_id", "TEXT"),
@@ -926,6 +1005,46 @@ impl Store {
         .await?;
         Self::add_columns_if_missing(pool, "session_ui_events", &[("created_at", "INTEGER")])
             .await?;
+        Self::apply_context_epochs(pool).await?;
+        Ok(())
+    }
+
+    /// Context epochs (compaction snapshots inside one frame). Existing rows
+    /// stay in epoch 0 and every frame's head stays at 0, so a database that
+    /// predates epochs reads back exactly as before. Additive only; safe to
+    /// re-run on every open.
+    async fn apply_context_epochs(pool: &SqlitePool) -> Result<()> {
+        let tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('frames','messages')",
+        )
+        .fetch_one(pool)
+        .await?;
+        if tables != 2 {
+            return Ok(());
+        }
+        Self::add_columns_if_missing(pool, "messages", &[("epoch", "INTEGER NOT NULL DEFAULT 0")])
+            .await?;
+        Self::add_columns_if_missing(
+            pool,
+            "frames",
+            &[
+                ("head_epoch", "INTEGER NOT NULL DEFAULT 0"),
+                ("context_epoch_high_water", "INTEGER NOT NULL DEFAULT 0"),
+            ],
+        )
+        .await?;
+        sqlx::raw_sql(include_str!("../migrations/0058_context_epochs.sql"))
+            .execute(pool)
+            .await?;
+        Self::record_migration(pool, CONTEXT_EPOCHS_MIGRATION).await?;
+        if !Self::migration_applied(pool, CONTEXT_EPOCH_IDENTITY_MIGRATION).await? {
+            sqlx::raw_sql(include_str!(
+                "../migrations/0059_context_epoch_identity.sql"
+            ))
+            .execute(pool)
+            .await?;
+            Self::record_migration(pool, CONTEXT_EPOCH_IDENTITY_MIGRATION).await?;
+        }
         Ok(())
     }
 
@@ -2119,13 +2238,34 @@ impl Store {
     }
 
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        if let Some(store) = self.route_setting(key).await? {
+            return Box::pin(store.set_setting(key, value)).await;
+        }
         sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(key).bind(value)
             .execute(&self.pool).await?;
         Ok(())
     }
 
+    /// Atomically update account-wide settings (for example model profiles
+    /// and their assignments). Project/frame settings must use `set_setting`.
+    pub async fn set_global_settings(&self, values: &[(&str, &str)]) -> Result<()> {
+        let global = self.route_global();
+        let store = global.as_ref().unwrap_or(self);
+        let mut tx = store.begin_write().await?;
+        for (key, value) in values {
+            sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind(key).bind(value)
+                .execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_setting(key).await? {
+            return Box::pin(store.get_setting(key)).await;
+        }
         let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key=?")
             .bind(key)
             .fetch_optional(&self.pool)
@@ -2134,6 +2274,9 @@ impl Store {
     }
 
     pub async fn delete_setting(&self, key: &str) -> Result<()> {
+        if let Some(store) = self.route_setting(key).await? {
+            return Box::pin(store.delete_setting(key)).await;
+        }
         sqlx::query("DELETE FROM settings WHERE key=?")
             .bind(key)
             .execute(&self.pool)

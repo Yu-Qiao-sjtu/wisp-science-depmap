@@ -1,6 +1,6 @@
 //! Windows integrated title bar: brand, File/Edit/View/Help menus, window controls.
 
-use crate::bindings::{arm_caption_drag, open_external_url, window_control};
+use crate::bindings::{arm_caption_drag, open_external_url, open_tutorials, window_control};
 use crate::i18n::{t, Locale};
 use leptos::*;
 

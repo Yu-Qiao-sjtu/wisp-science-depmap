@@ -165,6 +165,9 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
         .unwrap_or_default();
     let notifications_enabled = super::load_notifications_enabled(&state.store).await;
     let auto_compact = super::load_auto_compact_enabled(&state.store).await;
+    let semantic_compact_on_model_switch =
+        super::load_semantic_compact_on_model_switch(&state.store).await;
+    let semantic_compact_idle_hours = super::load_semantic_compact_idle_hours(&state.store).await;
     let (auto_continue, auto_continue_limit) =
         super::load_auto_continue_settings(&state.store).await;
     let follow_up_questions = state
@@ -194,10 +197,17 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
         workspace_dir,
         max_iter,
         auto_compact,
+        semantic_compact_on_model_switch,
+        semantic_compact_idle_hours,
         auto_continue,
         auto_continue_limit: auto_continue_limit as u64,
         follow_up_questions,
         resume_last_session,
+        decentralized_project_storage: state
+            .store
+            .decentralized_project_storage()
+            .await
+            .map_err(|e| e.to_string())?,
         max_tokens,
         reasoning_effort,
         service_tier,
@@ -393,6 +403,22 @@ pub(super) async fn set_settings(
         .map_err(|e| e.to_string())?;
     state
         .store
+        .set_setting(
+            "semantic_compact_on_model_switch",
+            &settings.semantic_compact_on_model_switch.to_string(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .store
+        .set_setting(
+            "semantic_compact_idle_hours",
+            &settings.semantic_compact_idle_hours.to_string(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .store
         .set_setting("auto_continue", &settings.auto_continue.to_string())
         .await
         .map_err(|e| e.to_string())?;
@@ -417,6 +443,14 @@ pub(super) async fn set_settings(
         .set_setting(
             "resume_last_session",
             &settings.resume_last_session.to_string(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .store
+        .set_setting(
+            "decentralized_project_storage",
+            &settings.decentralized_project_storage.to_string(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -962,17 +996,29 @@ mod tests {
 
 use super::*;
 
+/// With `session_id` this is that conversation's own flag; without one it is
+/// the default new conversations inherit (what the settings pane edits).
 #[tauri::command]
-pub(super) async fn get_auto_review_enabled(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(load_auto_review_enabled(&state.store).await)
+pub(super) async fn get_auto_review_enabled(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<bool, String> {
+    Ok(match session_id.as_deref() {
+        Some(session_id) => load_auto_review_enabled(&state.store, session_id).await,
+        None => load_default_auto_review_enabled(&state.store).await,
+    })
 }
 
 #[tauri::command]
 pub(super) async fn set_auto_review_enabled(
     state: State<'_, AppState>,
+    session_id: Option<String>,
     enabled: bool,
 ) -> Result<bool, String> {
-    save_auto_review_enabled(&state.store, enabled).await?;
+    match session_id.as_deref() {
+        Some(session_id) => save_auto_review_enabled(&state.store, session_id, enabled).await?,
+        None => save_default_auto_review_enabled(&state.store, enabled).await?,
+    }
     Ok(enabled)
 }
 

@@ -140,10 +140,14 @@ impl DesktopPetActivity {
             | AgentEvent::ToolPresentation { .. }
             | AgentEvent::AppContextUpdate { .. }
             | AgentEvent::Compaction { .. }
+            | AgentEvent::CompactionUndone { .. }
             | AgentEvent::ContextWarning { .. }
             | AgentEvent::Diff { .. }
             | AgentEvent::FileChanged { .. }
-            | AgentEvent::Resources { .. } => {}
+            | AgentEvent::Resources { .. }
+            | AgentEvent::MemoryProposal { .. }
+            | AgentEvent::FollowUps { .. }
+            | AgentEvent::HookFailed { .. } => {}
         }
     }
 

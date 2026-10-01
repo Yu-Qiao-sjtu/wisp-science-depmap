@@ -19,8 +19,51 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   const listeners: Record<string, ((e: { payload: unknown }) => void) | undefined> = {};
   const windowListeners: Record<string, ((e: { payload: unknown }) => void) | undefined> = {};
   const hydrationApprovals = new Map<string, any>();
+  const planProgressSnapshots = new Map<string, string | null>();
+  // Mirrors the backend AfterTurn hooks (src-tauri/src/turn_hooks.rs): after a
+  // completed turn, emit follow-ups when it ended on an answer and an
+  // automatic memory proposal when one applies.
+  const finalAnswerByFrame: Record<string, boolean> = {};
+  const trackFinalAnswer = (request: any) => {
+    if (request.kind === "User" || request.kind === "ToolCall") {
+      finalAnswerByFrame[request.frame_id] = false;
+    } else if (request.kind === "Text" && String(request.delta ?? "").trim()) {
+      finalAnswerByFrame[request.frame_id] = true;
+    } else if (request.kind === "ToolResult") {
+      finalAnswerByFrame[request.frame_id] =
+        request.name === "attempt_completion" && Boolean(String(request.content ?? "").trim());
+    }
+  };
+  const runAfterTurnHooks = (request: any) => {
+    const stopReason = request.stop_reason;
+    if (stopReason != null && stopReason !== "end_turn") return;
+    const frameId = String(request.frame_id);
+    const answered = finalAnswerByFrame[frameId];
+    setTimeout(() => {
+      if (answered) {
+        emit("agent", {
+          kind: "FollowUps",
+          frame_id: frameId,
+          questions: [
+            "Review the records that need manual correction",
+            "Expand the search for underrepresented species",
+            "Generate a literature landscape visualization",
+          ],
+        });
+      }
+      const proposal = mockMemoryProposal(frameId, 0, true);
+      if (proposal) emit("agent", { kind: "MemoryProposal", frame_id: frameId, proposal });
+    }, 0);
+  };
   const emit = (event: string, payload: unknown) => {
     const request = payload as any;
+    if (event === "agent") trackFinalAnswer(request);
+    if (event === "agent" && planProgressSnapshots.has(request.frame_id)) {
+      if (request.kind === "User") planProgressSnapshots.set(request.frame_id, null);
+      if (request.kind === "ToolResult" && request.name === "update_plan" && request.ok) {
+        planProgressSnapshots.set(request.frame_id, request.content);
+      }
+    }
     if (event === "confirm-request") {
       hydrationApprovals.set(request.frame_id, { ...request, approval_id: request.approval_id ?? `mock-${request.frame_id}` });
     } else if (event === "confirm-resolved" || (event === "agent" && request.kind === "Done")) {
@@ -33,6 +76,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     } catch {
       /* listener may not be registered yet */
     }
+    if (event === "agent" && request.kind === "Done") runAfterTurnHooks(request);
   };
   (window as any).__tauriEmit = emit;
   (window as any).__WISP_MCP_APP_BACKEND__ = "legacy-iframe";
@@ -173,13 +217,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   const mockOtherExplorationSession = query.get("mockOtherExplorationSession") === "1";
   const mockBranchFlow = query.get("mockBranches") === "1";
   const mockHistoricalExploration = query.get("mockHistoricalExploration") === "1";
+  let mockDecentralizedStorage = query.get("mockDecentralizedStorage") === "1";
   let mockLocale = query.get("mockLocale") === "zh" ? "zh" : "en";
   let mockNetworkSettings = {
     model_proxy_url: query.get("mockLegacyProxy") ?? "",
+    subscription_proxy_url: "",
     mcp_proxy_url: "", command_proxy_url: "", conda_mirror_url: "", pip_index_url: "", ca_bundle_path: "",
   };
 
-  const mockSessions: any[] = mockExplorationFlow
+  const mockSessions: any[] = query.get("mockInPlaceFolder") === "1" ? [] : mockExplorationFlow
     ? [
         { id: "exploration-mainline", title: "Mainline analysis", ts: 2100, running: false },
         ...(mockOtherExplorationSession
@@ -371,6 +417,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   (window as any).__petWindowVisible = false;
   let resolveMockUpdateCheck: (() => void) | null = null;
   const syncedProjects = new Set<string>();
+  const folderSync = ((window as any).__folderSync ??= {} as Record<string, string>);
   const nextProjectOpenDelayMs: Record<string, number> = {};
   let nextProbeDelayMs = 0;
   let nextMcpTestDelayMs = 0;
@@ -456,7 +503,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     },
   ];
   let memoryEnabled = true;
-  let autoReviewEnabled = false;
+  const sessionAutoReviewEnabled: Record<string, boolean> = {};
   let autoFailureAnalysis = {
     enabled: false,
     failure_rate_threshold: 30,
@@ -514,6 +561,29 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     other: [{ name: "other-2026-07-02.md", preview: "Notes for other workspace.", bytes: 64 }],
   };
   let globalMemories = [{ id: "global-memory-existing", content: "Prefer SI units across projects." }];
+  const mockMemoryProposal = (sessionId: string, turnIndex: number, automatic: boolean) => {
+    const latest = lastMessageBySession[sessionId] ?? "";
+    if (automatic && !autoFailureAnalysis.enabled && !/记住|REMEMBER/i.test(latest)) {
+      return null;
+    }
+    if (automatic && !/记住|REMEMBER|TOOLFAILMEMORY/i.test(latest)) {
+      return null;
+    }
+    const failure = /TOOLFAILMEMORY/i.test(latest);
+    return {
+      session_id: sessionId,
+      turn_index: turnIndex,
+      scope: /记住|REMEMBER/i.test(latest) ? "global" : "project",
+      content: failure
+        ? "Two shell calls failed because the input path was invalid; validate the path before retrying."
+        : "Prefer reproducible local workflows for this project.",
+      trigger: failure ? "tool_failures" : (automatic ? "explicit" : "manual"),
+      tool_calls: failure ? 3 : 1,
+      failed_tool_calls: failure ? 2 : 0,
+      failure_rate: failure ? 66.7 : 0,
+      global_memories: globalMemories,
+    };
+  };
   const memoryFilesFor = (projectId: string) => {
     const id = projectId || "default";
     if (!memoryByProject[id]) memoryByProject[id] = [];
@@ -1339,7 +1409,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   };
   const runReviewDismissed = new Set<string>();
   let defaultExecutionContext: string | null = null;
-  let runtimeInfos: any[] = [
+  let runtimeInfos: any[] = new URL(location.href).searchParams.get("mockRuntimes") === "none" ? [] : [
     {
       runtimeId: "runtime-python-local",
       generation: 1,
@@ -1604,6 +1674,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       { source_id: "run:r1", target_id: "artifact:h1", relation: "produced", metadata_json: "{}" },
     ],
   };
+  const researchArchives: Record<string, any> = {};
   const journeyZh = new URL(location.href).searchParams.get("mockJourney") === "design";
   const journeyText = (en: string, zh: string) => journeyZh ? zh : en;
   const journeyTime = (daysAgo: number, hour = 12, minute = 0) => {
@@ -1818,6 +1889,30 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             if (delay) await new Promise(resolve=>setTimeout(resolve,delay));
             return result;
           }
+          case "get_research_archive": return researchArchives[String(arg("frameId"))] ?? null;
+          case "prepare_research_archive": {
+            if ((window as any).__archivePrepareError) throw new Error((window as any).__archivePrepareError);
+            const frame = String(arg("frameId"));
+            return researchArchives[frame] = {
+              id: "archive-" + frame, project_id: "default", frame_id: frame, source_hash: "source",
+              title: "Root cell annotation", report: "## Finding\nSelected resolution 0.8.\n\n## Decisions\nCompared 0.5, 0.8 and 1.2; retained marker evidence.",
+              scripts: [{filename:"analysis.R",content:"# Recorded operations\nprint(0.8)"}],
+              files: [
+                {path:"results/final.csv",checksum:"final",size_bytes:256,action:"snapshot",can_delete:false,reason:"Final evidence",snapshot_path:null,cleanup_status:""},
+                {path:"scratch/trial.rds",checksum:"trial",size_bytes:1048576,action:"delete",can_delete:true,reason:"Exclusive creation",snapshot_path:null,cleanup_status:""}],
+              created_at:Math.floor(Date.now()/1000),frozen_at:null,warnings:["Recorded local files only. Scripts were not rerun."]
+            };
+          }
+          case "confirm_research_archive": {
+            if ((window as any).__archiveFailure) throw new Error("File changed since review: scratch/trial.rds");
+            const frame=String(arg("frameId")), input=plain(arg("input")), old=researchArchives[frame];
+            const saved=researchArchives[frame]={...old,...input,frozen_at:Math.floor(Date.now()/1000),files:old.files.map((f:any)=>({...f,...input.files.find((v:any)=>v.path===f.path),cleanup_status:input.files.find((v:any)=>v.path===f.path)?.action==="delete"?"deleted":"",snapshot_path:f.path==="results/final.csv"?".wisp/research-archives/a/final.csv":null}))};
+            journeyEntries.unshift(journeyEntry(saved.id,"archive",saved.title,0,{source_id:saved.id,frame_id:frame,summary:saved.report,status:"archived"}));
+            emit("research-archived",{frame_id:frame,project_id:"default"});
+            return saved;
+          }
+          case "retry_research_archive_cleanup": return researchArchives[String(arg("frameId"))];
+          case "continue_research_archive": return await (window as any).__TAURI__.core.invoke("new_session",{});
           case "get_research_journey": {
             const mode = new URL(location.href).searchParams.get("mockJourney");
             if (mode === "error" || (window as any).__journeyError) throw new Error("Research store unavailable");
@@ -2296,6 +2391,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             }
             if (query.get("mockSessionModels") === "1") {
               const id = String(arg("id") ?? "");
+              const plan = planProgressSnapshots.get(id);
+              if (plan) return {
+                items: [
+                  { role: "user", text: "PLANPROGRESS", tool_name: null, ok: null },
+                  { role: "tool", text: plan, tool_name: "update_plan", ok: true },
+                ],
+                next_before_seq: null,
+                user_offset: 0,
+              };
               return {
                 items: [
                   { role: "user", text: `Question in ${id}`, tool_name: null, ok: null },
@@ -2303,6 +2407,42 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                 ],
                 next_before_seq: null,
                 user_offset: 0,
+              };
+            }
+            if (query.get("mockPathTypes") === "1") {
+              return {
+                items: [{ role: "assistant", text: [
+                  "[Annotation directory](docs/07.celltype_auto_annotation)",
+                  "`results/` and [spaced directory](my%20data/)",
+                  "[Missing path](gone.txt) and [Unverified path](unchecked.txt)",
+                  "[Existing file](notes/FIGURE_LEGEND.md)",
+                  "[Saved report](saved.md)",
+                ].join("\n\n"), resources: [{
+                  id: "old-directory-binding", ordinal: 0,
+                  originalReference: "docs/07.celltype_auto_annotation",
+                  artifactId: null, artifactVersionId: null,
+                  displayName: "07.celltype_auto_annotation", kind: "file", mimeType: "application/octet-stream",
+                  status: "unresolved", error: "path is a directory, not a file",
+                }, {
+                  id: "saved-report", ordinal: 1, originalReference: "saved.md",
+                  artifactId: "resource-artifact-markdown", artifactVersionId: "resource-version-markdown",
+                  displayName: "saved.md", kind: "markdown", mimeType: "text/markdown", status: "ready", error: null,
+                }] }], next_before_seq: null, user_offset: 0,
+              };
+            }
+            if (query.get("mockHistoricalImages") === "1") {
+              return {
+                items: [{ role: "assistant", text: [
+                  "![sample stats](species_fix_out/figures/sample_statistics.png)",
+                  "![gene dotplot](species_fix_out/figures/gene_dotplot_combined.png)",
+                  "![schematic tree](species_fix_out/species_names_schematic_tree.png)",
+                  "![missing image](figures/missing-history.png)",
+                  "![saved version](figures/saved.png)",
+                ].join("\n\n"), resources: [{
+                  id: "saved-image-link", ordinal: 0, originalReference: "figures/saved.png",
+                  artifactId: "saved-image", artifactVersionId: "saved-image-v1",
+                  displayName: "saved.png", kind: "image", mimeType: "image/png", status: "ready", error: null,
+                }] }], next_before_seq: null, user_offset: 0,
               };
             }
             if (mockResourceSession) {
@@ -2641,8 +2781,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "list_projects":
             return [
               ...(new URL(location.href).searchParams.get("mockCalendar") === "dense" ? Array.from({length:32}, (_, index) => ({id:`calendar-project-${index}`,name:["跨物种单细胞图谱", "水稻基因组", "转录组分析", "长期研究项目与文献证据整理"][index % 4] + ` ${index + 1}`,workspace_dir:`/mock/calendar-${index}`,session_count:0,updated_at:0,running_count:0,needs_you_count:0,sync_configured:false,last_synced_at:null})) : []),
-              { id: "default", name: projectNames.default ?? project.name, workspace_dir: project.root, session_count: 0, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("default"), last_synced_at: syncedProjects.has("default") ? Math.floor(Date.now() / 1000) : null },
-              { id: "other", name: projectNames.other ?? "Other project", workspace_dir: "/mock/other", session_count: 1, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("other"), last_synced_at: syncedProjects.has("other") ? Math.floor(Date.now() / 1000) : null },
+              { id: "default", name: projectNames.default ?? project.name, workspace_dir: project.root, session_count: 0, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("default"), last_synced_at: syncedProjects.has("default") ? Math.floor(Date.now() / 1000) : null, folder_sync: folderSync.default ?? null },
+              { id: "other", name: projectNames.other ?? "Other project", workspace_dir: "/mock/other", session_count: 1, updated_at: 1, running_count: 0, needs_you_count: 0, sync_configured: syncedProjects.has("other"), last_synced_at: syncedProjects.has("other") ? Math.floor(Date.now() / 1000) : null, folder_sync: folderSync.other ?? null },
             ].map(p => ({ ...p, starred: localStorage.getItem("mock-project-star:" + p.id) === "true" }))
               .sort((a, b) => Number(b.starred) - Number(a.starred));
 
@@ -2705,8 +2845,22 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "create_project":
             activeProjectId = "default";
+            if (query.get("mockInPlaceFolder") === "1") {
+              project.name = String(arg("name"));
+              project.root = String(arg("workspaceDir"));
+            }
             return { id: "default", name: project.name, workspace_dir: project.root, session_count: 0, updated_at: 1, running_count: 0, needs_you_count: 0 };
           case "import_project": {
+            if (arg("directory")) {
+              const mode = query.get("mockProjectFolder");
+              if (mode === "cancel") return null;
+              if (mode === "missing") throw new Error("project_folder_invalid: Select an exported project folder containing manifest.json, metadata/project.sqlite and workspace.");
+              if (mode === "corrupt") throw new Error("project_folder_metadata_invalid: invalid sqlite database");
+              if (mode === "duplicate") throw new Error("This project is already present on this device.");
+              project.root = "/mock/root/new-project/workspace";
+              mockSessions.splice(0, mockSessions.length,
+                ...[1, 2, 3].map((n) => ({ id: `restored-${n}`, title: `Restored conversation ${n}`, ts: 2100 - n, running: false })));
+            }
             const delay = nextProjectTransferDelayMs.import ?? 0;
             delete nextProjectTransferDelayMs.import;
             if (delay > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 40)));
@@ -2729,7 +2883,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               totalBytes: 1024, currentPath: "data/example.tsv",
             });
             if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-            return "/mock/wisp-project.zip";
+            return arg("directory") ? "/mock/exported-project" : "/mock/wisp-project.zip";
           }
           case "sync_project":
             if ((window as any).__failSyncConflict) {
@@ -2737,7 +2891,15 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               throw new Error("Sync conflict: this device and another device both changed the project. No data was overwritten.");
             }
             syncedProjects.add(String(arg("id") ?? "default"));
+            if (folderSync[String(arg("id") ?? "default")]) {
+              folderSync[String(arg("id") ?? "default")] = "saved";
+              return { status: "published", direction: "push", revision: "revision-1", uploadedFiles: 0, downloadedFiles: 0, skippedPaths: [] };
+            }
             return { status: "synced", direction: "push", revision: "revision-1", uploadedFiles: 1, downloadedFiles: 0, skippedPaths: [] };
+          case "enable_project_folder_sync":
+            folderSync[String(arg("id") ?? "default")] = "saved";
+            syncedProjects.add(String(arg("id") ?? "default"));
+            return { status: "published", direction: "push", revision: "revision-1", uploadedFiles: 0, downloadedFiles: 0, skippedPaths: [] };
           case "resolve_project_sync":
             return { status: "synced", direction: arg("strategy") === "remote" ? "pull" : "push", revision: "revision-2", uploadedFiles: 1, downloadedFiles: 1, skippedPaths: [] };
           case "project_sync_code":
@@ -2810,7 +2972,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "get_network_settings": return { ...mockNetworkSettings };
           case "set_network_settings": {
             const next = plain(arg("settings") ?? {});
-            for (const key of ["model_proxy_url", "mcp_proxy_url", "command_proxy_url", "conda_mirror_url", "pip_index_url"]) {
+            for (const key of ["model_proxy_url", "subscription_proxy_url", "mcp_proxy_url", "command_proxy_url", "conda_mirror_url", "pip_index_url"]) {
               const value = String(next[key] ?? "").trim();
               if (value && value !== "none" && !/^https?:\/\/|^socks5h?:\/\//.test(value)) throw "Enter a complete URL.";
               next[key] = value;
@@ -2832,6 +2994,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               auto_continue_limit: 10,
               follow_up_questions: true,
               resume_last_session: true,
+              decentralized_project_storage: mockDecentralizedStorage,
               max_tokens: 4096,
               reasoning_effort: "",
               supports_vision: true,
@@ -3897,6 +4060,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             return run ?? null;
           }
           case "save_model": {
+            if ((window as any).__failSaveModel) throw new Error("Could not save model");
             const profile = plain(arg("profile") ?? {});
             // Mirror the backend: catalog-known models clamp context/output
             // to their documented ceilings.
@@ -3934,7 +4098,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               use_for_vision: useForVision,
               use_for_image_generation: useForImageGeneration,
               image_generation_capable: useForImageGeneration
-                || (m.model === profile.model && Boolean(m.image_generation_capable)),
+                || ["gpt-image-2", "grok-imagine-image-2.0"].includes(String(profile.model).split("/").pop()!.toLowerCase())
+                || (!arg("restoreChatModel") && m.model === profile.model && Boolean(m.image_generation_capable)),
               use_for_video_generation: useForVideoGeneration,
             } : {
               ...m,
@@ -3946,6 +4111,49 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                 ? false
                 : m.use_for_video_generation,
             });
+            const isChatModel = (model: any) => !model.image_generation_capable
+              && !model.use_for_video_generation
+              && !["grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview"].includes(String(model.model).split("/").pop()!.toLowerCase());
+            if (mockModels.some((model) => model.active && !isChatModel(model))) {
+              const fallback = mockModels.find(isChatModel)?.id;
+              mockModels = mockModels.map((model) => ({ ...model, active: model.id === fallback }));
+            }
+            return mockModels;
+          }
+          case "codex_subscription_status":
+            return { signed_in: !!(window as any).__savedSubscriptions?.[arg("provider") ?? "codex"], account_id: "account-test" };
+          case "start_codex_login":
+            return arg("provider") === "xai"
+              ? {
+                  login_id: "xai-login",
+                  method: "device",
+                  url: "https://accounts.x.ai/device?code=GROK-1234",
+                  user_code: "GROK-1234",
+                  verification_uri: "https://accounts.x.ai/device",
+                  message: "Approve the sign-in on the xAI page.",
+                }
+              : null;
+          case "codex_login_status":
+            return { status: "success", message: "Signed in to grok@example.com", account_id: "grok@example.com" };
+          case "save_codex_login": {
+            const provider = arg("provider") || "codex";
+            const xai = provider === "xai";
+            const [wireProvider, apiUrl] = ({
+              xai: ["xai_oauth", "https://api.x.ai/v1"],
+              chatgpt: ["openai_chatgpt", "https://api.openai.com/v1"],
+            } as Record<string, string[]>)[provider] ?? ["openai_codex", "https://chatgpt.com/backend-api"];
+            (window as any).__savedSubscriptions ??= {};
+            (window as any).__savedSubscriptions[provider] = true;
+            if (arg("accountOnly")) return mockModels;
+            mockModels = [...mockModels, {
+              ...mockModels[0],
+              id: `sub-${mockModels.length + 1}`,
+              label: arg("label") || `${xai ? "Grok" : "ChatGPT"} ${arg("model")}`,
+              provider: wireProvider,
+              api_url: apiUrl,
+              model: arg("model"),
+              has_api_key: true,
+            }];
             return mockModels;
           }
           case "remove_model": {
@@ -3988,15 +4196,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "get_project_info":
             ((window as any).__projectInfoReads ??= []).push(activeProjectId);
+            if (activeProjectId.startsWith("P") && query.has("mockWorkspaceProjects")) {
+              return { ...project, id: activeProjectId, root: "/mock/root/new-project" };
+            }
             return activeProjectId === "other"
               ? { ...project, id: "other", name: "Other project", root: "/mock/other" }
               : project;
-          case "generate_follow_up_questions":
-            return [
-              "Review the records that need manual correction",
-              "Expand the search for underrepresented species",
-              "Generate a literature landscape visualization",
-            ];
           case "get_project_run_retention":
             return projectRunRetention;
           case "set_project_run_retention": {
@@ -4017,6 +4222,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               description: projectDescriptions[settingsId] ?? "",
               agent_context: projectAgentContexts[settingsId] ?? (settingsId === "default" ? projectAgentContext : ""),
               default_specialist_id: projectDefaultSpecialists[settingsId] ?? "",
+              folder_sync: Boolean(folderSync[settingsId]),
             };
           }
           case "update_project": {
@@ -4335,6 +4541,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "list_dir": {
             const cwd = String(arg("path") ?? ".").replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "") || ".";
+            if (query.get("mockInPlaceFolder") === "1" && activeProjectId === "other") {
+              return cwd === "." ? [{ name: "other-project.txt", is_dir: false, size: 12 }] : [];
+            }
             return workspaceEntries
               .filter((entry) => {
                 const split = entry.path.lastIndexOf("/");
@@ -4565,6 +4774,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           }
           case "read_file_bytes": {
             const path = String(arg("path") ?? "").toLowerCase();
+            if (path.endsWith("missing-history.png")) throw new Error("File not found");
             if (path.includes(".pdf")) return base64Bytes(pdfBase64);
             if (path.includes(".docx")) return base64Bytes(docxBase64);
             if (path.includes(".xlsx") && xlsxBase64) return base64Bytes(xlsxBase64);
@@ -4633,14 +4843,46 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             }
             throw new Error("Artifact version not found");
           case "read_artifact_version_bytes":
+            if (arg("versionId") === "saved-image-v1") return base64Bytes("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0mAAAAAASUVORK5CYII=");
             if (arg("versionId") === "journey-image-v1" && fixtures?.researchImageBase64) return base64Bytes(fixtures.researchImageBase64);
             if (arg("versionId") === "resource-version-docx") {
               return base64Bytes(docxBase64);
             }
             throw new Error("Artifact version bytes not found");
+          case "classify_workspace_paths": {
+            const paths = Array.isArray(arg("paths")) ? arg("paths") : [];
+            if (query.get("mockPathTypes") === "1") {
+              const result = Object.fromEntries(paths.filter(path => path !== "unchecked.txt").map(path => [path,
+                ["docs/07.celltype_auto_annotation", "results", "my data"].includes(path)
+                  ? "directory" : path === "notes/FIGURE_LEGEND.md" ? "file" : "unavailable"]));
+              const w = window as any;
+              const fail = Boolean(w.__pathClassificationFailure);
+              if (w.__pathClassificationGate) await w.__pathClassificationGate;
+              w.__pathClassificationsSettled = (w.__pathClassificationsSettled ?? 0) + 1;
+              if (fail) {
+                w.__pathClassificationsFailed = (w.__pathClassificationsFailed ?? 0) + 1;
+                throw new Error("classification unavailable");
+              }
+              return result;
+            }
+            return Object.fromEntries(paths.map((value) => {
+              const path = String(value).replaceAll("\\", "/");
+              const missing = path.includes("/.pdf") || path.includes(".cache/")
+                || path === "old.csv" || path.endsWith("/old.csv");
+              const directory = path.replace(/\/$/, "") === "results";
+              return [value, missing ? "unavailable" : directory ? "directory"
+                : /\.[\w]+$/.test(path) ? "file" : "unavailable"];
+            }));
+          }
           case "missing_files": {
             const paths = Array.isArray(arg("paths")) ? arg("paths") : [];
-            return paths.filter((p) => String(p).includes("/.pdf") || String(p).includes("\\.pdf"));
+            return paths.filter((value) => {
+              const path = String(value).replaceAll("\\", "/");
+              return path.includes("/.pdf")
+                || path.includes(".cache/")
+                || path === "old.csv"
+                || path.endsWith("/old.csv");
+            });
           }
           case "append_review_note": {
             const src = String(arg("sourcePath") ?? "");
@@ -4750,6 +4992,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             mockPetEnabled = Boolean(next.pet_enabled);
             mockPetDirectory = String(next.pet_directory ?? "");
             mockLocale = String(next.locale ?? mockLocale);
+            mockDecentralizedStorage = Boolean(next.decentralized_project_storage ?? mockDecentralizedStorage);
             (window as any).__lastSetSettings = next;
             return null;
           }
@@ -4837,31 +5080,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               ...plain(arg("settings") ?? {}),
             };
             return { ...autoFailureAnalysis };
-          case "propose_turn_memory": {
-            const sessionId = String(arg("sessionId") ?? "");
-            const automatic = Boolean(arg("automatic"));
-            const latest = lastMessageBySession[sessionId] ?? "";
-            if (automatic && !autoFailureAnalysis.enabled && !/记住|REMEMBER/i.test(latest)) {
-              return null;
-            }
-            if (automatic && !/记住|REMEMBER|TOOLFAILMEMORY/i.test(latest)) {
-              return null;
-            }
-            const failure = /TOOLFAILMEMORY/i.test(latest);
-            return {
-              session_id: sessionId,
-              turn_index: Number(arg("turnIndex") ?? 0),
-              scope: /记住|REMEMBER/i.test(latest) ? "global" : "project",
-              content: failure
-                ? "Two shell calls failed because the input path was invalid; validate the path before retrying."
-                : "Prefer reproducible local workflows for this project.",
-              trigger: failure ? "tool_failures" : (automatic ? "explicit" : "manual"),
-              tool_calls: failure ? 3 : 1,
-              failed_tool_calls: failure ? 2 : 0,
-              failure_rate: failure ? 66.7 : 0,
-              global_memories: globalMemories,
-            };
-          }
+          case "propose_turn_memory":
+            return mockMemoryProposal(
+              String(arg("sessionId") ?? ""),
+              Number(arg("turnIndex") ?? 0),
+              false,
+            );
           case "confirm_turn_memory": {
             if (String(arg("scope")) === "global") {
               const replaceId = String(arg("replaceId") ?? "");
@@ -4901,10 +5125,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             globalMemories = globalMemories.filter((memory) => memory.id !== String(arg("id") ?? ""));
             return null;
           case "get_auto_review_enabled":
-            return autoReviewEnabled;
-          case "set_auto_review_enabled":
-            autoReviewEnabled = !!args?.enabled;
-            return autoReviewEnabled;
+            return sessionAutoReviewEnabled[String(arg("sessionId") ?? "")] ?? false;
+          case "set_auto_review_enabled": {
+            const sessionId = String(arg("sessionId") ?? "");
+            sessionAutoReviewEnabled[sessionId] = Boolean(arg("enabled"));
+            return sessionAutoReviewEnabled[sessionId];
+          }
           case "get_session_delegation_enabled":
             return sessionDelegationEnabled[String(arg("sessionId") ?? "")] ?? false;
           case "set_session_delegation_enabled": {
@@ -5214,6 +5440,32 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               }, 30);
               if (String(msg).includes("LONG")) return await new Promise<string>((resolve) => { acpLongResolvers[fid] = resolve; });
               return fid;
+            }
+            if (msg.trim().startsWith("/compact")) {
+              setTimeout(() => {
+                emit("agent", { kind: "CompactionStarted", frame_id: fid, strategy: "manual" });
+                emit("agent", { kind: "Compaction", frame_id: fid, before: 91_000, after: 45_000, strategy: "manual", epoch: 1 });
+                emit("agent", {
+                  kind: "Usage", frame_id: fid, round: 0, model: "mock", created_at: 1,
+                  input: 0, output: 0, reasoning: 0, cached: 0, ctx_tokens: 45_000, max_context: 100_000,
+                  context_usage: {
+                    system_prompt: 10_000, tool_definitions: 10_000, rules: 5_000,
+                    skills: 5_000, mcp_dynamic_tools: 0, subagent_definitions: 0, conversation: 15_000,
+                  },
+                });
+                emit("agent", { kind: "Done", frame_id: fid, stop_reason: "compact" });
+              }, 30);
+              return fid;
+            }
+            if (String(msg).includes("PLANPROGRESS")) {
+              return await new Promise<string>((resolve) => {
+                planProgressSnapshots.set(fid, null);
+                emit("agent", { kind: "User", frame_id: fid, text: msg });
+                (window as any).__finishPlanProgress = () => {
+                  emit("agent", { kind: "Done", frame_id: fid, stop_reason: "end_turn" });
+                  resolve(fid);
+                };
+              });
             }
             if (String(msg).includes("PRESTARTFAIL")) {
               throw new Error("No model profile is available");
@@ -5859,7 +6111,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                   delta: [
                     "Saved the screenshots as local files for this turn.",
                     "",
-                    '<image name="clipboard-preview.png" path="C:\\Users\\Alice\\AppData\\Local\\Temp\\clipboard-preview.png"></image>',
+                    '<image name="clipboard-preview.png" path="/mock/root/uploads/clipboard-preview.png"></image>',
                     "",
                     '<image name="clipboard-preview-2.png" path="C:\\Users\\Alice\\AppData\\Local\\Temp\\clipboard-preview-2.png"></image>',
                   ].join("\n"),
@@ -5925,7 +6177,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                 emit("agent", {
                   kind: "Text",
                   frame_id: fid,
-                  delta: "I inspected `old.csv` and created the requested output `new.png`. See `notes/FIGURE_LEGEND.md` and [the results folder](results/).",
+                  delta: "I inspected `old.csv` and created the requested output `new.png`. See `notes/FIGURE_LEGEND.md` and [the results folder](results/). 已删除本次生成的临时放大图（`.cache/Figure-style-rbq.png`）。",
                 });
                 emit("agent", { kind: "Done", frame_id: fid });
               }, 30);
@@ -6264,6 +6516,7 @@ export function parallelMock(): void {
       windowListeners[event]?.({ payload });
     } catch { /* not registered yet */ }
   };
+  (window as any).__emitParallelEvent = emit;
   const sessions: { id: string; title: string; ts: number; folder_id: string | null; stale_prompt?: boolean }[] = [];
   if (params.get("mockStaleRules") === "1") {
     sessions.push({ id: "stale-session", title: "Outdated rules chat", ts: 1999, folder_id: null, stale_prompt: true });
@@ -6375,6 +6628,7 @@ export function parallelMock(): void {
             auto_compact: true,
             follow_up_questions: true,
             resume_last_session: true,
+            decentralized_project_storage: false,
             supports_vision: true,
             sync_backend: "relay",
             sync_relay_url: "https://relay.example.test",
@@ -6393,11 +6647,6 @@ export function parallelMock(): void {
             return null;
           }
           case "get_project_info": return project;
-          case "generate_follow_up_questions": return [
-            "Review the records that need manual correction",
-            "Expand the search for underrepresented species",
-            "Generate a literature landscape visualization",
-          ];
           case "get_onboarding_state": return { show: false, has_api_key: true };
           case "get_capabilities": return { skills: [], mcp_servers: [], memory_files: [], project };
           case "list_approval_grants": return [];
@@ -6409,6 +6658,7 @@ export function parallelMock(): void {
           case "search_files": return [];
           case "search_artifacts": return [];
           case "read_file": return { path: "x", mime: "text/plain", text: "", base64: null };
+          case "classify_workspace_paths": return Object.fromEntries((arg("paths") ?? []).map((path: string) => [path, "file"]));
           case "missing_files": return [];
           case "export_session": return "/mock/export.zip";
           case "export_session_trajectory":
@@ -6521,8 +6771,14 @@ export function parallelMock(): void {
             // immediately (the real command is fast and non-blocking).
             const fid = (args && (args.sessionId ?? args.session_id)) || "t1";
             const msg = (args && args.message) || "";
+            const queueId = Number(args && (args.id ?? args.queue_id));
             const run = async () => {
-              emit("agent", { kind: "User", frame_id: fid, text: msg });
+              emit("queued-turn-state", {
+                sessionId: fid,
+                id: queueId,
+                state: "started",
+              });
+              emit("agent", { kind: "User", frame_id: fid, text: msg, queue_id: queueId });
               emit("agent", { kind: "Text", frame_id: fid, delta: `echo:${msg}` });
               await new Promise((resolve) => setTimeout(resolve, 50));
               emit("agent", { kind: "Done", frame_id: fid });
@@ -6533,6 +6789,11 @@ export function parallelMock(): void {
             return null;
           }
           case "queued_turn_action": return null;
+          case "undo_compaction": {
+            const frameId = String(arg("sessionId") ?? arg("session_id") ?? "");
+            emit("agent", { kind: "CompactionUndone", frame_id: frameId, epoch: 1 });
+            return 1;
+          }
           case "open_external_url":
             if (arg("url")) window.open(String(arg("url")), "_blank", "noopener,noreferrer");
             return null;

@@ -1,5 +1,33 @@
 # Browsing conversation history
 
+After a turn finishes, its commentary, reasoning, tool calls, and execution-plan
+updates collapse into one **Processed** disclosure before the final report.
+Per-round usage and context-compaction records between phases stay inside that
+disclosure in their original order; they no longer create repeated summaries
+with the same turn duration. Expand it to inspect the full process. The final
+answer, trailing usage, approval/question cards, and dedicated run/media cards
+remain separate. Active turns continue to show live progress.
+
+While a later turn is running, earlier messages keep **Copy**, **Memory**, and
+**Branch** available. Memory uses only the selected historical turn and still
+requires confirmation before saving. Branch opens an independent conversation
+at that checkpoint while the original turn continues in the background.
+Existing restrictions for ACP sessions, exploration sessions, and branches
+still apply. **Review**, **Rewind**, **Undo**, and **Start exploration** remain
+unavailable during a running turn; the unfinished turn cannot become a memory
+or branch checkpoint yet.
+
+When a completed Run is already attached to its matching submission step,
+`monitor_run` / `wisp_monitor_run` records and their progress messages join the
+same Processed disclosure, including when reopening a conversation. Expanding
+it preserves the individual tool results and their own durations; expanding
+the submission also reveals the completed Run card. Active Runs and Runs
+without a matching submission remain visible separately. If those cards or
+other standalone content split the process, the total turn duration appears
+only on the first Processed summary, never once per group.
+Monitored Runs still trigger the existing results-review prompt when eligible,
+even if their completed cards have just folded into the process.
+
 Opening or reopening a conversation shows its latest messages, including when
 entering through Recent conversations in another project. Switching back to a
 conversation starts at the end instead of restoring an older reading position.
@@ -26,7 +54,83 @@ Reopening a session replaces its paging request. A superseded request cannot
 insert older rows, show an error, or clear the newer request's loading state,
 even when both requests use the same history cursor.
 
+## Compaction row and undo
+
+A successful context compact leaves a timeline row. Expand it to read the
+checkpoint summary, token counts, strategy, epoch, and the first kept turn.
+If you have not continued the conversation, **Undo compaction** restores the
+previous model context and marks the row undone. After new turns, undo is
+disabled and **Rewind to before compact** uses the existing rewind confirmation
+to cut the conversation at that kept turn. Escape closes only the open summary.
+
+## Model view
+
+After a compact, earlier bubbles stay on the full transcript but are dimmed
+(`data-in-context="false"`) with a tooltip that they are represented by the
+summary. **Full transcript | Model view** in the conversation header (and the
+context-usage panel) switches the thread to the head epoch the model sees:
+folded system prompt, the checkpoint, and the kept tail. Prune-only compaction
+keeps those user and assistant turns in place and replaces old tool bodies
+with collapsed **Archived tool result** rows instead of fake assistant
+bubbles; it does not wrap process steps in the transcript's Processed
+disclosure. Model view is
+read-only — rewind, branch, edit, and explore stay on the full transcript.
+New turns appear after that epoch's retained context, including live answers
+and tool steps. Completing a turn refreshes the saved working set even when
+the epoch number has not changed. Loading or failed model-context reads show
+their own status and retry action; they never substitute the full transcript.
+The epoch's system prompt and checkpoint remain at the start regardless of
+the full transcript's history paging position.
+The usage panel adds a line such as `Epoch n · system + checkpoint + k kept
+turns` while a compaction is active. Switching conversations resets the view.
+
+The header uses a two-position pill with history and eye icons. In conversation
+panes up to 900 px wide it shows icons only; wider panes also show both labels.
+Hover tips and accessible names remain available at either size, and keyboard
+focus and pressed states identify the current view. The usage panel keeps its
+text labels visible.
+
+Compaction details and the usage panel refresh in the open conversation after
+the epoch is saved, including automatic compaction at the end of a turn.
+Undo restores the actual parent epoch, which can itself be compacted. A later
+compact always receives a new epoch number, even after undo, rewind, or restart.
+
+Manual compaction is a two-mode dialog from `/compact` or the Compact button
+in the context-usage panel. **Regular compact** archives the transcript and
+replaces old tool results with stubs; user and assistant turns stay in place.
+**Semantic compact** always writes a `[context summary checkpoint]` plus a
+short retained tail, even when prune alone would fit the window. The optional
+summarization instruction appears only after you choose semantic compact.
+`/compact preserve the unresolved QC blockers and exact file paths` opens on
+the semantic path with that instruction filled in. Automatic compaction at 80%
+still prunes first and only summarizes if the window is still full.
+
+**Settings → Conversation** can also start a semantic compact after you switch
+this conversation's model, and can prompt when you reopen a conversation that
+has been idle for a configured number of hours (default 24; 0 disables the
+prompt). Switching models does not compact unless that setting is on.
+
+Once a compact starts, the dialog cannot be dismissed; after the archive and
+new epoch are durable it closes and switches to Model view so the resulting
+working set can be reviewed before continuing. The usage panel receives a
+fresh post-compaction context estimate and breakdown rather than retaining the
+pre-compaction conversation total.
+The percentage measures the current context against the model's window;
+the reduction on a compaction row compares before and after that compaction.
+They have different denominators. Compaction immediately updates the context
+estimate, including when reopening older sessions without a following usage
+event. Cumulative input/output billing totals remain unchanged.
+Retained-tail markers follow copied messages through earlier epochs; when a
+legacy or ambiguous copy has no reliable origin, the marker remains unknown.
+
 ## Manual smoke checks
+
+- Compact twice, undo the latest compact, and verify the parent epoch, its
+  summary, and its undo action return without reopening the conversation.
+- Undo and compact again; verify the new card is not marked as already undone.
+- Trigger automatic compaction, let the turn finish, and expand its summary in
+  the same window. Switch conversations during refresh and verify neither
+  conversation receives the other's metadata or loses pending/live messages.
 
 - Leave a native tool waiting for approval, open that running conversation in a
   new window via Needs you, and verify both its history and approval are visible.

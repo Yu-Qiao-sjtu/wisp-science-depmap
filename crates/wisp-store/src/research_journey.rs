@@ -59,6 +59,9 @@ impl Store {
         from: i64,
         until: i64,
     ) -> Result<ResearchJourney> {
+        if let Some(store) = self.route_project(scope.project_id()).await? {
+            return Box::pin(store.research_journey(scope, from, until)).await;
+        }
         scope.validate()?;
         if from >= until || until.saturating_sub(from) > 32 * 86400 {
             bail!("Research history requires a date range of at most 32 days");
@@ -98,12 +101,23 @@ impl Store {
               FROM messages m JOIN frames f ON f.id=m.frame_id
               WHERE f.project_id=?1 AND ((?2 IS NULL AND f.exploration_id IS NULL) OR f.exploration_id=?2)
                 AND m.role='user' AND trim(COALESCE(m.content,''))<>''
+                AND NOT EXISTS (SELECT 1 FROM context_epochs ce WHERE ce.frame_id=m.frame_id
+                    AND m.seq BETWEEN ce.first_seq AND ce.initial_head_seq)
               UNION ALL
               SELECT 'journal:'||j.id, j.category, j.title, j.body, j.occurred_at, j.created_at,
                 j.id, NULL, 'recorded', '', NULL, 0, 1 FROM research_journal_entries j
               WHERE j.project_id=?1 AND ((?2 IS NULL AND j.exploration_id IS NULL) OR j.exploration_id=?2
                 OR (j.exploration_id IS NULL AND EXISTS(SELECT 1 FROM explorations x
                     JOIN exploration_baseline_entities b ON b.checkpoint_id=x.checkpoint_id WHERE x.id=?2 AND b.entity_kind='research_journal_entry' AND b.entity_id=j.id)))
+              UNION ALL
+              SELECT 'archive:'||a.id, 'archive', a.title, json_extract(a.record_json,'$.report'), a.frozen_at, a.created_at,
+                a.id, a.frame_id, 'archived', '', NULL, 0, 0 FROM research_archives a
+              WHERE a.project_id=?1 AND ?2 IS NULL AND a.frozen_at IS NOT NULL
+              UNION ALL
+              SELECT 'archive-continuation:'||c.frame_id, 'progress', 'Continue research / 继续研究', a.title,
+                f.created_at,f.created_at,a.id,c.frame_id,'continued','',NULL,0,0
+              FROM research_archive_continuations c JOIN research_archives a ON a.id=c.archive_id JOIN frames f ON f.id=c.frame_id
+              WHERE a.project_id=?1 AND ?2 IS NULL
             ) WHERE occurred_at>=?3 AND occurred_at<?4 ORDER BY occurred_at DESC, id DESC LIMIT 2001
         "#
         );
@@ -144,6 +158,9 @@ impl Store {
         scope: &StateScope,
         input: &ResearchJournalInput,
     ) -> Result<String> {
+        if let Some(store) = self.route_project(scope.project_id()).await? {
+            return Box::pin(store.add_research_journal_entry(scope, input)).await;
+        }
         scope.validate()?;
         if input.title.trim().is_empty()
             || input.title.chars().count() > 200
@@ -183,6 +200,9 @@ impl Store {
         scope: &StateScope,
         version_id: &str,
     ) -> Result<ResearchJourneySource> {
+        if let Some(store) = self.route_project(scope.project_id()).await? {
+            return Box::pin(store.research_journey_source(scope, version_id)).await;
+        }
         scope.validate()?;
         let exploration = match scope {
             StateScope::Mainline { .. } => None,

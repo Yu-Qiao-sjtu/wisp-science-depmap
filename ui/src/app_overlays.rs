@@ -1,3 +1,4 @@
+use crate::app_support::compose_icon;
 use crate::app_support::{
     classify_ssh_failure, js_error_text, refresh_execution_contexts, refresh_remote_dir,
     show_probe_stopped_toast, show_toast, show_warning_toast, ssh_connectivity_gap,
@@ -19,6 +20,8 @@ fn project_transfer_stage_label(locale: Locale, stage: &str) -> String {
     let key = match stage {
         "selecting_export_destination" => "projects.transfer.selecting_export_destination",
         "selecting_import_destination" => "projects.transfer.selecting_import_destination",
+        "selecting_project_folder" => "projects.transfer.selecting_project_folder",
+        "copying" => "projects.transfer.copying",
         "selecting_archive" => "projects.transfer.selecting_archive",
         "preparing" => "projects.transfer.preparing",
         "scanning" => "projects.transfer.scanning",
@@ -278,13 +281,13 @@ pub(crate) struct ProjectExportPromptState {
 pub(crate) fn ProjectExportPrompt(
     state: ProjectExportPromptState,
     on_export_zip: Callback<String>,
-    on_copy_path: Callback<String>,
+    on_export_directory: Callback<String>,
 ) -> impl IntoView {
     let ProjectExportPromptState { locale, prompt } = state;
     view! {
-        {move || prompt.get().map(|(project_id, workspace_dir)| {
+        {move || prompt.get().map(|(project_id, _)| {
             let export_id = project_id.clone();
-            let copy_path = workspace_dir.clone();
+            let directory_id = project_id.clone();
             view! {
                 <div class="overlay" data-testid="project-export-options">
                     <div class="modal confirm-modal project-export-options-modal"
@@ -294,23 +297,21 @@ pub(crate) fn ProjectExportPrompt(
                         <p class="project-export-zip-hint">
                             {move || t(locale.get(), "projects.export_zip_hint")}
                         </p>
-                        <div class="project-copy-folder-option">
-                            <strong>{move || t(locale.get(), "projects.copy_folder_title")}</strong>
-                            <p>{move || t(locale.get(), "projects.copy_folder_hint")}</p>
-                            <code title=workspace_dir.clone()>{workspace_dir}</code>
-                            <button type="button" class="btn-ghost"
-                                on:click=move |_| on_copy_path.call(copy_path.clone())>
-                                {move || t(locale.get(), "projects.copy_folder_path")}
+                        <div class="project-import-options">
+                            <button type="button" class="project-import-option"
+                                on:click=move |_| on_export_directory.call(directory_id.clone())>
+                                <strong>{move || t(locale.get(), "projects.export_directory")}</strong>
+                                <span>{move || t(locale.get(), "projects.export_directory_hint")}</span>
+                            </button>
+                            <button type="button" class="project-import-option"
+                                on:click=move |_| on_export_zip.call(export_id.clone())>
+                                <strong>{move || t(locale.get(), "projects.export_zip")}</strong>
+                                <span>{move || t(locale.get(), "projects.export_archive_hint")}</span>
                             </button>
                         </div>
                         <div class="row">
                             <button type="button" on:click=move |_| prompt.set(None)>
                                 {move || t(locale.get(), "settings.cancel")}
-                            </button>
-                            <button type="button" class="primary" on:click=move |_| {
-                                on_export_zip.call(export_id.clone());
-                            }>
-                                {move || t(locale.get(), "projects.export_zip")}
                             </button>
                         </div>
                     </div>
@@ -1003,6 +1004,7 @@ pub(crate) fn SshConnectivityOverlay(
                     SshFailKind::ProbeOutput => t(loc, "ssh_check.probe_output_title"),
                     SshFailKind::PasswordAuth => t(loc, "ssh_check.password_title"),
                     SshFailKind::KeyAuth => t(loc, "ssh_check.key_title"),
+                    SshFailKind::ClientVersion => t(loc, "ssh_check.client_title"),
                     _ => t(loc, "ssh_check.fail_title"),
                 }
             } else {
@@ -1013,6 +1015,7 @@ pub(crate) fn SshConnectivityOverlay(
                     SshFailKind::ProbeOutput => "ssh_check.probe_output_body",
                     SshFailKind::PasswordAuth => "ssh_check.password_body",
                     SshFailKind::KeyAuth => "ssh_check.key_body",
+                    SshFailKind::ClientVersion => "ssh_check.client_body",
                     _ => "ssh_check.fail_body",
                 };
                 tf(loc, key, &[("host", &host)])
@@ -1307,6 +1310,197 @@ pub(crate) fn ContextRecoveryOverlay(
                     </div>
                 </div>
             }
+        })}
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompactDialogMode {
+    Regular,
+    Semantic,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CompactOverlayState {
+    pub(crate) locale: RwSignal<Locale>,
+    pub(crate) dialog: RwSignal<Option<String>>,
+    pub(crate) mode: RwSignal<CompactDialogMode>,
+    pub(crate) instruction: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    pub(crate) error: RwSignal<Option<String>>,
+}
+
+#[component]
+pub(crate) fn CompactOverlay(
+    state: CompactOverlayState,
+    on_start: Callback<(String, String)>,
+    on_close: Callback<()>,
+) -> impl IntoView {
+    let CompactOverlayState {
+        locale,
+        dialog,
+        mode,
+        instruction,
+        busy,
+        error,
+    } = state;
+    view! {
+        {move || dialog.get().map(|frame_id| {
+            let start_id = frame_id.clone();
+            view! {
+                <div class="overlay compact-overlay" data-testid="compact-overlay">
+                    <div
+                        class="modal compact-modal"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="compact-title"
+                        aria-busy=move || busy.get().to_string()
+                        data-testid="compact-modal"
+                    >
+                        <div class="ps-head">
+                            <div>
+                                <h2 id="compact-title">{move || t(locale.get(), "compact.title")}</h2>
+                                <p class="compact-modal-subtitle">{move || t(locale.get(), "compact.subtitle")}</p>
+                            </div>
+                            {move || (!busy.get()).then(|| view! {
+                                <button
+                                    type="button"
+                                    class="ps-close"
+                                    data-testid="compact-close"
+                                    title=move || t(locale.get(), "compact.close")
+                                    aria-label=move || t(locale.get(), "compact.close")
+                                    on:click=move |_| on_close.call(())
+                                >
+                                    {compose_icon("close")}
+                                </button>
+                            })}
+                        </div>
+                        <div class="compact-mode-row">
+                            <button
+                                type="button"
+                                class="compact-mode"
+                                class:active=move || mode.get() == CompactDialogMode::Regular
+                                data-testid="compact-mode-regular"
+                                aria-pressed=move || (mode.get() == CompactDialogMode::Regular).to_string()
+                                disabled=move || busy.get()
+                                on:click=move |_| mode.set(CompactDialogMode::Regular)
+                            >
+                                <strong>{move || t(locale.get(), "compact.mode_regular")}</strong>
+                                <span>{move || t(locale.get(), "compact.mode_regular_hint")}</span>
+                            </button>
+                            <button
+                                type="button"
+                                class="compact-mode"
+                                class:active=move || mode.get() == CompactDialogMode::Semantic
+                                data-testid="compact-mode-semantic"
+                                aria-pressed=move || (mode.get() == CompactDialogMode::Semantic).to_string()
+                                disabled=move || busy.get()
+                                on:click=move |_| mode.set(CompactDialogMode::Semantic)
+                            >
+                                <strong>{move || t(locale.get(), "compact.mode_semantic")}</strong>
+                                <span>{move || t(locale.get(), "compact.mode_semantic_hint")}</span>
+                            </button>
+                        </div>
+                        <label
+                            for="compact-instruction"
+                            class="compact-instruction-field"
+                            class:hidden=move || mode.get() != CompactDialogMode::Semantic
+                        >
+                            {move || t(locale.get(), "compact.instruction_label")}
+                            <textarea
+                                id="compact-instruction"
+                                class="compact-instruction"
+                                data-testid="compact-instruction"
+                                rows="4"
+                                placeholder=move || t(locale.get(), "compact.instruction_placeholder")
+                                prop:value=move || instruction.get()
+                                disabled=move || busy.get()
+                                on:input=move |ev| instruction.set(event_target_value(&ev))
+                            ></textarea>
+                        </label>
+                        <p class="compact-modal-hint">{move || t(
+                            locale.get(),
+                            if mode.get() == CompactDialogMode::Semantic {
+                                "compact.hint_semantic"
+                            } else {
+                                "compact.hint_regular"
+                            },
+                        )}</p>
+                        {move || busy.get().then(|| view! {
+                            <div class="compact-progress" data-testid="compact-progress" role="status" aria-live="polite">
+                                <span class="compact-progress-dot" aria-hidden="true"></span>
+                                <span>{move || t(locale.get(), "compact.running")}</span>
+                            </div>
+                        })}
+                        {move || error.get().map(|message| view! {
+                            <div class="context-recovery-error" data-testid="compact-error" role="alert">{message}</div>
+                        })}
+                        {move || (!busy.get()).then(|| {
+                            let action_id = start_id.clone();
+                            view! {
+                                <div class="row">
+                                    <button type="button" data-testid="compact-cancel" on:click=move |_| on_close.call(())>
+                                        {move || t(locale.get(), "compact.cancel")}
+                                    </button>
+                                    <button type="button" class="primary" data-testid="compact-start" on:click=move |_| {
+                                        on_start.call((action_id.clone(), instruction.get_untracked()));
+                                    }>
+                                        {move || t(locale.get(), "compact.start")}
+                                    </button>
+                                </div>
+                            }
+                        })}
+                    </div>
+                </div>
+            }
+        })}
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CompactIdlePromptOverlayState {
+    pub(crate) locale: RwSignal<Locale>,
+    pub(crate) prompt: RwSignal<Option<(String, u64)>>,
+}
+
+#[component]
+pub(crate) fn CompactIdlePromptOverlay(
+    state: CompactIdlePromptOverlayState,
+    on_accept: Callback<String>,
+    on_dismiss: Callback<()>,
+) -> impl IntoView {
+    let CompactIdlePromptOverlayState { locale, prompt } = state;
+    view! {
+        {move || prompt.get().map(|(session_id, hours)| {
+            let accept_id = session_id.clone();
+            view! {
+                <div class="overlay compact-overlay" data-testid="compact-idle-overlay">
+                    <div
+                        class="modal compact-modal"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="compact-idle-title"
+                        data-testid="compact-idle-prompt"
+                    >
+                        <h2 id="compact-idle-title">{move || t(locale.get(), "compact.idle_title")}</h2>
+                        <p class="compact-modal-hint">{move || tf(
+                            locale.get(),
+                            "compact.idle_body",
+                            &[("hours", &hours.to_string())],
+                        )}</p>
+                        <div class="row">
+                            <button type="button" data-testid="compact-idle-dismiss" on:click=move |_| on_dismiss.call(())>
+                                {move || t(locale.get(), "compact.idle_dismiss")}
+                            </button>
+                            <button type="button" class="primary" data-testid="compact-idle-accept" on:click=move |_| {
+                                on_accept.call(accept_id.clone());
+                            }>
+                                {move || t(locale.get(), "compact.idle_accept")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }.into_view()
         })}
     }
 }

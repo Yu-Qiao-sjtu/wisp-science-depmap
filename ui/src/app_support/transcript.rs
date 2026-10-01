@@ -154,7 +154,9 @@ pub(crate) fn review_message_ui_index(items: &[ChatItem], message_index: usize) 
             | ChatItem::Compaction { .. }
             | ChatItem::ReviewTransition { .. }
             | ChatItem::Review(_)
-            | ChatItem::AppContextNotice(_) => false,
+            | ChatItem::AppContextNotice(_)
+            | ChatItem::System(_)
+            | ChatItem::Checkpoint(_) => false,
         })
         .nth(message_index)
         .map(|(ui_index, _)| ui_index)
@@ -527,6 +529,115 @@ pub(crate) fn user_message_index(items: &[ChatItem], ui_index: usize) -> Option<
     )
 }
 
+/// Merge saved epoch details without replacing live/queued transcript rows.
+pub(crate) fn apply_context_state(
+    items: &mut [ChatItem],
+    state: &SessionContextState,
+    resolve_pending: bool,
+) {
+    for &epoch in &state.undone_epochs {
+        apply_compaction_undone(items, epoch);
+    }
+    for card in &state.compactions {
+        let known = items.iter().position(|item| {
+            matches!(item,
+            ChatItem::Compaction { epoch: Some(epoch), .. } if *epoch == card.epoch)
+        });
+        // Only the newest epoch can resolve a live flag emitted before the
+        // turn's persist flush. Earlier same-sized flags remain untouched.
+        let pending = (resolve_pending && card.epoch == state.head_epoch)
+            .then(|| {
+                items.iter().rposition(|item| {
+                    matches!(item,
+            ChatItem::Compaction { epoch: None, before, after, strategy, .. }
+                if *before == card.before && *after == card.after && *strategy == card.strategy)
+                })
+            })
+            .flatten();
+        if let Some(index) = known.or(pending) {
+            items[index] = card.clone().into_chat();
+        }
+    }
+}
+
+/// Mark the compaction card for `epoch` as undone after `CompactionUndone`.
+pub(crate) fn apply_compaction_undone(items: &mut [ChatItem], epoch: u64) {
+    let mut restored_tokens = None;
+    for item in items.iter_mut() {
+        let ChatItem::Compaction {
+            epoch: Some(item_epoch),
+            before,
+            undone,
+            can_undo,
+            undo_reason,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if *item_epoch != epoch {
+            continue;
+        }
+        if !*undone {
+            restored_tokens = Some(*before);
+        }
+        *undone = true;
+        *can_undo = false;
+        *undo_reason = Some("undone".into());
+    }
+    if let Some(before) = restored_tokens {
+        let end = trailing_queue_start(items);
+        if let Some(index) = items[..end]
+            .iter()
+            .rposition(|row| matches!(row, ChatItem::Usage { .. }))
+        {
+            if let ChatItem::Usage {
+                ctx_tokens,
+                context_usage,
+                ..
+            } = &mut items[index]
+            {
+                *ctx_tokens = before;
+                *context_usage = ContextUsage {
+                    conversation: before,
+                    ..ContextUsage::default()
+                };
+            }
+            // The restored estimate is newer than the compaction cards, while
+            // billing totals still belong to this same turn.
+            items[index..end].rotate_left(1);
+        }
+    }
+}
+
+/// UI index of the user bubble at visual `kept_from` (plus `user_offset`).
+pub(crate) fn compaction_rewind_ui_index(
+    items: &[ChatItem],
+    user_offset: usize,
+    kept_from: usize,
+) -> Option<usize> {
+    let mut seen = user_offset;
+    for (ui_index, item) in items.iter().enumerate() {
+        if !matches!(item, ChatItem::User(_)) {
+            continue;
+        }
+        if seen == kept_from {
+            return Some(ui_index);
+        }
+        seen += 1;
+    }
+    None
+}
+
+pub(crate) fn compaction_undo_reason_key(reason: &str) -> &'static str {
+    match reason {
+        "undone" => "chat.compaction_undo_reason_undone",
+        "not_head" => "chat.compaction_undo_reason_not_head",
+        "has_new_turns" => "chat.compaction_undo_reason_has_new_turns",
+        _ => "chat.compaction_undo_reason_has_new_turns",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QueuedTurnRow {
     pub id: u64,
@@ -583,6 +694,72 @@ pub(crate) fn owning_user_turn_index(items: &[ChatItem], ui_index: usize) -> Opt
         .filter(|item| matches!(item, ChatItem::User(_) | ChatItem::QueuedUser { .. }))
         .count()
         .checked_sub(1)
+}
+
+/// Keep the persisted epoch prefix, then append turns accepted after that
+/// snapshot. Absolute user indices survive full-transcript paging/trimming.
+pub(crate) fn model_context_with_live_turns(
+    snapshot: &[ChatItem],
+    transcript: &[ChatItem],
+    user_offset: usize,
+    live_from: Option<usize>,
+) -> Vec<ChatItem> {
+    let mut rows = snapshot.to_vec();
+    let Some(live_from) = live_from else {
+        return rows;
+    };
+    let mut user_index = user_offset;
+    let start = transcript.iter().position(|row| {
+        if !matches!(row, ChatItem::User(_)) {
+            return false;
+        }
+        let matches = user_index >= live_from;
+        user_index += 1;
+        matches
+    });
+    if let Some(start) = start {
+        rows.extend(
+            transcript[start..]
+                .iter()
+                .filter(|row| {
+                    matches!(
+                        row,
+                        ChatItem::User(_)
+                            | ChatItem::Assistant { .. }
+                            | ChatItem::Tool { .. }
+                            | ChatItem::Reasoning(_)
+                            | ChatItem::AcpTool { .. }
+                    )
+                })
+                .cloned(),
+        );
+    }
+    rows
+}
+
+/// Whether a transcript row is still in the model's current working set.
+/// Compaction / usage / system / checkpoint rows are the in-context divider.
+pub(crate) fn item_in_context(
+    items: &[ChatItem],
+    ui_index: usize,
+    user_offset: usize,
+    from: Option<usize>,
+) -> bool {
+    let Some(from) = from else {
+        return true;
+    };
+    match items.get(ui_index) {
+        Some(
+            ChatItem::Compaction { .. }
+            | ChatItem::Usage { .. }
+            | ChatItem::System(_)
+            | ChatItem::Checkpoint(_),
+        ) => true,
+        Some(_) => {
+            owning_user_turn_index(items, ui_index).is_none_or(|turn| user_offset + turn >= from)
+        }
+        None => true,
+    }
 }
 
 pub(crate) fn transcript_item_timestamp(
@@ -806,9 +983,9 @@ mod transcript_render_window_tests {
 #[cfg(test)]
 mod conversation_outline_tests {
     use super::{
-        conversation_outline_target_is_loaded, merge_conversation_outline, owning_user_turn_index,
-        queued_turn_rows, transcript_item_timestamp, turn_duration_ms, user_turn_index,
-        QueuedTurnRow,
+        conversation_outline_target_is_loaded, item_in_context, merge_conversation_outline,
+        owning_user_turn_index, queued_turn_rows, transcript_item_timestamp, turn_duration_ms,
+        user_turn_index, QueuedTurnRow,
     };
     use crate::dto::{ChatItem, SessionOutlineItem};
 
@@ -874,6 +1051,12 @@ mod conversation_outline_tests {
         assert_eq!(user_turn_index(&items, 2), Some(1));
         assert_eq!(owning_user_turn_index(&items, 1), Some(0));
         assert_eq!(owning_user_turn_index(&items, 2), Some(1));
+        assert!(item_in_context(&items, 0, 0, None));
+        assert!(item_in_context(&items, 0, 0, Some(0)));
+        assert!(!item_in_context(&items, 0, 0, Some(1)));
+        assert!(item_in_context(&items, 2, 0, Some(1)));
+        assert!(!item_in_context(&items, 0, 1, Some(2)));
+        assert!(item_in_context(&items, 0, 1, Some(1)));
         assert!(conversation_outline_target_is_loaded(&items, 1, 2));
         assert!(!conversation_outline_target_is_loaded(&items, 1, 0));
         assert_eq!(
@@ -957,6 +1140,187 @@ mod conversation_outline_tests {
                 .collect::<Vec<_>>(),
             vec![(0, "first"), (1, "second"), (2, "third")]
         );
+    }
+}
+
+#[cfg(test)]
+mod compaction_undo_tests {
+    use super::{apply_compaction_undone, compaction_rewind_ui_index, compaction_undo_reason_key};
+    use crate::dto::ChatItem;
+
+    #[test]
+    fn context_refresh_updates_only_the_latest_matching_live_flag_and_preserves_other_rows() {
+        let mut items = vec![
+            ChatItem::User("queued message".into()),
+            ChatItem::compaction(1000, 200, "auto", None),
+            ChatItem::compaction(1000, 200, "auto", None),
+        ];
+        let state = crate::dto::SessionContextState {
+            head_epoch: 3,
+            compactions: vec![crate::dto::ContextCompactionDto {
+                epoch: 3,
+                before: 1000,
+                after: 200,
+                strategy: "auto".into(),
+                checkpoint: Some("saved summary".into()),
+                kept_from_user_index: Some(1),
+                can_undo: true,
+                undo_reason: None,
+            }],
+            ..Default::default()
+        };
+        super::apply_context_state(&mut items, &state, true);
+        assert!(matches!(&items[0], ChatItem::User(text) if text == "queued message"));
+        assert!(matches!(
+            &items[1],
+            ChatItem::Compaction { epoch: None, .. }
+        ));
+        assert!(matches!(
+            &items[2],
+            ChatItem::Compaction {
+                epoch: Some(3),
+                can_undo: true,
+                ..
+            }
+        ));
+        super::apply_context_state(&mut items, &state, false);
+        assert!(matches!(
+            &items[1],
+            ChatItem::Compaction { epoch: None, .. }
+        ));
+        let mut historical_page = vec![ChatItem::compaction(1000, 200, "auto", None)];
+        super::apply_context_state(&mut historical_page, &state, false);
+        assert!(matches!(
+            &historical_page[0],
+            ChatItem::Compaction { epoch: None, .. }
+        ));
+    }
+
+    #[test]
+    fn loaded_compaction_fields_survive_into_chat_and_undone_mark() {
+        let item = crate::dto::LoadedItem {
+            role: "compaction".into(),
+            text: r#"{"before":10,"after":4,"strategy":"manual","epoch":1,"checkpoint":"folded older turns","kept_from_user_index":1,"undone":false,"can_undo":true}"#.into(),
+            tool_name: None,
+            ok: None,
+            duration_ms: None,
+            input: String::new(),
+            model_name: None,
+            call_id: None,
+            kind: None,
+            status: None,
+            locations: None,
+            resources: Vec::new(),
+        };
+        let mut items = vec![
+            ChatItem::User("q1".into()),
+            ChatItem::User("q2".into()),
+            item.into_chat(),
+        ];
+        match &items[2] {
+            ChatItem::Compaction {
+                checkpoint,
+                kept_from_user_index,
+                undone,
+                can_undo,
+                ..
+            } => {
+                assert_eq!(checkpoint.as_deref(), Some("folded older turns"));
+                assert_eq!(*kept_from_user_index, Some(1));
+                assert!(!*undone);
+                assert!(*can_undo);
+            }
+            _ => panic!("expected ChatItem::Compaction"),
+        }
+        apply_compaction_undone(&mut items, 1);
+        match &items[2] {
+            ChatItem::Compaction {
+                undone,
+                can_undo,
+                undo_reason,
+                ..
+            } => {
+                assert!(*undone);
+                assert!(!*can_undo);
+                assert_eq!(undo_reason.as_deref(), Some("undone"));
+            }
+            _ => panic!("expected ChatItem::Compaction"),
+        }
+        assert_eq!(compaction_rewind_ui_index(&items, 0, 1), Some(1));
+        assert_eq!(compaction_rewind_ui_index(&items, 2, 3), Some(1));
+        assert_eq!(
+            compaction_undo_reason_key("has_new_turns"),
+            "chat.compaction_undo_reason_has_new_turns"
+        );
+    }
+}
+
+#[cfg(test)]
+mod context_view_tests {
+    #[test]
+    fn model_context_appends_new_turns_without_replaying_the_retained_tail() {
+        use super::model_context_with_live_turns;
+        use crate::dto::ChatItem;
+        let prefix = vec![
+            ChatItem::Checkpoint("earlier context".into()),
+            ChatItem::User("retained".into()),
+        ];
+        let live = vec![
+            ChatItem::User("retained".into()),
+            ChatItem::User("continued".into()),
+            ChatItem::Assistant {
+                text: "streaming".into(),
+                model: None,
+                resources: Vec::new(),
+            },
+            ChatItem::compaction(100, 30, "auto", None),
+        ];
+        let rows = model_context_with_live_turns(&prefix, &live, 40, Some(41));
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[0], ChatItem::Checkpoint(text) if text == "earlier context"));
+        assert!(matches!(&rows[2], ChatItem::User(text) if text == "continued"));
+        assert!(matches!(&rows[3], ChatItem::Assistant { text, .. } if text == "streaming"));
+        assert!(model_context_with_live_turns(&[], &live, 40, None).is_empty());
+    }
+
+    use super::item_in_context;
+    use crate::dto::ChatItem;
+
+    #[test]
+    fn in_context_marks_follow_the_kept_turn_and_offset() {
+        let items = vec![
+            ChatItem::User("q1".into()),
+            ChatItem::Assistant {
+                text: "a1".into(),
+                model: None,
+                resources: Vec::new(),
+            },
+            ChatItem::compaction(10, 4, "manual", Some(1)),
+            ChatItem::User("q2".into()),
+            ChatItem::Assistant {
+                text: "a2".into(),
+                model: None,
+                resources: Vec::new(),
+            },
+            ChatItem::Usage {
+                input: 1,
+                output: 1,
+                reasoning: 0,
+                cached: 0,
+                ctx_tokens: 4,
+                max_context: 10,
+                context_usage: crate::dto::ContextUsage::default(),
+            },
+        ];
+        assert!(!item_in_context(&items, 0, 0, Some(1)));
+        assert!(!item_in_context(&items, 1, 0, Some(1)));
+        assert!(item_in_context(&items, 2, 0, Some(1)));
+        assert!(item_in_context(&items, 3, 0, Some(1)));
+        assert!(item_in_context(&items, 4, 0, Some(1)));
+        assert!(item_in_context(&items, 5, 0, Some(1)));
+        assert!(item_in_context(&items, 0, 0, None));
+        assert!(!item_in_context(&items, 3, 0, Some(2)));
+        assert!(item_in_context(&items, 0, 1, Some(1)));
     }
 }
 

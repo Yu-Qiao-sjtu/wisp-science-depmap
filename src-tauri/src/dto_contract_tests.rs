@@ -9,6 +9,17 @@
 use serde_json::json;
 
 #[test]
+fn workspace_path_classification_distinguishes_directories_and_unavailable_entries() {
+    use wisp_dto::WorkspacePathKind;
+    let wire = json!({"report.md": "file", "docs/annotation": "directory", "gone": "unavailable"});
+    let kinds: std::collections::HashMap<String, WorkspacePathKind> =
+        serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(kinds["docs/annotation"], WorkspacePathKind::Directory);
+    assert_eq!(kinds["gone"], WorkspacePathKind::Unavailable);
+    assert_eq!(serde_json::to_value(kinds).unwrap(), wire);
+}
+
+#[test]
 fn workflow_conversion_progress_preserves_request_identity_and_stage() {
     use wisp_dto::{WorkflowConversionProgress, WorkflowConversionStage};
     let progress = WorkflowConversionProgress {
@@ -70,6 +81,7 @@ fn network_settings_support_partial_persisted_configuration() {
     }))
     .unwrap();
     assert!(settings.mcp_proxy_url.is_empty());
+    assert!(settings.subscription_proxy_url.is_empty());
     assert!(settings.command_proxy_url.is_empty());
     let ui: wisp_dto::NetworkSettings = roundtrip(&settings);
     assert_eq!(ui, settings);
@@ -740,6 +752,216 @@ fn native_approval_snapshot_and_resolution_share_the_request_contract() {
 }
 
 #[test]
+fn compaction_event_accepts_missing_and_present_epoch() {
+    let legacy: wisp_dto::AgentEvent = serde_json::from_value(json!({
+        "kind": "Compaction",
+        "frame_id": "f",
+        "before": 100,
+        "after": 40,
+        "strategy": "auto"
+    }))
+    .unwrap();
+    match legacy {
+        wisp_dto::AgentEvent::Compaction {
+            epoch, strategy, ..
+        } => {
+            assert_eq!(epoch, None);
+            assert_eq!(strategy, "auto");
+        }
+        _ => panic!("expected Compaction"),
+    }
+
+    let backend = super::AgentEvent::Compaction {
+        frame_id: "f".into(),
+        before: 100,
+        after: 40,
+        strategy: "manual".into(),
+        epoch: Some(2),
+    };
+    let wire = serde_json::to_value(&backend).unwrap();
+    assert_eq!(wire["epoch"], 2);
+    let ui: wisp_dto::AgentEvent = roundtrip(&backend);
+    match ui {
+        wisp_dto::AgentEvent::Compaction {
+            epoch,
+            strategy,
+            before,
+            after,
+            ..
+        } => {
+            assert_eq!(epoch, Some(2));
+            assert_eq!(strategy, "manual");
+            assert_eq!((before, after), (100, 40));
+        }
+        _ => panic!("expected Compaction"),
+    }
+
+    let item = wisp_dto::LoadedItem {
+        role: "compaction".into(),
+        text: r#"{"before":100,"after":40,"strategy":"auto"}"#.into(),
+        tool_name: None,
+        ok: None,
+        duration_ms: None,
+        input: String::new(),
+        model_name: None,
+        call_id: None,
+        kind: None,
+        status: None,
+        locations: None,
+        resources: Vec::new(),
+    };
+    match item.into_chat() {
+        wisp_dto::ChatItem::Compaction { epoch, .. } => assert_eq!(epoch, None),
+        _ => panic!("expected ChatItem::Compaction"),
+    }
+    let linked = wisp_dto::LoadedItem {
+        role: "compaction".into(),
+        text: r#"{"before":100,"after":40,"strategy":"manual","epoch":2}"#.into(),
+        tool_name: None,
+        ok: None,
+        duration_ms: None,
+        input: String::new(),
+        model_name: None,
+        call_id: None,
+        kind: None,
+        status: None,
+        locations: None,
+        resources: Vec::new(),
+    };
+    match linked.into_chat() {
+        wisp_dto::ChatItem::Compaction {
+            epoch, strategy, ..
+        } => {
+            assert_eq!(epoch, Some(2));
+            assert_eq!(strategy, "manual");
+        }
+        _ => panic!("expected ChatItem::Compaction"),
+    }
+}
+
+#[test]
+fn compaction_undone_event_roundtrips_and_chat_item_defaults() {
+    let backend = super::AgentEvent::CompactionUndone {
+        frame_id: "f".into(),
+        epoch: 2,
+    };
+    let ui: wisp_dto::AgentEvent = roundtrip(&backend);
+    match ui {
+        wisp_dto::AgentEvent::CompactionUndone { frame_id, epoch } => {
+            assert_eq!(frame_id, "f");
+            assert_eq!(epoch, 2);
+        }
+        _ => panic!("expected CompactionUndone"),
+    }
+    let page: wisp_dto::LoadedSessionPage = serde_json::from_value(json!({
+        "items": [], "next_before_seq": null, "user_offset": 0
+    }))
+    .unwrap();
+    assert!(page.context_epochs.is_empty());
+    assert_eq!(page.head_epoch, 0);
+    assert_eq!(page.in_context_from_user_index, None);
+
+    let marked: wisp_dto::LoadedSessionPage = serde_json::from_value(json!({
+        "items": [],
+        "next_before_seq": null,
+        "user_offset": 0,
+        "in_context_from_user_index": 2
+    }))
+    .unwrap();
+    assert_eq!(marked.in_context_from_user_index, Some(2));
+
+    match (wisp_dto::LoadedItem {
+        role: "system".into(),
+        text: "sys".into(),
+        tool_name: None,
+        ok: None,
+        duration_ms: None,
+        input: String::new(),
+        model_name: None,
+        call_id: None,
+        kind: Some("system".into()),
+        status: None,
+        locations: None,
+        resources: Vec::new(),
+    })
+    .into_chat()
+    {
+        wisp_dto::ChatItem::System(text) => assert_eq!(text, "sys"),
+        _ => panic!("expected ChatItem::System"),
+    }
+    match (wisp_dto::LoadedItem {
+        role: "checkpoint".into(),
+        text: "[context summary checkpoint]\n\nfolded".into(),
+        tool_name: None,
+        ok: None,
+        duration_ms: None,
+        input: String::new(),
+        model_name: None,
+        call_id: None,
+        kind: Some("checkpoint".into()),
+        status: None,
+        locations: None,
+        resources: Vec::new(),
+    })
+    .into_chat()
+    {
+        wisp_dto::ChatItem::Checkpoint(text) => {
+            assert!(text.contains("[context summary checkpoint]"));
+        }
+        _ => panic!("expected ChatItem::Checkpoint"),
+    }
+
+    let item = wisp_dto::LoadedItem {
+        role: "compaction".into(),
+        text: r#"{"before":10,"after":4,"strategy":"manual","epoch":1,"checkpoint":"folded","kept_from_user_index":2,"undone":true,"can_undo":false,"undo_reason":"undone"}"#.into(),
+        tool_name: None,
+        ok: None,
+        duration_ms: None,
+        input: String::new(),
+        model_name: None,
+        call_id: None,
+        kind: None,
+        status: None,
+        locations: None,
+        resources: Vec::new(),
+    };
+    match item.into_chat() {
+        wisp_dto::ChatItem::Compaction {
+            checkpoint,
+            kept_from_user_index,
+            undone,
+            can_undo,
+            undo_reason,
+            ..
+        } => {
+            assert_eq!(checkpoint.as_deref(), Some("folded"));
+            assert_eq!(kept_from_user_index, Some(2));
+            assert!(undone);
+            assert!(!can_undo);
+            assert_eq!(undo_reason.as_deref(), Some("undone"));
+        }
+        _ => panic!("expected ChatItem::Compaction"),
+    }
+}
+
+#[test]
+fn context_state_refresh_contract_keeps_parent_and_compaction_details() {
+    let value = serde_json::json!({
+        "head_epoch": 3, "context_epochs": [{"epoch":3,"parent_epoch":1,
+            "strategy":"auto","kind":"semantic","before_tokens":1000,"after_tokens":200,
+            "initial_head_seq":20}],
+        "in_context_from_user_index":2, "undone_epochs":[2],
+        "compactions":[{"epoch":3,"before":1000,"after":200,"strategy":"auto",
+            "checkpoint":"folded", "kept_from_user_index":2,"can_undo":true}]
+    });
+    let state: wisp_dto::SessionContextState = serde_json::from_value(value).unwrap();
+    assert_eq!(state.context_epochs[0].parent_epoch, 1);
+    assert_eq!(state.undone_epochs, [2]);
+    assert!(matches!(state.compactions[0].clone().into_chat(),
+        wisp_dto::ChatItem::Compaction { epoch: Some(3), checkpoint: Some(text), can_undo: true, .. } if text == "folded"));
+}
+
+#[test]
 fn project_summary_star_defaults_for_older_payloads_and_roundtrips() {
     let legacy = json!({"id": "p", "name": "Project"});
     let mut summary: wisp_dto::ProjectSummary = serde_json::from_value(legacy).unwrap();
@@ -749,4 +971,69 @@ fn project_summary_star_defaults_for_older_payloads_and_roundtrips() {
     assert_eq!(payload["starred"], true);
     let decoded: wisp_dto::ProjectSummary = serde_json::from_value(payload).unwrap();
     assert!(decoded.starred);
+}
+
+#[test]
+fn project_storage_setting_roundtrips_between_backend_and_ui() {
+    let baseline = serde_json::to_value(wisp_dto::Settings::default()).unwrap();
+    for enabled in [false, true] {
+        let mut payload = baseline.clone();
+        payload["decentralized_project_storage"] = json!(enabled);
+        let backend: crate::Settings = serde_json::from_value(payload).unwrap();
+        let ui: wisp_dto::Settings = roundtrip(&backend);
+        assert_eq!(ui.decentralized_project_storage, enabled);
+    }
+    let mut legacy = baseline;
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("decentralized_project_storage");
+    let ui: wisp_dto::Settings = serde_json::from_value(legacy).unwrap();
+    assert!(!ui.decentralized_project_storage);
+}
+
+#[test]
+fn after_turn_hook_events_roundtrip_to_ui() {
+    let backend: super::AgentEvent = serde_json::from_value(json!({
+        "kind": "MemoryProposal",
+        "frame_id": "f",
+        "proposal": {
+            "session_id": "f", "turn_index": 2, "scope": "project",
+            "content": "Validate paths before retrying.", "trigger": "tool_failures",
+            "tool_calls": 3, "failed_tool_calls": 2, "failure_rate": 66.7,
+            "global_memories": []
+        }
+    }))
+    .expect("backend accepts its own proposal shape");
+    match roundtrip::<_, wisp_dto::AgentEvent>(&backend) {
+        wisp_dto::AgentEvent::MemoryProposal { frame_id, proposal } => {
+            assert_eq!(frame_id, "f");
+            assert_eq!(proposal.turn_index, 2);
+            assert_eq!(proposal.trigger, "tool_failures");
+            assert_eq!(proposal.failed_tool_calls, 2);
+        }
+        _ => panic!("expected MemoryProposal"),
+    }
+
+    let backend = super::AgentEvent::FollowUps {
+        frame_id: "f".into(),
+        questions: vec!["One?".into(), "Two?".into(), "Three?".into()],
+    };
+    match roundtrip::<_, wisp_dto::AgentEvent>(&backend) {
+        wisp_dto::AgentEvent::FollowUps { questions, .. } => assert_eq!(questions.len(), 3),
+        _ => panic!("expected FollowUps"),
+    }
+
+    let backend = super::AgentEvent::HookFailed {
+        frame_id: "f".into(),
+        hook: crate::turn_hooks::HookId::MemoryProposal.as_str().into(),
+        message: "Reviewer ACP Agent is not configured.".into(),
+    };
+    match roundtrip::<_, wisp_dto::AgentEvent>(&backend) {
+        wisp_dto::AgentEvent::HookFailed { hook, message, .. } => {
+            assert_eq!(hook, "memory_proposal");
+            assert!(message.contains("not configured"));
+        }
+        _ => panic!("expected HookFailed"),
+    }
 }

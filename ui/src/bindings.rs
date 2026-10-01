@@ -74,6 +74,7 @@ extern "C" {
     /// `owner_id` is a unique mounted element that owns the URL until removal.
     #[wasm_bindgen(js_name = media_url)]
     pub(crate) async fn media_url(path: &str, owner_id: &str) -> JsValue;
+    pub(crate) async fn hydrate_workspace_images(owner_id: &str, unavailable: &str);
     /// Small canvas-downscaled variant of [`media_url`] for thumbnail-sized
     /// cards, so long histories do not keep full-size decoded bitmaps alive.
     #[wasm_bindgen(js_name = media_thumbnail_url)]
@@ -210,6 +211,13 @@ pub(crate) fn set_highlighted_code(id: String, text: String) {
     spawn_local(async move {
         let _ = highlight_set_code(&id, &text).await;
     });
+}
+
+/// Tutorials index. Help → Documentation and the home docs button both open it.
+pub(crate) const TUTORIALS_URL: &str = "https://wispscience.com/tutorials.html";
+
+pub(crate) fn open_tutorials() {
+    open_external_url(TUTORIALS_URL.to_string());
 }
 
 /// Open an http(s)/mailto/tel link in the OS default handler (not the app webview).

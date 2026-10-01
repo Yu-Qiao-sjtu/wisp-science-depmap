@@ -10,6 +10,83 @@ use crate::window_capture_escape;
 use leptos::*;
 use std::collections::{HashMap, HashSet};
 
+fn toggle_collapsed_key(set: &mut HashSet<String>, key: String) {
+    if !set.insert(key.clone()) {
+        set.remove(&key);
+    }
+}
+
+#[cfg(test)]
+mod nest_toggle_tests {
+    use super::toggle_collapsed_key;
+    use std::collections::HashSet;
+
+    #[test]
+    fn toggle_collapsed_key_inserts_then_removes() {
+        let mut set = HashSet::new();
+        toggle_collapsed_key(&mut set, "e:main".into());
+        assert!(set.contains("e:main"));
+        toggle_collapsed_key(&mut set, "e:main".into());
+        assert!(set.is_empty());
+        toggle_collapsed_key(&mut set, "b:main".into());
+        toggle_collapsed_key(&mut set, "e:main".into());
+        assert_eq!(set.len(), 2);
+    }
+}
+
+fn nest_group_toggle(
+    locale: Locale,
+    label_key: &'static str,
+    expand_key: &'static str,
+    collapse_key: &'static str,
+    count: usize,
+    collapsed: bool,
+    test_id: &'static str,
+    on_click: impl Fn(web_sys::MouseEvent) + 'static,
+) -> impl IntoView {
+    let action = t(locale, if collapsed { expand_key } else { collapse_key });
+    let count_label = count.to_string();
+    let aria = format!("{action} ({count})");
+    view! {
+        <button type="button" class="side-nest-toggle"
+            class:collapsed=collapsed
+            data-testid=test_id
+            aria-expanded=if collapsed { "false" } else { "true" }
+            title=action
+            aria-label=aria
+            on:click=on_click>
+            <span class="side-nest-caret" class:collapsed=collapsed aria-hidden="true">
+                {compose_icon("chevron-down")}
+            </span>
+            <span class="side-nest-label">{t(locale, label_key)}</span>
+            <span class="side-nest-count">{count_label}</span>
+        </button>
+    }
+}
+
+/// Secondary nav entry. `tier` names the window-height breakpoint in sidebar.css
+/// below which the entry leaves the inline nav for the "More" flyout.
+type NavEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Signal<bool>,
+    Callback<web_sys::MouseEvent>,
+);
+
+fn nav_entry_button(locale: RwSignal<Locale>, entry: NavEntry) -> impl IntoView {
+    let (icon, label_key, tier, active, on_click) = entry;
+    view! {
+        <button class=format!("side-btn {tier}") class:active=move || active.get()
+            aria-current=move || active.get().then_some("page")
+            title=move || t(locale.get(), label_key)
+            on:click=move |ev| on_click.call(ev)>
+            {compose_icon(icon)}
+            <span class="side-btn-label">{move || t(locale.get(), label_key)}</span>
+        </button>
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct SidebarState {
     pub(super) locale: RwSignal<Locale>,
@@ -127,6 +204,8 @@ pub(super) fn Sidebar(
         &["folder", "date", "none"],
     ));
     let sort_menu_open = create_rw_signal(false);
+    // Collapsed nested branch / exploration groups, keyed as "b:{parent}" / "e:{parent}".
+    let collapsed_nests = create_rw_signal(HashSet::<String>::new());
     let selecting_sessions = create_rw_signal(false);
     let selected_sessions = create_rw_signal::<HashSet<String>>(HashSet::new());
     let bulk_move_target = create_rw_signal(String::new());
@@ -143,6 +222,42 @@ pub(super) fn Sidebar(
         sort_menu_open.set(false);
         true
     });
+    // Short windows fold the tail of the nav into a "More" flyout instead of
+    // scrolling it. Holds the flyout's viewport (left, top) while open.
+    let nav_more_at = create_rw_signal::<Option<(f64, f64)>>(None);
+    window_capture_escape(move || {
+        if nav_more_at.get_untracked().is_none() {
+            return false;
+        }
+        nav_more_at.set(None);
+        true
+    });
+    let never = Signal::derive(|| false);
+    let nav_entries: [NavEntry; 5] = [
+        (
+            "folder-plus",
+            "sidebar.new_folder",
+            "nav-tier-2",
+            never,
+            new_folder,
+        ),
+        ("doc", "sidebar.files", "nav-tier-2", never, open_files),
+        (
+            "research-trail",
+            "sidebar.graph",
+            "nav-tier-1",
+            research_journey_open.into(),
+            open_research_graph,
+        ),
+        (
+            "book",
+            "sidebar.publication",
+            "nav-tier-1",
+            publication_open.into(),
+            open_publication_workspace,
+        ),
+        ("star", "sidebar.library", "nav-tier-1", never, open_library),
+    ];
 
     view! {
         <aside class="sidebar" class:collapsed=move || !show_sidebar.get()
@@ -184,7 +299,7 @@ pub(super) fn Sidebar(
                                             <span class="pm-name">{p.name.clone()}</span>
                                             {(!desc.trim().is_empty()).then(|| view! { <span class="pm-desc">{desc.clone()}</span> })}
                                         </span>
-                                        {is_active.then(|| view! { <span class="pm-check">"✓"</span> })}
+                                        {is_active.then(|| view! { <span class="pm-check">{compose_icon("check")}</span> })}
                                     </button>
                                 }
                             }).collect_view()
@@ -192,28 +307,44 @@ pub(super) fn Sidebar(
                     </div>
                 </div>
             })}
-            {move || (!demo_mode.get()).then(|| view! {
-                <nav class="nav">
-                    <button class="side-btn primary" title=move || t(locale.get(), "sidebar.new_session")
-                        aria-label=move || t(locale.get(), "sidebar.new_session")
-                        on:click=move |ev| new_session.call(ev)>
-                        {compose_icon("plus")}
-                        <span class="side-btn-label">{move || t(locale.get(), "sidebar.new_session")}</span>
-                        <kbd class="side-shortcut" aria-hidden="true">{new_session_shortcut}</kbd>
-                    </button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.search_sessions")
-                        aria-label=move || t(locale.get(), "sidebar.search_sessions")
-                        on:click=move |ev| open_search.call(ev)>
-                        {compose_icon("search")}
-                        <span class="side-btn-label">{move || t(locale.get(), "sidebar.search")}</span>
-                        <kbd class="side-shortcut" aria-hidden="true">{search_shortcut}</kbd>
-                    </button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.new_folder") on:click=move |ev| new_folder.call(ev)>{compose_icon("folder-plus")}{move || t(locale.get(), "sidebar.new_folder")}</button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.files") on:click=move |ev| open_files.call(ev)>{compose_icon("doc")}{move || t(locale.get(), "sidebar.files")}</button>
-                    <button class="side-btn" class:active=move ||research_journey_open.get() title=move || t(locale.get(), "sidebar.graph") on:click=move |ev| open_research_graph.call(ev)>{compose_icon("research-trail")}{move || t(locale.get(), "sidebar.graph")}</button>
-                    <button class="side-btn" class:active=move || publication_open.get() aria-current=move || publication_open.get().then_some("page") title=move || t(locale.get(), "sidebar.publication") on:click=move |ev| open_publication_workspace.call(ev)>{compose_icon("book")}{move || t(locale.get(), "sidebar.publication")}</button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.library") on:click=move |ev| open_library.call(ev)>{compose_icon("star")}{move || t(locale.get(), "sidebar.library")}</button>
-                </nav>
+            {move || (!demo_mode.get()).then(|| {
+                // Fresh per render: this closure rebuilds the nav whenever demo_mode is set.
+                let nav_more_ref = create_node_ref::<html::Button>();
+                view! {
+                    <nav class="nav">
+                        <button class="side-btn primary" title=move || t(locale.get(), "sidebar.new_session")
+                            aria-label=move || t(locale.get(), "sidebar.new_session")
+                            on:click=move |ev| new_session.call(ev)>
+                            {compose_icon("plus")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.new_session")}</span>
+                            <kbd class="side-shortcut" aria-hidden="true">{new_session_shortcut}</kbd>
+                        </button>
+                        <button class="side-btn" title=move || t(locale.get(), "sidebar.search_sessions")
+                            aria-label=move || t(locale.get(), "sidebar.search_sessions")
+                            on:click=move |ev| open_search.call(ev)>
+                            {compose_icon("search")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.search")}</span>
+                            <kbd class="side-shortcut" aria-hidden="true">{search_shortcut}</kbd>
+                        </button>
+                        {nav_entries.into_iter().map(|entry| nav_entry_button(locale, entry)).collect_view()}
+                        <button type="button" class="side-btn nav-more"
+                            class:open=move || nav_more_at.get().is_some()
+                            aria-haspopup="menu"
+                            aria-expanded=move || nav_more_at.get().is_some().to_string()
+                            title=move || t(locale.get(), "sidebar.more")
+                            aria-label=move || t(locale.get(), "sidebar.more")
+                            node_ref=nav_more_ref
+                            // While open, the backdrop covers this button and closes the menu.
+                            on:click=move |_| if let Some(el) = nav_more_ref.get_untracked() {
+                                let rect = el.get_bounding_client_rect();
+                                nav_more_at.set(Some((rect.right() + 6.0, rect.top())));
+                            }>
+                            {compose_icon("more")}
+                            <span class="side-btn-label">{move || t(locale.get(), "sidebar.more")}</span>
+                            <span class="nav-more-caret" aria-hidden="true">{compose_icon("chevron-right")}</span>
+                        </button>
+                    </nav>
+                }
             })}
             {move || (!demo_mode.get()).then(|| {
                 let loc = locale.get();
@@ -446,6 +577,8 @@ pub(super) fn Sidebar(
                         };
                         let title_attr = title.clone();
                         let title_tooltip = title.clone();
+                        // The compact rail hides titles; the initial keeps rows tellable apart.
+                        let initial: String = title.chars().next().into_iter().flat_map(char::to_uppercase).collect();
                         let open = load_session.clone();
                         let id_click = id.clone();
                         let id_key = id.clone();
@@ -531,6 +664,7 @@ pub(super) fn Sidebar(
                                             {compose_icon("circle-alert")}
                                         </span>
                                     </span>
+                                    <span class="ses-initial" aria-hidden="true">{initial}</span>
                                     {is_branch.then(|| view! {
                                         <span class="session-branch-icon" aria-hidden="true">{compose_icon("branch")}</span>
                                     })}
@@ -545,7 +679,7 @@ pub(super) fn Sidebar(
                                         ev.prevent_default();
                                         ev.stop_propagation();
                                         show_actions.call((ev, id_actions.clone(), title_actions.clone(), pinned, is_branch, branch_merged, has_branch_family, has_exploration_round, stale_prompt));
-                                    }>"⋯"</button>
+                                    }>{compose_icon("more")}</button>
                             </div>
                         }.into_view()
                     };
@@ -609,19 +743,74 @@ pub(super) fn Sidebar(
                         if kids.is_empty() && exploration_kids.is_empty() {
                             return item(s);
                         }
+                        let nests = collapsed_nests.get();
+                        let exploration_key = format!("e:{}", s.id);
+                        let branch_key = format!("b:{}", s.id);
+                        let exploration_collapsed = nests.contains(&exploration_key);
+                        let branch_collapsed = nests.contains(&branch_key);
+                        let exploration_count = exploration_kids.len();
+                        let branch_count = kids.len();
+                        let exploration_toggle_key = exploration_key.clone();
+                        let branch_toggle_key = branch_key.clone();
+                        let parent = item(s);
                         view! {
                             <div class="side-branch-group">
-                                {item(s)}
-                                {(!exploration_kids.is_empty()).then(|| view! {
+                                {parent}
+                                {(!exploration_kids.is_empty()).then(|| {
+                                    let exploration_toggle_key = exploration_toggle_key.clone();
+                                    view! {
                                     <div class="side-exploration-group" data-testid="sidebar-explorations">
-                                        <div class="side-exploration-group-title">{t(loc, "exploration.group")}</div>
-                                        {exploration_kids.iter().map(&exploration_item).collect_view()}
+                                        {nest_group_toggle(
+                                            loc,
+                                            "exploration.group",
+                                            "exploration.expand",
+                                            "exploration.collapse",
+                                            exploration_count,
+                                            exploration_collapsed,
+                                            "sidebar-exploration-toggle",
+                                            move |ev: web_sys::MouseEvent| {
+                                                ev.prevent_default();
+                                                ev.stop_propagation();
+                                                collapsed_nests.update(|set| {
+                                                    toggle_collapsed_key(set, exploration_toggle_key.clone());
+                                                });
+                                            },
+                                        )}
+                                        {(!exploration_collapsed).then(|| view! {
+                                            <div class="side-nest-items">
+                                                {exploration_kids.iter().map(&exploration_item).collect_view()}
+                                            </div>
+                                        })}
                                     </div>
+                                    }
                                 })}
-                                {(!kids.is_empty()).then(|| view! {
-                                    <div class="side-branch-kids">
-                                        {kids.iter().map(&item).collect_view()}
+                                {(!kids.is_empty()).then(|| {
+                                    let branch_toggle_key = branch_toggle_key.clone();
+                                    view! {
+                                    <div class="side-branch-kids" data-testid="sidebar-branches">
+                                        {nest_group_toggle(
+                                            loc,
+                                            "branch.group",
+                                            "branch.expand",
+                                            "branch.collapse",
+                                            branch_count,
+                                            branch_collapsed,
+                                            "sidebar-branch-toggle",
+                                            move |ev: web_sys::MouseEvent| {
+                                                ev.prevent_default();
+                                                ev.stop_propagation();
+                                                collapsed_nests.update(|set| {
+                                                    toggle_collapsed_key(set, branch_toggle_key.clone());
+                                                });
+                                            },
+                                        )}
+                                        {(!branch_collapsed).then(|| view! {
+                                            <div class="side-nest-items">
+                                                {kids.iter().map(&item).collect_view()}
+                                            </div>
+                                        })}
                                     </div>
+                                    }
                                 })}
                             </div>
                         }.into_view()
@@ -723,7 +912,7 @@ pub(super) fn Sidebar(
                                         folder_modal_input.set(fname_rename.clone());
                                         folder_modal.set(Some(FolderModal::Rename(fid_rename.clone())));
                                     }>
-                                    <span class="side-folder-caret" class:collapsed=collapsed>"▾"</span>
+                                    <span class="side-folder-caret" class:collapsed=collapsed>{compose_icon("chevron-down")}</span>
                                     {compose_icon("folder")}
                                     <span class="side-folder-name">{fname}</span>
                                     <span class="side-folder-count">{in_folder.len()}</span>
@@ -734,7 +923,7 @@ pub(super) fn Sidebar(
                                             ev.prevent_default();
                                             ev.stop_propagation();
                                             show_folder_actions.call((ev, fid_actions.clone(), fname_actions.clone()));
-                                        }>"⋯"</button>
+                                        }>{compose_icon("more")}</button>
                                 </div>
                                 {(!collapsed).then(|| view! {
                                     <div class="side-folder-sessions">
@@ -806,7 +995,7 @@ pub(super) fn Sidebar(
                                 <span class="update-card-title">{move || t(locale.get(), "update_card.title")}</span>
                                 <span class="update-card-ver">{format!("v{}", u.version)}</span>
                             </span>
-                            <span class="update-card-arrow" aria-hidden="true">"→"</span>
+                            <span class="update-card-arrow" aria-hidden="true">{compose_icon("arrow-right")}</span>
                         </button>
                     })}
                     {move || project_info.get().map(|p| {
@@ -820,12 +1009,22 @@ pub(super) fn Sidebar(
                             ])}</span>
                         </div>
                     }})}
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.capabilities") on:click=move |ev| open_capabilities.call(ev)>{compose_icon("grid")}{move || t(locale.get(), "sidebar.capabilities")}</button>
-                    <button class="side-btn" data-testid="report-problem-entry" title=move || t(locale.get(), "issue_report.sidebar") on:click=move |ev| open_issue_report.call(ev)>{compose_icon("chat")}{move || t(locale.get(), "issue_report.sidebar")}</button>
-                    <button class="side-btn" title=move || t(locale.get(), "sidebar.settings") on:click=move |ev| open_settings.call(ev)>{compose_icon("gear")}{move || t(locale.get(), "sidebar.settings")}</button>
+                    <button class="side-btn" title=move || t(locale.get(), "sidebar.capabilities") on:click=move |ev| open_capabilities.call(ev)>{compose_icon("grid")}<span class="side-btn-label">{move || t(locale.get(), "sidebar.capabilities")}</span></button>
+                    <button class="side-btn" data-testid="report-problem-entry" title=move || t(locale.get(), "issue_report.sidebar") on:click=move |ev| open_issue_report.call(ev)>{compose_icon("chat")}<span class="side-btn-label">{move || t(locale.get(), "issue_report.sidebar")}</span></button>
+                    <button class="side-btn" title=move || t(locale.get(), "sidebar.settings") on:click=move |ev| open_settings.call(ev)>{compose_icon("gear")}<span class="side-btn-label">{move || t(locale.get(), "sidebar.settings")}</span></button>
                 </div>
             })}
         </aside>
+        // Outside the aside so the compact rail's `.sidebar .side-btn-label`
+        // hiding does not reach the flyout's labels.
+        {move || nav_more_at.get().map(|(left, top)| view! {
+            <div class="nav-more-backdrop" on:click=move |_| nav_more_at.set(None)></div>
+            <div class="nav-more-menu" role="menu" data-testid="sidebar-more-menu"
+                style=format!("left:{left}px;top:{top}px")
+                on:click=move |_| nav_more_at.set(None)>
+                {nav_entries.into_iter().map(|entry| nav_entry_button(locale, entry)).collect_view()}
+            </div>
+        })}
         {move || show_sidebar.get().then(|| view! {
             <div class="sidebar-resizer" on:mousedown=move |ev| on_sidebar_resize_start.call(ev)></div>
         })}

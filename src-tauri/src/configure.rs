@@ -104,6 +104,18 @@ const CATALOG: &[SettingSpec] = &[
         summary: "Automatically compact long conversations near the context limit.",
     },
     SettingSpec {
+        key: "semantic_compact_on_model_switch",
+        kind: ValueKind::Bool,
+        writable: true,
+        summary: "Run semantic compaction after switching the conversation model.",
+    },
+    SettingSpec {
+        key: "semantic_compact_idle_hours",
+        kind: ValueKind::Int,
+        writable: true,
+        summary: "Prompt for semantic compaction after this many idle hours. 0 disables. Default 24.",
+    },
+    SettingSpec {
         key: "auto_continue",
         kind: ValueKind::Bool,
         writable: true,
@@ -120,6 +132,12 @@ const CATALOG: &[SettingSpec] = &[
         kind: ValueKind::Bool,
         writable: true,
         summary: "Generate three follow-up questions after each reply.",
+    },
+    SettingSpec {
+        key: "decentralized_project_storage",
+        kind: ValueKind::Bool,
+        writable: true,
+        summary: "Store new projects in their own folders. Existing project locations are unchanged.",
     },
     SettingSpec {
         key: "resume_last_session",
@@ -685,6 +703,17 @@ async fn current_values(store: &Store) -> Result<Map<String, Value>, String> {
         .map_err(|error| error.to_string())?
         .map(|value| value != "false")
         .unwrap_or(true);
+    let semantic_compact_on_model_switch = store
+        .get_setting("semantic_compact_on_model_switch")
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some_and(|value| value == "true");
+    let semantic_compact_idle_hours = store
+        .get_setting("semantic_compact_idle_hours")
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(24);
     let auto_continue = store
         .get_setting("auto_continue")
         .await
@@ -739,10 +768,25 @@ async fn current_values(store: &Store) -> Result<Map<String, Value>, String> {
     values.insert("locale".into(), json!(locale));
     values.insert("max_iter".into(), json!(max_iter));
     values.insert("auto_compact".into(), json!(auto_compact));
+    values.insert(
+        "semantic_compact_on_model_switch".into(),
+        json!(semantic_compact_on_model_switch),
+    );
+    values.insert(
+        "semantic_compact_idle_hours".into(),
+        json!(semantic_compact_idle_hours),
+    );
     values.insert("auto_continue".into(), json!(auto_continue));
     values.insert("auto_continue_limit".into(), json!(auto_continue_limit));
     values.insert("follow_up_questions".into(), json!(follow_up_questions));
     values.insert("resume_last_session".into(), json!(resume_last_session));
+    values.insert(
+        "decentralized_project_storage".into(),
+        json!(store
+            .decentralized_project_storage()
+            .await
+            .map_err(|e| e.to_string())?),
+    );
     values.insert("notifications_enabled".into(), json!(notifications_enabled));
     Ok(values)
 }
@@ -955,6 +999,23 @@ async fn apply_one(
             Ok(next.to_string())
         }
         "auto_compact" => write_bool_setting(store, "auto_compact", incoming).await,
+        "semantic_compact_on_model_switch" => {
+            write_bool_setting(store, "semantic_compact_on_model_switch", incoming).await
+        }
+        "semantic_compact_idle_hours" => {
+            let current = store
+                .get_setting("semantic_compact_idle_hours")
+                .await
+                .map_err(|error| error.to_string())?
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(24);
+            let next = resolve_int(incoming, current, 0, 10_000)?;
+            store
+                .set_setting("semantic_compact_idle_hours", &next.to_string())
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(next.to_string())
+        }
         "auto_continue" => write_bool_setting(store, "auto_continue", incoming).await,
         "auto_continue_limit" => {
             let current = store
@@ -972,6 +1033,9 @@ async fn apply_one(
         }
         "follow_up_questions" => write_bool_setting(store, "follow_up_questions", incoming).await,
         "resume_last_session" => write_bool_setting(store, "resume_last_session", incoming).await,
+        "decentralized_project_storage" => {
+            write_bool_setting(store, "decentralized_project_storage", incoming).await
+        }
         "notifications_enabled" => {
             write_bool_setting(store, "notifications_enabled", incoming).await
         }
@@ -1264,6 +1328,41 @@ mod tests {
             result.content
         );
         assert!(result.content.contains("reviewer"), "{}", result.content);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn project_storage_preference_roundtrips_and_rejects_invalid_values() {
+        let (store, root, db) = test_store().await;
+        let env = NoEnv(root.clone());
+        let configure = tool(store.clone(), root.clone());
+        assert!(!store.decentralized_project_storage().await.unwrap());
+        for enabled in [true, false] {
+            let result = configure
+                .run(
+                    &json!({"action": "set", "values": {"decentralized_project_storage": enabled}}),
+                    &env,
+                )
+                .await;
+            assert!(result.success, "{}", result.content);
+            assert_eq!(
+                store.decentralized_project_storage().await.unwrap(),
+                enabled
+            );
+            assert_eq!(
+                current_values(&store).await.unwrap()["decentralized_project_storage"],
+                json!(enabled)
+            );
+        }
+        let invalid = configure
+            .run(
+                &json!({"action": "set", "values": {"decentralized_project_storage": "invalid"}}),
+                &env,
+            )
+            .await;
+        assert!(!invalid.success);
+        assert!(!store.decentralized_project_storage().await.unwrap());
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_file(db);
     }

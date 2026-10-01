@@ -181,9 +181,13 @@ impl DeviceHub {
             | AgentEvent::AppContextUpdate { .. }
             | AgentEvent::Usage { .. }
             | AgentEvent::Compaction { .. }
+            | AgentEvent::CompactionUndone { .. }
             | AgentEvent::ContextWarning { .. }
             | AgentEvent::Diff { .. }
-            | AgentEvent::FileChanged { .. } => return,
+            | AgentEvent::FileChanged { .. }
+            | AgentEvent::MemoryProposal { .. }
+            | AgentEvent::FollowUps { .. }
+            | AgentEvent::HookFailed { .. } => return,
         };
         self.set_base(frame_id, project_id, state);
     }
@@ -294,6 +298,7 @@ mod tests {
             AgentEvent::User {
                 frame_id: "a".into(),
                 text: "prompt".into(),
+                queue_id: None,
             },
             text("a"),
             AgentEvent::Reasoning {

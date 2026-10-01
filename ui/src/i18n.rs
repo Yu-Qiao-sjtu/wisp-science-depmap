@@ -48,6 +48,15 @@ pub fn t(locale: Locale, key: &str) -> String {
     lookup(locale, key).unwrap_or(key).into()
 }
 
+pub fn document_locale() -> Locale {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.document_element())
+        .and_then(|element| element.get_attribute("lang"))
+        .map(|lang| Locale::from_code(&lang))
+        .unwrap_or_default()
+}
+
 pub fn empty_title(locale: Locale, index: usize) -> String {
     t(
         locale,
@@ -194,6 +203,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "sidebar.graph") => Some("Research journey"),
         (Locale::En, "sidebar.publication") => Some("Publication"),
         (Locale::En, "sidebar.library") => Some("Library"),
+        (Locale::En, "sidebar.more") => Some("More"),
         (Locale::En, "sidebar.new_folder") => Some("New group"),
         (Locale::En, "sidebar.sessions") => Some("Sessions"),
         (Locale::En, "sidebar.search_sessions") => Some("Search sessions"),
@@ -575,11 +585,14 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "composer.cut_in_now") => Some("Cut in (this turn)"),
         (Locale::En, "composer.interrupt_replace") => Some("Interrupt & replace"),
         (Locale::En, "queue.cut_in") => Some("Guide now"),
+        (Locale::En, "queue.waiting_current_step") => Some("Sent · waiting for the current step"),
+        (Locale::En, "plan.question.description_prefix") => Some("Description: "),
         (Locale::En, "queue.action_failed") => Some("Queue action failed: {error}"),
         (Locale::En, "queue.edit") => Some("Edit"),
         (Locale::En, "queue.remove") => Some("Remove"),
         (Locale::En, "queue.move_up") => Some("Move up"),
         (Locale::En, "queue.move_down") => Some("Move down"),
+        (Locale::En, "queue.more") => Some("More actions"),
         (Locale::En, "queue.header") => Some("{n} queued"),
         (Locale::En, "queue.region") => Some("Queued messages"),
         (Locale::En, "composer.send_options") => Some("Message options"),
@@ -653,6 +666,57 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "models.session_id_generated") => Some("<automatically generated conversation ID>"),
         (Locale::Zh, "models.session_id_generated") => Some("<Wisp 自动生成的会话 ID>"),
         (Locale::En, "models.add") => Some("Add API access"),
+        (Locale::En, "settings.nav.subscriptions") => Some("Subscription accounts"),
+        (Locale::En, "subscriptions.desc") => Some("Sign in to an existing account, then choose a model for your conversations."),
+        (Locale::En, "subscriptions.chatgpt") => Some("Legacy sign-in through the Codex CLI client. Prefer ChatGPT above; keep this only for existing models or device-code sign-in."),
+        (Locale::En, "subscriptions.chatgpt_signin") => Some("Official Sign in with ChatGPT: approve Wisp Science as a connected agent that uses your ChatGPT plan's usage."),
+        (Locale::En, "subscriptions.signed_in") => Some("Account saved"),
+        (Locale::En, "subscriptions.signed_out") => Some("Not signed in"),
+        (Locale::En, "subscriptions.loading") => Some("Checking account…"),
+        (Locale::En, "subscriptions.status_error") => Some("Could not check account status. Open sign-in to retry."),
+        (Locale::En, "subscriptions.models") => Some("Models from this subscription"),
+        (Locale::En, "subscriptions.empty") => Some("After signing in, add a model here to use it in conversations."),
+        (Locale::En, "subscriptions.manage") => Some("Manage sign-in"),
+        (Locale::En, "subscriptions.connection") => Some("Account: ChatGPT · Protocol: OpenAI Responses (managed by Wisp)"),
+        (Locale::En, "codex.login.account_step") => Some("1. Connect your account"),
+        (Locale::En, "codex.login.model_step") => Some("2. Choose your model"),
+        (Locale::En, "codex.login.ready") => Some("Account authorized. Save the account to finish."),
+        (Locale::En, "codex.login.pending") => Some("Waiting for authorization in your browser…"),
+        (Locale::En, "codex.login.manual") => Some("Browser did not return to Wisp?"),
+        (Locale::En, "codex.login.cancel_attempt") => Some("Cancel sign-in"),
+        (Locale::En, "codex.login.button") => Some("ChatGPT"),
+        (Locale::En, "codex.login.title") => Some("ChatGPT"),
+        (Locale::En, "codex.login.desc") => Some("Authorize Wisp to use your ChatGPT account. Sign-in credentials are stored in the OS keyring."),
+        (Locale::En, "codex.login.method") => Some("Sign-in method"),
+        (Locale::En, "codex.login.browser") => Some("Browser"),
+        (Locale::En, "codex.login.device") => Some("Device code"),
+        (Locale::En, "codex.login.label_ph") => Some("e.g. ChatGPT Codex"),
+        (Locale::En, "codex.login.browser_hint") => Some("A browser window opens for ChatGPT. If it cannot return to this computer, paste the final redirect URL."),
+        (Locale::En, "codex.login.device_hint") => Some("Enable device code login in ChatGPT security settings or workspace permissions, then enter the one-time code on the verification page."),
+        (Locale::En, "codex.login.use_saved") => Some("Use the ChatGPT sign-in already stored on this machine:"),
+        (Locale::En, "codex.login.code") => Some("One-time code"),
+        (Locale::En, "codex.login.url") => Some("Open the sign-in page"),
+        (Locale::En, "codex.login.paste") => Some("Redirect URL or code"),
+        (Locale::En, "codex.login.paste_ph") => Some("Paste the full redirect URL if the browser cannot reach this machine"),
+        (Locale::En, "codex.login.submit") => Some("Use pasted redirect"),
+        (Locale::En, "codex.login.waiting") => Some("Waiting for ChatGPT…"),
+        (Locale::En, "codex.login.start") => Some("Sign in"),
+        (Locale::En, "codex.login.save") => Some("Save model"),
+        (Locale::En, "codex.login.again") => Some("Sign in again"),
+        (Locale::En, "codex.login.saved_hint") => Some("This model uses a ChatGPT subscription. The tokens stay in the OS keyring."),
+        (Locale::En, "chatgpt.login.desc") => Some("Sign in with ChatGPT, name the agent, and allow it to use your ChatGPT plan's usage. Requests go to the OpenAI API with that authorization. Tokens are stored in the OS keyring."),
+        (Locale::En, "chatgpt.login.label_ph") => Some("e.g. ChatGPT"),
+        (Locale::En, "chatgpt.login.browser_hint") => Some("A browser window opens for ChatGPT. If it cannot return to this computer, paste the full redirect URL from the address bar."),
+        (Locale::En, "chatgpt.login.paste") => Some("Full redirect URL"),
+        (Locale::En, "chatgpt.login.paste_ph") => Some("http://127.0.0.1:1455/auth/callback?code=…&client_id=…"),
+        (Locale::En, "xai.login.button") => Some("SuperGrok"),
+        (Locale::En, "xai.login.title") => Some("SuperGrok / X Premium+"),
+        (Locale::En, "xai.login.desc") => Some("Sign in with a SuperGrok or X Premium+ subscription. Wisp stores the access and refresh tokens in the OS keyring and sends requests to the xAI API. This does not use an xAI API key. xAI may refuse some subscription tiers with HTTP 403; use an API key then."),
+        (Locale::En, "xai.login.label_ph") => Some("e.g. SuperGrok"),
+        (Locale::En, "xai.login.device_hint") => Some("The xAI page opens in the browser. Approve the sign-in, and enter the one-time code if it asks. This works over SSH and WSL."),
+        (Locale::En, "xai.login.use_saved") => Some("Use the SuperGrok sign-in already stored on this machine:"),
+        (Locale::En, "xai.login.waiting") => Some("Waiting for xAI…"),
+        (Locale::En, "xai.login.saved_hint") => Some("This model uses a SuperGrok subscription. The tokens stay in the OS keyring."),
         (Locale::En, "models.add_entry") => Some("Add model"),
         (Locale::En, "models.remove_entry") => Some("Remove model"),
         (Locale::En, "models.entries") => Some("Models"),
@@ -711,6 +775,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "composer.group_workflows") => Some("Workflows"),
         (Locale::En, "composer.group_skills") => Some("Skills"),
         (Locale::En, "composer.cmd_compact_sub") => Some("Archive full history, then fold old turns to shrink model context"),
+        (Locale::En, "composer.cmd_archive_sub") => Some("Review a research milestone, lock this notebook and clean up selected local files"),
         (Locale::En, "composer.cmd_fork_sub") => Some("Send the following message as a branch of this conversation"),
         (Locale::En, "composer.cmd_btw_sub") => Some("Open the side chat, or ask it the following question"),
         (Locale::En, "composer.cmd_rewind_sub") => Some("Preview and roll back the last turn; its message returns to the composer"),
@@ -859,6 +924,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "hosts.password_ph") => Some("Server login password"),
         (Locale::En, "hosts.password_keep") => Some("Leave blank to keep the stored password"),
         (Locale::En, "hosts.password_hint") => Some("The password is stored only in the OS keyring — never in project files or SQLite. Prefer SSH keys when possible."),
+        (Locale::En, "hosts.openssh_hint") => Some("Wisp requires a local OpenSSH client 8.4 or later (`ssh -V`). Windows 10's inbox OpenSSH is often 8.1 and cannot supply saved passwords."),
         (Locale::En, "hosts.user_ph") => Some("e.g. alice"),
         (Locale::En, "hosts.identity_ph") => Some("~/.ssh/id_ed25519"),
         (Locale::En, "hosts.notes") => Some("Anything the agent should know? (optional)"),
@@ -1303,6 +1369,9 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "preview.xlsx_truncated") => Some("Large workbook: only a bounded preview is shown."),
         (Locale::En, "preview.text_truncated") => Some("Large file ({total}): showing the first {shown}."),
         (Locale::En, "preview.unsupported_file") => Some("Preview is not supported for this file type."),
+        (Locale::En, "preview.unresolved_chat_path") => {
+            Some("This file path could not be opened from the message. Open it from the sidebar instead.")
+        }
         (Locale::En, "preview.output_omitted") => Some("Skipped {kind} output ({size}) because it exceeds the preview limit."),
         (Locale::En, "preview.pdf_page") => Some("Page {page} of {total}"),
         (Locale::En, "preview.pdf_prev_page") => Some("Previous page"),
@@ -1360,11 +1429,13 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "ssh_check.probe_output_title") => Some("SSH connected — environment information unavailable"),
         (Locale::En, "ssh_check.password_title") => Some("SSH password authentication failed"),
         (Locale::En, "ssh_check.key_title") => Some("SSH key authentication failed"),
+        (Locale::En, "ssh_check.client_title") => Some("Local OpenSSH is too old"),
         (Locale::En, "ssh_check.body") => Some("Wisp will not let the agent use `{host}` until connectivity is confirmed with a successful Probe using the configured host settings (alias/user/port/identity). Free-form shell ssh is disabled."),
         (Locale::En, "ssh_check.fail_body") => Some("Do not keep probing `{host}` until you fix the issue — repeated failed logins look like brute force and can get your IP banned."),
         (Locale::En, "ssh_check.probe_output_body") => Some("SSH authentication to `{host}` succeeded, but the account did not execute Wisp's non-interactive probe commands. Remote command execution is required for Agent, Runtime, Files, and terminal features."),
         (Locale::En, "ssh_check.password_body") => Some("The server rejected password authentication for `{host}`. This is an authentication problem, not an environment-information problem."),
         (Locale::En, "ssh_check.key_body") => Some("The server rejected key/agent authentication for `{host}`. This is an authentication problem, not an environment-information problem."),
+        (Locale::En, "ssh_check.client_body") => Some("Wisp cannot use `{host}` until this computer's OpenSSH client is 8.4 or later. Windows inbox OpenSSH 8.1 cannot supply saved passwords (`SSH_ASKPASS_REQUIRE`)."),
         (Locale::En, "ssh_check.detail") => Some("Error: {detail}"),
         (Locale::En, "ssh_check.hint") => Some("On the server side, unlock your IP if intrusion protection blocked it, fix the IdentityFile path, then Probe again."),
         (Locale::En, "ssh_check.causes_title") => Some("Likely causes"),
@@ -1390,6 +1461,9 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "ssh_check.cause.probe_output.1") => Some("The account may use a restricted shell or forced command that blocks non-interactive system queries."),
         (Locale::En, "ssh_check.cause.probe_output.2") => Some("A login-shell startup script may exit early or redirect command output."),
         (Locale::En, "ssh_check.cause.probe_output.3") => Some("A successful password check alone is not enough for compute features; the account must also allow non-interactive remote commands."),
+        (Locale::En, "ssh_check.cause.client.1") => Some("Run `ssh -V` in a terminal. Wisp needs OpenSSH 8.4 or later on this computer, not on the server."),
+        (Locale::En, "ssh_check.cause.client.2") => Some("On Windows, update OpenSSH Client in Settings → Apps → Optional features, or install a current Win32-OpenSSH release. Confirm `where ssh` points at the new binary."),
+        (Locale::En, "ssh_check.cause.client.3") => Some("Restart Wisp after upgrading so it picks up the new `ssh` on PATH."),
         (Locale::En, "ssh_check.cause.other.1") => Some("Host settings (alias/user/port/identity) do not match a working terminal ssh."),
         (Locale::En, "ssh_check.cause.other.2") => Some("Network, firewall, or server SSH service problem."),
         (Locale::En, "ssh_check.cause.other.3") => Some("Fix config first; do not spam Probe."),
@@ -2183,13 +2257,40 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "channels.messages_devices") => Some("Messages and devices"),
         (Locale::En, "settings.general.workspace") => Some("Workspace & interaction"),
         (Locale::En, "settings.general.notifications") => Some("Notifications & updates"),
-        (Locale::En, "settings.general.save_hint") => Some("Save the preferences above. Environment and network settings are saved separately."),
+        (Locale::En, "settings.general.save_hint") => Some("Save the preferences above. Local environment settings are saved separately."),
         (Locale::En, "settings.language") => Some("Language"),
         (Locale::En, "settings.language.en") => Some("English"),
         (Locale::En, "settings.language.zh") => Some("中文"),
+        (Locale::En, "subscriptions.xai") => Some("Sign in with a SuperGrok / X Premium+ account. Availability depends on your plan."),
+        (Locale::En, "subscriptions.add_model") => Some("Add model"),
+        (Locale::En, "subscriptions.managed") => Some("Enter a model ID and an optional alias. Wisp manages the connection and model parameters. Each account can have multiple models."),
+        (Locale::En, "subscriptions.sign_in") => Some("Sign in to account"),
+        (Locale::En, "subscriptions.save_account") => Some("Save account"),
+        (Locale::En, "subscriptions.saving_account") => Some("Saving account…"),
+        (Locale::En, "subscriptions.add_account") => Some("Add account"),
+        (Locale::En, "subscriptions.add_account_hint") => Some("Signing in with another ChatGPT account adds it to your accounts and makes it active. Signing in to a saved account updates it."),
+        (Locale::En, "subscriptions.active_account") => Some("Active account"),
+        (Locale::En, "subscriptions.accounts") => Some("Accounts ({n})"),
+        (Locale::En, "subscriptions.switch_account") => Some("Use this account"),
+        (Locale::En, "subscriptions.remove_account") => Some("Remove account"),
+        (Locale::En, "subscriptions.remove_account_confirm") => Some("Remove ChatGPT account {account}? Its sign-in is deleted from the OS keyring."),
+        (Locale::En, "subscriptions.import_local") => Some("Import local sign-in"),
+        (Locale::En, "subscriptions.import_local_hint") => Some("Import ChatGPT sign-ins saved by Codex CLI (~/.codex/auth.json) or CLIProxyAPI (~/.cli-proxy-api)."),
+        (Locale::En, "subscriptions.imported") => Some("Imported {n} ChatGPT account(s). Wisp now shares their refresh token with Codex CLI or CLIProxyAPI; that tool may ask you to sign in again after Wisp refreshes it."),
+        (Locale::En, "subscriptions.usage_refresh") => Some("Refresh usage"),
+        (Locale::En, "subscriptions.usage_loading") => Some("Loading usage…"),
+        (Locale::En, "subscriptions.usage_none") => Some("The service reported no usage limits."),
+        (Locale::En, "subscriptions.usage_used") => Some("{n}% used"),
+        (Locale::En, "subscriptions.usage_resets") => Some("resets in {time}"),
+        (Locale::En, "subscriptions.usage_hours") => Some("{n}-hour limit"),
+        (Locale::En, "subscriptions.usage_days") => Some("{n}-day limit"),
+        (Locale::En, "subscriptions.usage_limit") => Some("Usage limit"),
+        (Locale::En, "subscriptions.limit_reached") => Some("Limit reached"),
         (Locale::En, "settings.provider") => Some("Protocol"),
         (Locale::En, "settings.provider.openai") => Some("OpenAI Chat Completions"),
         (Locale::En, "settings.provider.openai_responses") => Some("OpenAI Responses"),
+        (Locale::En, "settings.provider.openai_codex") => Some("ChatGPT (Codex)"),
+        (Locale::En, "settings.provider.xai_oauth") => Some("SuperGrok / X Premium+ (xAI)"),
         (Locale::En, "settings.provider.anthropic") => Some("Anthropic"),
         (Locale::En, "settings.api_url") => Some("Base URL"),
         (Locale::En, "settings.endpoint_suffix") => Some("Endpoint suffix (optional)"),
@@ -2203,13 +2304,23 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "settings.max_iter") => Some("Maximum agent iterations per turn"),
         (Locale::En, "settings.max_iter_hint") => Some("Limits model/tool rounds in one turn, followed by one tool-free summary. Default: 100; 0 means unlimited."),
         (Locale::En, "settings.auto_compact") => Some("Automatically compact long conversations"),
-        (Locale::En, "settings.auto_compact_hint") => Some("Enabled by default. Before each model call, Wisp archives and compacts the conversation when its estimated context reaches 80%."),
+        (Locale::En, "settings.auto_compact_hint") => Some("Enabled by default. Before each model call, Wisp archives and compacts the conversation when its estimated context reaches 80%. That path prunes tool output first and only writes a semantic checkpoint if the window is still full."),
+        (Locale::En, "settings.semantic_compact_on_model_switch") => {
+            Some("Semantic compact when switching models")
+        }
+        (Locale::En, "settings.semantic_compact_on_model_switch_hint") => Some("Off by default. After you change this conversation's model, fold older turns into a checkpoint so the new model starts from a summary instead of the full history."),
+        (Locale::En, "settings.semantic_compact_idle_hours") => {
+            Some("Prompt for semantic compact after idle hours")
+        }
+        (Locale::En, "settings.semantic_compact_idle_hours_hint") => Some("Default: 24 hours. When you reopen a conversation that has been idle this long, ask whether to write a semantic checkpoint. 0 disables the prompt."),
         (Locale::En, "settings.auto_continue") => Some("Auto-continue truncated output"),
         (Locale::En, "settings.auto_continue_hint") => Some("When a model reaches its output-token limit, continue the current turn automatically."),
         (Locale::En, "settings.auto_continue_limit") => Some("Maximum automatic continuations per turn"),
         (Locale::En, "settings.auto_continue_limit_hint") => Some("Default: 10. After this limit, Wisp offers the existing manual Resume action."),
         (Locale::En, "settings.follow_up_questions") => Some("Suggest follow-up questions"),
         (Locale::En, "settings.follow_up_questions_hint") => Some("Use the current conversation model to suggest three next questions after each reply."),
+        (Locale::En, "settings.decentralized_project_storage") => Some("Decentralized project storage"),
+        (Locale::En, "settings.decentralized_project_storage_hint") => Some("Save new projects in their own folders. When off, new projects share the app database. Existing projects stay where they are. Off by default; upgrades from v1.15.0 keep it on."),
         (Locale::En, "settings.resume_last_session") => Some("Resume the last conversation when opening a workspace"),
         (Locale::En, "settings.resume_last_session_hint") => Some("Enabled by default. Reopen the last conversation that has a user message, not a named unused draft or a blank session."),
         (Locale::En, "settings.nav.network") => Some("Network"),
@@ -2220,6 +2331,10 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::Zh, "network.connection_hint") => Some("分别管理各类请求的代理地址。「跟随系统」使用系统或继承的代理环境变量；「直连」跳过代理。支持 HTTP、HTTPS 和 SOCKS5 地址。"),
         (Locale::En, "network.model") => Some("Model API"),
         (Locale::Zh, "network.model") => Some("模型 API"),
+        (Locale::En, "network.subscription") => Some("Subscription sign-in"),
+        (Locale::Zh, "network.subscription") => Some("订阅账号登录"),
+        (Locale::En, "network.subscription_hint") => Some("For ChatGPT / xAI sign-in and token refresh. Save, then start a new sign-in; active sign-ins keep their route. Model requests use Model API above. The browser uses its own network settings."),
+        (Locale::Zh, "network.subscription_hint") => Some("用于 ChatGPT / xAI 登录与令牌刷新。保存后重新开始登录；进行中的登录保持原配置。对话请求使用上方的模型 API 代理，浏览器使用自身网络设置。"),
         (Locale::En, "network.model_hint") => Some("Applies to model API requests, including image and video generation, from the next turn. Active requests finish with their existing configuration."),
         (Locale::Zh, "network.model_hint") => Some("用于模型 API 请求，包括图片和视频生成，从下一轮对话生效。正在进行的请求继续使用原配置。"),
         (Locale::En, "network.mcp") => Some("MCP services"),
@@ -2343,8 +2458,12 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "settings.supports_vision") => Some("Supports image input"),
         (Locale::En, "settings.use_for_vision") => Some("Use for image analysis"),
         (Locale::En, "settings.vision_hint") => Some("Image attachments go directly to visual input models; non-visual models and image tools use this assigned model for text observations."),
+        (Locale::En, "models.capability.image_only") => Some("Image-only"),
+        (Locale::En, "settings.restore_chat_model") => Some("Restore as chat model"),
+        (Locale::En, "settings.image_role_hint") => Some("Profile type: image-only. Unchecking Use for image generation only removes the current assignment; this profile still stays out of chat and image analysis. For a misclassified chat model, use Restore as chat model and save."),
+        (Locale::En, "settings.restore_chat_hint") => Some("Save to restore chat eligibility with the same model ID and credentials. Enable image input and analysis as needed. The current default and sessions already switched to another model stay there; select this model again where needed."),
         (Locale::En, "settings.use_for_image_generation") => Some("Use for image generation"),
-        (Locale::En, "settings.image_generation_hint") => Some("Uses an OpenAI-compatible Images API for PNG output. Custom model IDs are accepted unchanged; this selection determines image routing, not a model-name allowlist. Explicit SVG requests use the direct-SVG preview-and-correct path. With no format requested, a configured image model creates PNG; otherwise the Illustrator delivers SVG."),
+        (Locale::En, "settings.image_generation_hint") => Some("Saving with this enabled makes the profile image-only and removes chat and vision access. If this is the default, another chat model becomes the default. Sessions using this profile fall back on their next use. Uses an OpenAI-compatible Images API for PNG output. Custom model IDs are accepted unchanged; this selection determines image routing, not a model-name allowlist. Explicit SVG requests use the direct-SVG preview-and-correct path. With no format requested, a configured image model creates PNG; otherwise the Illustrator delivers SVG."),
         (Locale::En, "settings.image_size") => Some("Default size"),
         (Locale::En, "settings.image_quality") => Some("Default quality"),
         (Locale::En, "settings.image_aspect_ratio") => Some("Default aspect ratio"),
@@ -2525,6 +2644,41 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "context_usage.nudge") => Some("Window is almost full"),
         (Locale::En, "context_usage.nudge_compact") => Some("Compact"),
         (Locale::En, "context_usage.nudge_new_session") => Some("New session"),
+        (Locale::En, "context_usage.epoch_line") => {
+            Some("Epoch {epoch} · system + checkpoint + {turns} kept turns")
+        }
+        (Locale::En, "context_usage.epoch_line_no_checkpoint") => {
+            Some("Epoch {epoch} · system + {turns} kept turns")
+        }
+        (Locale::En, "compact.title") => Some("Compact context"),
+        (Locale::En, "compact.subtitle") => Some("Choose regular pruning or a semantic checkpoint before rewriting the model context."),
+        (Locale::En, "compact.mode_regular") => Some("Regular compact"),
+        (Locale::En, "compact.mode_regular_hint") => Some("Archive the transcript, then replace old tool results with short stubs. User and assistant turns stay in place."),
+        (Locale::En, "compact.mode_semantic") => Some("Semantic compact"),
+        (Locale::En, "compact.mode_semantic_hint") => Some("Fold older turns into a checkpoint plus a short retained tail. This is what the model view should show as a summary."),
+        (Locale::En, "compact.instruction_label") => Some("Optional summarization instruction"),
+        (Locale::En, "compact.instruction_placeholder") => Some("For example: preserve the unresolved QC blockers and exact file paths."),
+        (Locale::En, "compact.hint") => Some("The full transcript is archived first. Regular compact keeps the turns; semantic compact shows a checkpoint and retained tail in model view."),
+        (Locale::En, "compact.hint_regular") => Some("The full transcript is archived first. Model view keeps the original turns, with old tool results collapsed to archived stubs."),
+        (Locale::En, "compact.hint_semantic") => Some("The full transcript is archived first. After completion, model view shows the new checkpoint and retained tail."),
+        (Locale::En, "compact.start") => Some("Start compaction"),
+        (Locale::En, "compact.idle_title") => Some("Semantic compact?"),
+        (Locale::En, "compact.idle_body") => Some("This conversation has been idle for {hours} hours. Fold older turns into a checkpoint so the next model call starts from a summary?"),
+        (Locale::En, "compact.idle_accept") => Some("Semantic compact"),
+        (Locale::En, "compact.idle_dismiss") => Some("Not now"),
+        (Locale::En, "compact.cancel") => Some("Cancel"),
+        (Locale::En, "compact.close") => Some("Close compaction dialog"),
+        (Locale::En, "compact.running") => Some("Compacting context — this window is locked until the new context is ready."),
+        (Locale::En, "chat.view_full") => Some("Full transcript"),
+        (Locale::En, "chat.view_model") => Some("Model view"),
+        (Locale::En, "chat.out_of_context") => {
+            Some("Not in the current context; represented by the summary")
+        }
+        (Locale::En, "chat.context_system") => Some("System prompt"),
+        (Locale::En, "chat.context_tombstone") => Some("Archived tool result"),
+        (Locale::En, "chat.context_tombstone_named") => Some("Archived {name}"),
+        (Locale::En, "chat.context_view_loading") => Some("Loading model context…"),
+        (Locale::En, "chat.context_view_changed") => Some("The context changed while loading. Retry to see the latest epoch."),
         (Locale::En, "msg.usage") => Some("{in} in · {out} out tokens"),
         (Locale::En, "msg.usage.cached") => Some(" · {c} cached"),
         (Locale::En, "msg.usage.reasoning") => Some(" · {r} reasoning"),
@@ -2537,6 +2691,9 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "err.api_key_required") => Some("API key is required."),
         (Locale::En, "err.max_tokens_ceiling") => Some("{model} accepts at most {max} output tokens — lower Max output tokens."),
         (Locale::En, "err.unknown") => Some("Unknown error"),
+        (Locale::En, "err.openssh_too_old") => Some("Local OpenSSH is too old for Wisp (found OpenSSH {found}, need 8.4 or later). Password authentication uses SSH_ASKPASS_REQUIRE, which OpenSSH added in 8.4. On Windows, update OpenSSH Client in Settings → Apps → Optional features, or install a current Win32-OpenSSH build. Restart Wisp and run `ssh -V`."),
+        (Locale::En, "err.openssh_missing") => Some("OpenSSH client was not found on PATH. Wisp needs OpenSSH 8.4 or later (`ssh -V`). Install or enable OpenSSH, then restart Wisp."),
+        (Locale::En, "err.openssh_unparsed") => Some("Could not parse local OpenSSH version from `ssh -V`. Wisp needs OpenSSH 8.4 or later."),
         (Locale::En, "err.blank_window_no_project") => {
             Some("Open a project in this window before running that action.")
         }
@@ -2556,6 +2713,8 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "chat.progress") => Some("progress"),
         (Locale::En, "execution_plan.title") => Some("Execution plan"),
         (Locale::En, "execution_plan.complete") => Some("Plan completed"),
+        (Locale::En, "execution_plan.ended") => Some("Plan ended"),
+        (Locale::En, "execution_plan.idle") => Some("Plan · not running"),
         (Locale::En, "execution_plan.count") => Some("{done} / {total} completed"),
         (Locale::En, "execution_plan.progress") => Some("Plan completion"),
         (Locale::En, "execution_plan.updating") => Some("Updating plan…"),
@@ -2567,6 +2726,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "execution_plan.cancelled") => Some("Cancelled"),
         (Locale::En, "execution_plan.details") => Some("Tool details"),
         (Locale::En, "execution_plan.unavailable") => Some("Step details are unavailable for this update."),
+        (Locale::En, "execution_plan.dismiss") => Some("Dismiss plan"),
         (Locale::En, "chat.activity_done") => Some("Processed"),
         (Locale::En, "chat.steps_n") => Some("Ran {n} steps"),
         (Locale::En, "chat.steps_n_time") => Some("Ran {n} steps · {t}"),
@@ -2646,6 +2806,22 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "chat.compacting_title") => Some("Compacting context…"),
         (Locale::En, "chat.compacting_note") => Some("Summarizing conversation history"),
         (Locale::En, "chat.compaction_reduction") => Some("{percent}% smaller"),
+        (Locale::En, "chat.compaction_expand") => Some("Show compaction summary"),
+        (Locale::En, "chat.compaction_collapse") => Some("Hide compaction summary"),
+        (Locale::En, "chat.compaction_checkpoint") => Some("Checkpoint"),
+        (Locale::En, "chat.compaction_strategy") => Some("Strategy: {strategy}"),
+        (Locale::En, "chat.compaction_strategy_auto") => Some("automatic"),
+        (Locale::En, "chat.compaction_strategy_manual") => Some("manual"),
+        (Locale::En, "chat.compaction_epoch") => Some("Epoch {epoch}"),
+        (Locale::En, "chat.compaction_kept_from") => Some("Kept from turn {turn}"),
+        (Locale::En, "chat.compaction_undo") => Some("Undo compaction"),
+        (Locale::En, "chat.compaction_rewind") => Some("Rewind to before compact"),
+        (Locale::En, "chat.compaction_undone") => Some("Compaction undone"),
+        (Locale::En, "chat.compaction_undo_reason_undone") => Some("Already undone"),
+        (Locale::En, "chat.compaction_undo_reason_not_head") => Some("A newer compaction is active"),
+        (Locale::En, "chat.compaction_undo_reason_has_new_turns") => {
+            Some("Conversation continued after compaction")
+        }
         (Locale::En, "chat.reviewing_title") => Some("Reviewer is checking the margins…"),
         (Locale::En, "chat.reviewing_note") => Some("Red pen uncapped; claims are looking nervous"),
         (Locale::En, "context_recovery.title") => Some("This conversation is too long"),
@@ -2677,7 +2853,7 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "err.hint.model_name") => Some("The provider does not recognize the configured model name. Check the model name in Settings → Models."),
         (Locale::En, "err.hint.rate") => Some("Rate limited by the provider. Wait a moment and retry."),
         (Locale::En, "err.hint.server") => Some("The provider is temporarily overloaded or down. Retry in a bit."),
-        (Locale::En, "err.hint.network") => Some("Could not reach the model API. A closed proxy app often leaves the OS system proxy or HTTP_PROXY/HTTPS_PROXY pointing at a port that is not listening. Open Settings → General → Network, set Model API to Direct to connect without a proxy, or enter a proxy that is still running."),
+        (Locale::En, "err.hint.network") => Some("Could not reach the model API. A closed proxy app often leaves the OS system proxy or HTTP_PROXY/HTTPS_PROXY pointing at a port that is not listening. Open Settings → Network, set Model API to Direct to connect without a proxy, or enter a proxy that is still running."),
         (Locale::En, "err.hint.opencode_session") => Some("OpenCode requires x-opencode-session. In Request headers (advanced), enable Send conversation identifier and use this header name. Check that any forwarding proxy preserves the header."),
         (Locale::En, "err.hint.bad_request") => Some("The provider rejected the request. Common causes: the conversation is too long, or a message contains content this model does not support (e.g. images). Try /compact or another model."),
         (Locale::En, "err.hint.tool_pairing") => Some("A tool call is missing its result in the conversation history (often after an interrupted or timed-out tool). Click Resume again after updating, or send /compact to repair the history."),
@@ -2705,6 +2881,8 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "exploration.name") => Some("Exploration name"),
         (Locale::En, "exploration.create") => Some("Create exploration"),
         (Locale::En, "exploration.group") => Some("Explorations"),
+        (Locale::En, "exploration.expand") => Some("Expand explorations"),
+        (Locale::En, "exploration.collapse") => Some("Collapse explorations"),
         (Locale::En, "exploration.status_creating") => Some("Creating"),
         (Locale::En, "exploration.status_active") => Some("Active"),
         (Locale::En, "exploration.status_promoting") => Some("Promoting"),
@@ -2788,6 +2966,8 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "ctx.register_artifact") => Some("Register as artifact"),
         (Locale::En, "ctx.reveal_in_manager") => Some("Show in file manager"),
         (Locale::En, "ctx.open_with_system") => Some("Open with default app"),
+        (Locale::En, "ctx.open_in_files") => Some("Open in Files"),
+        (Locale::En, "ctx.open_directory_in_system") => Some("Open in file manager"),
         (Locale::En, "ctx.export_session") => Some("Export session"),
         (Locale::En, "ctx.export_debug_request") => Some("Export debug request (what was sent)"),
         (Locale::En, "ctx.open_session") => Some("Open session"),
@@ -2829,6 +3009,9 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "session.copy_demo_success") => Some("Demo copied to {project}."),
         (Locale::En, "session.no_target_project_demo") => Some("Create a project first, then copy this demo into it."),
         (Locale::En, "demo.actions") => Some("Demo actions"),
+        (Locale::En, "branch.group") => Some("Branches"),
+        (Locale::En, "branch.expand") => Some("Expand branches"),
+        (Locale::En, "branch.collapse") => Some("Collapse branches"),
         (Locale::En, "branch.delete") => Some("Delete branch"),
         (Locale::En, "branch.merge") => Some("Merge back"),
         (Locale::En, "branch.merge_title") => Some("Merge branch summary"),
@@ -3021,7 +3204,10 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "privacy.restore") => Some("Restore all"),
         (Locale::En, "privacy.select_all") => Some("Select all"),
         (Locale::En, "command.search_ph") => Some("Search conversations, projects, or files…"),
-        (Locale::En, "command.category") => Some("Command"),
+        (Locale::En, "command.section.projects") => Some("Projects"),
+        (Locale::En, "command.section.files") => Some("Files"),
+        (Locale::En, "command.section.sessions") => Some("Conversations"),
+        (Locale::En, "command.section.commands") => Some("Commands"),
         (Locale::En, "command.hint.navigate") => Some("navigate"),
         (Locale::En, "command.hint.open") => Some("open"),
         (Locale::En, "command.hint.open_new_window") => Some("open in new window"),
@@ -3043,9 +3229,9 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "projects.search_close") => Some(" close"),
         (Locale::En, "projects.new") => Some("New project"),
         (Locale::En, "projects.import") => Some("Import project"),
-        (Locale::En, "projects.import_options_hint") => Some("Open an existing folder, restore a complete Wisp archive, or recover conversations from workspace history."),
-        (Locale::En, "projects.import_in_place") => Some("Open a folder in place"),
-        (Locale::En, "projects.import_in_place_hint") => Some("Keep every file where it is. Wisp registers the folder without copying it."),
+        (Locale::En, "projects.import_options_hint") => Some("Import a complete project folder or ZIP, or recover available conversations from workspace history."),
+        (Locale::En, "projects.import_in_place") => Some("Import project folder"),
+        (Locale::En, "projects.import_in_place_hint") => Some("Select a Wisp project folder or an exported project folder. Wisp checks its metadata and opens the project where it is."),
         (Locale::En, "projects.import_zip") => Some("Import a ZIP archive"),
         (Locale::En, "projects.import_zip_hint") => Some("Restore workspace files, conversations, and Wisp project records into a new folder."),
         (Locale::En, "projects.recover_workspace") => Some("Recover conversations from a workspace"),
@@ -3061,12 +3247,6 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "projects.recover_empty") => Some("No recoverable conversations were found in this workspace."),
         (Locale::En, "projects.recover_action") => Some("Recover and open"),
         (Locale::En, "projects.recovering") => Some("Recovering…"),
-        (Locale::En, "projects.open_folder_title") => Some("Open project folder"),
-        (Locale::En, "projects.open_folder_hint") => Some("Wisp will use this folder in place. No project files are copied."),
-        (Locale::En, "projects.open_folder_action") => Some("Open project"),
-        (Locale::En, "projects.existing_title") => Some("Choose an existing project"),
-        (Locale::En, "projects.existing_hint") => Some("This folder is already registered. Choose a project to view its conversations. Each project ID keeps its own history; opening one does not merge or move conversations."),
-        (Locale::En, "projects.existing_privacy") => Some("Projects hidden by Privacy mode are omitted. Restore them from Privacy mode to include them here."),
         (Locale::En, "codex.title") => Some("Import Codex conversations"),
         (Locale::En, "codex.close") => Some("Close"),
         (Locale::En, "codex.hint") => Some("Codex CLI conversations (~/.codex/sessions)"),
@@ -3074,8 +3254,13 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "codex.source_local") => Some("Local"),
         (Locale::En, "codex.refresh") => Some("Refresh"),
         (Locale::En, "codex.import_all") => Some("Import all"),
+        (Locale::En, "codex.search") => Some("Search conversations"),
+        (Locale::En, "codex.search_placeholder") => {
+            Some("Search title, project, session ID, or source path")
+        }
         (Locale::En, "codex.loading") => Some("Scanning…"),
         (Locale::En, "codex.empty") => Some("No Codex conversations found"),
+        (Locale::En, "codex.no_matches") => Some("No conversations match this search"),
         (Locale::En, "codex.import") => Some("Import"),
         (Locale::En, "codex.update") => Some("Update"),
         (Locale::En, "codex.imported") => Some("Imported"),
@@ -3101,25 +3286,26 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "import.session_skipped") => Some("Session already imported and up to date"),
         (Locale::En, "projects.export") => Some("Export project"),
         (Locale::En, "projects.export_options_title") => Some("Export project"),
-        (Locale::En, "projects.export_zip_hint") => Some("A ZIP is the complete portable copy: it includes workspace files, conversations, and Wisp project records."),
-        (Locale::En, "projects.copy_folder_title") => Some("Need only the project files?"),
-        (Locale::En, "projects.copy_folder_hint") => Some("Copy this folder directly, then choose Import project → Open a folder in place on the other device. This skips compression, but does not include conversations or other Wisp-only records."),
-        (Locale::En, "projects.copy_folder_path") => Some("Copy folder path"),
-        (Locale::En, "projects.folder_path_copied") => Some("Project folder path copied"),
+        (Locale::En, "projects.export_directory") => Some("Export directory"),
+        (Locale::En, "projects.export_directory_hint") => Some("Choose a parent folder to save a complete project folder without compression."),
+        (Locale::En, "projects.export_archive_hint") => Some("Save the same complete project as a compressed ZIP file."),
+        (Locale::En, "projects.export_zip_hint") => Some("Both formats include workspace files, conversations and project records as a snapshot taken at export time."),
         (Locale::En, "projects.export_zip") => Some("Export ZIP"),
         (Locale::En, "projects.folder_registered") => Some("This folder is already registered as a project."),
         (Locale::En, "projects.transfer.export_title") => Some("Exporting project"),
         (Locale::En, "projects.transfer.import_title") => Some("Importing project"),
-        (Locale::En, "projects.transfer.selecting_export_destination") => Some("Choose the export file location in the system dialog."),
+        (Locale::En, "projects.transfer.selecting_export_destination") => Some("Choose the export location in the system dialog."),
         (Locale::En, "projects.transfer.selecting_import_destination") => Some("Choose a parent folder. Wisp will create a new folder named after the imported project inside it."),
         (Locale::En, "projects.transfer.import_destination_hint") => Some("The imported project is created in a project-named subfolder of the folder you select."),
+        (Locale::En, "projects.transfer.selecting_project_folder") => Some("Choose a Wisp project folder or an exported project folder in the system dialog."),
         (Locale::En, "projects.transfer.selecting_archive") => Some("Choose a project archive in the system dialog."),
         (Locale::En, "projects.transfer.preparing") => Some("Preparing the project snapshot…"),
         (Locale::En, "projects.transfer.scanning") => Some("Scanning workspace files…"),
+        (Locale::En, "projects.transfer.copying") => Some("Copying workspace files"),
         (Locale::En, "projects.transfer.writing") => Some("Compressing workspace files…"),
-        (Locale::En, "projects.transfer.validating") => Some("Validating the finished archive…"),
-        (Locale::En, "projects.transfer.publishing") => Some("Publishing the verified archive…"),
-        (Locale::En, "projects.transfer.reading") => Some("Reading project archive…"),
+        (Locale::En, "projects.transfer.validating") => Some("Validating the project package…"),
+        (Locale::En, "projects.transfer.publishing") => Some("Publishing the verified project package…"),
+        (Locale::En, "projects.transfer.reading") => Some("Reading project package…"),
         (Locale::En, "projects.transfer.extracting") => Some("Extracting workspace files…"),
         (Locale::En, "projects.transfer.registering") => Some("Registering the imported project…"),
         (Locale::En, "projects.transfer.export_complete") => Some("Project export complete"),
@@ -3147,6 +3333,12 @@ fn lookup(locale: Locale, key: &str) -> Option<&'static str> {
         (Locale::En, "projects.sync.code_copied") => Some("Secret device code copied."),
         (Locale::En, "projects.sync.enabled") => Some("Sync enabled"),
         (Locale::En, "projects.sync.last") => Some("Synced {when}"),
+        (Locale::En, "projects.folder.saved") => Some("Saved to project folder"),
+        (Locale::En, "projects.folder.saved_at") => Some("Saved to folder {when}"),
+        (Locale::En, "projects.folder.unpublished") => Some("Changes not yet saved to folder"),
+        (Locale::En, "projects.folder.remote_newer") => Some("Newer version in folder"),
+        (Locale::En, "projects.folder.waiting") => Some("Waiting for the cloud drive"),
+        (Locale::En, "projects.folder.conflict") => Some("Folder version conflict"),
         (Locale::En, "projects.sync.conflict_title") => Some("Both devices changed this project"),
         (Locale::En, "projects.sync.conflict_hint") => Some("If you use a cloud-drive folder, let its client finish and retry first. Otherwise choose which complete project state becomes the next revision."),
         (Locale::En, "projects.sync.conflict_backup") => Some("Export this project first if you want a safety copy of this device's version."),
@@ -3211,6 +3403,10 @@ Do not leave generated files in the project root.",
         (Locale::En, "proj_settings.default_specialist_hint") => Some("New conversations in this project automatically use this Specialist. Existing conversations keep their current Agent."),
         (Locale::En, "proj_settings.default_specialist_none") => Some("No project default"),
         (Locale::En, "proj_settings.agent_context_hint") => Some("Included in every agent's system prompt for this project. Use it for background, conventions, or instructions all agents should follow. Takes effect on the next new session."),
+        (Locale::En, "proj_settings.folder_sync") => Some("Cloud-drive folder"),
+        (Locale::En, "proj_settings.folder_sync_hint") => Some("Use this when the project folder is inside Nutstore, Baidu Netdisk, OneDrive, iCloud Drive or Dropbox. Wisp keeps the live database on this device and saves complete versions to .wisp/revisions for the drive to upload. On another device, import the folder. Close Wisp on other devices before enabling."),
+        (Locale::En, "proj_settings.folder_sync_enable") => Some("Save safely for cloud-drive sync"),
+        (Locale::En, "proj_settings.folder_sync_enabled") => Some("Enabled. The project card shows whether the latest changes are saved to the folder."),
         (Locale::En, "proj_settings.agent_context_confirm") => Some("Saving writes this project's Agent Context (.wisp/WISP.md). New conversations use it automatically. Existing conversations keep their current prompt until you right-click the session and reload project rules — that invalidates the model's prompt cache once for that session."),
         (Locale::En, "proj_settings.agent_context_confirm_action") => Some("Save agent context"),
 
@@ -3219,6 +3415,7 @@ Do not leave generated files in the project root.",
         (Locale::En, "sess_status.complete") => Some("Complete"),
         (Locale::En, "sess_status.needs_you_n") => Some("{n} need you"),
         (Locale::En, "inbox.empty") => Some("All caught up — nothing needs you."),
+        (Locale::En, "inbox.other_projects") => Some("Other projects"),
         (Locale::En, "time.just_now") => Some("just now"),
         (Locale::En, "time.minutes") => Some("{n}m"),
         (Locale::En, "time.hours") => Some("{n}h"),
@@ -3229,6 +3426,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "sidebar.graph") => Some("研究历程"),
         (Locale::Zh, "sidebar.publication") => Some("论文证据"),
         (Locale::Zh, "sidebar.library") => Some("收藏库"),
+        (Locale::Zh, "sidebar.more") => Some("更多"),
         (Locale::Zh, "sidebar.new_folder") => Some("新建分组"),
         (Locale::Zh, "sidebar.sessions") => Some("会话"),
         (Locale::Zh, "sidebar.search_sessions") => Some("搜索会话"),
@@ -3480,11 +3678,14 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "composer.cut_in_now") => Some("插队(本回合)"),
         (Locale::Zh, "composer.interrupt_replace") => Some("中断并替换"),
         (Locale::Zh, "queue.cut_in") => Some("立刻引导"),
+        (Locale::Zh, "queue.waiting_current_step") => Some("已发送 · 等待当前步骤完成"),
+        (Locale::Zh, "plan.question.description_prefix") => Some("说明："),
         (Locale::Zh, "queue.action_failed") => Some("队列操作失败：{error}"),
         (Locale::Zh, "queue.edit") => Some("编辑"),
         (Locale::Zh, "queue.remove") => Some("移除"),
         (Locale::Zh, "queue.move_up") => Some("上移"),
         (Locale::Zh, "queue.move_down") => Some("下移"),
+        (Locale::Zh, "queue.more") => Some("更多操作"),
         (Locale::Zh, "queue.header") => Some("{n} 条排队"),
         (Locale::Zh, "queue.region") => Some("排队消息"),
         (Locale::Zh, "composer.send_options") => Some("消息选项"),
@@ -3532,6 +3733,57 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "sidechat.evidence_summary") => Some("{n} 条对话来源 · 快照 {version}"),
         (Locale::Zh, "sidechat.turn") => Some("第 {n} 轮"),
         (Locale::Zh, "models.add") => Some("添加 API 接入"),
+        (Locale::Zh, "settings.nav.subscriptions") => Some("订阅账号"),
+        (Locale::Zh, "subscriptions.desc") => Some("登录已有账号，再选择用于对话的模型。"),
+        (Locale::Zh, "subscriptions.chatgpt") => Some("旧版登录：借用 Codex CLI 客户端。建议改用上方的 ChatGPT；仅在已有模型或需要设备码登录时保留。"),
+        (Locale::Zh, "subscriptions.chatgpt_signin") => Some("官方“使用 ChatGPT 登录”：授权 Wisp Science 作为已连接的智能体，使用你的 ChatGPT 套餐额度。"),
+        (Locale::Zh, "subscriptions.signed_in") => Some("已保存账号"),
+        (Locale::Zh, "subscriptions.signed_out") => Some("未登录"),
+        (Locale::Zh, "subscriptions.loading") => Some("正在检查账号…"),
+        (Locale::Zh, "subscriptions.status_error") => Some("无法获取账号状态，请打开登录页重试。"),
+        (Locale::Zh, "subscriptions.models") => Some("使用此订阅的模型"),
+        (Locale::Zh, "subscriptions.empty") => Some("登录后在这里添加模型，即可在对话中使用。"),
+        (Locale::Zh, "subscriptions.manage") => Some("管理登录"),
+        (Locale::Zh, "subscriptions.connection") => Some("账号：ChatGPT · 对话协议：OpenAI Responses（由 Wisp 管理）"),
+        (Locale::Zh, "codex.login.account_step") => Some("1. 登录账号"),
+        (Locale::Zh, "codex.login.model_step") => Some("2. 选择模型"),
+        (Locale::Zh, "codex.login.ready") => Some("账号已授权，保存账号以完成登录。"),
+        (Locale::Zh, "codex.login.pending") => Some("等待你在浏览器中完成授权…"),
+        (Locale::Zh, "codex.login.manual") => Some("浏览器没有返回 Wisp？"),
+        (Locale::Zh, "codex.login.cancel_attempt") => Some("取消本次登录"),
+        (Locale::Zh, "codex.login.button") => Some("ChatGPT"),
+        (Locale::Zh, "codex.login.title") => Some("ChatGPT"),
+        (Locale::Zh, "codex.login.desc") => Some("授权 Wisp 使用你的 ChatGPT 账号。登录凭据保存在系统密钥环中。"),
+        (Locale::Zh, "codex.login.method") => Some("登录方式"),
+        (Locale::Zh, "codex.login.browser") => Some("浏览器"),
+        (Locale::Zh, "codex.login.device") => Some("设备码"),
+        (Locale::Zh, "codex.login.label_ph") => Some("例如 ChatGPT Codex"),
+        (Locale::Zh, "codex.login.browser_hint") => Some("会打开浏览器登录 ChatGPT。如果浏览器无法回到这台电脑，把最终跳转地址粘贴回来。"),
+        (Locale::Zh, "codex.login.device_hint") => Some("在 ChatGPT 安全设置或工作区权限中启用设备码登录，再打开验证页输入一次性代码。"),
+        (Locale::Zh, "codex.login.use_saved") => Some("使用这台电脑上已经保存的 ChatGPT 登录："),
+        (Locale::Zh, "codex.login.code") => Some("一次性代码"),
+        (Locale::Zh, "codex.login.url") => Some("打开登录页"),
+        (Locale::Zh, "codex.login.paste") => Some("跳转地址或授权码"),
+        (Locale::Zh, "codex.login.paste_ph") => Some("如果浏览器无法回到这台电脑，粘贴完整的跳转地址"),
+        (Locale::Zh, "codex.login.submit") => Some("使用粘贴的跳转地址"),
+        (Locale::Zh, "codex.login.waiting") => Some("正在等待 ChatGPT…"),
+        (Locale::Zh, "codex.login.start") => Some("登录"),
+        (Locale::Zh, "codex.login.save") => Some("保存模型"),
+        (Locale::Zh, "codex.login.again") => Some("重新登录"),
+        (Locale::Zh, "codex.login.saved_hint") => Some("这个模型使用 ChatGPT 订阅。令牌保存在系统密钥环中。"),
+        (Locale::Zh, "chatgpt.login.desc") => Some("使用 ChatGPT 登录，为智能体命名，并允许它使用你的 ChatGPT 套餐额度。请求会凭此授权发送到 OpenAI API。令牌保存在系统密钥环中。"),
+        (Locale::Zh, "chatgpt.login.label_ph") => Some("例如 ChatGPT"),
+        (Locale::Zh, "chatgpt.login.browser_hint") => Some("会打开浏览器登录 ChatGPT。如果浏览器无法回到这台电脑，从地址栏复制完整的跳转地址粘贴回来。"),
+        (Locale::Zh, "chatgpt.login.paste") => Some("完整跳转地址"),
+        (Locale::Zh, "chatgpt.login.paste_ph") => Some("http://127.0.0.1:1455/auth/callback?code=…&client_id=…"),
+        (Locale::Zh, "xai.login.button") => Some("SuperGrok"),
+        (Locale::Zh, "xai.login.title") => Some("SuperGrok / X Premium+"),
+        (Locale::Zh, "xai.login.desc") => Some("使用 SuperGrok 或 X Premium+ 订阅登录。Wisp 把访问令牌和刷新令牌保存在系统密钥环里，并向 xAI API 发请求。这不是 xAI API 密钥。xAI 可能对部分订阅档位返回 HTTP 403，遇到时请改用 API 密钥。"),
+        (Locale::Zh, "xai.login.label_ph") => Some("例如 SuperGrok"),
+        (Locale::Zh, "xai.login.device_hint") => Some("会在浏览器打开 xAI 页面。确认授权；如果页面要求，输入一次性代码。SSH 和 WSL 也可以用这种方式。"),
+        (Locale::Zh, "xai.login.use_saved") => Some("使用这台电脑上已经保存的 SuperGrok 登录："),
+        (Locale::Zh, "xai.login.waiting") => Some("正在等待 xAI…"),
+        (Locale::Zh, "xai.login.saved_hint") => Some("这个模型使用 SuperGrok 订阅。令牌保存在系统密钥环中。"),
         (Locale::Zh, "models.add_entry") => Some("添加模型"),
         (Locale::Zh, "models.remove_entry") => Some("移除模型"),
         (Locale::Zh, "models.entries") => Some("模型"),
@@ -3590,6 +3842,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "composer.group_workflows") => Some("工作流"),
         (Locale::Zh, "composer.group_skills") => Some("技能"),
         (Locale::Zh, "composer.cmd_compact_sub") => Some("归档完整历史后折叠旧轮次，压缩模型上下文"),
+        (Locale::Zh, "composer.cmd_archive_sub") => Some("整理研究成果，集中确认后固定实验记录并清理所选本地文件"),
         (Locale::Zh, "composer.cmd_fork_sub") => Some("把后面的消息作为当前对话的分支发送"),
         (Locale::Zh, "composer.cmd_btw_sub") => Some("打开侧边问答，或把后面的问题发给它"),
         (Locale::Zh, "composer.cmd_rewind_sub") => Some("预览并回退最后一轮，该消息放回输入框"),
@@ -3738,6 +3991,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "hosts.password_ph") => Some("服务器登录密码"),
         (Locale::Zh, "hosts.password_keep") => Some("留空则保留已保存的密码"),
         (Locale::Zh, "hosts.password_hint") => Some("密码只保存在操作系统钥匙串中，不会写入项目文件或 SQLite。能用密钥时优先用密钥。"),
+        (Locale::Zh, "hosts.openssh_hint") => Some("本机 OpenSSH 需要 8.4 或更高（`ssh -V`）。Windows 10 自带客户端常为 8.1，无法向 SSH 提供已保存的密码。"),
         (Locale::Zh, "hosts.user_ph") => Some("例如 alice"),
         (Locale::Zh, "hosts.identity_ph") => Some("~/.ssh/id_ed25519"),
         (Locale::Zh, "hosts.notes") => Some("有什么需要 agent 知道的？（可选）"),
@@ -4114,6 +4368,9 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "preview.xlsx_truncated") => Some("工作簿较大，仅显示受限范围内的预览。"),
         (Locale::Zh, "preview.text_truncated") => Some("文件较大（{total}），仅显示前 {shown}。"),
         (Locale::Zh, "preview.unsupported_file") => Some("不支持预览此文件类型。"),
+        (Locale::Zh, "preview.unresolved_chat_path") => {
+            Some("该文件路径没有正确渲染，请通过侧边栏打开。")
+        }
         (Locale::Zh, "preview.output_omitted") => Some("{kind} 输出大小为 {size}，超过预览限制，已跳过。"),
         (Locale::Zh, "preview.pdf_page") => Some("第 {page} 页，共 {total} 页"),
         (Locale::Zh, "preview.pdf_prev_page") => Some("上一页"),
@@ -4171,11 +4428,13 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "ssh_check.probe_output_title") => Some("SSH 已连接 — 无法读取环境信息"),
         (Locale::Zh, "ssh_check.password_title") => Some("SSH 密码认证失败"),
         (Locale::Zh, "ssh_check.key_title") => Some("SSH 密钥认证失败"),
+        (Locale::Zh, "ssh_check.client_title") => Some("本机 OpenSSH 版本过低"),
         (Locale::Zh, "ssh_check.body") => Some("在使用配置的主机参数（别名/用户/端口/密钥）成功探测之前，Wisp 不会让 Agent 访问 `{host}`。已禁用 shell 里自由拼装的 ssh 命令。"),
         (Locale::Zh, "ssh_check.fail_body") => Some("在修好问题之前，请不要对 `{host}` 反复探测——连续失败登录会被当成爆破，可能封禁你的 IP。"),
         (Locale::Zh, "ssh_check.probe_output_body") => Some("Wisp 已通过 `{host}` 的 SSH 认证，但该账号没有执行非交互探测命令。Agent、Runtime、Files 和终端功能都需要远程命令执行能力。"),
         (Locale::Zh, "ssh_check.password_body") => Some("服务器拒绝了 `{host}` 的密码认证。这是认证问题，不是环境信息采集问题。"),
         (Locale::Zh, "ssh_check.key_body") => Some("服务器拒绝了 `{host}` 的密钥/agent 认证。这是认证问题，不是环境信息采集问题。"),
+        (Locale::Zh, "ssh_check.client_body") => Some("在本机 OpenSSH 升级到 8.4 或更高之前，Wisp 无法使用 `{host}`。Windows 自带的 OpenSSH 8.1 无法向 SSH 提供已保存的密码（需要 `SSH_ASKPASS_REQUIRE`）。"),
         (Locale::Zh, "ssh_check.detail") => Some("错误：{detail}"),
         (Locale::Zh, "ssh_check.hint") => Some("请在服务器侧检查网络、是否因入侵防护封禁 IP，并确认 IdentityFile 路径正确，然后重新探测。"),
         (Locale::Zh, "ssh_check.causes_title") => Some("可能原因"),
@@ -4201,6 +4460,9 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "ssh_check.cause.probe_output.1") => Some("该账号可能使用受限 shell 或强制命令，禁止非交互式系统查询。"),
         (Locale::Zh, "ssh_check.cause.probe_output.2") => Some("登录 shell 的启动脚本可能提前退出，或把命令输出重定向走了。"),
         (Locale::Zh, "ssh_check.cause.probe_output.3") => Some("只通过密码校验还不足以使用计算功能；该账号还必须允许执行非交互式远程命令。"),
+        (Locale::Zh, "ssh_check.cause.client.1") => Some("在本机终端运行 `ssh -V`。Wisp 需要的是这台电脑上的 OpenSSH 8.4 或更高，不是服务器上的版本。"),
+        (Locale::Zh, "ssh_check.cause.client.2") => Some("Windows：在「设置 → 应用 → 可选功能」中更新 OpenSSH 客户端，或安装最新的 Win32-OpenSSH。确认 `where ssh` 指向新的可执行文件。"),
+        (Locale::Zh, "ssh_check.cause.client.3") => Some("升级后请重启 Wisp，以便加载 PATH 上的新 `ssh`。"),
         (Locale::Zh, "ssh_check.cause.other.1") => Some("主机配置（别名/用户/端口/密钥）与终端能连上的 ssh 不一致。"),
         (Locale::Zh, "ssh_check.cause.other.2") => Some("网络、防火墙或服务器 SSH 服务异常。"),
         (Locale::Zh, "ssh_check.cause.other.3") => Some("先修好配置，不要连续点探测。"),
@@ -4992,13 +5254,40 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "channels.messages_devices") => Some("消息与设备"),
         (Locale::Zh, "settings.general.workspace") => Some("工作区与交互"),
         (Locale::Zh, "settings.general.notifications") => Some("通知与更新"),
-        (Locale::Zh, "settings.general.save_hint") => Some("保存以上偏好；本地环境和网络设置分别保存。"),
+        (Locale::Zh, "settings.general.save_hint") => Some("保存以上偏好；本地环境设置分别保存。"),
         (Locale::Zh, "settings.language") => Some("语言"),
         (Locale::Zh, "settings.language.en") => Some("English"),
         (Locale::Zh, "settings.language.zh") => Some("中文"),
+        (Locale::Zh, "subscriptions.xai") => Some("登录 SuperGrok / X Premium+ 账号，可用范围取决于套餐。"),
+        (Locale::Zh, "subscriptions.add_model") => Some("添加模型"),
+        (Locale::Zh, "subscriptions.managed") => Some("填写模型 ID，可自定义别名。连接和模型参数由 Wisp 管理，同一账号可添加多个模型。"),
+        (Locale::Zh, "subscriptions.sign_in") => Some("登录账号"),
+        (Locale::Zh, "subscriptions.save_account") => Some("保存账号"),
+        (Locale::Zh, "subscriptions.saving_account") => Some("正在保存账号…"),
+        (Locale::Zh, "subscriptions.add_account") => Some("添加账号"),
+        (Locale::Zh, "subscriptions.add_account_hint") => Some("使用其他 ChatGPT 账号登录会添加为新账号并设为当前账号；登录已保存的账号会更新它。"),
+        (Locale::Zh, "subscriptions.active_account") => Some("当前账号"),
+        (Locale::Zh, "subscriptions.accounts") => Some("账号（{n}）"),
+        (Locale::Zh, "subscriptions.switch_account") => Some("使用此账号"),
+        (Locale::Zh, "subscriptions.remove_account") => Some("移除账号"),
+        (Locale::Zh, "subscriptions.remove_account_confirm") => Some("移除 ChatGPT 账号 {account}？其登录凭据会从系统密钥环中删除。"),
+        (Locale::Zh, "subscriptions.import_local") => Some("导入本地登录"),
+        (Locale::Zh, "subscriptions.import_local_hint") => Some("导入 Codex CLI（~/.codex/auth.json）或 CLIProxyAPI（~/.cli-proxy-api）已保存的 ChatGPT 登录。"),
+        (Locale::Zh, "subscriptions.imported") => Some("已导入 {n} 个 ChatGPT 账号。Wisp 与 Codex CLI 或 CLIProxyAPI 共用刷新令牌，Wisp 刷新后该工具可能需要重新登录。"),
+        (Locale::Zh, "subscriptions.usage_refresh") => Some("刷新额度"),
+        (Locale::Zh, "subscriptions.usage_loading") => Some("正在获取额度…"),
+        (Locale::Zh, "subscriptions.usage_none") => Some("服务未返回额度限制。"),
+        (Locale::Zh, "subscriptions.usage_used") => Some("已用 {n}%"),
+        (Locale::Zh, "subscriptions.usage_resets") => Some("{time}后重置"),
+        (Locale::Zh, "subscriptions.usage_hours") => Some("{n} 小时额度"),
+        (Locale::Zh, "subscriptions.usage_days") => Some("{n} 天额度"),
+        (Locale::Zh, "subscriptions.usage_limit") => Some("用量额度"),
+        (Locale::Zh, "subscriptions.limit_reached") => Some("已达上限"),
         (Locale::Zh, "settings.provider") => Some("协议"),
         (Locale::Zh, "settings.provider.openai") => Some("OpenAI Chat Completions"),
         (Locale::Zh, "settings.provider.openai_responses") => Some("OpenAI Responses"),
+        (Locale::Zh, "settings.provider.openai_codex") => Some("ChatGPT（Codex 订阅）"),
+        (Locale::Zh, "settings.provider.xai_oauth") => Some("SuperGrok / X Premium+（xAI 订阅）"),
         (Locale::Zh, "settings.provider.anthropic") => Some("Anthropic"),
         (Locale::Zh, "settings.api_url") => Some("Base URL（基础地址）"),
         (Locale::Zh, "settings.endpoint_suffix") => Some("Endpoint 后缀（可选）"),
@@ -5012,13 +5301,19 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "settings.max_iter") => Some("每轮最大 Agent 迭代次数"),
         (Locale::Zh, "settings.max_iter_hint") => Some("限制单轮对话中的模型/工具循环次数；达到上限后额外生成一次无工具收尾总结。默认 100，0 表示不限制。"),
         (Locale::Zh, "settings.auto_compact") => Some("自动压缩过长对话"),
-        (Locale::Zh, "settings.auto_compact_hint") => Some("默认开启。每次模型调用前，当预估上下文达到 80% 时，Wisp 会先归档完整对话，再自动压缩。"),
+        (Locale::Zh, "settings.auto_compact_hint") => Some("默认开启。每次模型调用前，当预估上下文达到 80% 时，Wisp 会先归档完整对话，再自动压缩。该路径先收工具输出，只有窗口仍然不够时才写语义摘要。"),
+        (Locale::Zh, "settings.semantic_compact_on_model_switch") => Some("切换模型时自动语义压缩"),
+        (Locale::Zh, "settings.semantic_compact_on_model_switch_hint") => Some("默认关闭。更换本对话模型后，把较早轮次折成摘要 checkpoint，让新模型从摘要而不是全量历史开始。"),
+        (Locale::Zh, "settings.semantic_compact_idle_hours") => Some("空闲多久后提示语义压缩"),
+        (Locale::Zh, "settings.semantic_compact_idle_hours_hint") => Some("默认 24 小时。重新打开空闲这么久的对话时，询问是否写语义摘要。0 表示不提示。"),
         (Locale::Zh, "settings.auto_continue") => Some("截断后自动继续"),
         (Locale::Zh, "settings.auto_continue_hint") => Some("模型达到输出 token 上限时，自动继续当前任务。"),
         (Locale::Zh, "settings.auto_continue_limit") => Some("每轮自动继续次数上限"),
         (Locale::Zh, "settings.auto_continue_limit_hint") => Some("默认 10 次；达到上限后恢复现有的手动「继续执行」操作。"),
         (Locale::Zh, "settings.follow_up_questions") => Some("生成后续问题"),
         (Locale::Zh, "settings.follow_up_questions_hint") => Some("每次回复后，使用当前对话模型生成 3 个后续问题。"),
+        (Locale::Zh, "settings.decentralized_project_storage") => Some("项目去中心化存储"),
+        (Locale::Zh, "settings.decentralized_project_storage_hint") => Some("开启后，新项目的数据保存在各自文件夹；关闭后，新项目共用应用数据库。已有项目位置不变。默认关闭，从 v1.15.0 升级时保留开启。"),
         (Locale::Zh, "settings.resume_last_session") => Some("打开工作区时继续上次对话"),
         (Locale::Zh, "settings.resume_last_session_hint") => Some("默认开启。打开工作区时恢复最近有过对话的会话，不会进入仅改了名、还没发过消息的草稿。"),
         (Locale::Zh, "settings.proxy_url") => Some("模型 API 代理"),
@@ -5093,8 +5388,12 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "settings.supports_vision") => Some("支持图片输入"),
         (Locale::Zh, "settings.use_for_vision") => Some("用于图片分析"),
         (Locale::Zh, "settings.vision_hint") => Some("图片附件会直接发送给支持视觉的输入模型；非视觉模型和图片工具会调用这里指定的模型并获取文本观察结果。"),
+        (Locale::Zh, "models.capability.image_only") => Some("专用生图"),
+        (Locale::Zh, "settings.restore_chat_model") => Some("恢复为聊天模型"),
+        (Locale::Zh, "settings.image_role_hint") => Some("配置类型：专用生图。取消“用于图片生成”只取消当前分配，此配置仍不能用于聊天或图片分析。若误设了聊天模型，请点击“恢复为聊天模型”并保存。"),
+        (Locale::Zh, "settings.restore_chat_hint") => Some("保存后恢复聊天资格，模型 ID 和凭据保持不变。请按需启用图片输入和分析。当前默认模型及已切换到其他模型的会话不会自动切回，请在需要时重新选择此模型。"),
         (Locale::Zh, "settings.use_for_image_generation") => Some("用于图片生成"),
-        (Locale::Zh, "settings.image_generation_hint") => Some("通过 OpenAI 兼容 Images API 生成 PNG，支持自定义模型 ID 并原样传递；按生图用途路由，不按名称白名单限制。明确要求 SVG 时走直接生成、预览并修正 SVG 的路径；未指定格式时，有生图模型则生成 PNG，否则交付 SVG。"),
+        (Locale::Zh, "settings.image_generation_hint") => Some("勾选后保存会将配置改为专用生图类型，关闭聊天和视觉用途；若此配置是默认聊天模型，将改用其他聊天模型；使用它的会话会在下次使用时回退。通过 OpenAI 兼容 Images API 生成 PNG，支持自定义模型 ID 并原样传递；按生图用途路由，不按名称白名单限制。明确要求 SVG 时走直接生成、预览并修正 SVG 的路径；未指定格式时，有生图模型则生成 PNG，否则交付 SVG。"),
         (Locale::Zh, "settings.image_size") => Some("默认尺寸"),
         (Locale::Zh, "settings.image_quality") => Some("默认质量"),
         (Locale::Zh, "settings.image_aspect_ratio") => Some("默认宽高比"),
@@ -5237,6 +5536,39 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "context_usage.nudge") => Some("窗口快满了"),
         (Locale::Zh, "context_usage.nudge_compact") => Some("压缩"),
         (Locale::Zh, "context_usage.nudge_new_session") => Some("新开对话"),
+        (Locale::Zh, "context_usage.epoch_line") => {
+            Some("纪元 {epoch} · system + checkpoint + {turns} 轮 tail")
+        }
+        (Locale::Zh, "context_usage.epoch_line_no_checkpoint") => {
+            Some("纪元 {epoch} · system + {turns} 轮 tail")
+        }
+        (Locale::Zh, "compact.title") => Some("压缩上下文"),
+        (Locale::Zh, "compact.subtitle") => Some("先选择常规压缩或语义压缩，再重写模型实际使用的上下文。"),
+        (Locale::Zh, "compact.mode_regular") => Some("常规压缩"),
+        (Locale::Zh, "compact.mode_regular_hint") => Some("先归档完整对话，再把旧工具结果收成短桩。用户和助手轮次保持原位。"),
+        (Locale::Zh, "compact.mode_semantic") => Some("语义压缩"),
+        (Locale::Zh, "compact.mode_semantic_hint") => Some("把较早轮次折成摘要 checkpoint，只保留很短的 tail。这才是模型视角里应出现的摘要。"),
+        (Locale::Zh, "compact.instruction_label") => Some("可选的压缩引导"),
+        (Locale::Zh, "compact.instruction_placeholder") => Some("例如：保留未解决的 QC 阻塞、精确文件路径和下一步动作。"),
+        (Locale::Zh, "compact.hint") => Some("完整对话会先归档。常规压缩保留原轮次；语义压缩后模型视角显示摘要 checkpoint 和保留 tail。"),
+        (Locale::Zh, "compact.hint_regular") => Some("完整对话会先归档。模型视角保留原来的轮次，旧工具结果收成已归档短桩。"),
+        (Locale::Zh, "compact.hint_semantic") => Some("完整对话会先归档。完成后模型视角显示新的摘要 checkpoint 和保留的对话 tail。"),
+        (Locale::Zh, "compact.start") => Some("开始压缩"),
+        (Locale::Zh, "compact.idle_title") => Some("要做语义压缩吗？"),
+        (Locale::Zh, "compact.idle_body") => Some("这次对话已空闲 {hours} 小时。要把较早轮次折成摘要，让下一轮模型调用从 checkpoint 开始吗？"),
+        (Locale::Zh, "compact.idle_accept") => Some("语义压缩"),
+        (Locale::Zh, "compact.idle_dismiss") => Some("暂不"),
+        (Locale::Zh, "compact.cancel") => Some("取消"),
+        (Locale::Zh, "compact.close") => Some("关闭压缩对话框"),
+        (Locale::Zh, "compact.running") => Some("正在压缩上下文——新上下文准备好前，当前界面不可退出。"),
+        (Locale::Zh, "chat.view_full") => Some("完整记录"),
+        (Locale::Zh, "chat.view_model") => Some("模型视角"),
+        (Locale::Zh, "chat.out_of_context") => Some("不在当前上下文，已由摘要代表"),
+        (Locale::Zh, "chat.context_system") => Some("系统提示词"),
+        (Locale::Zh, "chat.context_tombstone") => Some("已归档的工具输出"),
+        (Locale::Zh, "chat.context_tombstone_named") => Some("已归档 · {name}"),
+        (Locale::Zh, "chat.context_view_loading") => Some("正在加载模型上下文…"),
+        (Locale::Zh, "chat.context_view_changed") => Some("加载期间上下文发生了变化，请重试以查看最新纪元。"),
         (Locale::Zh, "msg.usage") => Some("输入 {in} · 输出 {out} tokens"),
         (Locale::Zh, "msg.usage.cached") => Some(" · 缓存 {c}"),
         (Locale::Zh, "msg.usage.reasoning") => Some(" · 思考 {r}"),
@@ -5257,6 +5589,9 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "err.api_key_required") => Some("API 密钥不能为空。"),
         (Locale::Zh, "err.max_tokens_ceiling") => Some("{model} 的最大输出 tokens 上限为 {max}，请调低「最大输出 tokens」。"),
         (Locale::Zh, "err.unknown") => Some("未知错误"),
+        (Locale::Zh, "err.openssh_too_old") => Some("本机 OpenSSH 版本过低（当前 OpenSSH {found}，Wisp 需要 8.4 或更高）。密码认证依赖 SSH_ASKPASS_REQUIRE（OpenSSH 8.4 起提供）。Windows 请在「设置 → 应用 → 可选功能」中更新 OpenSSH 客户端，或安装最新的 Win32-OpenSSH。重启 Wisp 并用 `ssh -V` 确认。"),
+        (Locale::Zh, "err.openssh_missing") => Some("PATH 上找不到 OpenSSH 客户端。Wisp 需要 OpenSSH 8.4 或更高（`ssh -V`）。请安装或启用 OpenSSH 后重启 Wisp。"),
+        (Locale::Zh, "err.openssh_unparsed") => Some("无法从 `ssh -V` 解析本机 OpenSSH 版本。Wisp 需要 OpenSSH 8.4 或更高。"),
         (Locale::Zh, "err.blank_window_no_project") => {
             Some("请先在此窗口打开一个项目，再执行该操作。")
         }
@@ -5268,6 +5603,8 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "chat.progress") => Some("进度"),
         (Locale::Zh, "execution_plan.title") => Some("执行计划"),
         (Locale::Zh, "execution_plan.complete") => Some("计划已完成"),
+        (Locale::Zh, "execution_plan.ended") => Some("计划已结束"),
+        (Locale::Zh, "execution_plan.idle") => Some("执行计划 · 未运行"),
         (Locale::Zh, "execution_plan.count") => Some("{done} / {total} 已完成"),
         (Locale::Zh, "execution_plan.progress") => Some("计划完成进度"),
         (Locale::Zh, "execution_plan.updating") => Some("正在更新计划…"),
@@ -5279,6 +5616,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "execution_plan.cancelled") => Some("已取消"),
         (Locale::Zh, "execution_plan.details") => Some("工具详情"),
         (Locale::Zh, "execution_plan.unavailable") => Some("本次更新未提供步骤详情。"),
+        (Locale::Zh, "execution_plan.dismiss") => Some("关闭计划"),
         (Locale::Zh, "chat.activity_done") => Some("已处理"),
         (Locale::Zh, "chat.steps_n") => Some("已执行 {n} 步"),
         (Locale::Zh, "chat.steps_n_time") => Some("已执行 {n} 步 · {t}"),
@@ -5358,6 +5696,20 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "chat.compacting_title") => Some("正在压缩上下文…"),
         (Locale::Zh, "chat.compacting_note") => Some("正在整理对话历史"),
         (Locale::Zh, "chat.compaction_reduction") => Some("减少 {percent}%"),
+        (Locale::Zh, "chat.compaction_expand") => Some("展开压缩摘要"),
+        (Locale::Zh, "chat.compaction_collapse") => Some("收起压缩摘要"),
+        (Locale::Zh, "chat.compaction_checkpoint") => Some("摘要"),
+        (Locale::Zh, "chat.compaction_strategy") => Some("策略：{strategy}"),
+        (Locale::Zh, "chat.compaction_strategy_auto") => Some("自动"),
+        (Locale::Zh, "chat.compaction_strategy_manual") => Some("手动"),
+        (Locale::Zh, "chat.compaction_epoch") => Some("第 {epoch} 纪元"),
+        (Locale::Zh, "chat.compaction_kept_from") => Some("保留自第 {turn} 轮"),
+        (Locale::Zh, "chat.compaction_undo") => Some("撤销压缩"),
+        (Locale::Zh, "chat.compaction_rewind") => Some("回溯到压缩前"),
+        (Locale::Zh, "chat.compaction_undone") => Some("已撤销压缩"),
+        (Locale::Zh, "chat.compaction_undo_reason_undone") => Some("已撤销"),
+        (Locale::Zh, "chat.compaction_undo_reason_not_head") => Some("当前不是这一次压缩"),
+        (Locale::Zh, "chat.compaction_undo_reason_has_new_turns") => Some("压缩后已有新对话"),
         (Locale::Zh, "chat.reviewing_title") => Some("Reviewer 正在逐字挑刺…"),
         (Locale::Zh, "chat.reviewing_note") => Some("红笔已拔帽，论点开始紧张"),
         (Locale::Zh, "context_recovery.title") => Some("当前对话过长"),
@@ -5389,7 +5741,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "err.hint.model_name") => Some("服务商不识别所配置的模型名。请在 设置 → 模型 中核对模型名。"),
         (Locale::Zh, "err.hint.rate") => Some("请求过于频繁，被服务商限流。稍等片刻再重试。"),
         (Locale::Zh, "err.hint.server") => Some("服务商暂时过载或故障。请稍后重试。"),
-        (Locale::Zh, "err.hint.network") => Some("无法连接到模型 API。常见原因是本机代理软件已关闭，但操作系统仍保留系统代理，或残留 HTTP_PROXY/HTTPS_PROXY。请打开 设置 → 常规 → 网络，将「模型 API」设为「直连」，或填入仍在运行的代理地址。"),
+        (Locale::Zh, "err.hint.network") => Some("无法连接到模型 API。常见原因是本机代理软件已关闭，但操作系统仍保留系统代理，或残留 HTTP_PROXY/HTTPS_PROXY。请打开 设置 → 网络，将「模型 API」设为「直连」，或填入仍在运行的代理地址。"),
         (Locale::Zh, "err.hint.opencode_session") => Some("OpenCode 要求 x-opencode-session 会话头。请在“请求附加信息（高级）”中开启“附加会话标识”并使用此请求头名称，同时检查转发代理是否保留该请求头。"),
         (Locale::Zh, "err.hint.bad_request") => Some("请求被服务商拒绝。常见原因：对话过长，或消息包含该模型不支持的内容（如图片）。可尝试 /compact 或更换模型。"),
         (Locale::Zh, "err.hint.tool_pairing") => Some("对话历史里有一条工具调用缺少对应结果（常见于工具中断或超时后）。更新后请再点「继续执行」，或发送 /compact 修复历史。"),
@@ -5417,6 +5769,8 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "exploration.name") => Some("探索名称"),
         (Locale::Zh, "exploration.create") => Some("创建探索"),
         (Locale::Zh, "exploration.group") => Some("探索"),
+        (Locale::Zh, "exploration.expand") => Some("展开探索"),
+        (Locale::Zh, "exploration.collapse") => Some("收起探索"),
         (Locale::Zh, "exploration.status_creating") => Some("创建中"),
         (Locale::Zh, "exploration.status_active") => Some("进行中"),
         (Locale::Zh, "exploration.status_promoting") => Some("正在设为主线"),
@@ -5500,6 +5854,8 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "ctx.register_artifact") => Some("登记为产物"),
         (Locale::Zh, "ctx.reveal_in_manager") => Some("在文件管理器中打开"),
         (Locale::Zh, "ctx.open_with_system") => Some("使用系统默认应用打开"),
+        (Locale::Zh, "ctx.open_in_files") => Some("在文件面板中打开"),
+        (Locale::Zh, "ctx.open_directory_in_system") => Some("在系统文件管理器中打开"),
         (Locale::Zh, "ctx.export_session") => Some("导出会话"),
         (Locale::Zh, "ctx.export_debug_request") => Some("导出调试请求（实际发送内容）"),
         (Locale::Zh, "ctx.open_session") => Some("打开会话"),
@@ -5541,6 +5897,9 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "session.copy_demo_success") => Some("演示已复制到 {project}。"),
         (Locale::Zh, "session.no_target_project_demo") => Some("请先创建一个项目，再复制此演示。"),
         (Locale::Zh, "demo.actions") => Some("演示操作"),
+        (Locale::Zh, "branch.group") => Some("分支"),
+        (Locale::Zh, "branch.expand") => Some("展开分支"),
+        (Locale::Zh, "branch.collapse") => Some("收起分支"),
         (Locale::Zh, "branch.delete") => Some("删除分支"),
         (Locale::Zh, "branch.merge") => Some("回并"),
         (Locale::Zh, "branch.merge_title") => Some("回并分支总结"),
@@ -5715,7 +6074,10 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "privacy.restore") => Some("一键恢复"),
         (Locale::Zh, "privacy.select_all") => Some("全选"),
         (Locale::Zh, "command.search_ph") => Some("搜索对话、项目或文件…"),
-        (Locale::Zh, "command.category") => Some("命令"),
+        (Locale::Zh, "command.section.projects") => Some("项目"),
+        (Locale::Zh, "command.section.files") => Some("文件"),
+        (Locale::Zh, "command.section.sessions") => Some("对话"),
+        (Locale::Zh, "command.section.commands") => Some("命令"),
         (Locale::Zh, "command.hint.navigate") => Some("切换"),
         (Locale::Zh, "command.hint.open") => Some("打开"),
         (Locale::Zh, "command.hint.open_new_window") => Some("新窗口打开"),
@@ -5737,9 +6099,9 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "projects.search_close") => Some(" 关闭"),
         (Locale::Zh, "projects.new") => Some("新建项目"),
         (Locale::Zh, "projects.import") => Some("导入项目"),
-        (Locale::Zh, "projects.import_options_hint") => Some("请选择原地使用已有文件夹、恢复完整的 Wisp 压缩包，或从工作区历史中恢复会话。"),
-        (Locale::Zh, "projects.import_in_place") => Some("原地打开文件夹"),
-        (Locale::Zh, "projects.import_in_place_hint") => Some("文件保持在当前位置；Wisp 只登记此文件夹，不复制任何项目文件。"),
+        (Locale::Zh, "projects.import_options_hint") => Some("导入完整的项目文件夹或 ZIP，或从工作区历史中恢复可用会话。"),
+        (Locale::Zh, "projects.import_in_place") => Some("导入项目文件夹"),
+        (Locale::Zh, "projects.import_in_place_hint") => Some("选择 Wisp 项目文件夹或导出的项目文件夹。Wisp 检查 metadata 后直接打开，无需复制。"),
         (Locale::Zh, "projects.import_zip") => Some("导入 ZIP 压缩包"),
         (Locale::Zh, "projects.import_zip_hint") => Some("把工作区文件、会话和 Wisp 项目记录完整恢复到一个新文件夹。"),
         (Locale::Zh, "projects.recover_workspace") => Some("从工作区恢复会话"),
@@ -5755,12 +6117,6 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "projects.recover_empty") => Some("这个工作区中没有找到可恢复的会话。"),
         (Locale::Zh, "projects.recover_action") => Some("恢复并打开"),
         (Locale::Zh, "projects.recovering") => Some("正在恢复…"),
-        (Locale::Zh, "projects.open_folder_title") => Some("打开项目文件夹"),
-        (Locale::Zh, "projects.open_folder_hint") => Some("Wisp 会原地使用此文件夹，不会复制项目文件。"),
-        (Locale::Zh, "projects.open_folder_action") => Some("打开项目"),
-        (Locale::Zh, "projects.existing_title") => Some("选择已有项目"),
-        (Locale::Zh, "projects.existing_hint") => Some("此文件夹已注册。请选择一个项目查看其会话。每个项目 ID 分别保存历史；打开项目不会合并或移动会话。"),
-        (Locale::Zh, "projects.existing_privacy") => Some("隐私模式隐藏的项目不会列出。请先在隐私模式中恢复这些项目。"),
         (Locale::Zh, "codex.title") => Some("导入 Codex 会话"),
         (Locale::Zh, "codex.close") => Some("关闭"),
         (Locale::Zh, "codex.hint") => Some("Codex CLI 会话（~/.codex/sessions）"),
@@ -5768,8 +6124,11 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "codex.source_local") => Some("本地"),
         (Locale::Zh, "codex.refresh") => Some("刷新"),
         (Locale::Zh, "codex.import_all") => Some("全部导入"),
+        (Locale::Zh, "codex.search") => Some("搜索会话"),
+        (Locale::Zh, "codex.search_placeholder") => Some("搜索标题、项目、会话 ID 或源路径"),
         (Locale::Zh, "codex.loading") => Some("扫描中…"),
         (Locale::Zh, "codex.empty") => Some("没有找到 Codex 会话"),
+        (Locale::Zh, "codex.no_matches") => Some("没有匹配的会话"),
         (Locale::Zh, "codex.import") => Some("导入"),
         (Locale::Zh, "codex.update") => Some("更新"),
         (Locale::Zh, "codex.imported") => Some("已导入"),
@@ -5795,25 +6154,26 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "import.session_skipped") => Some("该会话已导入且是最新"),
         (Locale::Zh, "projects.export") => Some("导出项目"),
         (Locale::Zh, "projects.export_options_title") => Some("导出项目"),
-        (Locale::Zh, "projects.export_zip_hint") => Some("ZIP 是完整的可迁移副本，包含工作区文件、会话以及 Wisp 项目记录。"),
-        (Locale::Zh, "projects.copy_folder_title") => Some("只需要项目文件？"),
-        (Locale::Zh, "projects.copy_folder_hint") => Some("可以直接复制这个文件夹，并在另一台设备选择“导入项目 → 原地打开文件夹”。这样无需压缩，但不会包含会话和其他仅存于 Wisp 的记录。"),
-        (Locale::Zh, "projects.copy_folder_path") => Some("复制文件夹路径"),
-        (Locale::Zh, "projects.folder_path_copied") => Some("项目文件夹路径已复制"),
+        (Locale::Zh, "projects.export_directory") => Some("导出目录"),
+        (Locale::Zh, "projects.export_directory_hint") => Some("选择保存位置，导出完整项目文件夹，无需压缩。"),
+        (Locale::Zh, "projects.export_archive_hint") => Some("将同样的完整项目保存为 ZIP 压缩文件。"),
+        (Locale::Zh, "projects.export_zip_hint") => Some("两种格式都包含工作区文件、会话及项目记录，保存的是导出时的快照。"),
         (Locale::Zh, "projects.export_zip") => Some("导出 ZIP"),
         (Locale::Zh, "projects.folder_registered") => Some("这个文件夹已经登记为一个项目。"),
         (Locale::Zh, "projects.transfer.export_title") => Some("正在导出项目"),
         (Locale::Zh, "projects.transfer.import_title") => Some("正在导入项目"),
-        (Locale::Zh, "projects.transfer.selecting_export_destination") => Some("请在系统对话框中选择导出文件的位置。"),
+        (Locale::Zh, "projects.transfer.selecting_export_destination") => Some("请在系统对话框中选择导出位置。"),
         (Locale::Zh, "projects.transfer.selecting_import_destination") => Some("请选择用于存放导入项目的父文件夹。Wisp 会在其中新建一个与项目同名的文件夹。"),
         (Locale::Zh, "projects.transfer.import_destination_hint") => Some("导入后的项目会创建在所选文件夹下、以项目名命名的子文件夹中。"),
+        (Locale::Zh, "projects.transfer.selecting_project_folder") => Some("请在系统对话框中选择 Wisp 项目文件夹或导出的项目文件夹。"),
         (Locale::Zh, "projects.transfer.selecting_archive") => Some("请在系统对话框中选择项目压缩包。"),
         (Locale::Zh, "projects.transfer.preparing") => Some("正在准备项目快照…"),
         (Locale::Zh, "projects.transfer.scanning") => Some("正在扫描工作区文件…"),
+        (Locale::Zh, "projects.transfer.copying") => Some("正在复制工作区文件"),
         (Locale::Zh, "projects.transfer.writing") => Some("正在压缩工作区文件…"),
-        (Locale::Zh, "projects.transfer.validating") => Some("正在校验已完成的压缩包…"),
-        (Locale::Zh, "projects.transfer.publishing") => Some("正在发布已校验的压缩包…"),
-        (Locale::Zh, "projects.transfer.reading") => Some("正在读取项目压缩包…"),
+        (Locale::Zh, "projects.transfer.validating") => Some("正在校验完整项目包…"),
+        (Locale::Zh, "projects.transfer.publishing") => Some("正在发布已校验的项目包…"),
+        (Locale::Zh, "projects.transfer.reading") => Some("正在读取项目包…"),
         (Locale::Zh, "projects.transfer.extracting") => Some("正在解压工作区文件…"),
         (Locale::Zh, "projects.transfer.registering") => Some("正在登记导入的项目…"),
         (Locale::Zh, "projects.transfer.export_complete") => Some("项目导出完成"),
@@ -5841,6 +6201,12 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "projects.sync.code_copied") => Some("机密设备码已复制。"),
         (Locale::Zh, "projects.sync.enabled") => Some("已启用同步"),
         (Locale::Zh, "projects.sync.last") => Some("同步于 {when}"),
+        (Locale::Zh, "projects.folder.saved") => Some("已保存到项目文件夹"),
+        (Locale::Zh, "projects.folder.saved_at") => Some("已保存到文件夹 · {when}"),
+        (Locale::Zh, "projects.folder.unpublished") => Some("有更改尚未保存到文件夹"),
+        (Locale::Zh, "projects.folder.remote_newer") => Some("文件夹中有更新的版本"),
+        (Locale::Zh, "projects.folder.waiting") => Some("等待网盘同步完成"),
+        (Locale::Zh, "projects.folder.conflict") => Some("文件夹版本冲突"),
         (Locale::Zh, "projects.sync.conflict_title") => Some("两台设备都修改了此项目"),
         (Locale::Zh, "projects.sync.conflict_hint") => Some("若使用网盘目录，请先等待网盘客户端完成同步并重试；否则请选择哪一份完整项目状态作为下一个修订。"),
         (Locale::Zh, "projects.sync.conflict_backup") => Some("如果想保留此设备上的版本，请先导出项目作为安全备份。"),
@@ -5909,6 +6275,10 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "proj_settings.default_specialist_hint") => Some("本项目的新会话会自动使用该专家；已有会话继续保留当前 Agent。"),
         (Locale::Zh, "proj_settings.default_specialist_none") => Some("不设置项目默认 Agent"),
         (Locale::Zh, "proj_settings.agent_context_hint") => Some("会包含在本项目每个 Agent 的系统提示词中。可用于填写背景信息、约定或所有 Agent 都应遵循的指令。下次新建会话时生效。"),
+        (Locale::Zh, "proj_settings.folder_sync") => Some("网盘同步文件夹"),
+        (Locale::Zh, "proj_settings.folder_sync_hint") => Some("项目文件夹位于坚果云、百度网盘、OneDrive、iCloud 或 Dropbox 同步目录时使用。Wisp 在本机保存活跃数据库，并把完整版本写入 .wisp/revisions 供网盘上传；在其他设备上导入该文件夹即可。启用前请先关闭其他设备上的 Wisp。"),
+        (Locale::Zh, "proj_settings.folder_sync_enable") => Some("启用网盘安全保存"),
+        (Locale::Zh, "proj_settings.folder_sync_enabled") => Some("已启用。项目卡片会显示最新更改是否已保存到文件夹。"),
         (Locale::Zh, "proj_settings.agent_context_confirm") => Some("保存会写入本项目的 Agent 上下文（.wisp/WISP.md）。新会话会自动使用。已有会话仍沿用旧提示词，直到你在会话上右键并重载项目规则——重载会让该会话的模型提示词缓存失效一次。"),
         (Locale::Zh, "proj_settings.agent_context_confirm_action") => Some("保存 Agent 上下文"),
 
@@ -5917,6 +6287,7 @@ Do not leave generated files in the project root.",
         (Locale::Zh, "sess_status.complete") => Some("已完成"),
         (Locale::Zh, "sess_status.needs_you_n") => Some("{n} 个待处理"),
         (Locale::Zh, "inbox.empty") => Some("没有待处理的会话"),
+        (Locale::Zh, "inbox.other_projects") => Some("其他项目"),
         (Locale::Zh, "time.just_now") => Some("刚刚"),
         (Locale::Zh, "time.minutes") => Some("{n} 分钟"),
         (Locale::Zh, "time.hours") => Some("{n} 小时"),
@@ -5958,6 +6329,42 @@ pub fn send_failed(locale: Locale, msg: &str) -> String {
 
 pub fn localize_backend(locale: Locale, msg: &str) -> String {
     match msg {
+        m if m.starts_with("project_folder_invalid:") => {
+            if locale == Locale::Zh { "所选目录缺少项目 metadata。请选择包含 .wisp/project.json 和项目数据库的项目文件夹，或包含 manifest.json、metadata/project.sqlite 和 workspace 的导出目录。".into() }
+            else { m.trim_start_matches("project_folder_invalid:").trim().into() }
+        }
+        m if m.starts_with("project_folder_waiting:") => {
+            if locale == Locale::Zh { "网盘还没有同步完最新版本。请等待网盘客户端完成下载后再试，本机数据未被改动。".into() }
+            else { "The cloud drive has not finished syncing the latest version. Wait for the drive client, then try again. Nothing on this device was changed.".into() }
+        }
+        m if m.starts_with("project_folder_metadata_invalid:") => {
+            if locale == Locale::Zh { "项目 metadata 数据库损坏、不完整或与项目说明不匹配，无法导入。请从原项目重新导出。".into() }
+            else { "Project metadata is damaged, incomplete or does not match the manifest. Export the original project again.".into() }
+        }
+        "This project is already present on this device." => {
+            if locale == Locale::Zh { "此项目已在当前设备上，请从项目列表打开。".into() } else { msg.into() }
+        }
+        "Choose an export destination outside the project workspace." => {
+            if locale == Locale::Zh { "请选择项目工作区以外的导出位置。".into() } else { msg.into() }
+        }
+        m if m.contains("research_archive_read_only") => {
+            if locale==Locale::Zh {"实验记录本已归档，无法修改或删除。请从归档节点创建新会话继续研究。".into()}
+            else {"This research notebook is archived and cannot be changed or deleted. Continue research from its archive in a new conversation.".into()}
+        }
+        "Archive draft ran out of output tokens. Nothing was deleted. Try regenerate, or switch to a model with a larger output limit." => {
+            if locale==Locale::Zh {
+                "归档草稿超出模型输出额度，未删除任何文件。请点击「重新整理」，或改用输出额度更大的模型。".into()
+            } else {
+                "Archive draft ran out of output tokens. Nothing was deleted. Try regenerate, or switch to a model with a larger output limit.".into()
+            }
+        }
+        m if m.contains("max_output_tokens") => {
+            if locale==Locale::Zh {
+                "模型因达到输出额度上限而中止。请重试，或在设置中提高最大输出 tokens。".into()
+            } else {
+                "The model stopped because it reached the output token limit. Try again, or raise Max output tokens in Settings.".into()
+            }
+        }
         "API URL is required." => t(locale, "err.api_url_required"),
         "Model is required." => t(locale, "err.model_required"),
         "API key is required." => t(locale, "err.api_key_required"),
@@ -6298,11 +6705,26 @@ pub fn localize_backend(locale: Locale, msg: &str) -> String {
             }
             msg.to_string()
         }
+        m if m.contains("Local OpenSSH is too old") => {
+            let found = found_openssh_version(m).unwrap_or("unknown");
+            tf(locale, "err.openssh_too_old", &[("found", found)])
+        }
+        m if m.contains("OpenSSH client was not found") => t(locale, "err.openssh_missing"),
+        m if m.contains("Could not parse local OpenSSH") => t(locale, "err.openssh_unparsed"),
         _ => match api_error_hint(locale, msg) {
             Some(hint) => format!("{msg} — {hint}"),
             None => msg.to_string(),
         },
     }
+}
+
+fn found_openssh_version(msg: &str) -> Option<&str> {
+    const PREFIX: &str = "found OpenSSH ";
+    let start = msg.find(PREFIX)? + PREFIX.len();
+    let rest = &msg[start..];
+    let end = rest.find([',', ')'])?;
+    let found = rest[..end].trim();
+    (!found.is_empty()).then_some(found)
 }
 
 /// Friendly next-step hint for raw provider errors (`api: {status} {body}` /
@@ -6527,6 +6949,19 @@ mod api_error_hint_tests {
     }
 
     #[test]
+    fn localize_backend_translates_openssh_version_errors() {
+        let old = "Local OpenSSH is too old for Wisp (found OpenSSH 8.1, need 8.4 or later). Password authentication uses SSH_ASKPASS_REQUIRE.";
+        let zh = localize_backend(Locale::Zh, old);
+        assert!(zh.contains("8.1"), "{zh}");
+        assert!(zh.contains("8.4"), "{zh}");
+        assert!(zh.contains("本机 OpenSSH"), "{zh}");
+        let en = localize_backend(Locale::En, old);
+        assert!(en.contains("found OpenSSH 8.1"), "{en}");
+        let missing = localize_backend(Locale::Zh, "OpenSSH client was not found on PATH.");
+        assert!(missing.contains("找不到 OpenSSH"), "{missing}");
+    }
+
+    #[test]
     fn localize_backend_appends_hint() {
         let msg = r#"api: 402 {"error":{"message":"Insufficient Balance"}}"#;
         let out = localize_backend(Locale::Zh, msg);
@@ -6539,14 +6974,16 @@ mod api_error_hint_tests {
         let msg = "http: error sending request: tcp connect error: Connection refused (os error 111) (via leftover HTTPS_PROXY=http://127.0.0.1:7890)";
         assert_eq!(hint_key(msg), Some(t(Locale::En, "err.hint.network")));
         let zh = localize_backend(Locale::Zh, msg);
-        assert!(zh.contains("设置 → 常规 → 网络"), "{zh}");
+        assert!(zh.contains("设置 → 网络"), "{zh}");
+        assert!(!zh.contains("设置 → 常规 → 网络"), "{zh}");
         assert!(zh.contains("直连"), "{zh}");
         assert!(
             !zh.contains("设置 → 模型 → 模型 API 代理"),
             "old Models path must not remain in the hint: {zh}"
         );
         let en = localize_backend(Locale::En, msg);
-        assert!(en.contains("Settings → General → Network"), "{en}");
+        assert!(en.contains("Settings → Network"), "{en}");
+        assert!(!en.contains("Settings → General → Network"), "{en}");
         assert!(en.contains("Direct"), "{en}");
         let system = "http: error sending request: tunnel error: Connection refused (os error 61) (via system proxy http://127.0.0.1:10080)";
         assert_eq!(hint_key(system), Some(t(Locale::En, "err.hint.network")));
@@ -6555,7 +6992,8 @@ mod api_error_hint_tests {
             zh_system.contains("via system proxy http://127.0.0.1:10080"),
             "{zh_system}"
         );
-        assert!(zh_system.contains("设置 → 常规 → 网络"), "{zh_system}");
+        assert!(zh_system.contains("设置 → 网络"), "{zh_system}");
+        assert!(!zh_system.contains("设置 → 常规 → 网络"), "{zh_system}");
     }
 
     #[test]
@@ -6568,6 +7006,24 @@ mod api_error_hint_tests {
             send_failed(Locale::En, "Project not found"),
             "Send failed: Project not found"
         );
+    }
+
+    #[test]
+    fn localize_research_archive_output_limit() {
+        let draft = "Archive draft ran out of output tokens. Nothing was deleted. Try regenerate, or switch to a model with a larger output limit.";
+        let zh = localize_backend(Locale::Zh, draft);
+        assert!(zh.contains("输出额度"), "{zh}");
+        assert!(zh.contains("重新整理"), "{zh}");
+        assert!(!zh.contains("max_output_tokens"), "{zh}");
+        assert_eq!(localize_backend(Locale::En, draft), draft);
+
+        let wire = "response ended with status 'incomplete' (max_output_tokens)";
+        let zh_wire = localize_backend(Locale::Zh, wire);
+        assert!(zh_wire.contains("输出额度"), "{zh_wire}");
+        assert!(!zh_wire.contains("incomplete"), "{zh_wire}");
+        let en_wire = localize_backend(Locale::En, wire);
+        assert!(en_wire.contains("output token limit"), "{en_wire}");
+        assert!(!en_wire.contains("incomplete"), "{en_wire}");
     }
 
     #[test]
@@ -6637,6 +7093,11 @@ mod queue_label_tests {
         assert_eq!(tf(Locale::Zh, "queue.header", &[("n", "2")]), "2 条排队");
         assert_eq!(t(Locale::En, "queue.region"), "Queued messages");
         assert_eq!(t(Locale::Zh, "queue.region"), "排队消息");
+        // The row's overflow menu borrows the composer send-mode labels.
+        assert_eq!(t(Locale::En, "queue.more"), "More actions");
+        assert_eq!(t(Locale::Zh, "queue.more"), "更多操作");
+        assert_eq!(t(Locale::Zh, "composer.interrupt_replace"), "中断并替换");
+        assert_eq!(t(Locale::Zh, "composer.side_chat"), "侧边问答");
         // Sent-message rewind keeps its own label.
         assert_eq!(t(Locale::Zh, "msg.edit"), "回溯");
         assert_eq!(t(Locale::En, "msg.edit"), "Rewind");
@@ -6658,6 +7119,35 @@ mod queue_label_tests {
 
     #[test]
     fn context_usage_dock_and_resize_labels_exist_in_both_locales() {
+        assert_eq!(t(Locale::En, "chat.view_model"), "Model view");
+        assert_eq!(t(Locale::Zh, "chat.view_model"), "模型视角");
+        assert_eq!(t(Locale::En, "compact.mode_semantic"), "Semantic compact");
+        assert_eq!(t(Locale::Zh, "compact.mode_semantic"), "语义压缩");
+        assert_eq!(
+            t(Locale::Zh, "settings.semantic_compact_on_model_switch"),
+            "切换模型时自动语义压缩"
+        );
+        assert_eq!(
+            t(Locale::En, "chat.context_tombstone"),
+            "Archived tool result"
+        );
+        assert_eq!(t(Locale::Zh, "chat.context_tombstone"), "已归档的工具输出");
+        assert_eq!(
+            tf(
+                Locale::En,
+                "chat.context_tombstone_named",
+                &[("name", "read")]
+            ),
+            "Archived read"
+        );
+        assert_eq!(
+            tf(
+                Locale::Zh,
+                "chat.context_tombstone_named",
+                &[("name", "read")]
+            ),
+            "已归档 · read"
+        );
         assert_eq!(t(Locale::En, "context_usage.dock"), "Dock panel");
         assert_eq!(t(Locale::Zh, "context_usage.dock"), "停靠面板");
         assert_eq!(t(Locale::En, "context_usage.resize"), "Resize panel");

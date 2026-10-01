@@ -14,6 +14,9 @@ path = "src/main.rs"
 # library-harness Common Controls manifest and fail in cvtres on Windows.
 test = false
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # model-catalog bake: blocking HTTP + JSON in build.rs (offline snapshot
@@ -26,7 +29,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tauri = { version = "2", features = ["devtools", "tray-icon", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-opener = "2"
+tauri-plugin-opener = "2.7"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 serde = { workspace = true }
@@ -51,7 +54,7 @@ base64 = { workspace = true }
 ring = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-pulldown-cmark = { version = "0.12", default-features = false }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 same-file = { workspace = true }
 portable-pty = { workspace = true }
 async-trait = { workspace = true }
@@ -73,6 +76,7 @@ wisp-paths = { workspace = true }
 wisp-sync = { workspace = true }
 wisp-tools = { workspace = true }
 wisp-runs = { workspace = true }
+wisp-app = { workspace = true }
 # Shared UI ⇄ Tauri invoke/event DTOs. Contract tests still round-trip backend
 # payloads into these types; live commands such as browser tab cleanup emit them.
 wisp-dto = { workspace = true }
@@ -82,8 +86,8 @@ futures-util.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-tauri-winrt-notification = "0.7.3"
-windows = { version = "0.61", features = [
+tauri-winrt-notification = "0.8.1"
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
@@ -100,5 +104,10 @@ mac-notification-sys = "0.6.15"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+tao = "0.37.0"
+
 [dev-dependencies]
+tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }
