@@ -209,7 +209,7 @@ const CLAIM_RECORDS_MIGRATION: &str = "0060_claim_records";
 const CLAIM_RECORDS_MIGRATION_SQL: &str = include_str!("../migrations/0060_claim_records.sql");
 const RESEARCH_ARCHIVES_MIGRATION: &str = "0061_research_archives";
 const CONTEXT_EPOCHS_MIGRATION: &str = "0062_context_epochs";
-const CONTEXT_EPOCH_IDENTITY_MIGRATION: &str = "0063_context_epoch_identity";
+pub(crate) const CONTEXT_EPOCH_IDENTITY_MIGRATION: &str = "0063_context_epoch_identity";
 const ACP_AGENT_SELECTION_MIGRATION: &str = "0064_acp_agent_selection";
 
 #[derive(Clone)]
