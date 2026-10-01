@@ -313,7 +313,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: trunk-${{ runner.os }}-v1
+          key: trunk-${{ runner.os }}-v2
 
       - name: Install Trunk
         run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked

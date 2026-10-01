@@ -162,9 +162,14 @@ impl ManagedConnection {
                 Ok(client)
             }
             Err(error) => {
-                *self.failure.write().unwrap() = Some((Instant::now(), error.to_string()));
-                self.record_error(&error);
-                tracing::warn!(target: "wisp", error = %format!("{error:#}"), cooldown_s = RETRY_COOLDOWN.as_secs(), "mcp.connection.failed");
+                // Shutdown cancels an in-flight handshake on purpose. That is
+                // not a provider failure, so it must not start the retry cooldown.
+                let interrupted = error.to_string().contains("closed during initialization");
+                if !interrupted {
+                    *self.failure.write().unwrap() = Some((Instant::now(), error.to_string()));
+                    self.record_error(&error);
+                    tracing::warn!(target: "wisp", error = %format!("{error:#}"), cooldown_s = RETRY_COOLDOWN.as_secs(), "mcp.connection.failed");
+                }
                 Err(error)
             }
         }
