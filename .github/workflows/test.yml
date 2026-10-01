@@ -315,8 +315,15 @@ jobs:
           path: ~/.cargo/bin
           key: trunk-${{ runner.os }}-v2
 
-      - name: Install Trunk
-        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+      - name: Install Trunk and pinned wasm-bindgen
+        run: |
+          set -euo pipefail
+          command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+          if ! command -v wasm-bindgen.real >/dev/null 2>&1 || ! wasm-bindgen.real --version | grep -q '0\.2\.96'; then
+            cargo install wasm-bindgen-cli --version 0.2.96 --locked
+            mv "$HOME/.cargo/bin/wasm-bindgen" "$HOME/.cargo/bin/wasm-bindgen.real"
+          fi
+          ln -sf "$GITHUB_WORKSPACE/scripts/wasm-bindgen-wrapper.sh" "$HOME/.cargo/bin/wasm-bindgen"
 
       - uses: actions/setup-node@v4
         with:
