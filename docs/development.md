@@ -98,9 +98,13 @@ storage from content sent to configured model or data services.
 
 ## Build from source
 
+Clone with `git clone --filter=blob:none https://github.com/xuzhougeng/wisp-science.git`
+to skip downloading old screenshots and other large files from history; Git
+fetches past file versions on demand.
+
 Prerequisites:
 
-- **Rust** (stable, 1.88+) with `wasm32-unknown-unknown`:
+- **Rust** (stable, 1.90+) with `wasm32-unknown-unknown`:
   `rustup target add wasm32-unknown-unknown`
 - **uv**: <https://docs.astral.sh/uv/>
 - **Trunk**: `cargo install --locked trunk`
@@ -206,11 +210,19 @@ next launch). The `startup finished` line breaks pre-first-paint work by phase
 purge, and restoring project windows run after the window is interactive and
 are logged as `deferred startup finished`.
 
+If the window stops responding while quitting and the process has to be killed,
+the tail of `wisp.log` shows how far the exit sequence got. Each cleanup step is
+logged as it is entered (`app.exit.step` with `step="shutdown-mcp-broker"`,
+`"shutdown-mcp-connections"`, `"pause-method-searches"`, `"stop-device-bridge"`,
+`"shutdown-runtimes"`, `"shutdown-terminals"`, `"done"`), and the final line adds
+the total wall time (`app.exit.finished` with `elapsed_ms=…`). A log that ends at
+one of these lines names the step that never returned.
+
 ## Headless CLI
 
 ```bash
 export WISP_API_KEY=<your provider key>
-export WISP_PROVIDER=openai            # openai | openai_responses | anthropic
+export WISP_PROVIDER=openai            # openai | openai_responses | openai_chatgpt | openai_codex | xai_oauth | anthropic
 export WISP_MODEL=deepseek-v4-flash
 cargo run -p wisp-cli                  # interactive agent
 cargo run -p wisp-cli -- run "Summarize the files in this project"
@@ -225,7 +237,7 @@ Eval and the long-lived JSONL RPC protocol:
 | Variable             | Purpose                                                       |
 |----------------------|---------------------------------------------------------------|
 | `WISP_API_KEY`       | Provider API key (CLI). Desktop uses the OS keyring.          |
-| `WISP_PROVIDER`      | CLI API provider: `openai` (default), `openai_responses`, or `anthropic` |
+| `WISP_PROVIDER`      | CLI API provider: `openai` (default), `openai_responses`, `openai_chatgpt`, `openai_codex`, `xai_oauth`, or `anthropic`. `openai_chatgpt` uses `wisp-science login chatgpt`, legacy `openai_codex` uses `wisp-science login codex`, and `xai_oauth` uses `wisp-science login xai` instead of `WISP_API_KEY`. |
 | `WISP_API_URL`       | API root; defaults to DeepSeek / OpenAI / Anthropic           |
 | `WISP_MODEL`         | Model name                                                    |
 | `WISP_VISION`        | `1`/`true` if the primary model can read images natively (default off) |
@@ -365,8 +377,13 @@ wisp-science/
 │  ├─ wisp-acp/     ACP v1 stdio client for external coding agents
 │  ├─ wisp-sync/    Encrypted snapshot protocol + self-hosted relay server
 │  ├─ wisp-runs/    Run control plane (run_in_context / monitor_run / harvest)
+│  ├─ wisp-app/     Host-independent application queries over the existing store
+│  ├─ wisp-service/ Read-only JSONL host for the native project browser
+│  ├─ wisp-dto/     Shared data contracts for UI and application services
 │  └─ wisp-cli/     `wisp-science` headless binary
 ├─ src-tauri/       Tauri v2 desktop shell (commands + agent event stream)
+├─ apps/macos/      SwiftUI project browser preview + Foundation transport
+├─ apps/windows/    WinUI 3 preview, JSONL client, workspace actions, navigation and contract tests
 ├─ ui/              Leptos CSR frontend (built by Trunk, loaded in WebView2)
 ├─ python/          kernel_worker.py + mock MCP server (uv-managed)
 ├─ r/               optional system-R kernel worker (requires jsonlite)
@@ -376,6 +393,19 @@ wisp-science/
 
 ## Architecture
 
+- **Application services** (`wisp-app`): the first shared use case is
+  `projects::list_projects`, returning `wisp_dto::ProjectSummary` from an
+  existing `Store` plus snapshots of running and approval-blocked session IDs.
+  The Tauri command keeps its existing name and payload; it releases runtime
+  locks before calling the service. Project ordering, scratch-project exclusion,
+  counts, stars, sync metadata, and best-effort enrichment fallbacks are preserved.
+  `projects::project_status_counts` also serves the desktop's individual project
+  summaries. This crate has no Tauri or Leptos dependency and does not open a
+  separate database. The SwiftUI and WinUI 3 previews use read-only `wisp-service`
+  processes through the same versioned boundary. See
+  [Native project browser](native-project-browser.md) for build instructions,
+  status limitations, and the JSONL protocol. Verify the query boundary with
+  `cargo test -p wisp-app`.
 - **Agent loop** (`wisp-core::agent`): read → think → tool-call → verify,
   streaming tokens to an `Output` sink. Stops on `attempt_completion` or when
   the model returns no tool calls.
@@ -403,6 +433,20 @@ wisp-science/
 ## Testing
 
 - **Rust unit tests** — `cargo test --workspace`
+- **Windows desktop dependency upgrades** — run
+  `cargo check --locked -p wisp-tauri --all-targets --target x86_64-pc-windows-msvc`
+  to cover the desktop, tests, and every native smoke example with isolated target
+  features. Tauri 2.12, opener 2.7, and `tauri-winrt-notification` 0.8.1 use
+  `windows` 0.62; `notify-rust` 4.18.1 also routes the notification plugin through
+  the same WinRT dependency. Keep the existing `vendor/tao` redraw fix when updating plugins.
+  For opener/notification changes, manually check opening a URL/file, revealing
+  a file in Explorer, and clicking a notification while its owning project
+  window is hidden or minimized. The click must restore that window and open
+  the notification's session without navigating other project windows. Include
+  Chinese text and XML-sensitive characters (`&`, `<`, `>`) in the notification.
+  Run `webview_recovery_smoke` and `mcp_app_isolation_smoke` on Windows to cover
+  real WebView IPC and renderer isolation; mocked Playwright tests do not cover
+  native shell integration or toast activation.
 - **MCP client smoke** — `cargo run -p wisp-mcp --example smoke` launches the
   bundled mock MCP server via `uv` and round-trips `tools/list` + `tools/call`.
 - **UI E2E (Playwright + Tauri mock)** — `ui-tests/` runs the Leptos UI in a

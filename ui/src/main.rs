@@ -18,6 +18,7 @@ mod project_landing;
 mod publication;
 mod publication_sources;
 mod research;
+mod research_archive;
 mod research_calendar;
 mod research_journey;
 mod runtime_views;
@@ -37,18 +38,21 @@ use agent_workflows::{
 use app_overlays::{
     advance_browser_tab_cleanup, present_browser_needs_human, present_browser_tab_cleanup,
     BrowserNeedsHumanOverlay, BrowserNeedsHumanOverlayState, BrowserTabCleanupOverlay,
-    BrowserTabCleanupOverlayState, ContextRecoveryOverlay, ContextRecoveryOverlayState,
-    ExternalLinkConfirm, ProjectExportPrompt, ProjectExportPromptState, ProjectTransferOverlay,
-    ProjectTransferOverlayState, SshConnectivityOverlay, SshConnectivityOverlayState,
-    TurnMemoryOverlay, TurnMemoryOverlayState, UpdateCheckOverlay, UpdateCheckOverlayState,
+    BrowserTabCleanupOverlayState, CompactDialogMode, CompactIdlePromptOverlay,
+    CompactIdlePromptOverlayState, CompactOverlay, CompactOverlayState, ContextRecoveryOverlay,
+    ContextRecoveryOverlayState, ExternalLinkConfirm, ProjectExportPrompt,
+    ProjectExportPromptState, ProjectTransferOverlay, ProjectTransferOverlayState,
+    SshConnectivityOverlay, SshConnectivityOverlayState, TurnMemoryOverlay, TurnMemoryOverlayState,
+    UpdateCheckOverlay, UpdateCheckOverlayState,
 };
 use bindings::{
     add_workspace_file_to_motif, attach_chat_autoscroll, cancel_saved_marks_apply, clear_selection,
     close_mcp_app, force_chat_bottom, invoke, invoke_checked, is_mac, is_windows,
     jump_chat_to_item, jump_chat_to_user, listen, listen_current_window, listen_native_file_drop,
-    native_drop_in_composer, open_browser_extension_page, open_external_url, pasted_image_count,
-    preserve_chat_prepend_position, preview_selection, restore_chat_session_scroll,
-    schedule_chat_follow, set_saved_marks, set_window_title, CHAT_SCROLLER_ID, CHAT_THREAD_ID,
+    native_drop_in_composer, open_browser_extension_page, open_external_url, open_tutorials,
+    pasted_image_count, preserve_chat_prepend_position, preview_selection,
+    restore_chat_session_scroll, schedule_chat_follow, set_saved_marks, set_window_title,
+    CHAT_SCROLLER_ID, CHAT_THREAD_ID,
 };
 use context_menu::{ContextMenuPortal, CtxMenu};
 use dto::*;
@@ -122,7 +126,13 @@ fn supports_fast_service_tier(profile: &ModelProfile) -> bool {
     profile.is_chat_model()
         && matches!(
             profile.provider.trim(),
-            "openai" | "openai_responses" | "openai-responses" | "responses"
+            "openai"
+                | "openai_responses"
+                | "openai-responses"
+                | "responses"
+                | "openai_codex"
+                | "openai-codex"
+                | "codex"
         )
 }
 
@@ -213,7 +223,6 @@ use runtime_views::*;
 fn request_turn_memory_proposal(
     session_id: String,
     turn_index: Option<usize>,
-    automatic: bool,
     proposal: RwSignal<Option<TurnMemoryProposal>>,
     editor: RwSignal<String>,
     scope: RwSignal<String>,
@@ -229,14 +238,11 @@ fn request_turn_memory_proposal(
     loading.update(|ids| {
         ids.insert(session_id.clone());
     });
-    if !automatic {
-        status.set(t(locale.get_untracked(), "memory.proposal.generating"));
-    }
+    status.set(t(locale.get_untracked(), "memory.proposal.generating"));
     spawn_local(async move {
         let args = to_value(&serde_json::json!({
             "sessionId": session_id.clone(),
             "turnIndex": turn_index,
-            "automatic": automatic,
         }))
         .unwrap();
         match invoke_checked("propose_turn_memory", args).await {
@@ -249,11 +255,7 @@ fn request_turn_memory_proposal(
                     proposal.set(Some(next));
                     status.set(t(locale.get_untracked(), "memory.proposal.ready"));
                 }
-                Ok(_) => {
-                    if !automatic {
-                        status.set(t(locale.get_untracked(), "memory.proposal.none"));
-                    }
-                }
+                Ok(_) => status.set(t(locale.get_untracked(), "memory.proposal.none")),
                 Err(parse_error) => {
                     status.set(tf(
                         locale.get_untracked(),
@@ -341,6 +343,7 @@ fn App() -> impl IntoView {
     // instance. Content fingerprints intentionally remount changed rows while
     // streaming, so keeping this state here preserves explicit user choices.
     let step_disclosure_state = create_rw_signal::<HashMap<String, bool>>(HashMap::new());
+    let nested_link_disclosure = create_rw_signal::<HashMap<String, bool>>(HashMap::new());
     let empty_title_idx = create_rw_signal(
         (js_sys::Math::random() * EMPTY_TITLE_COUNT as f64).floor() as usize % EMPTY_TITLE_COUNT,
     );
@@ -459,7 +462,6 @@ fn App() -> impl IntoView {
     let conn_form_kind = create_memo(move |_| conn_form.get().map(|f| f.kind).unwrap_or_default());
     let settings = create_rw_signal(Settings::default());
     let follow_up_questions = create_rw_signal(HashMap::<String, Vec<String>>::new());
-    let follow_up_generation = create_rw_signal(HashMap::<String, u64>::new());
     // This mirrors the last persisted sync configuration. Keep it separate
     // from `settings`, which also holds unsaved edits while Settings is open.
     let sync_actions_available = create_rw_signal(false);
@@ -532,6 +534,64 @@ fn App() -> impl IntoView {
         }
     });
     let active_branch_state = create_rw_signal::<Option<String>>(None);
+    let archive_frame = create_rw_signal::<Option<String>>(None);
+    let archive_busy = create_rw_signal(false);
+    let archived_sessions = create_rw_signal(HashSet::<String>::new());
+    {
+        let closed = store_value(false);
+        let unlisten = store_value(None::<js_sys::Function>);
+        let cb = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+            // bindings::listen already unwraps the Tauri event payload.
+            if let Ok(id) = js_sys::Reflect::get(&event, &JsValue::from_str("frame_id")) {
+                if let Some(id) = id.as_string() {
+                    archived_sessions.update(|s| {
+                        s.insert(id);
+                    });
+                }
+            }
+        });
+        let function: js_sys::Function = cb.as_ref().unchecked_ref::<js_sys::Function>().clone();
+        spawn_local(async move {
+            let result = listen("research-archived", &function).await;
+            if let Some(f) = result.dyn_ref::<js_sys::Function>() {
+                if closed.try_get_value().unwrap_or(true) {
+                    let _ = f.call0(&JsValue::NULL);
+                } else {
+                    unlisten.set_value(Some(f.clone()));
+                }
+            }
+        });
+        on_cleanup(move || {
+            closed.set_value(true);
+            if let Some(f) = unlisten.get_value() {
+                let _ = f.call0(&JsValue::NULL);
+            }
+            drop(cb);
+        });
+    }
+    let active_archived = create_memo(move |_| {
+        active_session
+            .get()
+            .is_some_and(|id| archived_sessions.with(|s| s.contains(&id)))
+    });
+    create_effect(move |_| {
+        if let Some(id) = active_session.get() {
+            spawn_local(async move {
+                if let Ok(Some(a)) = research_journey::call::<Option<ResearchArchive>>(
+                    "get_research_archive",
+                    serde_json::json!({"frameId":id}),
+                )
+                .await
+                {
+                    if a.frozen_at.is_some() {
+                        archived_sessions.update(|s| {
+                            s.insert(a.frame_id);
+                        });
+                    }
+                }
+            });
+        }
+    });
     create_effect(move |_| {
         let active = active_session.get();
         let state = active.and_then(|id| {
@@ -570,6 +630,9 @@ fn App() -> impl IntoView {
         })
     });
     let composer_scope_locked = create_memo(move |_| {
+        if active_archived.get() {
+            return true;
+        }
         active_session.get().is_some_and(|frame_id| {
             explorations.with(|rows| {
                 rows.iter()
@@ -750,6 +813,119 @@ fn App() -> impl IntoView {
     let context_usage_suppress_click = context_usage.suppress_click;
     let context_usage_details = context_usage.details;
     let context_usage_detail_open = context_usage.detail_open;
+    let model_view = create_rw_signal(false);
+    let context_view_items = create_rw_signal::<Vec<ChatItem>>(Vec::new());
+    let context_view_live_from = create_rw_signal::<Option<usize>>(None);
+    let context_view_loading = create_rw_signal(false);
+    let context_view_error = create_rw_signal::<Option<String>>(None);
+    let in_context_from_user_index = create_rw_signal::<Option<usize>>(None);
+    let head_epoch = create_rw_signal(0u64);
+    let context_epochs = create_rw_signal::<Vec<ContextEpochDto>>(Vec::new());
+    let context_refresh_generation = create_rw_signal(0u64);
+    let refresh_context_state = Callback::new(move |id: String| {
+        if active_session.get_untracked().as_deref() != Some(id.as_str()) {
+            return;
+        }
+        context_refresh_generation.update(|generation| *generation = generation.wrapping_add(1));
+        let generation = context_refresh_generation.get_untracked();
+        if model_view.get_untracked() {
+            context_view_loading.set(true);
+            context_view_error.set(None);
+        }
+        spawn_local(async move {
+            for _ in 0..3 {
+                let revision =
+                    transcript_event_revisions.with_untracked(|all| all.get(&id).copied());
+                // Include optimistic turns inserted while the read is pending
+                // in the live suffix rather than swallowing them into a
+                // snapshot that was requested before they existed.
+                let user_offset = transcript_pages
+                    .with_untracked(|pages| pages.get(&id).map_or(0, |page| page.user_offset));
+                let next_user = user_offset
+                    + items.with_untracked(|rows| {
+                        rows.iter()
+                            .filter(|row| matches!(row, ChatItem::User(_)))
+                            .count()
+                    });
+                let args = to_value(&serde_json::json!({ "sessionId": id })).unwrap();
+                let result = async {
+                    let value = invoke_checked("load_session_context_state", args)
+                        .await
+                        .map_err(js_error_text)?;
+                    let snapshot = serde_wasm_bindgen::from_value::<SessionContextState>(value)
+                        .map_err(|error| error.to_string())?;
+                    let rows = if model_view.get_untracked() {
+                        let args = to_value(&tauri_args::load_session_context_view(&id)).unwrap();
+                        let value = invoke_checked("load_session_context_view", args)
+                            .await
+                            .map_err(js_error_text)?;
+                        Some(
+                            serde_wasm_bindgen::from_value::<Vec<LoadedItem>>(value)
+                                .map_err(|error| error.to_string())?,
+                        )
+                    } else {
+                        None
+                    };
+                    Ok::<_, String>((snapshot, rows))
+                }
+                .await;
+                if active_session.get_untracked().as_deref() != Some(id.as_str())
+                    || context_refresh_generation.get_untracked() != generation
+                {
+                    return;
+                }
+                let Ok((snapshot, context_rows)) = result else {
+                    context_view_loading.set(false);
+                    context_view_error.set(result.err());
+                    return;
+                };
+                // Validate the whole read, including the model rows. Publishing
+                // the epoch before the second await let a superseding Done
+                // refresh skip the missing model snapshot as "unchanged".
+                if transcript_event_revisions.with_untracked(|all| all.get(&id).copied())
+                    != revision
+                {
+                    continue;
+                }
+                let previous_epoch = head_epoch.get_untracked();
+                context_epochs.set(snapshot.context_epochs.clone());
+                head_epoch.set(snapshot.head_epoch);
+                in_context_from_user_index.set(snapshot.in_context_from_user_index);
+                items.update(|rows| {
+                    apply_context_state(rows, &snapshot, snapshot.head_epoch > previous_epoch)
+                });
+                if let Some(rows) = context_rows.filter(|_| model_view.get_untracked()) {
+                    context_view_live_from.set(Some(next_user));
+                    context_view_items.set(rows.into_iter().map(LoadedItem::into_chat).collect());
+                }
+                context_view_loading.set(false);
+                return;
+            }
+            context_view_loading.set(false);
+            context_view_error.set(Some(
+                t(locale.get_untracked(), "chat.context_view_changed").into(),
+            ));
+        });
+    });
+    let thread_items = Signal::derive(move || {
+        if model_view.get() {
+            let user_offset = active_session.get().map_or(0, |id| {
+                transcript_pages.with(|pages| pages.get(&id).map_or(0, |page| page.user_offset))
+            });
+            context_view_items.with(|snapshot| {
+                items.with(|live| {
+                    model_context_with_live_turns(
+                        snapshot,
+                        live,
+                        user_offset,
+                        context_view_live_from.get(),
+                    )
+                })
+            })
+        } else {
+            items.get()
+        }
+    });
     let active_context_usage = create_memo(move |_| {
         let session_id = active_session.get()?;
         if active_acp_agent_id.get().is_some() {
@@ -796,9 +972,18 @@ fn App() -> impl IntoView {
     }
     create_effect(move |_| {
         let _ = active_session.get();
+        context_refresh_generation.update(|generation| *generation = generation.wrapping_add(1));
         context_usage_open.set(false);
         context_usage_details.set(None);
         context_usage_detail_open.set(None);
+        model_view.set(false);
+        context_view_items.set(Vec::new());
+        context_view_live_from.set(None);
+        context_view_loading.set(false);
+        context_view_error.set(None);
+        in_context_from_user_index.set(None);
+        head_epoch.set(0);
+        context_epochs.set(Vec::new());
     });
     create_effect(move |_| {
         let open = context_usage_open.get();
@@ -928,10 +1113,13 @@ fn App() -> impl IntoView {
             .get()
             .is_some_and(|id| compacting_sessions.with(|sessions| sessions.contains(&id)))
     });
+    let semantic_compact_after_model = create_rw_signal::<Option<String>>(None);
     let switch_http_model = Callback::new(move |(id, dont_ask_again): (String, bool)| {
         provisional_acp_selection.set(None);
         active_acp_agent_id.set(None);
         let session_id = active_session.get_untracked();
+        let auto_semantic = settings.get_untracked().semantic_compact_on_model_switch
+            && items.with_untracked(|rows| !rows.is_empty());
         spawn_local(async move {
             let arg = to_value(&serde_json::json!({
                 "id": id.clone(),
@@ -945,8 +1133,11 @@ fn App() -> impl IntoView {
                     }
                     if let Some(session_id) = session_id {
                         session_model_ids.update(|models| {
-                            models.insert(session_id, id);
+                            models.insert(session_id.clone(), id);
                         });
+                        if auto_semantic {
+                            semantic_compact_after_model.set(Some(session_id));
+                        }
                     }
                     if dont_ask_again {
                         disable_model_switch_warning();
@@ -961,7 +1152,16 @@ fn App() -> impl IntoView {
     let send_mode_menu_open = create_rw_signal(false);
     // Queue (#433): monotonic key for optimistic queued follow-ups, shared with the
     // backend queue item so edit/cancel/cut-in target the same row.
-    let queue_seq = create_rw_signal(0u64);
+    // A window-scoped seed prevents queue ID collisions across session windows.
+    let queue_seq = create_rw_signal((js_sys::Math::random() * 4_503_599_627_370_496.0) as u64);
+    // Live backend lifecycle for queued rows. The row text is deliberately
+    // excluded from reconciliation because equal bodies can carry different
+    // attachments and still be separate intents.
+    let queue_states = create_rw_signal::<HashMap<(String, u64), String>>(HashMap::new());
+    // Native ask_user option clicks stage an editable answer here. The tuple
+    // stores the last generated draft so selecting another option can replace
+    // it without overwriting text the user has already edited.
+    let native_question_draft = create_rw_signal::<Option<(String, usize, String)>>(None);
     let side_chat_input = create_rw_signal(String::new());
     let side_chat_quotes = create_rw_signal::<Vec<ComposerQuote>>(vec![]);
     let side_chat_items = create_rw_signal::<Vec<SideChatItem>>(vec![]);
@@ -1089,6 +1289,120 @@ fn App() -> impl IntoView {
     let context_recovery_dialog = create_rw_signal::<Option<String>>(None);
     let context_recovery_busy = create_rw_signal(false);
     let context_recovery_error = create_rw_signal::<Option<String>>(None);
+    // Manual compaction is a two-step flow: choose regular prune vs semantic
+    // checkpoint (optional instruction only for semantic), then keep the modal
+    // locked until the archive and new context epoch are durable.
+    let compact_dialog = create_rw_signal::<Option<String>>(None);
+    let compact_mode = create_rw_signal(CompactDialogMode::Regular);
+    let compact_instruction = create_rw_signal(String::new());
+    let compact_busy = create_rw_signal(false);
+    let compact_error = create_rw_signal::<Option<String>>(None);
+    let compact_idle_prompt = create_rw_signal::<Option<(String, u64)>>(None);
+    let compact_idle_dismissed = create_rw_signal::<HashSet<String>>(HashSet::new());
+    // Set only when the dialog was opened from the context-limit recovery
+    // offer: that flow promises "compact and continue", so the interrupted
+    // turn still has to resume once the new epoch is durable. Cancelling the
+    // dialog clears it.
+    let compact_resume = create_rw_signal::<Option<String>>(None);
+    let open_compact_dialog = Callback::new(
+        move |(id, instruction, mode): (String, String, CompactDialogMode)| {
+            if id.trim().is_empty() || compact_busy.get_untracked() {
+                return;
+            }
+            compact_idle_prompt.set(None);
+            compact_mode.set(mode);
+            compact_instruction.set(instruction);
+            compact_error.set(None);
+            compact_dialog.set(Some(id));
+        },
+    );
+    let close_compact_dialog = Callback::new(move |_: ()| {
+        if !compact_busy.get_untracked() {
+            compact_dialog.set(None);
+            compact_mode.set(CompactDialogMode::Regular);
+            compact_instruction.set(String::new());
+            compact_error.set(None);
+            compact_resume.set(None);
+        }
+    });
+    let start_compact_dialog = Callback::new(move |(id, instruction): (String, String)| {
+        if compact_busy.get_untracked() {
+            return;
+        }
+        compact_busy.set(true);
+        compact_error.set(None);
+        let semantic = compact_mode.get_untracked() == CompactDialogMode::Semantic;
+        let message = if semantic {
+            if instruction.trim().is_empty() {
+                "/compact --semantic".to_string()
+            } else {
+                format!("/compact --semantic {}", instruction.trim())
+            }
+        } else {
+            "/compact".to_string()
+        };
+        let locale = locale;
+        spawn_local(async move {
+            let args = to_value(&SendMessageArgs {
+                session_id: Some(id),
+                message,
+                attachments: vec![],
+                references: vec![],
+                resume: false,
+                acp_agent_id: None,
+                guide: None,
+                replace: None,
+            })
+            .unwrap();
+            if let Err(error) = invoke_checked("send_message", args).await {
+                compact_error.set(Some(localize_backend(
+                    locale.get_untracked(),
+                    &js_error_text(error),
+                )));
+                compact_busy.set(false);
+            }
+        });
+    });
+    create_effect(move |_| {
+        let Some(id) = semantic_compact_after_model.get() else {
+            return;
+        };
+        semantic_compact_after_model.set(None);
+        if compact_busy.get_untracked() || id.trim().is_empty() {
+            return;
+        }
+        open_compact_dialog.call((id.clone(), String::new(), CompactDialogMode::Semantic));
+        start_compact_dialog.call((id, String::new()));
+    });
+    create_effect(move |_| {
+        let session_id = active_session.get();
+        let on_projects = show_projects.get();
+        if on_projects || session_id.is_none() {
+            return;
+        }
+        let id = session_id.as_ref().unwrap().clone();
+        if compact_dialog.get_untracked().is_some()
+            || compact_busy.get_untracked()
+            || active_acp_agent_id.get_untracked().is_some()
+            || compact_idle_dismissed.with_untracked(|set| set.contains(&id))
+            || items.with_untracked(|rows| rows.iter().all(|row| !matches!(row, ChatItem::User(_))))
+        {
+            return;
+        }
+        let hours = settings.with_untracked(|cfg| cfg.semantic_compact_idle_hours);
+        let last_activity = sessions.with_untracked(|list| {
+            list.iter()
+                .find(|session| session.id == id)
+                .map(|session| session.ts)
+                .unwrap_or(0)
+        });
+        let now = js_sys::Date::now() as i64;
+        if should_prompt_semantic_compact_idle(hours, last_activity, now, true)
+            && compact_idle_prompt.get_untracked().is_none()
+        {
+            compact_idle_prompt.set(Some((id, hours)));
+        }
+    });
     let refresh_models = move || model_settings.refresh_models();
     // Tauri's native drag/drop event contains absolute paths (including
     // directories). Drops on a remote Files panel upload via scp; drops on
@@ -1163,6 +1477,7 @@ fn App() -> impl IntoView {
     let command_palette_open = create_rw_signal(false);
     let action_palette_open = create_rw_signal(false);
     let (privacy_active_initial, privacy_projects_initial) = load_privacy_mode();
+    mirror_privacy_mode(privacy_active_initial, &privacy_projects_initial);
     let privacy_mode_active = create_rw_signal(privacy_active_initial);
     let privacy_hidden_project_ids = create_rw_signal(privacy_projects_initial);
     let privacy_mode_modal_open = create_rw_signal(false);
@@ -1447,6 +1762,8 @@ fn App() -> impl IntoView {
     // renamed or overwritten still lingers and 404s on click (#41). Ask the
     // backend which referenced files are gone and drop them from the list.
     let missing_paths = create_rw_signal(std::collections::HashSet::<String>::new());
+    let workspace_path_liveness = create_rw_signal(WorkspacePathLiveness::default());
+    provide_context(workspace_path_liveness.read_only());
     let artifact_file_paths = create_memo(move |_| {
         artifacts_all.with(|artifacts| {
             artifacts
@@ -1458,17 +1775,80 @@ fn App() -> impl IntoView {
                 .collect::<Vec<_>>()
         })
     });
+    let workspace_path_candidates = create_memo(move |_| {
+        let _ = active_session.get();
+        let _ = transcript_projection_epoch.get();
+        let _ = busy.get();
+        let root = project_info
+            .get()
+            .map(|project| project.root)
+            .unwrap_or_default();
+        let mut paths = artifact_file_paths.get();
+        if root.is_empty() {
+            return paths;
+        }
+        let mut seen = paths.iter().cloned().collect::<HashSet<_>>();
+        items.with_untracked(|list| {
+            for path in collect_chat_workspace_paths(list, &root) {
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+        });
+        paths
+    });
+    let path_check_gen = Rc::new(Cell::new(0u64));
     create_effect(move |_| {
-        let paths = artifact_file_paths.get();
+        let _ = project_info.get();
+        let _ = active_session.get();
+        let _ = busy.get();
+        let paths = workspace_path_candidates.get();
+        let gen = path_check_gen.get().wrapping_add(1);
+        path_check_gen.set(gen);
+        workspace_path_liveness.set(WorkspacePathLiveness::default());
         if paths.is_empty() {
-            missing_paths.set(std::collections::HashSet::new());
+            if !missing_paths.get_untracked().is_empty() {
+                missing_paths.set(HashSet::new());
+            }
+            if workspace_path_liveness.get_untracked() != WorkspacePathLiveness::default() {
+                workspace_path_liveness.set(WorkspacePathLiveness::default());
+            }
             return;
         }
+        let path_check_gen = Rc::clone(&path_check_gen);
         spawn_local(async move {
-            let arg = to_value(&serde_json::json!({ "paths": paths })).unwrap();
-            let v = invoke("missing_files", arg).await;
-            if let Ok(m) = serde_wasm_bindgen::from_value::<Vec<String>>(v) {
-                missing_paths.set(m.into_iter().collect());
+            let arg = to_value(&serde_json::json!({ "paths": paths.clone() })).unwrap();
+            let v = invoke("classify_workspace_paths", arg).await;
+            if gen != path_check_gen.get() {
+                return;
+            }
+            if let Ok(kinds) =
+                serde_wasm_bindgen::from_value::<HashMap<String, WorkspacePathKind>>(v)
+            {
+                let missing = paths
+                    .iter()
+                    .filter(|path| kinds.get(*path) != Some(&WorkspacePathKind::File))
+                    .cloned()
+                    .collect::<HashSet<_>>();
+                let next = WorkspacePathLiveness {
+                    checked: kinds.keys().cloned().collect(),
+                    missing: kinds
+                        .iter()
+                        .filter(|(_, kind)| **kind == WorkspacePathKind::Unavailable)
+                        .map(|(path, _)| path.clone())
+                        .collect(),
+                    directories: kinds
+                        .iter()
+                        .filter(|(_, kind)| **kind == WorkspacePathKind::Directory)
+                        .map(|(path, _)| path.clone())
+                        .collect(),
+                };
+                if missing_paths.get_untracked() != missing {
+                    missing_paths.set(missing);
+                }
+                if workspace_path_liveness.get_untracked() != next {
+                    workspace_path_liveness.set(next);
+                }
             }
         });
     });
@@ -1544,9 +1924,7 @@ fn App() -> impl IntoView {
         };
         let _ = transcript_projection_epoch.get();
         run_records.with(|runs| {
-            items.with_untracked(|rows| {
-                chat_render::completed_run_owners(rows, runs, &frame_id)
-            })
+            items.with_untracked(|rows| chat_render::completed_run_owners(rows, runs, &frame_id))
         })
     });
     let automatic_session_runs = create_memo(move |_| {
@@ -1576,6 +1954,16 @@ fn App() -> impl IntoView {
     let sel_artifact = create_rw_signal(0usize);
     let show_art_preview = create_rw_signal(false);
     let modal_artifact = create_rw_signal(None::<ModalArtifact>); // (path, name, kind)
+    // Background output updates change navigation, not the mounted viewer.
+    // Reading `artifacts` in the modal's render closure remounts the image and
+    // provenance on every change, replaying the overlay animation and losing
+    // zoom, the selected provenance tab, and unsent code edits.
+    let modal_image_nav = create_memo(move |_| {
+        let Some((path, _, kind)) = modal_artifact.get() else {
+            return (None, None);
+        };
+        artifacts.with(|arts| modal_image_nav_targets(arts, &path, &kind))
+    });
     let artifact_menu = create_rw_signal(None::<(usize, i32, i32)>); // (open tile idx, cursor x, y) — fixed-positioned so the `.rp-tiles` overflow doesn't clip it
     let collapsed_art_groups = create_rw_signal::<HashSet<String>>(HashSet::new());
     let rp_grid = create_rw_signal(false); // false = detailed/list, true = tiled/grid; shared by Artifacts + Files
@@ -1659,6 +2047,14 @@ fn App() -> impl IntoView {
     ));
     let file_sort_menu_open = create_rw_signal(false);
     let file_entries = create_rw_signal::<Vec<DirEntry>>(vec![]);
+    let open_workspace_directory = Callback::new(move |path: String| {
+        file_source.set("local".into());
+        file_query.set(String::new());
+        file_cwd.set(path);
+        refresh_dir(file_cwd, file_entries);
+        ensure_right_tab(RightTab::File, show_right, open_right_tabs, right_tab);
+    });
+    provide_context(OpenWorkspaceDirectory(open_workspace_directory));
     let file_search_hits = create_rw_signal::<Vec<FileSearchHit>>(vec![]);
     let selecting_workspace_entries = create_rw_signal(false);
     let selected_workspace_paths = create_rw_signal::<HashSet<String>>(HashSet::new());
@@ -1803,14 +2199,10 @@ fn App() -> impl IntoView {
 
     create_effect(move |_| {
         if file_source.get() != "local" {
-            file_search_hits.set(vec![]);
+            clear_file_search(file_search_hits);
             return;
         }
-        let q = file_query.get();
-        if q.trim().is_empty() {
-            file_search_hits.set(vec![]);
-            return;
-        }
+        let _ = file_query.get();
         refresh_file_search(file_query, file_search_hits);
     });
 
@@ -2205,6 +2597,7 @@ fn App() -> impl IntoView {
                 let branchable =
                     active_branch_state.get().is_none() && !active_is_exploration.get();
                 let available = |name: &str| match name {
+                    "archive" => has_items && !active_is_exploration.get(),
                     "compact" => !acp,
                     "rewind" => !acp && has_items,
                     "fork" => !acp && branchable,
@@ -2522,6 +2915,11 @@ fn App() -> impl IntoView {
     let pet_activity_cb = pet_activity;
     let status_cb = status;
     let compacting_sessions_cb = compacting_sessions;
+    let compact_dialog_cb = compact_dialog;
+    let compact_busy_cb = compact_busy;
+    let compact_error_cb = compact_error;
+    let model_view_cb = model_view;
+    let context_view_items_cb = context_view_items;
     let locale_cb = locale;
     let models_cb = models;
     let session_models_cb = session_model_ids;
@@ -2601,6 +2999,11 @@ fn App() -> impl IntoView {
                             branches.insert(id.clone(), page.branches.clone());
                         });
                         active_branch_state.set(page.branch_state.clone());
+                        if page.archived {
+                            archived_sessions.update(|s| {
+                                s.insert(id.clone());
+                            });
+                        }
                         let mut chats = page
                             .items
                             .into_iter()
@@ -2608,6 +3011,11 @@ fn App() -> impl IntoView {
                             .collect::<Vec<_>>();
                         settle_question_cards(&mut chats);
                         items.set(chats);
+                        context_epochs.set(page.context_epochs);
+                        head_epoch.set(page.head_epoch);
+                        in_context_from_user_index.set(page.in_context_from_user_index);
+                        model_view.set(false);
+                        context_view_items.set(Vec::new());
                     }
                     refresh_session_history();
                 }
@@ -2695,8 +3103,12 @@ fn App() -> impl IntoView {
                     sessions.insert(frame_id);
                 });
             }
-            AgentEvent::User { frame_id, text } => {
-                dismiss_follow_up_questions(follow_up_questions, follow_up_generation, &frame_id);
+            AgentEvent::User {
+                frame_id,
+                text,
+                queue_id,
+            } => {
+                dismiss_follow_up_questions(follow_up_questions, &frame_id);
                 // The banner judges the answer on screen; a new turn has none yet.
                 set_browser_offline_notice(browser_offline_cb, &frame_id, None);
                 set_pet_activity(&frame_id, "running");
@@ -2714,8 +3126,13 @@ fn App() -> impl IntoView {
                     &session_models_cb.get_untracked(),
                     Some(&frame_id),
                 );
+                if let Some(id) = queue_id {
+                    queue_states.update(|states| {
+                        states.remove(&(frame_id.clone(), id));
+                    });
+                }
                 route_items(active_cb, items_cb, transcripts_cb, &frame_id, |v| {
-                    start_user_turn(v, text, model.clone());
+                    start_user_turn(v, text, model.clone(), queue_id);
                 });
                 conversation_outlines_cb.update(|outlines| {
                     let outline = outlines.entry(frame_id.clone()).or_default();
@@ -3085,16 +3502,36 @@ fn App() -> impl IntoView {
                 before,
                 after,
                 strategy,
+                epoch,
             } => {
                 finish_compaction(&frame_id);
                 let auto_continue = strategy == "auto_continue";
+                let manual_compaction = strategy == "manual";
                 route_items(active_cb, items_cb, transcripts_cb, &frame_id, |items| {
-                    items.push(ChatItem::Compaction {
-                        before,
-                        after,
-                        strategy,
-                    });
+                    items.push(ChatItem::compaction(before, after, strategy, epoch));
                 });
+                refresh_transcript_projections(&frame_id);
+                if !auto_continue && epoch.is_some() {
+                    let reveal_manual_context = manual_compaction
+                        && compact_dialog_cb.get_untracked().as_deref() == Some(frame_id.as_str())
+                        && active_cb.get_untracked().as_deref() == Some(frame_id.as_str());
+                    if reveal_manual_context {
+                        // A completed manual compaction should immediately
+                        // reveal the exact model context that will be used.
+                        // The epoch refresh below reloads the checkpoint and
+                        // retained tail before the user continues typing.
+                        model_view_cb.set(true);
+                        context_view_items_cb.set(Vec::new());
+                        context_view_live_from.set(None);
+                    }
+                    refresh_context_state.call(frame_id.clone());
+                }
+                if manual_compaction
+                    && compact_dialog_cb.get_untracked().as_deref() == Some(frame_id.as_str())
+                {
+                    compact_busy_cb.set(true);
+                    compact_error_cb.set(None);
+                }
                 if active_cb.get().as_deref() == Some(&frame_id) {
                     let before = before.to_string();
                     let after = after.to_string();
@@ -3106,6 +3543,12 @@ fn App() -> impl IntoView {
                         ));
                     }
                 }
+            }
+            AgentEvent::CompactionUndone { frame_id, epoch } => {
+                route_items(active_cb, items_cb, transcripts_cb, &frame_id, |items| {
+                    apply_compaction_undone(items, epoch);
+                });
+                refresh_context_state.call(frame_id);
             }
             AgentEvent::ContextWarning {
                 frame_id,
@@ -3134,7 +3577,15 @@ fn App() -> impl IntoView {
                 stop_reason,
             } => {
                 finish_compaction(&frame_id);
+                if stop_reason.as_deref() == Some("compact")
+                    && compact_dialog_cb.get_untracked().as_deref() == Some(frame_id.as_str())
+                {
+                    compact_dialog_cb.set(None);
+                    compact_busy_cb.set(false);
+                    compact_error_cb.set(None);
+                }
                 flush_now();
+                refresh_context_state.call(frame_id.clone());
                 conversation_outlines_cb.update(|outlines| {
                     if let Some(entry) = outlines
                         .get_mut(&frame_id)
@@ -3192,68 +3643,11 @@ fn App() -> impl IntoView {
                     stopping_session.set(None);
                 }
                 refresh_session_history();
-                if stop_reason
-                    .as_deref()
-                    .is_none_or(|reason| reason == "end_turn")
-                {
-                    request_turn_memory_proposal(
-                        frame_id.clone(),
-                        None,
-                        true,
-                        turn_memory_proposal,
-                        turn_memory_editor,
-                        turn_memory_scope,
-                        turn_memory_replace_id,
-                        turn_memory_loading,
-                        turn_memory_error,
-                        status_cb,
-                        locale_cb,
-                    );
-                }
-                let has_final_answer =
-                    if active_cb.get_untracked().as_deref() == Some(frame_id.as_str()) {
-                        items_cb.with_untracked(|items| latest_turn_has_final_answer(items))
-                    } else {
-                        transcripts_cb.with_untracked(|transcripts| {
-                            transcripts
-                                .get(&frame_id)
-                                .is_some_and(|items| latest_turn_has_final_answer(items))
-                        })
-                    };
-                if settings.get_untracked().follow_up_questions && has_final_answer {
-                    let generation = follow_up_generation.try_update(|generations| {
-                        let generation = generations.entry(frame_id.clone()).or_default();
-                        *generation += 1;
-                        *generation
-                    });
-                    spawn_local(async move {
-                        let args = to_value(&serde_json::json!({
-                            "sessionId": frame_id.clone(),
-                        }))
-                        .unwrap();
-                        let Ok(value) = invoke_checked("generate_follow_up_questions", args).await
-                        else {
-                            return;
-                        };
-                        let Ok(questions) = serde_wasm_bindgen::from_value::<Vec<String>>(value)
-                        else {
-                            return;
-                        };
-                        if questions.len() == 3
-                            && follow_up_generation
-                                .with_untracked(|generations| generations.get(&frame_id).copied())
-                                == generation
-                        {
-                            follow_up_questions.update(|all| {
-                                all.insert(frame_id, questions);
-                            });
-                        }
-                    });
-                }
             }
             AgentEvent::Error { frame_id, message } => {
                 finish_compaction(&frame_id);
                 flush_now();
+                refresh_context_state.call(frame_id.clone());
                 conversation_outlines_cb.update(|outlines| {
                     if let Some(entry) = outlines
                         .get_mut(&frame_id)
@@ -3289,6 +3683,13 @@ fn App() -> impl IntoView {
                     // /compact + resume path. Do not offer an action that
                     // cannot preserve its opaque session state.
                     && active_acp_agent_id.get_untracked().is_none();
+                if compact_dialog_cb.get_untracked().as_deref() == Some(frame_id.as_str())
+                    && compact_busy_cb.get_untracked()
+                {
+                    compact_busy_cb.set(false);
+                    compact_error_cb
+                        .set(Some(localize_backend(locale_cb.get_untracked(), &message)));
+                }
                 if !rolled_back {
                     let model = session_model_label(
                         &models_cb.get_untracked(),
@@ -3423,6 +3824,41 @@ fn App() -> impl IntoView {
                     status_cb.set(t(locale_cb.get(), "status.correcting"));
                 }
             }
+            AgentEvent::FollowUps {
+                frame_id,
+                questions,
+            } => {
+                // The user may have sent again before the hook finished.
+                if questions.len() == 3
+                    && !running_cb.with_untracked(|running| running.contains(&frame_id))
+                {
+                    follow_up_questions.update(|all| {
+                        all.insert(frame_id, questions);
+                    });
+                }
+            }
+            AgentEvent::MemoryProposal { proposal, .. } => {
+                if turn_memory_proposal.get_untracked().is_none() {
+                    turn_memory_editor.set(proposal.content.clone());
+                    turn_memory_scope.set(proposal.scope.clone());
+                    turn_memory_replace_id.set(String::new());
+                    turn_memory_error.set(None);
+                    turn_memory_proposal.set(Some(proposal));
+                    status_cb.set(t(locale_cb.get_untracked(), "memory.proposal.ready"));
+                }
+            }
+            // Follow-up suggestions are optional; only a failed memory draft
+            // is worth a status line.
+            AgentEvent::HookFailed { hook, message, .. } => {
+                if hook == "memory_proposal" {
+                    let locale = locale_cb.get_untracked();
+                    status_cb.set(tf(
+                        locale,
+                        "memory.proposal.failed",
+                        &[("msg", &localize_backend(locale, &message))],
+                    ));
+                }
+            }
             AgentEvent::Review { frame_id, report } => {
                 set_pet_activity(&frame_id, "review");
                 flush_now();
@@ -3477,6 +3913,50 @@ fn App() -> impl IntoView {
     // future is polled, so we must await `listen_current_window`.
     spawn_local(async move {
         let _ = listen_current_window("agent", &agent_js).await;
+    });
+
+    // Queue lifecycle is keyed by the backend id. This closes the gap where
+    // the optimistic row and the real User event have the same text but are
+    // different messages (for example, different attachments).
+    let queue_state_cb = Closure::wrap(Box::new(move |payload: JsValue| {
+        let Ok(event) = serde_wasm_bindgen::from_value::<QueuedTurnStateEvent>(payload) else {
+            return;
+        };
+        queue_states.update(|states| match event.state.as_str() {
+            "queued" | "cutin_pending" => {
+                states.insert((event.session_id.clone(), event.id), event.state.clone());
+            }
+            _ => {
+                states.remove(&(event.session_id.clone(), event.id));
+            }
+        });
+        if matches!(
+            event.state.as_str(),
+            "started" | "cancelled" | "superseded" | "failed"
+        ) {
+            route_items(
+                active_session,
+                items,
+                transcripts,
+                &event.session_id,
+                |rows| {
+                    rows.retain(
+                        |row| !matches!(row, ChatItem::QueuedUser { id, .. } if *id == event.id),
+                    );
+                },
+            );
+            transcript_projection_epoch.update(|revision| {
+                *revision = revision.wrapping_add(1);
+            });
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    let queue_state_js = queue_state_cb
+        .as_ref()
+        .unchecked_ref::<js_sys::Function>()
+        .clone();
+    queue_state_cb.forget();
+    spawn_local(async move {
+        let _ = listen_current_window("queued-turn-state", &queue_state_js).await;
     });
 
     // Confirm handler: render an inline approval card in the session thread
@@ -3965,7 +4445,7 @@ fn App() -> impl IntoView {
         let _ = listen_current_window("ask-user-resolved", &ask_resolved_js).await;
     });
 
-    let stop = move |_| {
+    let stop = Callback::new(move |(): ()| {
         if stopping_session.get().is_some() {
             return;
         }
@@ -3989,7 +4469,7 @@ fn App() -> impl IntoView {
                 }
             }
         });
-    };
+    });
 
     let send = Callback::new(move |action: ComposerSendAction| {
         if demo_mode.get_untracked() {
@@ -4043,6 +4523,26 @@ fn App() -> impl IntoView {
         }
         let active = active_session.get();
         let creates_session = active.is_none();
+        if action == ComposerSendAction::Normal {
+            if let Some((question_session, question_index, _)) =
+                native_question_draft.get_untracked()
+            {
+                if active.as_deref() == Some(question_session.as_str()) {
+                    route_items(
+                        active_session,
+                        items,
+                        transcripts,
+                        &question_session,
+                        |rows| {
+                            if let Some(ChatItem::Question(card)) = rows.get_mut(question_index) {
+                                card.state = QuestionState::Answered;
+                            }
+                        },
+                    );
+                    native_question_draft.set(None);
+                }
+            }
+        }
         let pending_fast = pending_service_tier.get();
         // Any prior send-failed hint (e.g. the max_tokens truncation notice) is
         // stale once a new turn is committed; the Ok path never cleared it, so it
@@ -4072,7 +4572,7 @@ fn App() -> impl IntoView {
         // session lock / prompt build for a long time while the optimistic
         // user bubble is already on screen.
         if let Some(id) = active.as_ref() {
-            dismiss_follow_up_questions(follow_up_questions, follow_up_generation, id);
+            dismiss_follow_up_questions(follow_up_questions, id);
         }
         // Queue (#433): a plain send into a busy session parks behind the
         // running turn — cancellable / restorable to the composer until the
@@ -4097,6 +4597,9 @@ fn App() -> impl IntoView {
                     text: display_message.clone(),
                 });
             });
+            queue_states.update(|states| {
+                states.insert((session.clone(), qid), "queued".into());
+            });
             transcript_projection_epoch.update(|revision| {
                 *revision = revision.wrapping_add(1);
             });
@@ -4113,8 +4616,13 @@ fn App() -> impl IntoView {
                 .unwrap();
                 if let Err(error) = invoke_checked("enqueue_turn", args).await {
                     mcp_app_context.set(saved_mcp_app_context.clone());
+                    queue_states.update(|states| {
+                        states.remove(&(session.clone(), qid));
+                    });
                     route_items(active_session, items, transcripts, &session, |rows| {
-                        remove_optimistic_send_rows(rows, &enqueue_msg);
+                        rows.retain(
+                            |row| !matches!(row, ChatItem::QueuedUser { id, .. } if *id == qid),
+                        );
                     });
                     transcript_projection_epoch.update(|revision| {
                         *revision = revision.wrapping_add(1);
@@ -4250,14 +4758,7 @@ fn App() -> impl IntoView {
                 *revision = revision.wrapping_add(1);
             });
             force_chat_bottom();
-            // Await the stop before send_message so the running turn is already
-            // flagged for cancellation; send_message then blocks on the session's
-            // workflow lock and starts as soon as the old turn aborts. Firing the
-            // stop concurrently could cancel the new turn instead.
-            if action == ComposerSendAction::InterruptReplace {
-                let arg = to_value(&tauri_args::stop_agent(&Some(id.clone()))).unwrap();
-                let _ = invoke("stop_agent", arg).await;
-            }
+            // The backend reserves replacement priority before cancelling.
             // Persist/emit the same display text the optimistic bubble uses
             // (including "Uploaded files: …"). Sending the bare composer body
             // makes AgentEvent::User mismatch the optimistic row and append a
@@ -4771,9 +5272,10 @@ fn App() -> impl IntoView {
             return;
         }
         status.set(String::new());
-        let restore = matches!(op, QueueOp::Edit(_));
+        let to_side_chat = matches!(op, QueueOp::SideChat(_));
+        let restore = matches!(op, QueueOp::Edit(_)) || to_side_chat;
         let (id, action, message): (u64, &'static str, Option<String>) = match op {
-            QueueOp::Cancel(id) | QueueOp::Edit(id) => {
+            QueueOp::Cancel(id) | QueueOp::Edit(id) | QueueOp::SideChat(id) => {
                 let mut draft = String::new();
                 route_items(active_session, items, transcripts, &sid, |rows| {
                     if restore {
@@ -4787,10 +5289,15 @@ fn App() -> impl IntoView {
                         |it| !matches!(it, ChatItem::QueuedUser { id: qid, .. } if *qid == id),
                     );
                 });
-                if restore {
+                if to_side_chat {
+                    send_side_chat((draft, vec![], false));
+                } else if restore {
                     input.set(draft);
                     focus_composer();
                 }
+                queue_states.update(|states| {
+                    states.remove(&(sid.clone(), id));
+                });
                 (id, "cancel", None)
             }
             // The bubble stays; it promotes to a User row when the running turn
@@ -4820,6 +5327,27 @@ fn App() -> impl IntoView {
                 });
                 (id, if up { "move_up" } else { "move_down" }, None)
             }
+            // Interrupt & replace, from the row: jump the queue locally and
+            // server-side, then stop the running turn so the driver picks this
+            // one up next.
+            QueueOp::InterruptReplace(id) => {
+                route_items(active_session, items, transcripts, &sid, |rows| {
+                    let Some(i) = rows.iter().position(
+                        |it| matches!(it, ChatItem::QueuedUser { id: qid, .. } if *qid == id),
+                    ) else {
+                        return;
+                    };
+                    // Queued rows sit contiguously at the tail, so the first one
+                    // is the front of the queue.
+                    let front = rows
+                        .iter()
+                        .position(|it| matches!(it, ChatItem::QueuedUser { .. }))
+                        .unwrap_or(i);
+                    let item = rows.remove(i);
+                    rows.insert(front, item);
+                });
+                (id, "move_front", None)
+            }
         };
         if action != "cutin" {
             transcript_projection_epoch.update(|revision| {
@@ -4834,13 +5362,22 @@ fn App() -> impl IntoView {
                 message,
             })
             .unwrap();
-            if let Err(error) = invoke_checked("queued_turn_action", args).await {
-                if active_session.get_untracked().as_deref() == Some(sid.as_str()) {
-                    status.set(tf(
-                        locale.get(),
-                        "queue.action_failed",
-                        &[("error", &js_error_text(error))],
-                    ));
+            match invoke_checked("queued_turn_action", args).await {
+                // The stop follows the reorder: the freed session must find this
+                // item already at the front of the queue.
+                Ok(_) => {
+                    if action == "move_front" {
+                        stop.call(());
+                    }
+                }
+                Err(error) => {
+                    if active_session.get_untracked().as_deref() == Some(sid.as_str()) {
+                        status.set(tf(
+                            locale.get(),
+                            "queue.action_failed",
+                            &[("error", &js_error_text(error))],
+                        ));
+                    }
                 }
             }
         });
@@ -4980,77 +5517,33 @@ fn App() -> impl IntoView {
     };
 
     let compact_context_recovery = Callback::new(move |id: String| {
-        if context_recovery_busy.get_untracked() {
+        if context_recovery_busy.get_untracked() || compact_busy.get_untracked() {
             return;
         }
-        context_recovery_busy.set(true);
+        context_recovery_dialog.set(None);
         context_recovery_error.set(None);
-        spawn_local(async move {
-            let compact = to_value(&SendMessageArgs {
-                session_id: Some(id.clone()),
-                message: "/compact".into(),
-                attachments: vec![],
-                references: vec![],
-                resume: false,
-                acp_agent_id: None,
-                guide: None,
-                replace: None,
-            })
-            .unwrap();
-            if let Err(error) = invoke_checked("send_message", compact).await {
-                let message = localize_backend(locale.get_untracked(), &js_error_text(error));
-                context_recovery_error.set(Some(message));
-                context_recovery_busy.set(false);
-                return;
-            }
+        compact_resume.set(Some(id.clone()));
+        open_compact_dialog.call((id, String::new(), CompactDialogMode::Semantic));
+    });
 
-            // /compact rewrites only the model context. The existing error row
-            // stays in the visual transcript until we remove it here; the
-            // completed tool rows remain and Resume continues after them.
-            if active_session.get_untracked().as_deref() == Some(id.as_str()) {
-                let model = session_model_label(
-                    &models.get_untracked(),
-                    &session_model_ids.get_untracked(),
-                    Some(&id),
-                );
-                items.update(|rows| {
-                    if let Some(index) = rows.iter().rposition(is_error_assistant) {
-                        rows.remove(index);
-                    }
-                    ensure_streaming_assistant(rows, model);
-                });
-            }
-            context_recovery_dialog.set(None);
-            context_recovery_error.set(None);
-            begin_pending_turn(pending_turns, running, &id);
-            force_chat_bottom();
-
-            let resume = to_value(&SendMessageArgs {
-                session_id: Some(id.clone()),
-                message: String::new(),
-                attachments: vec![],
-                references: vec![],
-                resume: true,
-                acp_agent_id: None,
-                guide: None,
-                replace: None,
-            })
-            .unwrap();
-            if let Err(error) = invoke_checked("send_message", resume).await {
-                let raw = js_error_text(error);
-                if raw.contains(NO_API_KEY_MARK) {
-                    needs_api_key.set(true);
-                }
-                status.set(tf(
-                    locale.get_untracked(),
-                    "status.send_failed",
-                    &[("msg", &localize_backend(locale.get_untracked(), &raw))],
-                ));
-            }
-            finish_pending_turn(pending_turns, running, &id);
-            context_recovery_busy.set(false);
-            refresh_session_history();
-        });
+    // The guided dialog only rewrites the model context. A compaction that
+    // started from the recovery offer closes the dialog on its Done event with
+    // the flag still set, and continues the interrupted turn from there.
+    create_effect(move |_| {
+        if compact_dialog.get().is_some() {
+            return;
+        }
+        let Some(id) = compact_resume.get() else {
+            return;
+        };
+        compact_resume.set(None);
+        if active_session.get_untracked().as_deref() != Some(id.as_str()) {
+            return;
+        }
+        if let Some(index) = items.with_untracked(|rows| rows.iter().rposition(is_error_assistant))
+        {
+            resume_turn(index);
+        }
     });
 
     let new_session_context_recovery = Callback::new(move |source_id: String| {
@@ -5251,6 +5744,16 @@ fn App() -> impl IntoView {
                 Err(error) => status.set(js_error_text(error)),
             }
         });
+    };
+
+    // The send slot holds one button: while a turn runs it is Stop, and it
+    // becomes Queue… only once there is something to queue.
+    let composer_has_draft = move || {
+        !input.get().trim().is_empty()
+            || !attachments.get().is_empty()
+            || !composer_references.get().is_empty()
+            || !composer_quotes.get().is_empty()
+            || mcp_app_context.get().is_some()
     };
 
     let composer_blocked = move || {
@@ -5679,24 +6182,11 @@ fn App() -> impl IntoView {
         let Some(id) = active_session.get_untracked() else {
             return;
         };
-        if busy.get_untracked() {
+        if busy.get_untracked() || active_acp_agent_id.get_untracked().is_some() {
             return;
         }
         context_usage_open.set(false);
-        spawn_local(async move {
-            let args = to_value(&SendMessageArgs {
-                session_id: Some(id),
-                message: "/compact".into(),
-                attachments: vec![],
-                references: vec![],
-                resume: false,
-                acp_agent_id: None,
-                guide: None,
-                replace: None,
-            })
-            .unwrap();
-            let _ = invoke_checked("send_message", args).await;
-        });
+        open_compact_dialog.call((id, String::new(), CompactDialogMode::Regular));
     });
     let new_session_from_usage = Callback::new(move |_: ()| {
         context_usage_open.set(false);
@@ -6087,9 +6577,19 @@ fn App() -> impl IntoView {
                     all.insert(id.clone(), page.branches);
                 });
                 active_branch_state.set(page.branch_state);
+                if page.archived {
+                    archived_sessions.update(|s| {
+                        s.insert(id.clone());
+                    });
+                }
                 conversation_outlines.update(|all| {
                     all.insert(id.clone(), page.outline);
                 });
+                context_epochs.set(page.context_epochs);
+                head_epoch.set(page.head_epoch);
+                in_context_from_user_index.set(page.in_context_from_user_index);
+                model_view.set(false);
+                context_view_items.set(Vec::new());
                 transcript_pages.update(|pages| {
                     pages.insert(
                         id.clone(),
@@ -6117,6 +6617,19 @@ fn App() -> impl IntoView {
                 return;
             }
         });
+    });
+    let toggle_model_view = Callback::new(move |_| {
+        if model_view.get() {
+            model_view.set(false);
+            return;
+        }
+        let Some(id) = active_session.get() else {
+            return;
+        };
+        model_view.set(true);
+        context_view_items.set(Vec::new());
+        context_view_live_from.set(None);
+        refresh_context_state.call(id);
     });
     let open_exploration = {
         let load_session = load_session.clone();
@@ -6544,7 +7057,9 @@ fn App() -> impl IntoView {
     });
 
     let request_session_review = Callback::new(move |session_id: String| {
-        if reviewing.with_untracked(|ids| ids.contains(&session_id)) {
+        if running.with_untracked(|ids| ids.contains(&session_id))
+            || reviewing.with_untracked(|ids| ids.contains(&session_id))
+        {
             return;
         }
         reviewing.update(|ids| {
@@ -6571,7 +7086,6 @@ fn App() -> impl IntoView {
         request_turn_memory_proposal(
             session_id,
             Some(turn_index),
-            false,
             turn_memory_proposal,
             turn_memory_editor,
             turn_memory_scope,
@@ -6592,7 +7106,33 @@ fn App() -> impl IntoView {
             return false;
         };
         match name {
-            "compact" => return false,
+            "archive" => {
+                input.set(String::new());
+                archive_frame.set(active_session.get_untracked());
+                return true;
+            }
+            "compact" => {
+                input.set(String::new());
+                if active_acp_agent_id.get_untracked().is_some() {
+                    status.set(localize_backend(
+                        locale.get_untracked(),
+                        "ACP conversations cannot be compacted from this desktop view.",
+                    ));
+                } else if let Some(id) = active_session.get_untracked() {
+                    let mode = if payload.trim().is_empty() {
+                        CompactDialogMode::Regular
+                    } else {
+                        CompactDialogMode::Semantic
+                    };
+                    open_compact_dialog.call((id, payload.to_string(), mode));
+                } else {
+                    status.set(localize_backend(
+                        locale.get_untracked(),
+                        "Open a conversation before compacting its context.",
+                    ));
+                }
+                return true;
+            }
             "fork" => {
                 if active_branch_state.get_untracked().is_some()
                     || active_is_exploration.get_untracked()
@@ -6738,11 +7278,18 @@ fn App() -> impl IntoView {
         true
     })));
 
+    let outline_jump_request = store_value(0_u64);
     let jump_to_conversation_outline =
         Callback::new(move |(target, before_seq): (usize, Option<i64>)| {
+            outline_jump_request.update_value(|request| *request += 1);
+            let request = outline_jump_request.get_value();
+            let load_epoch = transcript_load_epoch.get_untracked();
             let Some(id) = active_session.get_untracked() else {
                 return;
             };
+            let event_revision =
+                transcript_event_revisions.with_untracked(|all| all.get(&id).copied());
+            transcript_page_error.set(None);
             let user_offset = transcript_pages
                 .with_untracked(|pages| pages.get(&id).copied())
                 .map_or(0, |page| page.user_offset);
@@ -6759,34 +7306,78 @@ fn App() -> impl IntoView {
                 return;
             }
             conversation_outline_selected.set(Some(target));
+            transcript_page_error.set(None);
             spawn_local(async move {
-                let value = invoke(
-                    "load_session",
-                    to_value(&serde_json::json!({
-                        "id": id.clone(),
-                        "beforeSeq": before_seq,
-                    }))
-                    .unwrap(),
-                )
-                .await;
-                let Ok(page) = serde_wasm_bindgen::from_value::<LoadedSessionPage>(value) else {
-                    return;
+                let mut cursor = before_seq;
+                let mut visited = HashSet::new();
+                let result = loop {
+                    if !visited.insert(cursor) {
+                        break Err("History pagination did not advance".to_string());
+                    }
+                    let result = invoke_checked(
+                        "load_session",
+                        to_value(&serde_json::json!({ "id": id.clone(), "beforeSeq": cursor }))
+                            .unwrap(),
+                    )
+                    .await
+                    .map_err(js_error_text)
+                    .and_then(|value| {
+                        serde_wasm_bindgen::from_value::<LoadedSessionPage>(value)
+                            .map_err(|error| error.to_string())
+                    });
+                    // A newer jump, reload, or session switch owns the view.
+                    if outline_jump_request.get_value() != request
+                        || transcript_load_epoch.get_untracked() != load_epoch
+                        || transcript_event_revisions.with_untracked(|all| all.get(&id).copied())
+                            != event_revision
+                        || active_session.get_untracked().as_deref() != Some(id.as_str())
+                    {
+                        return;
+                    }
+                    let page = match result {
+                        Ok(page) => page,
+                        Err(error) => break Err(error),
+                    };
+                    let mut chats = page
+                        .items
+                        .iter()
+                        .cloned()
+                        .map(LoadedItem::into_chat)
+                        .collect::<Vec<_>>();
+                    settle_question_cards(&mut chats);
+                    if conversation_outline_target_is_loaded(&chats, page.user_offset, target) {
+                        let target_local = target - page.user_offset;
+                        break Ok((page, chats, target_local));
+                    }
+                    if target < page.user_offset {
+                        if let Some(next) = page.next_before_seq {
+                            cursor = Some(next);
+                            continue;
+                        }
+                    }
+                    // An obsolete supplied cursor may land before the target.
+                    // Restart at the latest page once, then follow only the
+                    // cursors returned by the backend.
+                    if !visited.contains(&None) {
+                        cursor = None;
+                        continue;
+                    }
+                    break Err("The selected question is unavailable in saved history".to_string());
                 };
-                let target_local = target.saturating_sub(page.user_offset);
-                let mut chats = page
-                    .items
-                    .into_iter()
-                    .map(LoadedItem::into_chat)
-                    .collect::<Vec<_>>();
-                settle_question_cards(&mut chats);
-                let chats = chats;
-                let loaded_turns = chats
-                    .iter()
-                    .filter(|item| matches!(item, ChatItem::User(_) | ChatItem::QueuedUser { .. }))
-                    .count();
-                if target < page.user_offset || target_local >= loaded_turns {
-                    return;
-                }
+                let (page, chats, target_local) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        transcript_page_error.set(Some((
+                            id.clone(),
+                            tf(
+                                locale.get_untracked(),
+                                "transcript.load_failed",
+                                &[("msg", &error)],
+                            ),
+                        )));
+                        return;
+                    }
+                };
                 if !page.outline.is_empty() {
                     conversation_outlines.update(|outlines| {
                         outlines.insert(id.clone(), page.outline);
@@ -6974,9 +7565,37 @@ fn App() -> impl IntoView {
     // source: resolve the bridge's pending request; the answer returns inside
     // the agent's still-running turn.
     let on_question_answer = Callback::new(
-        move |(ui_index, request_id, answer): (usize, Option<String>, String)| {
+        move |(ui_index, request_id, answer, fill_only): (usize, Option<String>, String, bool)| {
             let answer = answer.trim().to_string();
             if answer.is_empty() {
+                return;
+            }
+            // Native option clicks stage an editable composer draft. The card
+            // remains pending until the user submits the resulting message.
+            // ACP responses still resolve immediately because they are a
+            // protocol reply to a live bridge request, not a new turn.
+            if fill_only && request_id.is_none() {
+                let Some(session_id) = active_session.get_untracked() else {
+                    return;
+                };
+                let previous = native_question_draft.get_untracked();
+                let current_input = input.get_untracked();
+                let draft = if previous.as_ref().is_some_and(
+                    |(previous_session, previous_index, previous_text)| {
+                        *previous_session == session_id
+                            && *previous_index == ui_index
+                            && current_input == *previous_text
+                    },
+                ) {
+                    answer.clone()
+                } else if current_input.trim().is_empty() {
+                    answer.clone()
+                } else {
+                    format!("{}\n\n{}", current_input.trim_end(), answer)
+                };
+                input.set(draft.clone());
+                native_question_draft.set(Some((session_id, ui_index, draft)));
+                focus_composer();
                 return;
             }
             // Settle the card before sending: the send appends rows, so the
@@ -6998,6 +7617,7 @@ fn App() -> impl IntoView {
                 None => {
                     // The send callback reads the composer synchronously, so
                     // swap the answer in and restore any draft right after.
+                    native_question_draft.set(None);
                     let draft = input.get_untracked();
                     input.set(answer);
                     send.call(ComposerSendAction::Normal);
@@ -7376,6 +7996,7 @@ fn App() -> impl IntoView {
         // Reset before the fetch: otherwise the previous session's flag shows
         // on the new one for as long as the round trip takes.
         local_plan_mode.set(Some(false));
+        auto_review_enabled.set(false);
         agent_completion.set(AgentCompletionSettings::default());
         agent_completion_busy.set(false);
         let Some(session_id) = active_session.get() else {
@@ -7395,17 +8016,22 @@ fn App() -> impl IntoView {
                 .await
                 .ok()
                 .and_then(|value| value.as_bool());
-            let completion = invoke_checked("get_session_agent_completion", args)
+            let completion = invoke_checked("get_session_agent_completion", args.clone())
                 .await
                 .ok()
                 .and_then(|value| {
                     serde_wasm_bindgen::from_value::<AgentCompletionSettings>(value).ok()
                 });
+            let auto_review = invoke_checked("get_auto_review_enabled", args)
+                .await
+                .ok()
+                .and_then(|value| value.as_bool());
             if active_session.get_untracked().as_deref() == Some(session_id.as_str()) {
                 delegation_enabled.set(enabled.unwrap_or(false));
                 full_permission_enabled.set(full_permission.unwrap_or(false));
                 local_plan_mode.set(plan.unwrap_or(None));
                 agent_completion.set(completion.unwrap_or_default());
+                auto_review_enabled.set(auto_review.unwrap_or(false));
             }
         });
     });
@@ -7540,12 +8166,6 @@ fn App() -> impl IntoView {
         });
     });
     spawn_local(async move {
-        let value = invoke("get_auto_review_enabled", JsValue::UNDEFINED).await;
-        if let Some(enabled) = value.as_bool() {
-            auto_review_enabled.set(enabled);
-        }
-    });
-    spawn_local(async move {
         let value = invoke("get_auto_failure_analysis_settings", JsValue::UNDEFINED).await;
         if let Ok(settings) = from_value::<AutoFailureAnalysisSettings>(value) {
             auto_failure_analysis.set(settings);
@@ -7574,14 +8194,50 @@ fn App() -> impl IntoView {
     let storage_prefs_form = create_rw_signal(None::<StoragePrefsForm>);
     let run_review_modal = create_rw_signal(None::<String>);
     provide_context(RunReviewModal(run_review_modal));
-    // Deferred results-review prompting (#897): monitored run cards nominate
-    // candidates here; this root effect waits until the owning session is
+    // Deferred results-review prompting (#897) follows monitored Run state,
+    // independent of whether its card is mounted or folded into activity.
+    // The root waits until the owning session is
     // idle, asks the backend whether each candidate has an unresolved product
     // decision, and opens the modal for the newest one that does. Exploratory
     // command runs never enter the queue, and dismissed or empty workspaces
     // never prompt.
     let pending_run_reviews = create_rw_signal(Vec::<String>::new());
-    provide_context(crate::overlays::PendingRunReviews(pending_run_reviews));
+    create_effect(
+        move |previous: Option<(Option<String>, HashMap<String, String>)>| {
+            let session = active_session.get();
+            let previous = previous
+                .filter(|(previous_session, _)| *previous_session == session)
+                .map(|(_, statuses)| statuses)
+                .unwrap_or_default();
+            let monitored = monitored_run_ids.get();
+            let mut statuses = HashMap::new();
+            let candidates = run_records.with(|runs| {
+                runs.iter()
+                    .filter(|run| monitored.contains(&run.id))
+                    .filter_map(|run| {
+                        statuses.insert(run.id.clone(), run.status.clone());
+                        (matches!(
+                            previous.get(&run.id).map(String::as_str),
+                            Some("submitted" | "running" | "cancelling")
+                        ) && run.status == "succeeded"
+                            && run.kind == "ssh_direct"
+                            && run.cleaned_at.is_none())
+                        .then(|| run.id.clone())
+                    })
+                    .collect::<Vec<_>>()
+            });
+            if !candidates.is_empty() {
+                pending_run_reviews.update(|ids| {
+                    for id in candidates {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                });
+            }
+            (session, statuses)
+        },
+    );
     create_effect(move |_| {
         if run_review_modal.get().is_some() {
             return;
@@ -7640,6 +8296,40 @@ fn App() -> impl IntoView {
         runs: run_records,
         clock: run_clock.read_only(),
         dismissed: dismissed_run_cards,
+    });
+    provide_context(chat_render::CompactionRowActions {
+        undo: Callback::new(move |epoch: u64| {
+            if busy.get() {
+                return;
+            }
+            let sid = active_session.get();
+            spawn_local(async move {
+                let args = to_value(&tauri_args::undo_compaction(&sid)).unwrap();
+                if invoke_checked("undo_compaction", args).await.is_err() {
+                    return;
+                }
+                if let Some(id) = sid.as_deref() {
+                    route_items(active_session, items, transcripts, id, |rows| {
+                        apply_compaction_undone(rows, epoch);
+                    });
+                    refresh_context_state.call(id.to_string());
+                }
+            });
+        }),
+        rewind_before: Callback::new(move |kept_from: usize| {
+            if busy.get() {
+                return;
+            }
+            let list = items.get();
+            let offset = active_session
+                .get()
+                .as_deref()
+                .and_then(|id| transcript_pages.with(|pages| pages.get(id).copied()))
+                .map_or(0, |page| page.user_offset);
+            if let Some(ui_index) = compaction_rewind_ui_index(&list, offset, kept_from) {
+                edit_confirm.set(Some(ui_index));
+            }
+        }),
     });
     // The transfer tray needs the shared clock only while the active session
     // has an active or briefly lingering transfer. Once the last card expires,
@@ -8140,7 +8830,10 @@ fn App() -> impl IntoView {
             let arg = to_value(&serde_json::json!({ "query": "", "limit": 50 })).unwrap();
             let v = invoke("search_sessions", arg).await;
             if let Ok(rows) = serde_wasm_bindgen::from_value::<Vec<SessionSearchInfo>>(v) {
-                let rows: Vec<_> = rows.into_iter().filter(|s| s.status == "needs_you").collect();
+                let rows: Vec<_> = rows
+                    .into_iter()
+                    .filter(|s| s.status == "needs_you")
+                    .collect();
                 if inbox_sessions.with_untracked(|current| current != &rows) {
                     inbox_sessions.set(rows);
                 }
@@ -8148,6 +8841,14 @@ fn App() -> impl IntoView {
         });
     };
     refresh_inbox();
+    // Other projects stay listed in the dropdown, but only this project's
+    // sessions light the badge — a fresh window must not flag unrelated work.
+    let inbox_in_this_project = move |s: &SessionSearchInfo| {
+        project_info.with(|p| p.as_ref().is_none_or(|p| p.id == s.project_id))
+    };
+    let inbox_here_count = create_memo(move |_| {
+        inbox_sessions.with(|rows| rows.iter().filter(|s| inbox_in_this_project(s)).count())
+    });
     // Close on any click that bubbles to the window; the bell and the dropdown
     // stop propagation (same pattern as the titlebar menus — a fixed backdrop
     // would be clipped to the topbar, whose backdrop-filter contains it).
@@ -8300,6 +9001,10 @@ fn App() -> impl IntoView {
                 open_workspace_path_in_system(payload);
                 return;
             }
+            if action == "openWorkspaceDirectory" {
+                open_workspace_directory.call(payload);
+                return;
+            }
             if action == "copyImage" {
                 spawn_local(async move {
                     if context_menu::copy_image(&payload).await {
@@ -8393,13 +9098,15 @@ fn App() -> impl IntoView {
                 return;
             }
             if action == "openWorkspaceFileCenter" {
-                let tab = CenterFileTab::from_path(payload.clone());
-                center_files.update(|files| {
-                    if !files.iter().any(|file| file.path == payload) {
-                        files.push(tab.clone());
-                    }
+                confirm_workspace_file_open(payload.clone(), move || {
+                    let tab = CenterFileTab::from_path(payload.clone());
+                    center_files.update(|files| {
+                        if !files.iter().any(|file| file.path == payload) {
+                            files.push(tab.clone());
+                        }
+                    });
+                    center_file.set(Some(payload));
                 });
-                center_file.set(Some(payload));
                 return;
             }
             if action == "closeCenterCurrent" {
@@ -8834,6 +9541,25 @@ fn App() -> impl IntoView {
             }
             return;
         }
+        if compact_idle_prompt.get().is_some() {
+            ev.prevent_default();
+            if let Some((id, _)) = compact_idle_prompt.get_untracked() {
+                compact_idle_dismissed.update(|dismissed| {
+                    dismissed.insert(id);
+                });
+            }
+            compact_idle_prompt.set(None);
+            return;
+        }
+        if compact_dialog.get().is_some() {
+            ev.prevent_default();
+            if !compact_busy.get() {
+                compact_dialog.set(None);
+                compact_instruction.set(String::new());
+                compact_error.set(None);
+            }
+            return;
+        }
         if context_recovery_dialog.get().is_some() {
             ev.prevent_default();
             if !context_recovery_busy.get() {
@@ -8872,6 +9598,13 @@ fn App() -> impl IntoView {
         if trajectory_open.get() {
             ev.prevent_default();
             trajectory_open.set(false);
+            return;
+        }
+        if archive_frame.get().is_some() && modal_artifact.get().is_none() {
+            ev.prevent_default();
+            if !archive_busy.get() {
+                archive_frame.set(None);
+            }
             return;
         }
         if let Some(modal) = update_check_modal.get() {
@@ -9468,109 +10201,122 @@ fn App() -> impl IntoView {
     // serialized gate. A rapid A -> B switch can therefore never let A's late
     // response load a session, refresh lists, or publish project metadata after
     // B has become the requested target.
-    let open_project_transition = {
+    let open_project_with_files = {
         let transition_epoch = project_transition_epoch.clone();
         let transition_target = project_transition_target.clone();
         let open_gate = project_open_gate.clone();
         let load_session = load_session.clone();
         let app_shell_entering = app_shell_entering;
-        Callback::new(move |(project_id, session_id): (String, Option<String>)| {
-            if project_transfer
-                .get_untracked()
-                .is_some_and(|transfer| transfer.is_exporting_project(&project_id))
-            {
-                let message = t(locale.get_untracked(), "projects.transfer.export_locked");
-                project_open_error.set(Some(message.clone()));
-                status.set(message);
-                return;
-            }
-            let calendar_day = calendar_journey_request
-                .get_untracked()
-                .filter(|(id, _)| id == &project_id)
-                .map(|(_, day)| day);
-            calendar_journey_request.set(None);
-            home_calendar_open.set(false);
-            journey_initial_day.set(None);
-            let request_epoch = transition_epoch.get().wrapping_add(1);
-            transition_epoch.set(request_epoch);
-            *transition_target.borrow_mut() = Some(project_id.clone());
+        Callback::new(
+            move |(project_id, session_id, show_files): (String, Option<String>, bool)| {
+                if project_transfer
+                    .get_untracked()
+                    .is_some_and(|transfer| transfer.is_exporting_project(&project_id))
+                {
+                    let message = t(locale.get_untracked(), "projects.transfer.export_locked");
+                    project_open_error.set(Some(message.clone()));
+                    status.set(message);
+                    return;
+                }
+                let calendar_day = calendar_journey_request
+                    .get_untracked()
+                    .filter(|(id, _)| id == &project_id)
+                    .map(|(_, day)| day);
+                calendar_journey_request.set(None);
+                home_calendar_open.set(false);
+                journey_initial_day.set(None);
+                let request_epoch = transition_epoch.get().wrapping_add(1);
+                transition_epoch.set(request_epoch);
+                *transition_target.borrow_mut() = Some(project_id.clone());
 
-            project_open_error.set(None);
-            status.set(String::new());
-            show_proj_menu.set(false);
-            show_research_graph.set(false);
-            research_graph.set(ResearchGraph::default());
-            demo_mode.set(false);
-            // Move the visible rows into the inactive cache so background
-            // sessions keep streaming without cloning a long transcript.
-            replace_visible_transcript(
-                active_session.get_untracked(),
-                None,
-                Vec::new(),
-                items,
-                transcripts,
-                running,
-            );
-            active_session.set(None);
-            collapsed_folders.set(HashSet::new());
-            selecting_workspace_entries.set(false);
-            selected_workspace_paths.set(HashSet::new());
-            project_info.set(None);
-            app_shell_entering.set(true);
-            {
-                let transition_epoch = transition_epoch.clone();
-                let app_shell_entering = app_shell_entering;
-                set_timeout(
-                    move || {
-                        if transition_epoch.get() == request_epoch {
-                            app_shell_entering.set(false);
-                        }
-                    },
-                    std::time::Duration::from_millis(520),
+                project_open_error.set(None);
+                status.set(String::new());
+                show_proj_menu.set(false);
+                show_research_graph.set(false);
+                research_graph.set(ResearchGraph::default());
+                demo_mode.set(false);
+                // Move the visible rows into the inactive cache so background
+                // sessions keep streaming without cloning a long transcript.
+                replace_visible_transcript(
+                    active_session.get_untracked(),
+                    None,
+                    Vec::new(),
+                    items,
+                    transcripts,
+                    running,
                 );
-            }
-            show_projects.set(false);
-
-            let transition_epoch = transition_epoch.clone();
-            let transition_target = transition_target.clone();
-            let open_gate = open_gate.clone();
-            let load_session = load_session.clone();
-            spawn_local(async move {
-                let _permit = acquire_project_open_gate(open_gate).await;
-                if !project_transition_is_current(
-                    &transition_epoch,
-                    &transition_target,
-                    request_epoch,
-                    &project_id,
-                ) {
-                    return;
+                // Folder navigation belongs to the project, even when neither
+                // project has a conversation to trigger the session-tab reset.
+                // Let the session effect stash outgoing conversation tabs itself.
+                if active_session.get_untracked().is_none() {
+                    center_file.set(None);
+                    center_files.set(Vec::new());
                 }
-
-                let args = to_value(&serde_json::json!({ "id": project_id.clone() })).unwrap();
-                let open_result = invoke_checked("open_project", args).await;
-                if !project_transition_is_current(
-                    &transition_epoch,
-                    &transition_target,
-                    request_epoch,
-                    &project_id,
-                ) {
-                    return;
+                active_session.set(None);
+                file_source.set("local".into());
+                file_cwd.set(".".into());
+                file_query.set(String::new());
+                clear_dir_listing(file_entries);
+                clear_file_search(file_search_hits);
+                collapsed_folders.set(HashSet::new());
+                selecting_workspace_entries.set(false);
+                selected_workspace_paths.set(HashSet::new());
+                project_info.set(None);
+                app_shell_entering.set(true);
+                {
+                    let transition_epoch = transition_epoch.clone();
+                    let app_shell_entering = app_shell_entering;
+                    set_timeout(
+                        move || {
+                            if transition_epoch.get() == request_epoch {
+                                app_shell_entering.set(false);
+                            }
+                        },
+                        std::time::Duration::from_millis(520),
+                    );
                 }
+                show_projects.set(false);
 
-                let project_result = match open_result {
-                    Ok(_) => invoke_checked("get_project_info", JsValue::UNDEFINED).await,
-                    Err(error) => Err(error),
-                };
-                if !project_transition_is_current(
-                    &transition_epoch,
-                    &transition_target,
-                    request_epoch,
-                    &project_id,
-                ) {
-                    return;
-                }
+                let transition_epoch = transition_epoch.clone();
+                let transition_target = transition_target.clone();
+                let open_gate = open_gate.clone();
+                let load_session = load_session.clone();
+                spawn_local(async move {
+                    let _permit = acquire_project_open_gate(open_gate).await;
+                    if !project_transition_is_current(
+                        &transition_epoch,
+                        &transition_target,
+                        request_epoch,
+                        &project_id,
+                    ) {
+                        return;
+                    }
 
-                let result = project_result
+                    let args = to_value(&serde_json::json!({ "id": project_id.clone() })).unwrap();
+                    let open_result = invoke_checked("open_project", args).await;
+                    if !project_transition_is_current(
+                        &transition_epoch,
+                        &transition_target,
+                        request_epoch,
+                        &project_id,
+                    ) {
+                        return;
+                    }
+
+                    let project_result = match open_result {
+                        Ok(_) => invoke_checked("get_project_info", JsValue::UNDEFINED).await,
+                        Err(error) => Err(error),
+                    };
+                    if !project_transition_is_current(
+                        &transition_epoch,
+                        &transition_target,
+                        request_epoch,
+                        &project_id,
+                    ) {
+                        return;
+                    }
+
+                    let result = project_result
                     .map_err(js_error_text)
                     .and_then(|value| {
                         serde_wasm_bindgen::from_value::<ProjectInfo>(value)
@@ -9586,52 +10332,62 @@ fn App() -> impl IntoView {
                         }
                     });
 
-                let project = match result {
-                    Ok(project) => project,
-                    Err(raw_error) => {
-                        let loc = locale.get_untracked();
-                        let detail = localize_backend(loc, &raw_error);
-                        let message = tf(loc, "projects.open_failed", &[("msg", &detail)]);
-                        project_open_error.set(Some(message.clone()));
-                        status.set(message);
-                        project_info.set(None);
-                        *transition_target.borrow_mut() = None;
-                        show_projects.set(true);
+                    let project = match result {
+                        Ok(project) => project,
+                        Err(raw_error) => {
+                            let loc = locale.get_untracked();
+                            let detail = localize_backend(loc, &raw_error);
+                            let message = tf(loc, "projects.open_failed", &[("msg", &detail)]);
+                            project_open_error.set(Some(message.clone()));
+                            status.set(message);
+                            project_info.set(None);
+                            *transition_target.borrow_mut() = None;
+                            show_projects.set(true);
+                            return;
+                        }
+                    };
+
+                    let session_id = match session_id {
+                        Some(session_id) => Some(session_id),
+                        None if calendar_day.is_none()
+                            && settings.get_untracked().resume_last_session =>
+                        {
+                            invoke_latest_used_session().await
+                        }
+                        None => None,
+                    };
+                    if !project_transition_is_current(
+                        &transition_epoch,
+                        &transition_target,
+                        request_epoch,
+                        &project_id,
+                    ) {
                         return;
                     }
-                };
-
-                let session_id = match session_id {
-                    Some(session_id) => Some(session_id),
-                    None if calendar_day.is_none()
-                        && settings.get_untracked().resume_last_session =>
-                    {
-                        invoke_latest_used_session().await
+                    project_info.set(Some(project));
+                    if let Some(day) = calendar_day {
+                        journey_initial_day.set(Some(day));
+                        show_research_graph.set(true);
+                        refresh_research_graph(research_graph);
                     }
-                    None => None,
-                };
-                if !project_transition_is_current(
-                    &transition_epoch,
-                    &transition_target,
-                    request_epoch,
-                    &project_id,
-                ) {
-                    return;
-                }
-                project_info.set(Some(project));
-                if let Some(day) = calendar_day {
-                    journey_initial_day.set(Some(day));
-                    show_research_graph.set(true);
-                    refresh_research_graph(research_graph);
-                }
-                if let Some(session_id) = session_id {
-                    load_session.call(session_id);
-                }
-                refresh_session_history();
-                refresh_folders(folders);
-            });
-        })
+                    if let Some(session_id) = session_id {
+                        load_session.call(session_id);
+                    }
+                    if show_files {
+                        ensure_right_tab(RightTab::File, show_right, open_right_tabs, right_tab);
+                    }
+                    if show_right.get_untracked() && right_tab.get_untracked() == RightTab::File {
+                        refresh_dir(file_cwd, file_entries);
+                    }
+                    refresh_session_history();
+                    refresh_folders(folders);
+                });
+            },
+        )
     };
+    let open_project_transition = Callback::new(move |(id, session): (String, Option<String>)| {
+        open_project_with_files.call((id, session, false));
+    });
     // Sent by the pet (to "main") and by `open_project_window` targeting a
     // session in an already-open project window (#423). This listener must be
     // window-scoped: the generic event listener is app-wide, so a targeted
@@ -10114,7 +10870,7 @@ fn App() -> impl IntoView {
             }
         });
     });
-    let start_project_export = Callback::new(move |id: String| {
+    let start_project_export = Callback::new(move |(id, directory): (String, bool)| {
         if project_transfer
             .get_untracked()
             .is_some_and(|transfer| transfer.is_active())
@@ -10128,7 +10884,8 @@ fn App() -> impl IntoView {
             Some(id.clone()),
         )));
         spawn_local(async move {
-            let args = to_value(&serde_json::json!({ "id": id.clone() })).unwrap();
+            let args =
+                to_value(&serde_json::json!({ "id": id.clone(), "directory": directory })).unwrap();
             match invoke_checked("export_project", args).await {
                 Ok(value) => {
                     if let Ok(Some(path)) = serde_wasm_bindgen::from_value::<Option<String>>(value)
@@ -10502,11 +11259,10 @@ fn App() -> impl IntoView {
         {
             return;
         }
-        let Some((path, _, kind)) = modal_artifact.get() else {
+        if modal_artifact.get_untracked().is_none() {
             return;
-        };
-        let (prev_artifact, next_artifact) =
-            modal_image_nav_targets(&artifacts.get(), &path, &kind);
+        }
+        let (prev_artifact, next_artifact) = modal_image_nav.get_untracked();
         match ev.key().as_str() {
             "ArrowLeft" => {
                 let Some((path, name, kind)) = prev_artifact else {
@@ -10526,6 +11282,12 @@ fn App() -> impl IntoView {
         }
     });
 
+    // Share the historical/live boundary without subscribing every row to
+    // streaming text updates.
+    let latest_user_item = create_memo(move |_| {
+        let _ = transcript_projection_epoch.get();
+        items.with_untracked(|rows| rows.iter().rposition(|item| matches!(item, ChatItem::User(_))))
+    });
     // Undo eligibility changes at turn boundaries, but the assistant Markdown
     // does not. Publish the one eligible index separately so adding/removing
     // its button never remounts and reparses the whole message row.
@@ -10607,7 +11369,8 @@ fn App() -> impl IntoView {
         create_memo(move |_| show_right.get() && !scratch_open.get() && !demo_mode.get());
     let center_preview = create_memo(move |_| {
         let path = (!demo_mode.get()).then(|| center_file.get()).flatten()?;
-        let file = center_files.with(|files| files.iter().find(|file| file.path == path).cloned())?;
+        let file =
+            center_files.with(|files| files.iter().find(|file| file.path == path).cloned())?;
         let revision = center_file_revisions
             .with(|revisions| revisions.get(&path).copied().unwrap_or_default());
         let display_path = project_info
@@ -10618,6 +11381,10 @@ fn App() -> impl IntoView {
             })
             .unwrap_or_else(|| path.replace('\\', "/"));
         Some((file, revision, display_path))
+    });
+    provide_context(ModelViewCtrl {
+        on: model_view,
+        toggle: toggle_model_view,
     });
 
     view! {
@@ -10653,11 +11420,8 @@ fn App() -> impl IntoView {
         />
         <ProjectExportPrompt
             state=ProjectExportPromptState { locale, prompt: project_export_prompt }
-            on_export_zip=start_project_export
-            on_copy_path=Callback::new(move |path: String| {
-                copy_text(path);
-                show_toast(&t(locale.get_untracked(), "projects.folder_path_copied"));
-            })
+            on_export_zip=Callback::new(move |id| start_project_export.call((id, false)))
+            on_export_directory=Callback::new(move |id| start_project_export.call((id, true)))
         />
         <ProjectTransferOverlay state=ProjectTransferOverlayState { locale, project_transfer } />
         <ExternalLinkConfirm locale=locale pending=external_link_confirm />
@@ -10838,6 +11602,7 @@ fn App() -> impl IntoView {
                 menu_new_project, menu_import_project, home_calendar_open, home_dialog_open,
             }
             open_project=switch_project
+            open_project_folder=Callback::new(move |id| open_project_with_files.call((id, None, true)))
             open_project_session=palette_open_session
             open_project_journey=Callback::new(move |(id, day): (String, i64)| {
                 calendar_journey_request.set(Some((id.clone(), day)));
@@ -10886,11 +11651,13 @@ fn App() -> impl IntoView {
                 left=Signal::derive(move || if show_sidebar.get() { sidebar_w.get() } else { 0.0 })
                 graph=research_graph.read_only()
                 artifact_open=Signal::derive(move || modal_artifact.get().is_some()
+                    || archive_frame.get().is_some()
                     || show_settings.get() || show_library.get() || show_publication_workspace.get()
                     || show_proj_settings.get() || show_capabilities.get())
                 on_close=Callback::new(move |_| show_research_graph.set(false))
                 on_artifact=Callback::new(move |target| modal_artifact.set(Some(target)))
                 on_session=Callback::new(move |id| { show_research_graph.set(false); load_session.call(id); })
+                on_archive=Callback::new(move |id|archive_frame.set(Some(id)))
             />
         })}
         <SshConnectivityOverlay
@@ -11047,7 +11814,19 @@ fn App() -> impl IntoView {
                         } else {
                             center_conversation_title.get()
                         }
-                        on:click=move |_| center_file.set(None)>
+                        on:click=move |_| center_file.set(None)
+                        on:dblclick=move |ev: web_sys::MouseEvent| {
+                            if demo_mode.get_untracked() {
+                                return;
+                            }
+                            let Some(id) = active_session.get_untracked() else {
+                                return;
+                            };
+                            ev.prevent_default();
+                            let title = center_conversation_title.get_untracked();
+                            rename_session_input.set(title.clone());
+                            rename_session_target.set(Some((id, title)));
+                        }>
                         <span class="center-tab-label">{move || if demo_mode.get() {
                             t(locale.get(), "projects.example").into()
                         } else {
@@ -11123,6 +11902,9 @@ fn App() -> impl IntoView {
                 }}
                 <div class="spacer"></div>
                 <div class="topbar-actions">
+                {move || active_session.get().is_some().then(|| view! {
+                    <TranscriptViewToggle />
+                })}
                 {move || {
                     let count = conversation_outline.with(|rows| rows.len());
                     (count > 0 && (!center_file_open.get() || center_split.get())).then(|| view! {
@@ -11161,11 +11943,16 @@ fn App() -> impl IntoView {
                     on:click=move |_| trajectory_open.set(true)>
                     {compose_icon("timeline")}
                 </button>
+                <button type="button" class="icon-btn" data-testid="archive-topbar"
+                    title=move ||research_journey::j(locale.get(),"Archive research","研究归档")
+                    aria-label=move ||research_journey::j(locale.get(),"Archive research","研究归档")
+                    disabled=move ||demo_mode.get() || busy.get() || active_session.get().is_none() || active_is_exploration.get()
+                    on:click=move |_|archive_frame.set(active_session.get_untracked())>{compose_icon("archive")}</button>
                 <div class="inbox-wrap">
                     <button class="icon-btn"
                         class:active=move || inbox_open.get()
                         title=move || {
-                            let n = inbox_sessions.get().len().to_string();
+                            let n = inbox_here_count.get().to_string();
                             tf(locale.get(), "sess_status.needs_you_n", &[("n", &n)])
                         }
                         on:click=move |ev| {
@@ -11176,7 +11963,7 @@ fn App() -> impl IntoView {
                         }>
                         {compose_icon("bell")}
                         {move || {
-                            let n = inbox_sessions.get().len();
+                            let n = inbox_here_count.get();
                             (n > 0).then(|| view! { <span class="inbox-badge">{n}</span> })
                         }}
                     </button>
@@ -11184,25 +11971,34 @@ fn App() -> impl IntoView {
                         <div class="inbox-drop" on:click=|ev| ev.stop_propagation()>
                             <div class="inbox-title">{move || t(locale.get(), "sess_status.needs_you")}</div>
                             {move || {
-                                let rows = inbox_sessions.get();
-                                if rows.is_empty() {
-                                    view! { <div class="inbox-empty">{move || t(locale.get(), "inbox.empty")}</div> }.into_view()
-                                } else {
-                                    rows.into_iter().map(|s| {
-                                        let project_id = s.project_id.clone();
-                                        let session_id = s.id.clone();
-                                        let title = user_message_presentation(&s.title).body;
-                                        view! {
-                                            <button type="button" class="inbox-item"
-                                                on:click=move |_| {
-                                                    inbox_open.set(false);
-                                                    palette_open_session.call((project_id.clone(), session_id.clone()));
-                                                }>
-                                                <span class="inbox-item-project">{s.project_name.clone()}</span>
-                                                <span class="inbox-item-title">{title}</span>
-                                            </button>
-                                        }
-                                    }).collect_view()
+                                let (here, other): (Vec<_>, Vec<_>) = inbox_sessions
+                                    .get()
+                                    .into_iter()
+                                    .partition(|s| inbox_in_this_project(s));
+                                let row = |s: SessionSearchInfo| {
+                                    let project_id = s.project_id.clone();
+                                    let session_id = s.id.clone();
+                                    let title = user_message_presentation(&s.title).body;
+                                    view! {
+                                        <button type="button" class="inbox-item"
+                                            on:click=move |_| {
+                                                inbox_open.set(false);
+                                                palette_open_session.call((project_id.clone(), session_id.clone()));
+                                            }>
+                                            <span class="inbox-item-project">{s.project_name.clone()}</span>
+                                            <span class="inbox-item-title">{title}</span>
+                                        </button>
+                                    }
+                                };
+                                view! {
+                                    {(here.is_empty() && other.is_empty()).then(|| view! {
+                                        <div class="inbox-empty">{move || t(locale.get(), "inbox.empty")}</div>
+                                    })}
+                                    {here.into_iter().map(row).collect_view()}
+                                    {(!other.is_empty()).then(|| view! {
+                                        <div class="inbox-title">{move || t(locale.get(), "inbox.other_projects")}</div>
+                                    })}
+                                    {other.into_iter().map(row).collect_view()}
                                 }
                             }}
                         </div>
@@ -11888,7 +12684,7 @@ fn App() -> impl IntoView {
                         selection_popup.set(None);
                     }
                 }>
-                <div class="thread" id=CHAT_THREAD_ID>
+                <div class="thread" id=CHAT_THREAD_ID data-model-view=move || model_view_active().to_string()>
                     {move || active_session.get().and_then(|frame_id| {
                         let rows = explorations.get();
                         if let Some(summary) = rows.iter().find(|row| {
@@ -11960,7 +12756,10 @@ fn App() -> impl IntoView {
                             </div>
                         })
                     })}
-                    {move || active_session.get().and_then(|id| {
+                    {move || (!model_view_active())
+                        .then(|| active_session.get())
+                        .flatten()
+                        .and_then(|id| {
                         transcript_pages.get().get(&id).copied().and_then(|page| {
                             let (_, window_start, _) = items.with(|rows| {
                                 transcript_render_window(
@@ -12007,7 +12806,18 @@ fn App() -> impl IntoView {
                             }
                         })
                     })}
-                    {move || (items.with(|l| l.is_empty()) && !(transcript_loading.get().is_some() && transcript_loading.get() == active_session.get()) && transcript_page_error.get().is_none_or(|(id, _)| active_session.get().as_deref() != Some(id.as_str()))).then(|| view! {
+                    {move || (model_view.get() && context_view_loading.get()).then(|| view! {
+                        <div class="transcript-page-control" role="status" data-testid="context-view-loading">{t(locale.get(), "chat.context_view_loading")}</div>
+                    })}
+                    {move || model_view.get().then(|| context_view_error.get()).flatten().map(|message| view! {
+                        <div class="transcript-page-control" role="alert" data-testid="context-view-error">
+                            {message}
+                            <button type="button" on:click=move |_| {
+                                if let Some(id) = active_session.get_untracked() { refresh_context_state.call(id); }
+                            }>{t(locale.get(), "transcript.retry")}</button>
+                        </div>
+                    })}
+                    {move || (!model_view.get() && thread_items.with(|l| l.is_empty()) && !(transcript_loading.get().is_some() && transcript_loading.get() == active_session.get()) && transcript_page_error.get().is_none_or(|(id, _)| active_session.get().as_deref() != Some(id.as_str()))).then(|| view! {
                         <div class="empty">
                             <span class="empty-logo brand-wordmark" role="img" aria-label="wisp-depmap"></span>
                             <h1>{move || empty_title(locale.get(), empty_title_idx.get())}</h1>
@@ -12063,7 +12873,9 @@ fn App() -> impl IntoView {
                             // Rows carry message indices, never cloned messages;
                             // `children` clones lazily, so a flush only pays for
                             // rows whose fingerprint key actually changed.
-                            conversation_outline.with(|outline| items.with(|list| {
+                            conversation_outline.with(|outline| {
+                            let list_owned = thread_items.get();
+                            let list = &list_owned;
                             // Queued user turns live after the active turn and
                             // must not make its process group look historical.
                             let queue_start = trailing_queue_start(list);
@@ -12086,19 +12898,31 @@ fn App() -> impl IntoView {
                             // once complete, fold commentary + reasoning + tools
                             // into one activity summary before the final answer.
                             let mut rows: Vec<(String, usize, bool, u64, ThreadRow)> = Vec::new();
-                            let (window, _, _) = transcript_render_window(
-                                list,
-                                requested_start,
-                                TRANSCRIPT_RENDER_TURNS,
-                            );
+                            // The model working set is already bounded by its
+                            // context window. Never inherit the full transcript's
+                            // paging offset and hide this epoch's checkpoint.
+                            let model_view_on = model_view.get();
+                            let completed_runs = completed_run_owners.get();
+                            let window = if model_view_on {
+                                0..list.len()
+                            } else {
+                                transcript_render_window(list, requested_start, TRANSCRIPT_RENDER_TURNS).0
+                            };
                             let mut i = window.start;
+                            let mut last_activity_user_index = None;
                             while i < window.end {
                                 if renders_nothing(&list[i]) { i += 1; continue; }
-                                if let Some(end) = completed_activity_end(list, i, busy_now) {
+                                // Processed folding is transcript narrative.
+                                // Model view keeps the raw working-set order.
+                                if let Some(end) = (!model_view_on)
+                                    .then(|| completed_activity_end(list, i, busy_now, &completed_runs))
+                                    .flatten()
+                                {
                                     let start = i;
                                     let mut indices: Vec<usize> = Vec::new();
                                     for j in i..end {
-                                        if is_turn_activity_at(list, j) {
+                                        if is_turn_activity_at(list, j, &completed_runs)
+                                            || matches!(list[j], ChatItem::Usage { .. } | ChatItem::Compaction { .. }) {
                                             indices.push(j);
                                         }
                                     }
@@ -12117,8 +12941,13 @@ fn App() -> impl IntoView {
                                         .checked_sub(1)
                                         .map(|index| index + user_offset);
                                     let duration_ms = user_index
+                                        // Visible action/media/active Run cards can still
+                                        // split activity. The clock belongs to the turn,
+                                        // so only its first summary displays it.
+                                        .filter(|index| Some(*index) != last_activity_user_index)
                                         .and_then(|index| outline.iter().find(|entry| entry.user_index == index))
                                         .and_then(|entry| turn_duration_ms(entry.sent_at, entry.response_at));
+                                    last_activity_user_index = user_index;
                                     duration_ms.hash(&mut h);
                                     rows.push((thread_session_id.clone(), start, false, h.finish(), ThreadRow::Activity {
                                         indices,
@@ -12170,12 +12999,12 @@ fn App() -> impl IntoView {
                                     let streaming_reasoning = live_reasoning_index == Some(i);
                                     let compact_assistant = commentary
                                         || live_assistant_index == Some(i);
-                                    let timestamp = transcript_item_timestamp(
+                                    let timestamp = (!model_view.get()).then(|| transcript_item_timestamp(
                                         list,
                                         i,
                                         user_offset,
                                         &outline,
-                                    );
+                                    )).flatten();
                                     let mut fp = if streaming_assistant || streaming_reasoning {
                                         0
                                     } else {
@@ -12201,7 +13030,7 @@ fn App() -> impl IntoView {
                             // session id. Use their persisted creation time to put the
                             // fallback card before the next user turn instead of always
                             // appending it to the live end of the conversation.
-                            let automatic_runs = automatic_session_runs.get();
+                            let automatic_runs = if model_view.get() { Vec::new() } else { automatic_session_runs.get() };
                             let mut automatic_runs = automatic_runs.into_iter().peekable();
                             let mut anchored = Vec::with_capacity(rows.len() + automatic_runs.len());
                             let mut synthetic_start = list.len();
@@ -12238,12 +13067,16 @@ fn App() -> impl IntoView {
                                 synthetic_start += 1;
                             }
                             anchored
-                            }))
+                            })
                         }
                         key=|(session_id, start, streaming, fp, _)| {
-                            (session_id.clone(), *start, *streaming, *fp)
+                            (session_id.clone(), *start, *streaming, *fp, model_view_active())
                         }
                         children=move |(session_id, start, _, _, row)| {
+                            // Model indices refer to the epoch, not the full
+                            // transcript. Keep direct borrows on the normal
+                            // streaming path to avoid cloning a long history.
+                            let row_source = if model_view_active_untracked() { thread_items } else { items.into() };
                             match row {
                                 ThreadRow::AutoRun { run_id } => view! {
                                     <div class="tool-wrap run-monitor-wrap auto-run-monitor"
@@ -12268,10 +13101,11 @@ fn App() -> impl IntoView {
                                 } => {
                                     // Rebuilt only when the fingerprint key changed,
                                     // so this is the one clone that actually pays off.
+                                    let nest_session_id = session_id.clone();
                                     let item = if streaming_reasoning {
                                         ChatItem::Reasoning(String::new())
                                     } else {
-                                        items.with_untracked(|list| list[i].clone())
+                                        thread_items.with_untracked(|list| list[i].clone())
                                     };
                                     let on_resume = Callback::new(resume_turn);
                                     let class = if commentary {
@@ -12279,7 +13113,7 @@ fn App() -> impl IntoView {
                                     } else {
                                         class_for(&item)
                                     };
-                                    let user_index = items
+                                    let user_index = thread_items
                                         .with_untracked(|rows| user_turn_index(rows, i))
                                         .map(|index| {
                                             index
@@ -12289,7 +13123,7 @@ fn App() -> impl IntoView {
                                                     })
                                                     .map_or(0, |page| page.user_offset)
                                         });
-                                    let explore_turn_index = items
+                                    let explore_turn_index = thread_items
                                         .with_untracked(|rows| owning_user_turn_index(rows, i))
                                         .map(|index| {
                                             index
@@ -12299,6 +13133,26 @@ fn App() -> impl IntoView {
                                                     })
                                                     .map_or(0, |page| page.user_offset)
                                         });
+                                    let context_session_id = session_id.clone();
+                                    // Refresh marks when the context boundary changes,
+                                    // without rescanning history on each streaming chunk.
+                                    let in_context = Signal::derive(move || {
+                                        let boundary = in_context_from_user_index.get();
+                                        let user_offset = transcript_pages
+                                            .with(|pages| pages.get(&context_session_id).copied())
+                                            .map_or(0, |page| page.user_offset);
+                                        model_view.get() || thread_items.with_untracked(|rows| {
+                                            item_in_context(
+                                                rows,
+                                                i,
+                                                user_offset,
+                                                boundary,
+                                            )
+                                        })
+                                    });
+                                    let out_of_context_title = move || (!in_context.get()).then(|| {
+                                        t(locale.get(), "chat.out_of_context").to_string()
+                                    });
                                     let data_user_index =
                                         user_index.map(|index| index.to_string());
                                     let branch_anchor = if matches!(&item, ChatItem::User(_)) {
@@ -12337,18 +13191,27 @@ fn App() -> impl IntoView {
                                         Vec::new()
                                     };
                                     let can_undo = Signal::derive(move || {
-                                        !compact_assistant
+                                        !model_view_active()
+                                            && !compact_assistant
                                             && !matches!(active_branch_state.get().as_deref(), Some("merged" | "orphaned"))
                                             && undo_assistant_index.get() == Some(i)
                                     });
-                                    let show_actions = Signal::derive(move || !busy.get());
+                                    // Historical turns stay usable while a later turn runs.
+                                    // The live tail has no stable memory/branch checkpoint yet.
+                                    let show_actions = Signal::derive(move || {
+                                        !model_view_active()
+                                            && (!busy.get() || latest_user_item.get().is_some_and(|latest| i < latest))
+                                    });
                                     let can_branch = Signal::derive(move || {
-                                        active_branch_state.get().is_none()
+                                        show_actions.get()
+                                            && active_branch_state.get().is_none()
                                             && active_acp_agent_id.get().is_none()
                                             && !active_is_exploration.get()
-                                            && !busy.get()
                                     });
                                     let show_explore = Signal::derive(move || {
+                                        if model_view_active() {
+                                            return false;
+                                        }
                                         if compact_assistant
                                             || active_acp_agent_id.get().is_some()
                                             || active_branch_state.get().is_some()
@@ -12394,11 +13257,14 @@ fn App() -> impl IntoView {
                                                 conversation_outline_selected.get() == Some(index)
                                             })
                                             data-ui-index=i.to_string()
-                                            data-user-index=data_user_index>
+                                            data-user-index=data_user_index
+                                            data-in-context=move || in_context.get().to_string()
+                                            data-testid="transcript-item"
+                                            title=out_of_context_title>
                                             {if streaming_assistant {
                                                 view! {
                                                     <StreamingAssistantMessage
-                                                        items=items
+                                                        items=row_source
                                                         source_item=i
                                                         on_artifact=on_artifact_select
                                                         on_file=on_file_link
@@ -12407,7 +13273,7 @@ fn App() -> impl IntoView {
                                             } else if streaming_reasoning {
                                                 view! {
                                                     <StreamingReasoningMessage
-                                                        items=items
+                                                        items=row_source
                                                         source_item=i
                                                         session_id=session_id
                                                         disclosure_state=step_disclosure_state
@@ -12417,7 +13283,8 @@ fn App() -> impl IntoView {
                                                 render_item(
                                                     i, &item, timestamp, artifacts, on_artifact_select, on_file_link,
                                                     run_records, run_clock.read_only(), busy.read_only(), compact_assistant,
-                                                    active_acp_agent_id.get().is_none()
+                                                    !model_view_active_untracked()
+                                                        && active_acp_agent_id.get().is_none()
                                                         && !matches!(active_branch_state.get_untracked().as_deref(), Some("merged" | "orphaned")),
                                                     can_branch, show_actions, can_undo, show_explore, can_explore, edit_message, branch_message, undo_message, explore_turn_index.unwrap_or_default(), start_exploration_from_turn, session_id,
                                                     request_turn_memory, request_session_review, respond_confirm, on_resume,
@@ -12428,82 +13295,137 @@ fn App() -> impl IntoView {
                                                     Callback::new(move |detail| branch_merge_detail.set(Some(detail))),
                                                 ).into_view()
                                             }}
-                                            {(!message_branches.is_empty() || !message_explorations.is_empty()).then(|| view! {
+                                            {(!model_view_active_untracked() && (!message_branches.is_empty() || !message_explorations.is_empty())).then(|| {
+                                                let loc = locale.get();
+                                                let branch_count = message_branches.len();
+                                                let exploration_count = message_explorations.len();
+                                                let branches = store_value(message_branches);
+                                                let explorations = store_value(message_explorations);
+                                                let branch_open_id = format!("{nest_session_id}:{i}:branches");
+                                                let exploration_open_id = format!("{nest_session_id}:{i}:explorations");
+                                                let branch_open_show = branch_open_id.clone();
+                                                let exploration_open_show = exploration_open_id.clone();
+                                                let open_branch = load_session.clone();
+                                                let open_exploration = open_exploration.clone();
+                                                view! {
                                                 <div class="message-branch-links">
-                                                    {message_branches.into_iter().map(|branch| {
-                                                        let open = load_session.clone();
-                                                        let open_id = branch.id.clone();
-                                                        let merged = branch.merged;
-                                                        let merge_summary = branch.merge_summary.clone();
-                                                        let title = if branch.title.trim().is_empty() {
-                                                            t(locale.get(), "sidebar.untitled").to_string()
-                                                        } else {
-                                                            branch.title
-                                                        };
-                                                        let detail_title = title.clone();
-                                                        view! {
-                                                            <div class="message-branch-entry">
-                                                                <button type="button" class="message-branch-link"
-                                                                    data-testid="message-branch-link"
-                                                                    data-session-id=branch.id
-                                                                    data-session-title=title.clone()
-                                                                    data-session-branch="true"
-                                                                    data-session-family="true"
-                                                                    data-branch-merged=if merged { "true" } else { "false" }
-                                                                    on:click=move |_| open.call(open_id.clone())>
-                                                                    <span aria-hidden="true">{compose_icon("branch")}</span>
-                                                                    <span>{title}</span>
-                                                                </button>
-                                                                {merge_summary.map(|summary| {
-                                                                    let detail_summary = summary.clone();
-                                                                    view! {
-                                                                        <button type="button" class="branch-merge-card" data-testid="branch-merge-card"
-                                                                            on:click=move |_| branch_merge_detail.set(Some((detail_title.clone(), detail_summary.clone())))>
-                                                                            <span class="branch-merge-card-icon" aria-hidden="true">{compose_icon("check")}</span>
-                                                                            <span class="branch-merge-card-copy">
-                                                                                <strong>{t(locale.get(), "branch.merged_result")}</strong>
-                                                                            </span>
-                                                                            <span class="branch-merge-card-open">{compose_icon("chevron-right")}</span>
-                                                                        </button>
-                                                                    }
-                                                                })}
-                                                            </div>
-                                                        }
-                                                    }).collect_view()}
-                                                    {message_explorations.into_iter().map(|summary| {
-                                                        let isolation_is_full = summary.isolation_is_full();
-                                                        let exploration = summary.exploration;
-                                                        let exploration_for_open = exploration.clone();
-                                                        let open = open_exploration.clone();
-                                                        let status_key = match exploration.status.as_str() {
-                                                            "active" => "exploration.status_active",
-                                                            "promoting" => "exploration.status_promoting",
-                                                            "creating" => "exploration.status_creating",
-                                                            _ => "exploration.status_failed",
-                                                        };
-                                                        let isolation_key = if isolation_is_full {
-                                                            "exploration.isolation_full"
-                                                        } else {
-                                                            "exploration.isolation_partial"
-                                                        };
-                                                        view! {
-                                                            <div class="message-branch-entry message-exploration-entry">
-                                                                <button type="button" class="message-branch-link exploration-message-card"
-                                                                    data-testid="exploration-message-card"
-                                                                    data-exploration-id=exploration.id.clone()
-                                                                    data-exploration-status=exploration.status.clone()
-                                                                    title=exploration.name.clone()
-                                                                    on:click=move |_| open.call(exploration_for_open.clone())>
-                                                                    <span aria-hidden="true">{compose_icon("flask")}</span>
-                                                                    <span class="message-exploration-copy">
-                                                                        <strong>{exploration.name}</strong>
-                                                                        <span>{format!("{} · {}", t(locale.get(), status_key), t(locale.get(), isolation_key))}</span>
-                                                                    </span>
-                                                                </button>
-                                                            </div>
-                                                        }
-                                                    }).collect_view()}
+                                                    {(branch_count > 0).then(|| view! {
+                                                        <div class="message-nest-group" data-testid="message-branches">
+                                                            {nested_links_toggle(
+                                                                loc,
+                                                                "branch.group",
+                                                                "branch.expand",
+                                                                "branch.collapse",
+                                                                branch_count,
+                                                                branch_open_id,
+                                                                nested_link_disclosure,
+                                                                "message-branch-toggle",
+                                                            )}
+                                                            {move || disclosure_open(nested_link_disclosure, &branch_open_show, true).then(|| {
+                                                                let open = open_branch.clone();
+                                                                view! {
+                                                                    <div class="message-nest-entries">
+                                                                        {branches.get_value().into_iter().map(|branch| {
+                                                                            let open = open.clone();
+                                                                            let open_id = branch.id.clone();
+                                                                            let merged = branch.merged;
+                                                                            let merge_summary = branch.merge_summary.clone();
+                                                                            let title = if branch.title.trim().is_empty() {
+                                                                                t(loc, "sidebar.untitled").to_string()
+                                                                            } else {
+                                                                                branch.title
+                                                                            };
+                                                                            let detail_title = title.clone();
+                                                                            view! {
+                                                                                <div class="message-branch-entry">
+                                                                                    <button type="button" class="message-branch-link"
+                                                                                        data-testid="message-branch-link"
+                                                                                        data-session-id=branch.id
+                                                                                        data-session-title=title.clone()
+                                                                                        data-session-branch="true"
+                                                                                        data-session-family="true"
+                                                                                        data-branch-merged=if merged { "true" } else { "false" }
+                                                                                        on:click=move |_| open.call(open_id.clone())>
+                                                                                        <span aria-hidden="true">{compose_icon("branch")}</span>
+                                                                                        <span>{title}</span>
+                                                                                    </button>
+                                                                                    {merge_summary.map(|summary| {
+                                                                                        let detail_summary = summary.clone();
+                                                                                        view! {
+                                                                                            <button type="button" class="branch-merge-card" data-testid="branch-merge-card"
+                                                                                                on:click=move |_| branch_merge_detail.set(Some((detail_title.clone(), detail_summary.clone())))>
+                                                                                                <span class="branch-merge-card-icon" aria-hidden="true">{compose_icon("check")}</span>
+                                                                                                <span class="branch-merge-card-copy">
+                                                                                                    <strong>{t(loc, "branch.merged_result")}</strong>
+                                                                                                </span>
+                                                                                                <span class="branch-merge-card-open">{compose_icon("chevron-right")}</span>
+                                                                                            </button>
+                                                                                        }
+                                                                                    })}
+                                                                                </div>
+                                                                            }
+                                                                        }).collect_view()}
+                                                                    </div>
+                                                                }
+                                                            })}
+                                                        </div>
+                                                    })}
+                                                    {(exploration_count > 0).then(|| view! {
+                                                        <div class="message-nest-group" data-testid="message-explorations">
+                                                            {nested_links_toggle(
+                                                                loc,
+                                                                "exploration.group",
+                                                                "exploration.expand",
+                                                                "exploration.collapse",
+                                                                exploration_count,
+                                                                exploration_open_id,
+                                                                nested_link_disclosure,
+                                                                "message-exploration-toggle",
+                                                            )}
+                                                            {move || disclosure_open(nested_link_disclosure, &exploration_open_show, true).then(|| {
+                                                                let open = open_exploration.clone();
+                                                                view! {
+                                                                    <div class="message-nest-entries">
+                                                                        {explorations.get_value().into_iter().map(|summary| {
+                                                                            let isolation_is_full = summary.isolation_is_full();
+                                                                            let exploration = summary.exploration;
+                                                                            let exploration_for_open = exploration.clone();
+                                                                            let open = open.clone();
+                                                                            let status_key = match exploration.status.as_str() {
+                                                                                "active" => "exploration.status_active",
+                                                                                "promoting" => "exploration.status_promoting",
+                                                                                "creating" => "exploration.status_creating",
+                                                                                _ => "exploration.status_failed",
+                                                                            };
+                                                                            let isolation_key = if isolation_is_full {
+                                                                                "exploration.isolation_full"
+                                                                            } else {
+                                                                                "exploration.isolation_partial"
+                                                                            };
+                                                                            view! {
+                                                                                <div class="message-branch-entry message-exploration-entry">
+                                                                                    <button type="button" class="message-branch-link exploration-message-card"
+                                                                                        data-testid="exploration-message-card"
+                                                                                        data-exploration-id=exploration.id.clone()
+                                                                                        data-exploration-status=exploration.status.clone()
+                                                                                        title=exploration.name.clone()
+                                                                                        on:click=move |_| open.call(exploration_for_open.clone())>
+                                                                                        <span aria-hidden="true">{compose_icon("flask")}</span>
+                                                                                        <span class="message-exploration-copy">
+                                                                                            <strong>{exploration.name}</strong>
+                                                                                            <span>{format!("{} · {}", t(loc, status_key), t(loc, isolation_key))}</span>
+                                                                                        </span>
+                                                                                    </button>
+                                                                                </div>
+                                                                            }
+                                                                        }).collect_view()}
+                                                                    </div>
+                                                                }
+                                                            })}
+                                                        </div>
+                                                    })}
                                                 </div>
+                                                }
                                             })}
                                         </div>
                                     }.into_view()
@@ -12516,7 +13438,7 @@ fn App() -> impl IntoView {
                                         <div class="steps-wrap" data-ui-indices=ui_indices>{
                                             render_steps_group(
                                                 indices,
-                                                items,
+                                                row_source,
                                                 live,
                                                 false,
                                                 None,
@@ -12532,7 +13454,7 @@ fn App() -> impl IntoView {
                                         <div class="steps-wrap" data-ui-indices=ui_indices>{
                                             render_steps_group(
                                                 indices,
-                                                items,
+                                                row_source,
                                                 false,
                                                 true,
                                                 duration_ms,
@@ -12590,7 +13512,10 @@ fn App() -> impl IntoView {
                             }
                         })
                     })}
-                    {move || active_session.get().and_then(|id| {
+                    {move || (!model_view_active())
+                        .then(|| active_session.get())
+                        .flatten()
+                        .and_then(|id| {
                         transcript_pages.get().get(&id).copied().and_then(|page| {
                             let (_, start, total) = items.with(|rows| {
                                 transcript_render_window(
@@ -13044,6 +13969,9 @@ fn App() -> impl IntoView {
                         {t(locale.get(), "projects.example_read_only")}
                     </div>
                 })}
+                {move ||active_archived.get().then(||view!{
+                    <div class="archive-readonly" data-testid="archive-readonly"><span>{research_journey::j(locale.get(),"Archived notebook · read only","实验记录本已归档 · 只读")}</span><button class="btn-ghost" on:click=move |_|archive_frame.set(active_session.get_untracked())>{research_journey::j(locale.get(),"View milestone / Continue research","查看归档 / 继续研究")}</button></div>
+                })}
                 {move || next_stopping_session(
                     stopping_session.get(),
                     active_session.get().as_deref(),
@@ -13081,6 +14009,21 @@ fn App() -> impl IntoView {
                                         on_compact=compact_from_usage
                                         on_new_session=new_session_from_usage
                                         compact_disabled=Signal::derive(move || busy.get())
+                                        epoch_line=context_epoch_line(
+                                            locale.get(),
+                                            head_epoch.get(),
+                                            context_epochs.with(|rows| {
+                                                rows.iter().any(|row| {
+                                                    row.epoch == head_epoch.get()
+                                                        && row.checkpoint_seq.is_some()
+                                                })
+                                            }),
+                                            conversation_outline.with(|rows| {
+                                                rows.len().saturating_sub(
+                                                    in_context_from_user_index.get().unwrap_or(0),
+                                                )
+                                            }),
+                                        )
                                     />
                                 </div>
                             }
@@ -13091,10 +14034,12 @@ fn App() -> impl IntoView {
                         items=items
                         user_offset=composer_queue_offset
                         can_cut_in=composer_queue_can_cut_in
+                        queue_states=Signal::derive(move || { let sid = active_session.get().unwrap_or_default(); queue_states.get().into_iter().filter_map(|((session, id), state)| (session == sid).then_some((id, state))).collect() })
                         on_queue=on_queue
                     />
                 })}
                 {move || (!demo_mode.get()).then(|| view! {
+                    <ComposerPlanProgress items=items busy=busy session_id=active_session />
                     <SessionRuntimeStrip
                         locale=locale
                         execution_contexts=execution_contexts
@@ -13388,6 +14333,7 @@ fn App() -> impl IntoView {
                             on:keydown:undelegated=on_send
                             on:paste=on_paste
                             prop:placeholder=move || {
+                                if active_archived.get(){return research_journey::j(locale.get(),"Archived notebook. Continue research in a new conversation.","实验记录本已归档，请从归档节点继续研究。").to_string();}
                                 if matches!(active_branch_state.get().as_deref(), Some("merged" | "orphaned")) {
                                     t(locale.get(), "branch.frozen_placeholder").into()
                                 } else if mainline_frozen.get() {
@@ -13759,9 +14705,34 @@ fn App() -> impl IntoView {
                                                     let enabled = event_target_checked(&ev);
                                                     auto_review_enabled.set(enabled);
                                                     spawn_local(async move {
-                                                        let arg = to_value(&serde_json::json!({ "enabled": enabled })).unwrap();
-                                                        if invoke_checked("set_auto_review_enabled", arg).await.is_err() {
-                                                            auto_review_enabled.set(!enabled);
+                                                        let (session_id, created_session) = match active_session.get_untracked() {
+                                                            Some(session_id) => (session_id, false),
+                                                            None if enabled => {
+                                                                let Some(session_id) = invoke("new_session", JsValue::UNDEFINED).await.as_string() else {
+                                                                    auto_review_enabled.set(false);
+                                                                    return;
+                                                                };
+                                                                (session_id, true)
+                                                            }
+                                                            None => {
+                                                                auto_review_enabled.set(false);
+                                                                return;
+                                                            }
+                                                        };
+                                                        let args = to_value(&serde_json::json!({
+                                                            "sessionId": session_id.clone(),
+                                                            "enabled": enabled,
+                                                        })).unwrap();
+                                                        let saved = invoke_checked("set_auto_review_enabled", args).await
+                                                            .ok()
+                                                            .and_then(|value| value.as_bool());
+                                                        if created_session {
+                                                            active_session.set(Some(session_id.clone()));
+                                                            items.set(vec![]);
+                                                            refresh_session_history();
+                                                        }
+                                                        if active_session.get_untracked().as_deref() == Some(session_id.as_str()) {
+                                                            auto_review_enabled.set(saved.unwrap_or(!enabled));
                                                         }
                                                     });
                                                 } />
@@ -14656,20 +15627,26 @@ fn App() -> impl IntoView {
                             {move || busy.get().then(|| view! {
                                 <button type="button" class="stop"
                                     disabled=move || active_session.get() == stopping_session.get()
-                                    on:click=stop>
+                                    on:click=move |_| stop.call(())>
                                     {move || t(locale.get(), if active_session.get() == stopping_session.get() { "composer.stopping" } else { "composer.stop" })}
                                 </button>
                             })}
-                            <div class="send-split">
-                                <button class="send" disabled=composer_blocked on:click=move |_| send.call(ComposerSendAction::Normal)>
-                                    {move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })}
-                                </button>
+                            <div class="send-split"
+                                style:display=move || if busy.get() && !composer_has_draft() { "none" } else { "inline-flex" }>
                                 <button type="button" class="send-menu-toggle"
                                     disabled=composer_blocked
                                     aria-label=move || t(locale.get(), "composer.send_options")
                                     title=move || t(locale.get(), "composer.send_options")
                                     on:click=move |_| send_mode_menu_open.update(|o| *o = !*o)>
                                     {compose_icon("chevron-down")}
+                                </button>
+                                <button type="button" class="send"
+                                    class:is-empty=move || !composer_has_draft()
+                                    disabled=composer_blocked
+                                    aria-label=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
+                                    title=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
+                                    on:click=move |_| send.call(ComposerSendAction::Normal)>
+                                    {compose_icon("arrow-up")}
                                 </button>
                                 {move || send_mode_menu_open.get().then(|| view! {
                                     <div class="send-menu-backdrop" on:click=move |_| send_mode_menu_open.set(false)></div>
@@ -16334,6 +17311,21 @@ fn App() -> impl IntoView {
                             on_compact=compact_from_usage
                             on_new_session=new_session_from_usage
                             compact_disabled=Signal::derive(move || busy.get())
+                            epoch_line=context_epoch_line(
+                                locale.get(),
+                                head_epoch.get(),
+                                context_epochs.with(|rows| {
+                                    rows.iter().any(|row| {
+                                        row.epoch == head_epoch.get()
+                                            && row.checkpoint_seq.is_some()
+                                    })
+                                }),
+                                conversation_outline.with(|rows| {
+                                    rows.len().saturating_sub(
+                                        in_context_from_user_index.get().unwrap_or(0),
+                                    )
+                                }),
+                            )
                         />
                     }
                 })
@@ -16709,21 +17701,17 @@ fn App() -> impl IntoView {
 
         {move || modal_artifact.get().map(|(path, name, kind)| {
             let session = active_session.get();
-            let arts_for_nav = artifacts.get();
-            let (prev_artifact, next_artifact) = modal_image_nav_targets(&arts_for_nav, &path, &kind);
-            let can_prev = prev_artifact.is_some();
-            let can_next = next_artifact.is_some();
             view! {
                 <ArtifactModal path=path name=name kind=kind session=session
-                    can_prev=can_prev
-                    can_next=can_next
+                    can_prev=Signal::derive(move || modal_image_nav.with(|nav| nav.0.is_some()))
+                    can_next=Signal::derive(move || modal_image_nav.with(|nav| nav.1.is_some()))
                     on_prev=Callback::new(move |_| {
-                        if let Some((path, name, kind)) = prev_artifact.clone() {
+                        if let Some((path, name, kind)) = modal_image_nav.get_untracked().0 {
                             modal_artifact.set(Some((path, name, kind)));
                         }
                     })
                     on_next=Callback::new(move |_| {
-                        if let Some((path, name, kind)) = next_artifact.clone() {
+                        if let Some((path, name, kind)) = modal_image_nav.get_untracked().1 {
                             modal_artifact.set(Some((path, name, kind)));
                         }
                     })
@@ -17001,35 +17989,57 @@ fn App() -> impl IntoView {
             on_compact=compact_context_recovery
             on_new_session=new_session_context_recovery
         />
+        <CompactOverlay
+            state=CompactOverlayState {
+                locale,
+                dialog: compact_dialog,
+                mode: compact_mode,
+                instruction: compact_instruction,
+                busy: compact_busy,
+                error: compact_error,
+            }
+            on_start=start_compact_dialog
+            on_close=close_compact_dialog
+        />
+        <CompactIdlePromptOverlay
+            state=CompactIdlePromptOverlayState {
+                locale,
+                prompt: compact_idle_prompt,
+            }
+            on_accept=Callback::new(move |id: String| {
+                compact_idle_dismissed.update(|dismissed| {
+                    dismissed.insert(id.clone());
+                });
+                compact_idle_prompt.set(None);
+                open_compact_dialog.call((id, String::new(), CompactDialogMode::Semantic));
+            })
+            on_dismiss=Callback::new(move |_| {
+                if let Some((id, _)) = compact_idle_prompt.get_untracked() {
+                    compact_idle_dismissed.update(|dismissed| {
+                        dismissed.insert(id);
+                    });
+                }
+                compact_idle_prompt.set(None);
+            })
+        />
         <ContextMenuPortal menu=ctx_menu.read_only() set_menu=ctx_menu.write_only() on_pick=on_ctx_pick />
+        {move ||archive_frame.get().map(|id|view!{
+            <research_archive::ArchiveReview locale=locale frame_id=id busy=archive_busy
+                on_close=Callback::new(move |_|archive_frame.set(None))
+                on_frozen=Callback::new(move |id:String|{archived_sessions.update(|s|{s.insert(id);});refresh_session_history();})
+                on_continue=Callback::new(move |id|{archive_frame.set(None);show_research_graph.set(false);refresh_session_history();load_session.call(id);})
+                on_notebook=Callback::new(move |id|{archive_frame.set(None);show_research_graph.set(false);load_session.call(id);})
+                on_file=Callback::new(move |target|modal_artifact.set(Some(target)))
+            />
+        })}
         </div>
     }
 }
 
-/// `console_error_panic_hook` plus one deliberate downgrade: leptos 0.6
-/// runs a `create_effect`'s first pass in a microtask bound to its owner, and
-/// an owner disposed in between makes `with_owner` panic with
-/// `OwnerDisposed`. Keyed rows (streaming turns, artifact-card rebuilds) hit
-/// that race routinely; under release `panic = "abort"` it used to take the
-/// whole renderer down — a dead window with the backend still running. A
-/// disposed-owner effect has nothing left to update, so the correct handling
-/// is to drop it with a console warning instead of aborting.
-fn install_panic_hook() {
-    std::panic::set_hook(Box::new(move |info| {
-        let message = format!("{info}");
-        if message.contains("OwnerDisposed") {
-            web_sys::console::warn_1(&wasm_bindgen::JsValue::from_str(&format!(
-                "dropped reactive effect for a disposed owner: {message}"
-            )));
-            return;
-        }
-        // Everything else keeps the standard hook behavior (error + stack).
-        console_error_panic_hook::hook(info);
-    }));
-}
-
 pub fn main() {
-    install_panic_hook();
+    // A panic cannot be recovered on wasm32: it traps without running
+    // destructors or restoring the shadow stack, so log every one loudly.
+    console_error_panic_hook::set_once();
     let is_pet_window = window().location().search().ok().is_some_and(|query| {
         query
             .split('&')

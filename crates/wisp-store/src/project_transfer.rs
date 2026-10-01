@@ -220,6 +220,66 @@ async fn copy_project_children(tx: &mut Transaction<'_, Sqlite>, project_id: &st
         .execute(&mut **tx)
         .await?;
     }
+    // Context epochs arrived after the fixed column lists above. Older
+    // bundles have neither column nor table and import as epoch 0.
+    if attached_table_columns(tx, "messages")
+        .await?
+        .contains("epoch")
+    {
+        sqlx::query(
+            "UPDATE messages SET epoch=(SELECT source.epoch FROM transfer.messages source \
+               WHERE source.id=messages.id) \
+             WHERE frame_id IN (SELECT id FROM transfer.frames WHERE project_id=?)",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if attached_table_columns(tx, "frames")
+        .await?
+        .contains("acp_agent_selection")
+    {
+        sqlx::query("UPDATE frames SET acp_agent_selection=(SELECT source.acp_agent_selection FROM transfer.frames source WHERE source.id=frames.id) WHERE project_id=?")
+            .bind(project_id).execute(&mut **tx).await?;
+    }
+    if attached_table_columns(tx, "frames")
+        .await?
+        .contains("head_epoch")
+    {
+        sqlx::query(
+            "UPDATE frames SET head_epoch=(SELECT source.head_epoch FROM transfer.frames source \
+               WHERE source.id=frames.id) WHERE project_id=?",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if attached_table_exists(tx, "context_epochs").await? {
+        sqlx::query(
+            "INSERT INTO context_epochs(frame_id,epoch,parent_epoch,strategy,kind,before_tokens,\
+                after_tokens,first_seq,initial_head_seq,checkpoint_seq,first_kept_seq,archive_ref,\
+                ui_event_seq,created_at) \
+             SELECT frame_id,epoch,parent_epoch,strategy,kind,before_tokens,after_tokens,first_seq,\
+                initial_head_seq,checkpoint_seq,first_kept_seq,archive_ref,ui_event_seq,created_at \
+             FROM transfer.context_epochs \
+             WHERE frame_id IN (SELECT id FROM transfer.frames WHERE project_id=?)",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if attached_table_columns(tx, "frames")
+        .await?
+        .contains("context_epoch_high_water")
+    {
+        sqlx::query(
+            "UPDATE frames SET context_epoch_high_water=(SELECT source.context_epoch_high_water \
+            FROM transfer.frames source WHERE source.id=frames.id) WHERE project_id=?",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+    }
     if attached_table_exists(tx, "message_resource_links").await? {
         let columns = attached_table_columns(tx, "message_resource_links").await?;
         let created_artifact = if columns.contains("created_artifact") {
@@ -830,6 +890,13 @@ async fn copy_publication_children(
     .bind(project_id)
     .execute(&mut **tx)
     .await?;
+    // Import sealed notebooks after messages so immutable notebooks survive transfers.
+    if attached_table_exists(tx, "research_archives").await? {
+        sqlx::query("INSERT INTO research_archives SELECT * FROM transfer.research_archives WHERE project_id=? AND frozen_at IS NOT NULL").bind(project_id).execute(&mut **tx).await?;
+        if attached_table_exists(tx, "research_archive_continuations").await? {
+            sqlx::query("INSERT INTO research_archive_continuations SELECT c.* FROM transfer.research_archive_continuations c JOIN research_archives a ON a.id=c.archive_id WHERE a.project_id=?").bind(project_id).execute(&mut **tx).await?;
+        }
+    }
     Ok(())
 }
 
@@ -841,6 +908,8 @@ pub(crate) async fn delete_project_children(
     project_id: &str,
 ) -> Result<()> {
     const QUERIES: &[&str] = &[
+        "DELETE FROM research_archive_continuations WHERE archive_id IN (SELECT id FROM research_archives WHERE project_id=?)",
+        "DELETE FROM research_archives WHERE project_id=?",
         "UPDATE agent_workflows SET status='draft' WHERE project_id=?",
         "DELETE FROM publication_freeze_attempts WHERE revision_id IN (SELECT revision.id FROM publication_revisions revision JOIN publications publication ON publication.id=revision.publication_id WHERE publication.project_id=?)",
         "UPDATE publication_revisions SET state='deleting' WHERE publication_id IN (SELECT id FROM publications WHERE project_id=?)",
@@ -905,6 +974,7 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM codex_turn_configs WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM acp_sessions WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM execution_log WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
+        "DELETE FROM context_epochs WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM messages WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM research_edges WHERE project_id=?",
         "DELETE FROM research_nodes WHERE project_id=?",
@@ -1300,7 +1370,7 @@ async fn restore_import_paths(
 }
 
 impl Store {
-    async fn database_path(&self) -> Result<PathBuf> {
+    pub(super) async fn database_path(&self) -> Result<PathBuf> {
         let rows = sqlx::query("PRAGMA database_list")
             .fetch_all(&self.pool)
             .await?;
@@ -1370,6 +1440,8 @@ impl Store {
             ("research_nodes", "*", "id"),
             ("research_edges", "*", "id"),
             ("research_journal_entries", "*", "id"),
+            ("research_archives", "*", "id"),
+            ("research_archive_continuations", "*", "frame_id"),
         ];
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database.display()))?
             .read_only(true);
@@ -1428,6 +1500,9 @@ impl Store {
         project_id: &str,
         destination: &Path,
     ) -> Result<ProjectTransferStats> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.export_project_database(project_id, destination)).await;
+        }
         let (_, source_root) = self
             .get_project(project_id)
             .await?
@@ -1509,6 +1584,13 @@ impl Store {
         project_id: &str,
         workspace: &Path,
     ) -> Result<()> {
+        if self.registry.is_some() {
+            anyhow::ensure!(
+                !workspace.join(super::PROJECT_DATABASE).exists()
+                    && !workspace.join(super::PROJECT_METADATA).exists(),
+                "This workspace already contains project storage; register its folder instead"
+            );
+        }
         if self.get_project(project_id).await?.is_some() {
             anyhow::bail!("this project is already present on this device");
         }
@@ -1558,7 +1640,15 @@ impl Store {
         let _ = sqlx::query("DETACH DATABASE transfer")
             .execute(&mut *connection)
             .await;
-        result.context("could not import project metadata")
+        drop(connection);
+        result.context("could not import project metadata")?;
+        if self.registry.is_some()
+            && self.project_scope.is_none()
+            && self.decentralized_project_storage().await?
+        {
+            self.migrate_project_storage(project_id).await?;
+        }
+        Ok(())
     }
 
     /// Replace an existing project's portable rows from a trusted, decrypted
@@ -1572,6 +1662,17 @@ impl Store {
         workspace: &Path,
         sync_state: &ProjectSyncState,
     ) -> Result<()> {
+        if let Some(store) = self.route_project(project_id).await? {
+            Box::pin(store.replace_project_database(
+                archive_database,
+                project_id,
+                workspace,
+                sync_state,
+            ))
+            .await?;
+            self.upsert_project_sync_state(sync_state).await?;
+            return Ok(());
+        }
         if sync_state.project_id != project_id {
             anyhow::bail!("sync cursor does not belong to the replaced project");
         }
@@ -1699,6 +1800,102 @@ mod tests {
             r"C:\Users\Alice\Study\figures\plot.png"
         );
         assert!(restored_project_path(Path::new("/tmp/study"), "../escape").is_err());
+    }
+
+    #[tokio::test]
+    async fn context_epochs_survive_a_project_database_roundtrip() {
+        let token = uuid::Uuid::new_v4();
+        let source_path =
+            std::env::temp_dir().join(format!("wisp_epoch_transfer_source_{token}.sqlite"));
+        let archive_path =
+            std::env::temp_dir().join(format!("wisp_epoch_transfer_archive_{token}.sqlite"));
+        let target_path =
+            std::env::temp_dir().join(format!("wisp_epoch_transfer_target_{token}.sqlite"));
+        let source = Store::open(&source_path).await.unwrap();
+        source
+            .create_project("project", "Epoch project", "workspace")
+            .await
+            .unwrap();
+        source
+            .create_frame("frame", "project", "OPERON", "model")
+            .await
+            .unwrap();
+        for (seq, message) in [
+            wisp_llm::Message::system("sys"),
+            wisp_llm::Message::user("q1"),
+            wisp_llm::Message::assistant("a1"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            source
+                .append_message("frame", seq as i64 + 1, message)
+                .await
+                .unwrap();
+        }
+        let compacted = [
+            wisp_llm::Message::system("sys"),
+            wisp_llm::Message::user("[context summary checkpoint]\n\nsummary"),
+        ];
+        source
+            .open_context_epoch(
+                "frame",
+                crate::OpenContextEpoch {
+                    messages: &compacted,
+                    strategy: "manual",
+                    kind: "semantic",
+                    before_tokens: 10,
+                    after_tokens: 5,
+                    checkpoint_index: Some(1),
+                    first_kept_seq: None,
+                    archive_ref: Some("wisp-history:abc"),
+                    ui_event_seq: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE frames SET context_epoch_high_water=7 WHERE id='frame'")
+            .execute(&source.pool)
+            .await
+            .unwrap();
+        source
+            .export_project_database("project", &archive_path)
+            .await
+            .unwrap();
+        let target = Store::open(&target_path).await.unwrap();
+        target
+            .import_project_database(&archive_path, "project", Path::new("workspace-imported"))
+            .await
+            .unwrap();
+        assert_eq!(target.frame_head_epoch("frame").await.unwrap(), 1);
+        assert_eq!(
+            target.context_epochs("frame").await.unwrap(),
+            source.context_epochs("frame").await.unwrap()
+        );
+        assert_eq!(
+            target
+                .load_messages_all_epochs("frame")
+                .await
+                .unwrap()
+                .iter()
+                .map(|(epoch, seq, _)| (*epoch, *seq))
+                .collect::<Vec<_>>(),
+            [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5)]
+        );
+        assert_eq!(target.load_messages("frame").await.unwrap().len(), 2);
+        let high: i64 =
+            sqlx::query_scalar("SELECT context_epoch_high_water FROM frames WHERE id='frame'")
+                .fetch_one(&target.pool)
+                .await
+                .unwrap();
+        assert_eq!(high, 7);
+
+        source.pool.close().await;
+        target.pool.close().await;
+        for path in [source_path, archive_path, target_path] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[tokio::test]

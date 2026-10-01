@@ -89,11 +89,11 @@
   },
   {
     "group": "figures",
-    "id": "figure-duplicate-audit",
-    "title_zh": "图像重复检查",
-    "title_en": "Figure duplication review",
-    "summary_zh": "拆分论文图像面板，筛查重复或变换后的相似图像，并整理可复核的证据。",
-    "summary_en": "Inspect figure panels for duplication or transformed reuse and produce reviewable evidence."
+    "id": "research-integrity-audit",
+    "title_zh": "研究诚信筛查",
+    "title_en": "Research integrity screening",
+    "summary_zh": "筛查图像重复、复用或变换，以及数值块、末位数字、GRIM 与 p 值不一致等候选证据。",
+    "summary_en": "Screen figure reuse and numeric anomalies such as copied blocks, terminal digits, GRIM, and mismatched p-values."
   },
   {
     "group": "figures",
@@ -222,5 +222,13 @@
     "title_en": "Word–Zotero citations",
     "summary_zh": "检查或转换 DOCX 中的引用与参考文献，保留源文件，并分步确认实际集成操作。",
     "summary_en": "Audit or convert DOCX citations and bibliographies while preserving sources and explicitly authorizing live integration."
+  },
+  {
+    "group": "extension",
+    "id": "computer-use",
+    "title_zh": "操作桌面应用",
+    "title_en": "Native desktop control",
+    "summary_zh": "通过 Cua Driver 查看并操作本机窗口、原生对话框和已登录的桌面界面，并在操作后核对结果。",
+    "summary_en": "Inspect and operate native windows, file dialogs, and signed-in desktop UI through Cua Driver, then verify the result."
   }
 ]

@@ -815,6 +815,19 @@ struct RawExport<'a> {
     trace: &'a TraceExportSummary,
 }
 
+pub(crate) fn render_native_trajectory_html(
+    snapshot: &TrajectorySnapshot,
+    locale: &str,
+    exported_at: &str,
+) -> String {
+    render_trajectory_html(
+        snapshot,
+        &TraceExportSummary::default(),
+        locale,
+        exported_at,
+    )
+}
+
 fn render_trajectory_html(
     snapshot: &TrajectorySnapshot,
     trace: &TraceExportSummary,

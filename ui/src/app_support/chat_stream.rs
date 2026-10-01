@@ -1,17 +1,13 @@
 use super::*;
 
-/// Drop suggested follow-ups for `frame_id` and invalidate any in-flight
-/// generation so a late `generate_follow_up_questions` cannot put them back.
+/// Drop suggested follow-ups for `frame_id`. A late `FollowUps` event for a
+/// session that is running again is ignored where it is received.
 pub(crate) fn dismiss_follow_up_questions(
     questions: RwSignal<HashMap<String, Vec<String>>>,
-    generations: RwSignal<HashMap<String, u64>>,
     frame_id: &str,
 ) {
     questions.update(|all| {
         all.remove(frame_id);
-    });
-    generations.update(|all| {
-        *all.entry(frame_id.to_string()).or_default() += 1;
     });
 }
 
@@ -113,25 +109,6 @@ pub(crate) fn is_error_assistant(item: &ChatItem) -> bool {
     matches!(item, ChatItem::Assistant { text, .. } if text.starts_with("Error: "))
 }
 
-/// Follow-up suggestions belong only to a turn that actually produced a final
-/// answer. In particular, assistant commentary before a tool is not a final
-/// answer: if the provider drops after that tool, a stray `Done` event must not
-/// make the interrupted task look complete by offering next questions.
-pub(crate) fn latest_turn_has_final_answer(items: &[ChatItem]) -> bool {
-    let turn_start = items
-        .iter()
-        .rposition(|item| matches!(item, ChatItem::User(_) | ChatItem::QueuedUser { .. }))
-        .map_or(0, |index| index.saturating_add(1));
-    items
-        .iter()
-        .enumerate()
-        .skip(turn_start)
-        .any(|(index, item)| {
-            matches!(item, ChatItem::Assistant { text, .. } if !text.trim().is_empty() && !text.starts_with("Error: "))
-                && !is_commentary_at(items, index)
-        })
-}
-
 pub(crate) fn strip_error_at(items: &mut Vec<ChatItem>, idx: usize) {
     if idx < items.len() && is_error_assistant(&items[idx]) {
         items.remove(idx);
@@ -180,14 +157,60 @@ pub(crate) fn trailing_queue_start(items: &[ChatItem]) -> usize {
         .unwrap_or(0)
 }
 
-pub(crate) fn start_user_turn(items: &mut Vec<ChatItem>, text: String, model: Option<String>) {
+pub(crate) fn start_user_turn(
+    items: &mut Vec<ChatItem>,
+    text: String,
+    model: Option<String>,
+    queue_id: Option<u64>,
+) {
     let incoming_body = composer_text_from_user_message(&text);
-    // ponytail: text-keyed promotion; upgrade to a backend intent_id if
-    // display/echo texts ever diverge beyond the attachment suffix.
-    if let Some((idx, queued)) = items.iter().enumerate().find_map(|(i, item)| match item {
-        ChatItem::QueuedUser { text: queued, .. }
-            if queued == &text || composer_text_from_user_message(queued) == incoming_body =>
+    // Queue turns carry their backend id, so remove exactly that optimistic
+    // row. Equal message bodies are allowed to have different attachments.
+    if let Some(queue_id) = queue_id {
+        if let Some(idx) = items
+            .iter()
+            .position(|item| matches!(item, ChatItem::QueuedUser { id, .. } if *id == queue_id))
         {
+            let display = match &items[idx] {
+                ChatItem::QueuedUser { text: queued, .. } if queued.len() > text.len() => {
+                    queued.clone()
+                }
+                _ => text,
+            };
+            items.splice(
+                idx..=idx,
+                [
+                    ChatItem::User(display),
+                    ChatItem::Assistant {
+                        text: String::new(),
+                        model,
+                        resources: Vec::new(),
+                    },
+                ],
+            );
+        } else {
+            let index = trailing_queue_start(items);
+            items.splice(
+                index..index,
+                [
+                    ChatItem::User(text),
+                    ChatItem::Assistant {
+                        text: String::new(),
+                        model,
+                        resources: Vec::new(),
+                    },
+                ],
+            );
+        }
+        return;
+    }
+    // Mid-turn cut-ins predate the queue id propagation and remain transient
+    // rows (id == 0). Only those rows may use text matching as a fallback.
+    if let Some((idx, queued)) = items.iter().enumerate().find_map(|(i, item)| match item {
+        ChatItem::QueuedUser {
+            id: 0,
+            text: queued,
+        } if queued == &text || composer_text_from_user_message(queued) == incoming_body => {
             Some((i, queued.clone()))
         }
         _ => None,
@@ -239,28 +262,29 @@ pub(crate) fn start_user_turn(items: &mut Vec<ChatItem>, text: String, model: Op
 mod start_user_turn_tests {
     use super::{
         append_assistant_delta, append_reasoning_delta, completed_activity_end,
-        composer_text_from_user_message, dismiss_follow_up_questions, is_commentary_at,
-        is_image_generation_tool, is_tool_activity, is_video_generation_tool,
+        completed_activity_groups, composer_text_from_user_message, dismiss_follow_up_questions,
+        is_commentary_at, is_image_generation_tool, is_tool_activity, is_video_generation_tool,
         message_with_attachments, message_with_composer_context, message_with_quotes,
         message_with_read_only_quotes, process_item_insert_index, runtime_object_quote,
         selection_targets_center_file, start_user_turn, trailing_queue_start, ComposerQuote,
         ComposerReferenceChip,
     };
-    use crate::dto::{ChatItem, ContextUsage};
+    use crate::dto::{AppContextNotice, ChatItem, ContextUsage, PlanCard, ReviewTransitionPhase};
     use leptos::*;
     use std::collections::HashMap;
 
     #[test]
-    fn dismiss_follow_up_questions_removes_and_invalidates_generation() {
+    fn dismiss_follow_up_questions_removes_only_that_session() {
         let runtime = create_runtime();
-        let questions = create_rw_signal(HashMap::from([(
-            "s1".to_string(),
-            vec!["one?".into(), "two?".into(), "three?".into()],
-        )]));
-        let generations = create_rw_signal(HashMap::from([("s1".to_string(), 3u64)]));
-        dismiss_follow_up_questions(questions, generations, "s1");
-        assert!(questions.get_untracked().is_empty());
-        assert_eq!(generations.get_untracked().get("s1").copied(), Some(4));
+        let questions = create_rw_signal(HashMap::from([
+            ("s1".to_string(), vec!["one?".into()]),
+            ("s2".to_string(), vec!["two?".into()]),
+        ]));
+        dismiss_follow_up_questions(questions, "s1");
+        assert_eq!(
+            questions.get_untracked().keys().collect::<Vec<_>>(),
+            vec!["s2"]
+        );
         runtime.dispose();
     }
 
@@ -425,7 +449,12 @@ mod start_user_turn_tests {
                 resources: Vec::new(),
             },
         ];
-        start_user_turn(&mut items, "图片里有啥文字?".into(), Some("gpt".into()));
+        start_user_turn(
+            &mut items,
+            "图片里有啥文字?".into(),
+            Some("gpt".into()),
+            None,
+        );
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], ChatItem::User(s) if s == &display));
     }
@@ -441,7 +470,7 @@ mod start_user_turn_tests {
                 resources: Vec::new(),
             },
         ];
-        start_user_turn(&mut items, display.clone(), None);
+        start_user_turn(&mut items, display.clone(), None, None);
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], ChatItem::User(s) if s == &display));
         assert_eq!(composer_text_from_user_message(&display), "描述下图片");
@@ -579,6 +608,31 @@ mod start_user_turn_tests {
     }
 
     #[test]
+    fn commentary_skips_empty_placeholders() {
+        let assistant = |text: &str| ChatItem::Assistant {
+            text: text.into(),
+            model: None,
+            resources: Vec::new(),
+        };
+        let items = vec![
+            ChatItem::User("question".into()),
+            assistant("checking"),
+            assistant(""),
+            ChatItem::Tool {
+                name: "python".into(),
+                ok: Some(true),
+                input: String::new(),
+                output: String::new(),
+                started_at_ms: None,
+                duration_ms: Some(1),
+            },
+            assistant("final answer"),
+        ];
+        assert!(is_commentary_at(&items, 1));
+        assert!(!is_commentary_at(&items, 4));
+    }
+
+    #[test]
     fn image_generation_is_not_folded_into_tool_activity() {
         let image = ChatItem::Tool {
             name: "generate_image".into(),
@@ -607,6 +661,20 @@ mod start_user_turn_tests {
         assert!(is_video_generation_tool("generate_video"));
         assert!(!is_video_generation_tool("generate_image"));
         assert!(!is_tool_activity(&video));
+    }
+
+    #[test]
+    fn context_tombstones_are_not_folded_into_tool_activity() {
+        let tombstone = ChatItem::Tool {
+            name: "read".into(),
+            ok: Some(true),
+            input: String::new(),
+            output: "[compacted; full content archived at wisp-history:abc — retrieve only narrow ranges with read/grep; do not load the whole archive back into context]".into(),
+            started_at_ms: None,
+            duration_ms: None,
+        };
+        assert!(tombstone.is_context_tombstone());
+        assert!(!is_tool_activity(&tombstone));
     }
 
     #[test]
@@ -640,8 +708,164 @@ mod start_user_turn_tests {
             assistant("final answer"),
         ];
 
-        assert_eq!(completed_activity_end(&items, 1, false), Some(6));
-        assert_eq!(completed_activity_end(&items, 1, true), None);
+        let completed_runs = HashMap::new();
+        assert_eq!(
+            completed_activity_end(&items, 1, false, &completed_runs),
+            Some(6)
+        );
+        assert_eq!(
+            completed_activity_end(&items, 1, true, &completed_runs),
+            None
+        );
+
+        // Persisted transcripts contain per-round usage between tool phases.
+        let mut recorded = items.clone();
+        recorded.insert(
+            4,
+            ChatItem::Usage {
+                input: 100,
+                output: 10,
+                reasoning: 0,
+                cached: 0,
+                ctx_tokens: 0,
+                max_context: 0,
+                context_usage: ContextUsage::default(),
+            },
+        );
+        recorded.insert(5, ChatItem::compaction(100, 50, "auto", Some(1)));
+        assert_eq!(
+            completed_activity_end(&recorded, 1, false, &completed_runs),
+            Some(8)
+        );
+        assert_eq!(
+            completed_activity_end(&recorded, 1, true, &completed_runs),
+            None
+        );
+        // Final report and trailing metadata stay outside the disclosure.
+        recorded.push(recorded[4].clone());
+        assert_eq!(
+            completed_activity_end(&recorded, 1, false, &completed_runs),
+            Some(8)
+        );
+        recorded.push(ChatItem::User("next question".into()));
+        assert_eq!(
+            completed_activity_end(&recorded, 1, true, &completed_runs),
+            Some(8)
+        );
+        recorded.insert(
+            6,
+            ChatItem::ApprovalPending {
+                tool: "write".into(),
+                preview: "results".into(),
+                message: "Approve?".into(),
+            },
+        );
+        assert_eq!(
+            completed_activity_end(&recorded, 1, false, &completed_runs),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn completed_activity_keeps_one_summary_across_phase_glue() {
+        let assistant = |text: &str| ChatItem::Assistant {
+            text: text.into(),
+            model: None,
+            resources: Vec::new(),
+        };
+        let tool = |ok: Option<bool>| ChatItem::Tool {
+            name: "python".into(),
+            ok,
+            input: "plot()".into(),
+            output: String::new(),
+            started_at_ms: None,
+            duration_ms: Some(50),
+        };
+        let usage = ChatItem::Usage {
+            input: 100,
+            output: 10,
+            reasoning: 0,
+            cached: 0,
+            ctx_tokens: 0,
+            max_context: 0,
+            context_usage: ContextUsage::default(),
+        };
+        let notice = ChatItem::AppContextNotice(AppContextNotice {
+            context_id: "app".into(),
+            app_name: "plot".into(),
+            state: "ready".into(),
+            summary: String::new(),
+            structured_preview: None,
+        });
+        let mut items = vec![ChatItem::User("plot the heatmap".into())];
+        for phase in 0..7 {
+            items.push(assistant(&format!("phase {phase}")));
+            items.push(ChatItem::Assistant {
+                text: String::new(),
+                model: None,
+                resources: Vec::new(),
+            });
+            items.push(ChatItem::Reasoning(format!("thinking {phase}")));
+            items.push(tool(Some(true)));
+            items.push(ChatItem::FileChanged(format!("fig{phase}.png")));
+            items.push(usage.clone());
+            items.push(notice.clone());
+            items.push(ChatItem::ReviewTransition {
+                phase: ReviewTransitionPhase::Passed,
+                model: None,
+            });
+            if phase == 3 {
+                items.push(ChatItem::compaction(1000, 500, "auto", Some(1)));
+            }
+        }
+        items.push(tool(None));
+        items.push(assistant("The heatmap is ready."));
+        items.push(usage);
+
+        let completed_runs = HashMap::new();
+        let groups = completed_activity_groups(&items, false, &completed_runs);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].start, 1);
+        assert_eq!(
+            completed_activity_end(&items, 1, false, &completed_runs),
+            Some(groups[0].end)
+        );
+        assert!(matches!(
+            items[groups[0].end],
+            ChatItem::Assistant { ref text, .. } if text == "The heatmap is ready."
+        ));
+        assert!(is_commentary_at(&items, 1));
+        assert!(!is_commentary_at(&items, groups[0].end));
+    }
+
+    #[test]
+    fn propose_plan_cards_stay_outside_the_processed_summary() {
+        let completed_runs = HashMap::new();
+        let items = vec![
+            ChatItem::User("Prepare the regression plan".into()),
+            ChatItem::Plan(PlanCard::default()),
+        ];
+        assert!(completed_activity_groups(&items, false, &completed_runs).is_empty());
+        assert_eq!(
+            completed_activity_end(&items, 1, false, &completed_runs),
+            None
+        );
+
+        let items = vec![
+            ChatItem::User("Inspect then plan".into()),
+            ChatItem::Reasoning("checking".into()),
+            ChatItem::Tool {
+                name: "read".into(),
+                ok: Some(true),
+                input: String::new(),
+                output: String::new(),
+                started_at_ms: None,
+                duration_ms: Some(2),
+            },
+            ChatItem::Plan(PlanCard::default()),
+        ];
+        let groups = completed_activity_groups(&items, false, &completed_runs);
+        assert_eq!(groups, vec![1..3]);
     }
 
     #[test]
@@ -659,8 +883,15 @@ mod start_user_turn_tests {
             ChatItem::Reasoning("current thought".into()),
         ];
 
-        assert_eq!(completed_activity_end(&items, 1, true), Some(2));
-        assert_eq!(completed_activity_end(&items, 4, true), None);
+        let completed_runs = HashMap::new();
+        assert_eq!(
+            completed_activity_end(&items, 1, true, &completed_runs),
+            Some(2)
+        );
+        assert_eq!(
+            completed_activity_end(&items, 4, true, &completed_runs),
+            None
+        );
     }
 
     #[test]
@@ -706,7 +937,7 @@ mod start_user_turn_tests {
             },
         ];
 
-        start_user_turn(&mut items, "图片里有啥文字?".into(), None);
+        start_user_turn(&mut items, "图片里有啥文字?".into(), None, Some(1));
 
         assert_eq!(items.len(), 4);
         assert!(matches!(&items[2], ChatItem::User(s) if s == &display));
@@ -735,7 +966,7 @@ mod start_user_turn_tests {
             },
         ];
 
-        start_user_turn(&mut items, "queued".into(), Some("model".into()));
+        start_user_turn(&mut items, "queued".into(), Some("model".into()), Some(1));
 
         assert!(matches!(&items[2], ChatItem::User(text) if text == "queued"));
         assert!(matches!(
@@ -743,6 +974,26 @@ mod start_user_turn_tests {
             ChatItem::Assistant { text, model, .. } if text.is_empty() && model.as_deref() == Some("model")
         ));
         assert!(matches!(&items[4], ChatItem::QueuedUser { text, .. } if text == "later"));
+    }
+
+    #[test]
+    fn untagged_user_event_does_not_guess_between_normal_queue_rows() {
+        let mut items = vec![
+            ChatItem::QueuedUser {
+                id: 1,
+                text: "same".into(),
+            },
+            ChatItem::QueuedUser {
+                id: 2,
+                text: "same".into(),
+            },
+        ];
+
+        start_user_turn(&mut items, "same".into(), None, None);
+
+        assert!(matches!(&items[0], ChatItem::QueuedUser { id: 1, .. }));
+        assert!(matches!(&items[1], ChatItem::QueuedUser { id: 2, .. }));
+        assert!(matches!(&items[2], ChatItem::User(text) if text == "same"));
     }
 }
 
@@ -793,6 +1044,9 @@ pub(crate) fn is_video_generation_tool(name: &str) -> bool {
 }
 
 pub(crate) fn is_tool_activity(item: &ChatItem) -> bool {
+    if item.is_context_tombstone() {
+        return false;
+    }
     match item {
         ChatItem::Tool { name, .. } => {
             name != "attempt_completion"
@@ -805,27 +1059,61 @@ pub(crate) fn is_tool_activity(item: &ChatItem) -> bool {
     }
 }
 
+/// Rows that can sit between tool phases without ending the process. Trailing
+/// copies stay outside the disclosure so the final report is not wrapped.
+pub(crate) fn is_activity_glue(item: &ChatItem) -> bool {
+    match item {
+        ChatItem::Usage { .. }
+        | ChatItem::Compaction { .. }
+        | ChatItem::FileChanged(_)
+        | ChatItem::AppContextNotice(_)
+        | ChatItem::System(_)
+        | ChatItem::Checkpoint(_)
+        | ChatItem::ReviewTransition { .. } => true,
+        ChatItem::Assistant { text, .. } if text.trim().is_empty() => true,
+        ChatItem::Tool { name, .. } if name == "attempt_completion" => true,
+        _ => false,
+    }
+}
+
 /// Assistant text that introduces a tool is visible commentary, while the last
 /// assistant row in a turn keeps the full answer treatment.
 pub(crate) fn is_commentary_at(items: &[ChatItem], index: usize) -> bool {
-    if !matches!(&items[index], ChatItem::Assistant { text, .. } if !text.trim().is_empty()) {
-        return false;
+    is_commentary_before(items, index, is_tool_activity)
+}
+
+fn is_commentary_before(
+    items: &[ChatItem],
+    index: usize,
+    is_activity: impl Fn(&ChatItem) -> bool,
+) -> bool {
+    match items.get(index) {
+        Some(ChatItem::Assistant { text, .. })
+            if !text.trim().is_empty() && !text.starts_with("Error: ") => {}
+        _ => return false,
     }
     items[index + 1..]
         .iter()
-        .find(|item| {
-            !matches!(
-                item,
-                ChatItem::Reasoning(_) | ChatItem::Usage { .. } | ChatItem::FileChanged(_)
-            )
-        })
-        .is_some_and(is_tool_activity)
+        .find(|item| !is_activity_glue(item) && !matches!(item, ChatItem::Reasoning(_)))
+        .is_some_and(is_activity)
 }
 
-pub(crate) fn is_turn_activity_at(items: &[ChatItem], index: usize) -> bool {
+pub(crate) fn is_turn_activity_at(
+    items: &[ChatItem],
+    index: usize,
+    completed_runs: &HashMap<String, usize>,
+) -> bool {
+    // A completed monitor whose card lives inside its exact submission is
+    // process activity too. Standalone/active Run cards remain boundaries.
+    let is_activity = |item: &ChatItem| {
+        is_tool_activity(item)
+            || (!item.is_context_tombstone()
+                && matches!(item, ChatItem::Tool { name, input, .. }
+                    if is_run_monitor_tool(name) && completed_runs.contains_key(input.trim())))
+    };
     matches!(items.get(index), Some(ChatItem::Reasoning(_)))
-        || items.get(index).is_some_and(is_tool_activity)
-        || (index < items.len() && is_commentary_at(items, index))
+        || items.get(index).is_some_and(is_activity)
+        || is_commentary_before(items, index, is_activity)
 }
 
 /// End (exclusive) of the contiguous process activity that can collapse once
@@ -835,8 +1123,9 @@ pub(crate) fn completed_activity_end(
     items: &[ChatItem],
     start: usize,
     busy: bool,
+    completed_runs: &HashMap<String, usize>,
 ) -> Option<usize> {
-    if !is_turn_activity_at(items, start) {
+    if !is_turn_activity_at(items, start, completed_runs) {
         return None;
     }
 
@@ -851,17 +1140,39 @@ pub(crate) fn completed_activity_end(
 
     let turn_end = boundary.unwrap_or(items.len());
     let mut end = start;
-    while end < turn_end {
-        if is_turn_activity_at(items, end)
-            || matches!(&items[end], ChatItem::Assistant { text, .. } if text.trim().is_empty())
-            || matches!(&items[end], ChatItem::FileChanged(_))
-        {
-            end += 1;
+    for index in start..turn_end {
+        if is_turn_activity_at(items, index, completed_runs) {
+            end = index + 1;
+        } else if is_activity_glue(&items[index]) {
+            continue;
         } else {
             break;
         }
     }
+    // Metadata between phases belongs inside the disclosure. Leave trailing
+    // usage/compaction outside, and never cross a final answer or action card.
     Some(end)
+}
+
+/// Completed process groups in walk order. Used by tests to assert a finished
+/// turn collapses to one Processed summary instead of repeating the turn clock.
+#[cfg(test)]
+pub(crate) fn completed_activity_groups(
+    items: &[ChatItem],
+    busy: bool,
+    completed_runs: &HashMap<String, usize>,
+) -> Vec<std::ops::Range<usize>> {
+    let mut groups = Vec::new();
+    let mut index = 0;
+    while index < items.len() {
+        if let Some(end) = completed_activity_end(items, index, busy, completed_runs) {
+            groups.push(index..end);
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    groups
 }
 
 pub(crate) fn append_reasoning_delta(items: &mut Vec<ChatItem>, delta: String) {

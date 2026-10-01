@@ -1,4 +1,4 @@
-> **Runtime note (0.3.1):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2. Shared Chrome stays on `ws://127.0.0.1:18765`; workspace Chrome uses a dedicated profile and `18766`. Wisp prepares a verified stable extension directory and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
+> **Runtime note (0.3.1):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2. Shared Chrome stays on `ws://127.0.0.1:18765`; each project workspace uses its own persistent profile and an allocated loopback endpoint. Wisp prepares a verified stable extension directory and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
 
 # Real-browser automation
 
@@ -55,6 +55,25 @@ skipped until the challenge is gone. When it is off, a confirmation lists them,
 all selected by default; uncheck any to keep, then close the rest or keep all.
 If the extension is disconnected at the end of the turn, the pending list is
 kept until it reconnects.
+
+Browser occupancy is scoped to the resolved browser lane. Projects targeting
+`shared` remain serialized. With explicit isolation requested, call
+`browser_setup` with `action=start_workspace` in each project, then use
+`session=workspace` for that project's browser tools. Each project gets its
+own profile, login state, extension connection and tabs, so their workspace
+retrievals can run concurrently. Omitting `session` still selects shared Chrome;
+Wisp never silently switches a shared request to a workspace.
+
+`browser_setup` reports the current project's workspace `project_id`, `lane`,
+connection/process state, paths and endpoint. Starting it again reuses the same
+running instance. A maximum of three workspace instances is allowed; stop an
+idle one from its own project with `action=stop_workspace` before starting a
+fourth. Stop and project deletion affect only that project's browser. Profiles
+are retained; old unscoped workspace profiles are not migrated automatically.
+On app restart, start the project workspace again. Old workspace tab-cleanup
+and verification prompts are discarded to avoid acting on reused tab ids.
+Closing a Wisp window continues to allow its active sessions to finish; use
+`stop_workspace` to explicitly release the browser resource.
 
 The banner describes the answer on screen, not the session. It is derived from
 the browser tool results of the latest turn only, and a single successful

@@ -192,7 +192,7 @@ pub(crate) async fn list_agent_workflows(
     load_agent_workflow_snapshots(&state.store, &project.id, Some(&session_id)).await
 }
 
-async fn load_agent_workflow_snapshots(
+pub(crate) async fn load_agent_workflow_snapshots(
     store: &Store,
     project_id: &str,
     session_id: Option<&str>,
@@ -683,6 +683,15 @@ pub(crate) async fn approve_agent_workflow(
     expected_version: i64,
 ) -> Result<AgentWorkflowSnapshot, String> {
     let project = state.require_active(window.label())?;
+    approve_agent_workflow_for_project(&state, project, workflow_id, expected_version).await
+}
+
+pub(crate) async fn approve_agent_workflow_for_project(
+    state: &crate::AppState,
+    project: ActiveProject,
+    workflow_id: String,
+    expected_version: i64,
+) -> Result<AgentWorkflowSnapshot, String> {
     let current = project_workflow(&state.store, &project.id, &workflow_id).await?;
     require_workflow_delegation(&state.store, &current).await?;
     if stored_dynamic_plan(&current)?
@@ -773,9 +782,25 @@ pub(crate) async fn retry_agent_workflow(
     budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
 ) -> Result<AgentWorkflowSnapshot, String> {
     let project = state.require_active(window.label())?;
+    retry_agent_workflow_for_project(
+        &state,
+        project,
+        state.active_frame(window.label()),
+        workflow_id,
+        budget_overrides,
+    )
+    .await
+}
+
+pub(crate) async fn retry_agent_workflow_for_project(
+    state: &crate::AppState,
+    project: ActiveProject,
+    frame_id: Option<String>,
+    workflow_id: String,
+    budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
+) -> Result<AgentWorkflowSnapshot, String> {
     let snapshot = match budget_overrides.filter(|overrides| !overrides.is_empty()) {
         Some(overrides) => {
-            let frame_id = state.active_frame(window.label());
             let policy = dynamic_delegation_policy_for_project(
                 &state.store,
                 &project,
@@ -1009,6 +1034,14 @@ pub(crate) async fn run_agent_workflow(
     workflow_id: String,
 ) -> Result<DelegationExecutionResult, String> {
     let project = state.require_active(window.label())?;
+    run_agent_workflow_for_project(&state, project, workflow_id).await
+}
+
+pub(crate) async fn run_agent_workflow_for_project(
+    state: &crate::AppState,
+    project: ActiveProject,
+    workflow_id: String,
+) -> Result<DelegationExecutionResult, String> {
     let _project_activity = state.begin_project_activity(&project.id)?;
     execute_agent_workflow(
         &state.store,
@@ -3427,7 +3460,7 @@ impl AgentDelegator for AcpDelegator {
                     .map_err(anyhow::Error::msg)?
             ),
         );
-        let next_seq = self.store.load_messages(&child_frame_id).await?.len() as i64 + 1;
+        let next_seq = self.store.max_message_seq(&child_frame_id).await? + 1;
         self.store
             .append_message(&child_frame_id, next_seq, &Message::user(&prompt_text))
             .await?;

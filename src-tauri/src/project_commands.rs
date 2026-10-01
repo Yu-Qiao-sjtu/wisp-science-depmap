@@ -105,9 +105,7 @@ pub(super) async fn set_project_starred(
     id: String,
     starred: bool,
 ) -> Result<(), String> {
-    state
-        .store
-        .set_project_starred(&id, starred)
+    wisp_app::projects::set_project_starred(&state.store, &id, starred)
         .await
         .map_err(|e| e.to_string())
 }
@@ -118,40 +116,9 @@ pub(super) async fn list_projects(
 ) -> Result<Vec<ProjectSummary>, String> {
     let running = state.running_turns.lock().await.clone();
     let awaiting = state.awaiting_confirm.lock().unwrap().clone();
-    let rows = state
-        .store
-        .list_projects()
+    wisp_app::projects::list_projects(&state.store, &running, &awaiting)
         .await
-        .map_err(|e| format!("{e}"))?;
-    let starred = state
-        .store
-        .starred_project_ids()
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut out = vec![];
-    for (id, name, ws, _c, upd, cnt, desc, art) in rows {
-        let (running_count, needs_you_count) =
-            project_status_counts(&state.store, &id, &running, &awaiting).await;
-        let sync_state = state.store.get_project_sync_state(&id).await.ok().flatten();
-        let sync_configured = sync_state
-            .as_ref()
-            .is_some_and(|state| state.base_revision.is_some());
-        out.push(ProjectSummary {
-            starred: starred.contains(&id),
-            id,
-            name,
-            description: desc,
-            workspace_dir: ws,
-            session_count: cnt,
-            artifact_count: art,
-            updated_at: upd,
-            running_count,
-            needs_you_count,
-            sync_configured,
-            last_synced_at: sync_state.and_then(|state| state.last_synced_at),
-        });
-    }
-    Ok(out)
+        .map_err(|error| error.to_string())
 }
 
 fn matching_workspace_projects(
@@ -181,27 +148,25 @@ pub(super) async fn list_workspace_projects(
     ))
 }
 
-#[tauri::command]
-pub(super) async fn create_project(
-    state: State<'_, AppState>,
-    name: String,
-    workspace_dir: String,
-    description: String,
-    agent_context: String,
-    standard_layout: bool,
-) -> Result<ProjectSummary, String> {
-    if name.trim().is_empty() {
+/// Filesystem and store writes for a new project. Callers supply the store
+/// directly: this does not read or change any WebView window's active project
+/// or session, and it does not create a conversation.
+pub(crate) async fn create_project_record(
+    store: &wisp_store::Store,
+    input: wisp_dto::native_projects::CreateProjectRequest,
+) -> Result<String, String> {
+    let name = input.name.trim();
+    if name.is_empty() {
         return Err("Project name is required".into());
     }
-    let dir = workspace_dir.trim();
+    let dir = input.workspace_dir.trim();
     if dir.is_empty() {
         return Err("A working directory is required".into());
     }
     let path = PathBuf::from(dir);
     std::fs::create_dir_all(&path)
         .map_err(|e| format!("Failed to create working directory: {e}"))?;
-    if state
-        .store
+    if store
         .list_projects()
         .await
         .map_err(|e| format!("{e}"))?
@@ -218,24 +183,22 @@ pub(super) async fn create_project(
     let id = Uuid::new_v4().to_string();
     // #405: opt-in. Unchecked means the user keeps their own structure, so we
     // create nothing — the convention lives in .wisp/WISP.md instead (below).
-    if standard_layout {
-        workspace_manifest::init_workspace_layout(&path, &id, name.trim())?;
+    if input.standard_layout {
+        workspace_manifest::init_workspace_layout(&path, &id, name)?;
     }
-    state
-        .store
-        .create_project(&id, name.trim(), dir)
+    store
+        .create_project(&id, name, dir)
         .await
         .map_err(|e| format!("{e}"))?;
     // Description (DB) + Agent Context (.wisp/WISP.md) — same storage as update_project.
-    let desc = description.trim();
+    let desc = input.description.trim();
     if !desc.is_empty() {
-        state
-            .store
-            .update_project(&id, name.trim(), desc)
+        store
+            .update_project(&id, name, desc)
             .await
             .map_err(|e| format!("{e}"))?;
     }
-    let ctx = agent_context.trim();
+    let ctx = input.agent_context.trim();
     if !ctx.is_empty() {
         let wisp_dir = path.join(".wisp");
         std::fs::create_dir_all(&wisp_dir)
@@ -243,6 +206,29 @@ pub(super) async fn create_project(
         std::fs::write(wisp_dir.join("WISP.md"), ctx)
             .map_err(|e| format!("Failed to write Agent Context: {e}"))?;
     }
+    Ok(id)
+}
+
+#[tauri::command]
+pub(super) async fn create_project(
+    state: State<'_, AppState>,
+    name: String,
+    workspace_dir: String,
+    description: String,
+    agent_context: String,
+    standard_layout: bool,
+) -> Result<ProjectSummary, String> {
+    let id = create_project_record(
+        &state.store,
+        wisp_dto::native_projects::CreateProjectRequest {
+            name,
+            workspace_dir,
+            description,
+            agent_context,
+            standard_layout,
+        },
+    )
+    .await?;
     Ok(build_project_summary(&state, &id).await)
 }
 
@@ -420,6 +406,7 @@ pub(super) async fn open_project(
     window: crate::workspace_surface::WorkspaceSurface,
     id: String,
 ) -> Result<ProjectSummary, String> {
+    super::project_sync::adopt_newer_folder_version(&state, &id).await;
     let _project_activity = state.begin_project_activity(&id)?;
     let (name, ws) = set_active_project(state.inner(), window.label(), &id).await?;
     apply_app_window_title(&window, Some(&name));
@@ -584,6 +571,7 @@ pub(super) async fn spawn_project_window_with_label(
         .title(app_window_title(Some(&name)))
         .inner_size(1100.0, 760.0)
         .resizable(true)
+        .general_autofill_enabled(false)
         .on_navigation(crate::guard_webview_navigation);
     // Center over the requesting window (or the main window on startup
     // restore); otherwise the OS cascades each new window to an arbitrary
@@ -664,6 +652,7 @@ pub(super) async fn spawn_blank_window(
         .title(app_window_title(None))
         .inner_size(1100.0, 760.0)
         .resizable(true)
+        .general_autofill_enabled(false)
         .on_navigation(crate::guard_webview_navigation);
     let anchor = anchor_label
         .and_then(|label| app.workspace_surface(label))
@@ -741,6 +730,7 @@ pub(super) async fn delete_project(
     // Stop the deleted project's own running sessions (gather frame ids before
     // the store cascade removes them); other projects keep running (#52).
     cancel_project_sessions(state.inner(), &id).await;
+    state.browser_bridge.stop_project_workspace(&id).await;
     state.runtime_manager.stop_project(&id).await;
     if let Err(error) = state.run_manager.wind_down_project(&state.store, &id).await {
         tracing::warn!(project_id = %id, "project wind-down failed: {error}");
@@ -842,6 +832,7 @@ pub(super) struct ProjectSettings {
     description: String,
     agent_context: String,
     default_specialist_id: String,
+    folder_sync: bool,
 }
 
 fn project_agent_context_path(root: &Path) -> PathBuf {
@@ -903,12 +894,19 @@ pub(super) async fn get_project_settings(
         specialists::project_default_specialist_id(&state.store, &project_id)
             .await
             .unwrap_or_default();
+    let folder_sync = state
+        .store
+        .get_project_sync_state(&project_id)
+        .await
+        .map_err(|e| format!("{e}"))?
+        .is_some_and(|sync| sync.transport_kind == wisp_store::WORKSPACE_TRANSPORT);
     Ok(ProjectSettings {
         id: project_id,
         name,
         description,
         agent_context: read_project_agent_context(&root),
         default_specialist_id,
+        folder_sync,
     })
 }
 
@@ -1104,6 +1102,7 @@ mod tests {
             needs_you_count: 0,
             sync_configured: false,
             last_synced_at: None,
+            folder_sync: None,
         };
         let projects = vec![
             summary("P37", &root, 9),

@@ -1,6 +1,6 @@
 use super::*;
 use leptos::leptos_dom::helpers::TimeoutHandle;
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 const STREAMING_MARKDOWN_TAIL_THRESHOLD_BYTES: usize = 8_000;
 
@@ -27,7 +27,7 @@ pub(crate) fn streaming_markdown_commit_interval_ms(
     }
 }
 
-fn assistant_text_at(items: RwSignal<Vec<ChatItem>>, source_item: usize) -> String {
+fn assistant_text_at(items: Signal<Vec<ChatItem>>, source_item: usize) -> String {
     items.with_untracked(|rows| match rows.get(source_item) {
         Some(ChatItem::Assistant { text, .. }) => text.clone(),
         _ => String::new(),
@@ -39,7 +39,7 @@ fn assistant_text_at(items: RwSignal<Vec<ChatItem>>, source_item: usize) -> Stri
 /// suffix remains visible as a cheap whitespace-preserving text tail.
 #[component]
 pub(crate) fn StreamingAssistantMessage(
-    items: RwSignal<Vec<ChatItem>>,
+    items: Signal<Vec<ChatItem>>,
     source_item: usize,
     on_artifact: Callback<usize>,
     on_file: Callback<ModalArtifact>,
@@ -49,7 +49,6 @@ pub(crate) fn StreamingAssistantMessage(
     let commit_handle = Rc::new(Cell::new(None::<TimeoutHandle>));
     let active = Rc::new(Cell::new(true));
     let recent_parse_cost_ms = Rc::new(Cell::new(None::<f64>));
-    let project = use_context::<ReadSignal<Option<ProjectInfo>>>();
 
     create_render_effect({
         let commit_handle = Rc::clone(&commit_handle);
@@ -106,15 +105,8 @@ pub(crate) fn StreamingAssistantMessage(
         let recent_parse_cost_ms = Rc::clone(&recent_parse_cost_ms);
         move |_| {
             let started_at = js_sys::Date::now();
-            let project_root =
-                project.and_then(|project| project.get().map(|project| project.root));
-            let html = enrich_md_html(
-                md_to_html(&rendered_text.get()),
-                &[],
-                &[],
-                locale.get(),
-                project_root.as_deref(),
-            );
+            let html =
+                enrich_app_markdown(md_to_html(&rendered_text.get()), &[], &[], locale.get());
             let elapsed = (js_sys::Date::now() - started_at).max(0.0);
             let smoothed = recent_parse_cost_ms
                 .get()
@@ -209,6 +201,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "bubble" => view! { <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/> }.into_view(),
         "sparkles" => view! { <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/> }.into_view(),
         "undo" => view! { <path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v1"/> }.into_view(),
+        "undo-compact" => view! { <path d="M3 9a9 9 0 1 0 3-6.7L3 6"/><path d="M3 3v3h3"/> }.into_view(),
         "panel" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/> }.into_view(),
         "dock" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/> }.into_view(),
         "chevron-down" => view! { <path d="m6 9 6 6 6-6"/> }.into_view(),
@@ -228,6 +221,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "close" => view! { <path d="M18 6 6 18"/><path d="m6 6 12 12"/> }.into_view(),
         "more" => view! { <circle cx="12" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/> }.into_view(),
         "arrow-right" => view! { <path d="M5 12h14m-6-6 6 6-6 6"/> }.into_view(),
+        "arrow-up" => view! { <path d="m5 12 7-7 7 7"/><path d="M12 19V5"/> }.into_view(),
         "minus" => view! { <path d="M5 12h14"/> }.into_view(),
         "database" => view! { <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/> }.into_view(),
         "trash" => view! { <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/> }.into_view(),
@@ -260,6 +254,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "circle-minus" => view! { <circle cx="12" cy="12" r="9"/><path d="M8 12h8"/> }.into_view(),
         "context-compact" => view! { <path d="M6 5h12"/><path d="M4 12h16"/><path d="M6 19h12"/> }.into_view(),
         "lock" => view! { <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/> }.into_view(),
+        "archive" => view! { <rect x="3" y="3" width="18" height="4" rx="1"/><path d="M5 7v13h14V7M10 11h4"/> }.into_view(),
         "hand" => view! { <path d="M8 13V5a2 2 0 0 1 4 0v7"/><path d="M12 6a2 2 0 0 1 4 0v6"/><path d="M16 8a2 2 0 0 1 4 0v7a7 7 0 0 1-7 7h-1c-2 0-3.5-1-4.5-2.5L3 13a2 2 0 0 1 3-2l2 2"/> }.into_view(),
         "ban" => view! { <circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/> }.into_view(),
         "skill" => view! { <path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/> }.into_view(),
@@ -269,6 +264,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "user" => view! { <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/> }.into_view(),
         "wrench" => view! { <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/> }.into_view(),
         "clock" => view! { <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/> }.into_view(),
+        "history" => view! { <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/> }.into_view(),
         "sort" => view! { <path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/> }.into_view(),
         "search" => view! { <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/> }.into_view(),
         "eye" => view! { <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/> }.into_view(),
@@ -632,6 +628,11 @@ pub(crate) enum QueueOp {
     /// Swap one place earlier / later in the FIFO order (clamped at the ends).
     MoveUp(u64),
     MoveDown(u64),
+    /// Jump it to the front of the queue and stop the running turn, so it takes
+    /// over the session instead of waiting it out.
+    InterruptReplace(u64),
+    /// Unqueue it and ask it in the side chat instead.
+    SideChat(u64),
 }
 
 /// Queue (#433): one parked follow-up in the composer card. `id == 0` is a
@@ -641,18 +642,35 @@ pub(crate) enum QueueOp {
 pub(crate) fn QueuedMessage(
     id: u64,
     text: String,
+    status: String,
     user_index: usize,
     can_cut_in: bool,
     can_reorder: bool,
     on_queue: Callback<QueueOp>,
 ) -> impl IntoView {
     let locale = use_locale();
-    let show_controls = id != 0;
+    let cut_in_pending = status == "cutin_pending";
+    let show_controls = id != 0 && !cut_in_pending;
     let preview = text.clone();
+    // The row's overflow menu carries the send-mode actions that act on this
+    // parked message instead of on the composer draft.
+    let menu_open = create_rw_signal(false);
+    window_capture_escape(move || {
+        if !menu_open.get_untracked() {
+            return false;
+        }
+        menu_open.set(false);
+        true
+    });
     view! {
         <div class="msg user queued" data-user-index=user_index.to_string()>
             <div class="queued-card">
                 <div class="body" title=preview>{text}</div>
+                {cut_in_pending.then(|| view! {
+                    <span class="queue-state" aria-live="polite">
+                        {move || t(locale.get(), "queue.waiting_current_step")}
+                    </span>
+                })}
                 {show_controls.then(move || view! {
                     <div class="queue-actions">
                         {can_cut_in.then(|| view! {
@@ -662,6 +680,36 @@ pub(crate) fn QueuedMessage(
                                 <span>{move || t(locale.get(), "queue.cut_in")}</span>
                             </button>
                         })}
+                        <div class="queue-menu-wrap">
+                            <button type="button" class="msg-icon-btn"
+                                title=move || t(locale.get(), "queue.more")
+                                aria-label=move || t(locale.get(), "queue.more")
+                                on:click=move |_| menu_open.update(|open| *open = !*open)>
+                                {compose_icon("more")}
+                            </button>
+                            {move || menu_open.get().then(|| view! {
+                                <div class="send-menu-backdrop"
+                                    on:click=move |_| menu_open.set(false)></div>
+                                <div class="send-mode-menu queue-mode-menu">
+                                    <button type="button" class="send-mode-item"
+                                        on:click=move |_| {
+                                            menu_open.set(false);
+                                            on_queue.call(QueueOp::InterruptReplace(id));
+                                        }>
+                                        <span class="compose-item-icon">{compose_icon("sync")}</span>
+                                        <span>{move || t(locale.get(), "composer.interrupt_replace")}</span>
+                                    </button>
+                                    <button type="button" class="send-mode-item"
+                                        on:click=move |_| {
+                                            menu_open.set(false);
+                                            on_queue.call(QueueOp::SideChat(id));
+                                        }>
+                                        <span class="compose-item-icon">{compose_icon("chat")}</span>
+                                        <span>{move || t(locale.get(), "composer.side_chat")}</span>
+                                    </button>
+                                </div>
+                            })}
+                        </div>
                         {can_reorder.then(|| view! {
                             <button type="button" class="msg-icon-btn"
                                 title=move || t(locale.get(), "queue.move_up")
@@ -702,6 +750,7 @@ pub(crate) fn ComposerQueue(
     items: RwSignal<Vec<ChatItem>>,
     user_offset: Signal<usize>,
     can_cut_in: Signal<bool>,
+    queue_states: Signal<HashMap<u64, String>>,
     on_queue: Callback<QueueOp>,
 ) -> impl IntoView {
     let locale = use_locale();
@@ -722,10 +771,16 @@ pub(crate) fn ComposerQueue(
                     </div>
                     <div class="composer-queue-list">
                         {rows.into_iter().map(|row| {
+                            let status = queue_states
+                                .get()
+                                .get(&row.id)
+                                .cloned()
+                                .unwrap_or_else(|| "queued".into());
                             view! {
                                 <QueuedMessage
                                     id=row.id
                                     text=row.text
+                                    status=status
                                     user_index=row.user_index
                                     can_cut_in=can_cut_in
                                     can_reorder=can_reorder
@@ -851,7 +906,7 @@ pub(crate) fn UserMessage(
     .collect_view();
     view! {
         <div class="user-bubble"
-            data-branch-ui-index=can_branch.get_untracked().then(|| ui_index.to_string())>
+            data-branch-ui-index=move || can_branch.get().then(|| ui_index.to_string())>
             {has_images.then(|| view! { <div class="user-attachment-images">{image_cards}</div> })}
             {has_files.then(|| view! { <div class="user-attachment-files">{file_cards}</div> })}
             {has_context.then(|| view! { <div class="user-context-cards">{context_cards}</div> })}
@@ -888,7 +943,6 @@ pub(crate) fn UserMessage(
                 <button
                     type="button"
                     class="msg-btn"
-                    disabled=move || busy.get()
                     title=move || t(locale.get(), "msg.copy")
                     on:click=move |_| on_copy.call(text.clone())
                 >{move || t(locale.get(), "msg.copy")}</button>
@@ -988,6 +1042,7 @@ pub(crate) fn AssistantMessage(
     on_copy: Callback<String>,
     on_memory: Callback<()>,
     on_review: Callback<()>,
+    busy: ReadSignal<bool>,
     on_branch: Callback<usize>,
     can_branch: Signal<bool>,
     show_actions: Signal<bool>,
@@ -1003,7 +1058,6 @@ pub(crate) fn AssistantMessage(
     let text_for_html = text.clone();
     let project = use_context::<ReadSignal<Option<ProjectInfo>>>();
     let html = create_memo(move |_| {
-        let project_root = project.and_then(|project| project.get().map(|project| project.root));
         // Subscribe to the shared artifact list at row scope: an artifact
         // change recomputes only this memo, and String equality keeps the DOM
         // (plus the highlight/resource effects below) untouched for rows whose
@@ -1011,13 +1065,14 @@ pub(crate) fn AssistantMessage(
         // fingerprint that used to remount every assistant row on any artifact
         // event — the remount storm behind the dead-window reports.
         artifacts.with(|arts| {
-            enrich_md_html(
+            let html = enrich_app_markdown(
                 md_to_html(&text_for_html),
                 arts,
                 &resources_for_html,
                 locale.get(),
-                project_root.as_deref(),
-            )
+            );
+            let root = project.and_then(|project| project.get().map(|project| project.root));
+            prepare_workspace_images(html, root.as_deref())
         })
     });
     let hid = unique_dom_id("md");
@@ -1032,6 +1087,11 @@ pub(crate) fn AssistantMessage(
         let _ = html.get();
         let dom_id = hid_for_resources.clone();
         let resources = resources_for_effect.clone();
+        let fallback_dom_id = dom_id.clone();
+        let unavailable = t(locale.get(), "chat.image_preview_unavailable");
+        spawn_local(async move {
+            crate::bindings::hydrate_workspace_images(&fallback_dom_id, &unavailable).await;
+        });
         spawn_local(async move {
             for resource in resources
                 .into_iter()
@@ -1170,6 +1230,7 @@ pub(crate) fn AssistantMessage(
                 <button
                     type="button"
                     class="msg-icon-btn msg-review-btn"
+                    disabled=move || busy.get()
                     title=move || t(locale.get(), "msg.review")
                     aria-label=move || t(locale.get(), "msg.review")
                     on:click=move |_| on_review.call(())
@@ -1424,8 +1485,6 @@ pub(crate) fn ApprovalCard(
     } else {
         vec![]
     };
-    let project_root = use_context::<ReadSignal<Option<ProjectInfo>>>()
-        .and_then(|project| project.get().map(|project| project.root));
     let tool_for_title = tool.clone();
     let title = move || {
         let loc = locale.get();
@@ -1462,12 +1521,11 @@ pub(crate) fn ApprovalCard(
                     view! {
                         <div class="plan-steps">
                             {plan_steps.into_iter().map(|(cls, text)| {
-                                let html = enrich_md_html(
+                                let html = enrich_app_markdown(
                                     md_to_html(&text),
                                     &[],
                                     &[],
                                     locale.get(),
-                                    project_root.as_deref(),
                                 );
                                 let step_artifact = on_artifact.clone();
                                 let step_file = on_file.clone();

@@ -5,16 +5,16 @@ use super::session_commands::transcript_page_items;
 use super::{
     begin_queued_cutin, branch_title, client_turn_error, coalesce_live_agent_events,
     copy_dir_recursive, enable_referenced_contexts, events_to_items, limit_persisted_ui_event,
-    live_agent_event, merge_pending_ui_event, message_uses_resource_bindings, messages_to_items,
-    navigation_allowed, parse_disabled_skills, parse_enabled_skill_names,
-    parse_follow_up_questions, parse_skill_tags, persist_ui_events, provenance_ui_file_changes,
-    receive_confirm_decision, resolve_acp_artifact_references, resolve_composer_references,
-    resolve_reader_references, resolve_review_backend, resolve_workspace, session_runtime_status,
-    should_hide_app_on_macos_close, should_persist_ui_event, specialist_skill_index,
-    take_next_queued_turn, user_message_start, AgentEvent, ComposerReferenceArg, McpConnection,
-    McpHttpAuth, McpTransport, ProjectActivityLocks, QueuedItem, SessionRuntime, SkillInfo,
-    StartupReport, StartupTimeline, MAX_PENDING_UI_EVENT_BYTES, UI_STREAM_OUTPUT_MAX_BYTES,
-    UI_TOOL_RESULT_MAX_CHARS,
+    live_agent_event, merge_pending_ui_event, message_uses_resource_bindings,
+    messages_to_context_view_items, messages_to_items, navigation_allowed, parse_disabled_skills,
+    parse_enabled_skill_names, parse_follow_up_questions, parse_skill_tags, persist_ui_events,
+    provenance_ui_file_changes, receive_confirm_decision, resolve_acp_artifact_references,
+    resolve_composer_references, resolve_reader_references, resolve_review_backend,
+    resolve_workspace, session_runtime_status, should_hide_app_on_macos_close,
+    should_persist_ui_event, specialist_skill_index, take_next_queued_turn, user_message_start,
+    AgentEvent, ComposerReferenceArg, McpConnection, McpHttpAuth, McpTransport,
+    ProjectActivityLocks, QueuedItem, SessionRuntime, SkillInfo, StartupReport, StartupTimeline,
+    MAX_PENDING_UI_EVENT_BYTES, UI_STREAM_OUTPUT_MAX_BYTES, UI_TOOL_RESULT_MAX_CHARS,
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -106,6 +106,32 @@ fn model_user_agent_is_validated_before_building_a_provider() {
     assert!(config("client\r\nX-Injected: value")
         .unwrap_err()
         .contains("User-Agent"));
+}
+
+#[test]
+fn xai_subscription_uses_chat_completions_and_only_sends_its_token_to_x_ai() {
+    let config = |url, key| {
+        super::build_provider_config(
+            "xai-oauth",
+            url,
+            key,
+            "grok-4.6",
+            1024,
+            "",
+            "",
+            "",
+            true,
+            None,
+            "",
+            None,
+        )
+    };
+    let cfg = config("https://api.x.ai/v1", "xai-access").unwrap();
+    assert!(matches!(cfg.kind, wisp_llm::ProviderKind::OpenAiCompatible));
+    assert!(config("https://gateway.example/v1", "xai-access").is_err());
+    assert!(config("https://api.x.ai/v1", "")
+        .unwrap_err()
+        .contains("login xai"));
 }
 
 #[tokio::test]
@@ -768,9 +794,28 @@ async fn auto_review_is_off_by_default_and_persists_changes() {
         .await
         .unwrap();
 
-    assert!(!super::load_auto_review_enabled(&store).await);
-    super::save_auto_review_enabled(&store, true).await.unwrap();
-    assert!(super::load_auto_review_enabled(&store).await);
+    // The pre-#1293 global flag the composer used to write must not leak into
+    // new sessions as their default.
+    store
+        .set_setting("auto_review_enabled", "true")
+        .await
+        .unwrap();
+    assert!(!super::load_auto_review_enabled(&store, "a").await);
+    super::save_auto_review_enabled(&store, "a", true)
+        .await
+        .unwrap();
+    assert!(super::load_auto_review_enabled(&store, "a").await);
+    // The whole point: session "a" stays on its own.
+    assert!(!super::load_auto_review_enabled(&store, "b").await);
+    // The settings-pane default only applies to sessions without their own flag.
+    super::save_default_auto_review_enabled(&store, true)
+        .await
+        .unwrap();
+    assert!(super::load_auto_review_enabled(&store, "b").await);
+    super::save_auto_review_enabled(&store, "b", false)
+        .await
+        .unwrap();
+    assert!(!super::load_auto_review_enabled(&store, "b").await);
     drop(store);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -962,6 +1007,69 @@ fn reloaded_background_completion_keeps_terminal_status() {
 }
 
 #[test]
+fn context_view_keeps_system_and_checkpoint_rows() {
+    let items = messages_to_context_view_items(&[
+        wisp_llm::Message::system("sys"),
+        wisp_llm::Message::user("[context summary checkpoint]\n\nfolded"),
+        wisp_llm::Message::user("keep"),
+        wisp_llm::Message::assistant("answer"),
+    ]);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.role.as_str())
+            .collect::<Vec<_>>(),
+        ["system", "checkpoint", "user", "assistant"]
+    );
+    assert_eq!(items[0].kind.as_deref(), Some("system"));
+    assert_eq!(items[1].kind.as_deref(), Some("checkpoint"));
+}
+
+#[test]
+fn context_view_does_not_promote_tombstoned_completions_to_assistant() {
+    let tombstone = "[compacted; full content archived at wisp-history:abc — retrieve only narrow ranges with read/grep; do not load the whole archive back into context]";
+    let items = messages_to_context_view_items(&[
+        wisp_llm::Message::system("sys"),
+        wisp_llm::Message::user("plan the preprint"),
+        wisp_llm::Message::assistant("outline"),
+        wisp_llm::Message::tool("call-1", "attempt_completion", tombstone),
+        wisp_llm::Message::user("later"),
+        wisp_llm::Message::tool("call-2", "read", tombstone),
+        wisp_llm::Message::assistant("tail"),
+    ]);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (
+                item.role.as_str(),
+                item.kind.as_deref(),
+                item.tool_name.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("system", Some("system"), None),
+            ("user", None, None),
+            ("assistant", None, None),
+            ("tool", Some("tombstone"), Some("attempt_completion")),
+            ("user", None, None),
+            ("tool", Some("tombstone"), Some("read")),
+            ("assistant", None, None),
+        ]
+    );
+    assert!(items
+        .iter()
+        .all(|item| item.role != "assistant" || item.text != tombstone));
+    let transcript = messages_to_items(&[wisp_llm::Message::tool(
+        "call-1",
+        "attempt_completion",
+        tombstone,
+    )]);
+    assert_eq!(transcript.len(), 1);
+    assert_eq!(transcript[0].role, "assistant");
+    assert_eq!(transcript[0].text, tombstone);
+}
+
+#[test]
 fn ssh_artifact_uri_maps_to_execution_context_and_remote_path() {
     assert_eq!(
         parse_ssh_artifact_uri("ssh://CPU/home/xzg/results.tar.gz"),
@@ -981,6 +1089,7 @@ fn persisted_ui_events_keep_live_step_order_and_boundaries() {
         AgentEvent::User {
             frame_id: frame_id.clone(),
             text: "question".into(),
+            queue_id: None,
         },
         AgentEvent::MessageBoundary {
             frame_id: frame_id.clone(),
@@ -1218,6 +1327,7 @@ fn persisted_usage_folds_per_turn_and_floats_to_tail() {
         AgentEvent::User {
             frame_id: frame_id.clone(),
             text: "q1".into(),
+            queue_id: None,
         },
         AgentEvent::Text {
             frame_id: frame_id.clone(),
@@ -1228,6 +1338,7 @@ fn persisted_usage_folds_per_turn_and_floats_to_tail() {
         AgentEvent::User {
             frame_id: frame_id.clone(),
             text: "q2".into(),
+            queue_id: None,
         },
         AgentEvent::Text {
             frame_id: frame_id.clone(),
@@ -1264,11 +1375,25 @@ fn persisted_ui_events_ignore_ephemeral_reviewer_handoffs() {
             frame_id: frame_id.clone(),
         },
         AgentEvent::CorrectionStarted {
-            frame_id,
+            frame_id: frame_id.clone(),
             model: "main-model".into(),
+        },
+        AgentEvent::FollowUps {
+            frame_id: frame_id.clone(),
+            questions: vec!["One?".into()],
+        },
+        AgentEvent::HookFailed {
+            frame_id,
+            hook: "memory_proposal".into(),
+            message: "failed".into(),
         },
     ];
 
+    // AfterTurn hook results are live-only, like the invoke results they replaced.
+    assert!(events
+        .iter()
+        .skip(2)
+        .all(|event| !should_persist_ui_event(event)));
     let (items, _) = events_to_items(&events);
     assert!(items.is_empty());
 }
@@ -1280,6 +1405,7 @@ fn persisted_ui_events_restore_context_compaction_flags() {
         before: 812_000,
         after: 236_000,
         strategy: "auto".into(),
+        epoch: None,
     };
     assert!(should_persist_ui_event(&event));
     let events = vec![event];
@@ -1291,6 +1417,84 @@ fn persisted_ui_events_restore_context_compaction_flags() {
     assert_eq!(payload["before"], 812_000);
     assert_eq!(payload["after"], 236_000);
     assert_eq!(payload["strategy"], "auto");
+    assert!(payload["epoch"].is_null());
+
+    let (linked, _) = events_to_items(&[AgentEvent::Compaction {
+        frame_id: "f".into(),
+        before: 100,
+        after: 40,
+        strategy: "manual".into(),
+        epoch: Some(2),
+    }]);
+    let linked_payload: serde_json::Value = serde_json::from_str(&linked[0].text).unwrap();
+    assert_eq!(linked_payload["epoch"], 2);
+}
+
+#[test]
+fn persisted_compaction_updates_floated_usage_without_changing_billing() {
+    let usage = |tokens| AgentEvent::Usage {
+        frame_id: "f".into(),
+        round: 1,
+        model: "m".into(),
+        created_at: 1,
+        input: 5_350_300,
+        output: 1500,
+        reasoning: 0,
+        cached: 0,
+        ctx_tokens: tokens,
+        max_context: 1_048_576,
+        context_usage: wisp_core::ContextUsage {
+            conversation: tokens,
+            ..Default::default()
+        },
+    };
+    let mut events = vec![
+        usage(752_000),
+        AgentEvent::Compaction {
+            frame_id: "f".into(),
+            before: 569_400,
+            after: 245_500,
+            strategy: "manual".into(),
+            epoch: Some(1),
+        },
+    ];
+    let (rows, _) = events_to_items(&events);
+    let snapshot: serde_json::Value = serde_json::from_str(&rows.last().unwrap().text).unwrap();
+    assert_eq!(snapshot["ctx_tokens"], 245_500);
+    assert_eq!(snapshot["context_usage"]["conversation"], 245_500);
+    assert_eq!(snapshot["input"], 5_350_300);
+    assert_eq!(snapshot["output"], 1500);
+    events.push(usage(260_000));
+    let (rows, _) = events_to_items(&events);
+    let snapshot: serde_json::Value = serde_json::from_str(&rows.last().unwrap().text).unwrap();
+    assert_eq!(snapshot["ctx_tokens"], 260_000);
+    events.truncate(2);
+    events.push(AgentEvent::CompactionUndone {
+        frame_id: "f".into(),
+        epoch: 1,
+    });
+    let (rows, _) = events_to_items(&events);
+    let snapshot: serde_json::Value = serde_json::from_str(&rows.last().unwrap().text).unwrap();
+    assert_eq!(snapshot["ctx_tokens"], 569_400);
+    assert_eq!(snapshot["input"], 5_350_300);
+    // Automatic flags have no epoch until the turn is persisted; two flags
+    // in a turn still undo back to the first pre-compaction context.
+    if let AgentEvent::Compaction { epoch, .. } = &mut events[1] {
+        *epoch = None;
+    }
+    events.insert(
+        2,
+        AgentEvent::Compaction {
+            frame_id: "f".into(),
+            before: 245_500,
+            after: 120_000,
+            strategy: "auto".into(),
+            epoch: None,
+        },
+    );
+    let (rows, _) = events_to_items(&events);
+    let snapshot: serde_json::Value = serde_json::from_str(&rows.last().unwrap().text).unwrap();
+    assert_eq!(snapshot["ctx_tokens"], 569_400);
 }
 
 #[test]
@@ -1915,6 +2119,7 @@ fn transcript_page_reconstructs_legacy_prefix_before_persisted_events() {
         },
     ];
     let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: None,
         messages: vec![
             (1, wisp_llm::Message::user("legacy question")),
             (2, wisp_llm::Message::assistant("fallback answer")),
@@ -1942,6 +2147,7 @@ fn transcript_page_reconstructs_legacy_prefix_before_persisted_events() {
 #[test]
 fn persisted_ui_events_from_older_builds_keep_the_transcript() {
     let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: None,
         messages: vec![(1, wisp_llm::Message::user("hello"))],
         branch_merges: vec![],
         reviews: vec![],
@@ -1977,8 +2183,37 @@ fn persisted_ui_events_from_older_builds_keep_the_transcript() {
 }
 
 #[test]
+fn compacted_model_prefix_and_checkpoint_never_duplicate_visual_questions() {
+    let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: Some(0),
+        messages: vec![(3, wisp_llm::Message::user("question 41"))],
+        branch_merges: vec![],
+        reviews: vec![],
+        resources: vec![],
+        ui_events: vec![
+            r#"{"kind":"User","frame_id":"f","text":"question 2"}"#.into(),
+            r#"{"kind":"MessageBoundary","frame_id":"f","seq":4}"#.into(),
+        ],
+        next_before_seq: Some(3),
+        user_offset: 1,
+        latest_seq: 81,
+    };
+    let items = transcript_page_items(&page).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].text, "question 2");
+    let fallback = messages_to_items(&[
+        wisp_llm::Message::user("[context summary checkpoint] summary"),
+        wisp_llm::Message::user("[compacted; summary]"),
+        wisp_llm::Message::user("real question"),
+    ]);
+    assert_eq!(fallback.len(), 1);
+    assert_eq!(fallback[0].text, "real question");
+}
+
+#[test]
 fn branch_merge_projection_never_relabels_the_previous_answer() {
     let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: None,
         messages: vec![
             (1, wisp_llm::Message::user("question")),
             (2, wisp_llm::Message::assistant("original answer")),

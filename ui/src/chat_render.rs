@@ -5,16 +5,26 @@ use crate::dto::*;
 use crate::i18n::{self, t, tf, use_locale, Locale};
 use crate::research;
 use crate::text::{event_target_value, format_duration_ms, md_to_html, tool_card_label};
+use crate::window_capture_escape;
 use leptos::*;
 use serde_wasm_bindgen::to_value;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+#[derive(Clone, Copy)]
+pub(crate) struct CompactionRowActions {
+    pub undo: Callback<u64>,
+    pub rewind_before: Callback<usize>,
+}
+
 /// The submission result is the durable link between a transcript row and a Run.
 /// Never infer ownership from a command, title, or nearby timestamp.
 pub(crate) fn submitted_run_id(name: &str, output: &str) -> Option<String> {
-    if !matches!(name, "run_in_context" | "wisp_run_in_context") {
+    if !matches!(
+        name,
+        "run_in_context" | "wisp_run_in_context" | "transfer_between_contexts"
+    ) {
         return None;
     }
     let value: serde_json::Value = serde_json::from_str(output).ok()?;
@@ -58,6 +68,182 @@ pub(crate) fn completed_run_owners(
     owners
 }
 
+#[cfg(test)]
+mod submitted_run_id_tests {
+    use super::{completed_run_owners, submitted_run_id};
+    use crate::app_support::completed_activity_groups;
+    use crate::dto::{ChatItem, RunSummary};
+
+    fn tool(name: &str, output: &str) -> ChatItem {
+        ChatItem::Tool {
+            name: name.into(),
+            ok: Some(true),
+            input: "ssh:CPU3:/data/file.png".into(),
+            output: output.into(),
+            started_at_ms: None,
+            duration_ms: Some(46),
+        }
+    }
+
+    fn run(id: &str, frame_id: &str, status: &str) -> RunSummary {
+        RunSummary {
+            id: id.into(),
+            frame_id: Some(frame_id.into()),
+            context_id: "ssh:CPU3".into(),
+            title: "Download file.png from CPU3".into(),
+            kind: "file_transfer".into(),
+            status: status.into(),
+            created_at: 1,
+            started_at: Some(1),
+            ended_at: Some(2),
+            exit_code: Some(0),
+            remote_workdir: None,
+            timeout_secs: None,
+            last_polled_at: None,
+            last_poll_error: None,
+            progress_json: "{}".into(),
+            harvested_at: None,
+            cleaned_at: None,
+            cleanup_error: None,
+            output_fingerprint: String::new(),
+        }
+    }
+
+    #[test]
+    fn extracts_ids_from_compute_and_transfer_submissions() {
+        let output = r#"{"run_id":"xfer-1","status":"submitted"}"#;
+        assert_eq!(
+            submitted_run_id("run_in_context", r#"{"run_id":"run-1"}"#).as_deref(),
+            Some("run-1")
+        );
+        assert_eq!(
+            submitted_run_id("wisp_run_in_context", r#"{"id":"run-2"}"#).as_deref(),
+            Some("run-2")
+        );
+        assert_eq!(
+            submitted_run_id("transfer_between_contexts", output).as_deref(),
+            Some("xfer-1")
+        );
+        assert_eq!(submitted_run_id("monitor_run", output), None);
+        assert_eq!(submitted_run_id("harvest_run", output), None);
+        assert_eq!(submitted_run_id("shell", output), None);
+    }
+
+    #[test]
+    fn completed_monitors_and_their_commentary_share_the_submission_activity() {
+        let monitor = |name: &str, id: &str| ChatItem::Tool {
+            name: name.into(),
+            input: format!(" {id} "),
+            output: "monitored output".into(),
+            ok: Some(true),
+            started_at_ms: None,
+            duration_ms: Some(50),
+        };
+        let assistant = |text: &str| ChatItem::Assistant {
+            text: text.into(),
+            model: None,
+            resources: Vec::new(),
+        };
+        let mut items = vec![
+            ChatItem::User("Analyze and transfer".into()),
+            tool(
+                "run_in_context",
+                r#"{"run_id":"run-1","status":"submitted"}"#,
+            ),
+            monitor("monitor_run", "run-1"),
+            tool(
+                "transfer_between_contexts",
+                r#"{"run_id":"xfer-1","status":"submitted"}"#,
+            ),
+            assistant("Checking the transfer"),
+            ChatItem::Reasoning("Verify the result".into()),
+            monitor("wisp_monitor_run", "xfer-1"),
+            assistant("Final report"),
+        ];
+        for status in ["succeeded", "failed", "cancelled", "timed_out", "lost"] {
+            let owners = completed_run_owners(
+                &items,
+                &[
+                    run("run-1", "session", status),
+                    run("xfer-1", "session", status),
+                ],
+                "session",
+            );
+            assert_eq!(
+                completed_activity_groups(&items, false, &owners),
+                vec![1..7]
+            );
+            assert!(completed_activity_groups(&items, true, &owners).is_empty());
+        }
+
+        // Running, unknown, and foreign Runs must keep their standalone card.
+        for first in [
+            run("run-1", "session", "running"),
+            run("run-1", "elsewhere", "succeeded"),
+            run("unrelated", "session", "succeeded"),
+        ] {
+            let owners = completed_run_owners(
+                &items,
+                &[first, run("xfer-1", "session", "succeeded")],
+                "session",
+            );
+            assert_eq!(
+                completed_activity_groups(&items, false, &owners),
+                vec![1..2, 3..7]
+            );
+        }
+
+        let owners = completed_run_owners(
+            &items,
+            &[
+                run("run-1", "session", "succeeded"),
+                run("xfer-1", "session", "succeeded"),
+            ],
+            "session",
+        );
+        items.push(ChatItem::QueuedUser {
+            id: 1,
+            text: "Queued question".into(),
+        });
+        assert!(completed_activity_groups(&items, true, &owners).is_empty());
+        items.pop();
+        items.push(ChatItem::User("Next question".into()));
+        assert_eq!(completed_activity_groups(&items, true, &owners), vec![1..7]);
+    }
+
+    #[test]
+    fn completed_transfers_are_owned_by_their_submission_row() {
+        let items = vec![
+            ChatItem::User("download results".into()),
+            tool(
+                "transfer_between_contexts",
+                r#"{"run_id":"xfer-1","status":"submitted"}"#,
+            ),
+            tool("shell", r#"{"run_id":"xfer-1"}"#),
+        ];
+        let owners = completed_run_owners(
+            &items,
+            &[run("xfer-1", "live-session", "succeeded")],
+            "live-session",
+        );
+        assert_eq!(owners.get("xfer-1"), Some(&1));
+    }
+
+    #[test]
+    fn running_transfers_stay_unowned_until_they_settle() {
+        let items = vec![tool(
+            "transfer_between_contexts",
+            r#"{"run_id":"xfer-1","status":"submitted"}"#,
+        )];
+        let owners = completed_run_owners(
+            &items,
+            &[run("xfer-1", "live-session", "running")],
+            "live-session",
+        );
+        assert!(owners.is_empty());
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CompletedRunCards {
     pub owners: Memo<HashMap<String, usize>>,
@@ -69,10 +255,14 @@ pub(crate) struct CompletedRunCards {
 /// True for items whose `render_item` produces an empty view, so the thread
 /// loop can drop their wrapper `<div>` and avoid a dangling `.thread` gap (#19).
 pub(crate) fn renders_nothing(item: &ChatItem) -> bool {
+    if item.is_context_tombstone() {
+        return false;
+    }
     matches!(item, ChatItem::Assistant { text, .. } if text.trim().is_empty())
         || matches!(item, ChatItem::Tool { name, .. } if name == "attempt_completion")
         || matches!(item, ChatItem::FileChanged(_))
         || matches!(item, ChatItem::QueuedUser { .. })
+        || matches!(item, ChatItem::AppContextNotice(_))
 }
 
 pub(crate) fn class_for(item: &ChatItem) -> &'static str {
@@ -80,6 +270,7 @@ pub(crate) fn class_for(item: &ChatItem) -> &'static str {
         ChatItem::User(_) => "msg user",
         ChatItem::QueuedUser { .. } => "msg user queued",
         ChatItem::Assistant { text, .. } if text.starts_with("Error: ") => "tool-wrap",
+        item if item.is_context_tombstone() => "msg context-tombstone-row",
         ChatItem::Assistant { .. } => "msg assistant",
         ChatItem::BranchMerge { .. } => "branch-merge-card-row",
         ChatItem::Reasoning(_) => "msg reasoning",
@@ -102,7 +293,41 @@ pub(crate) fn class_for(item: &ChatItem) -> &'static str {
         ChatItem::Plan(_) => "tool-wrap plan-wrap",
         ChatItem::Question(_) => "tool-wrap plan-question-wrap",
         ChatItem::AppContextNotice(_) => "app-context-notice-row",
+        ChatItem::System(_) => "msg system context-system-row",
+        ChatItem::Checkpoint(_) => "msg checkpoint context-checkpoint-row",
     }
+}
+
+fn render_context_tombstone(item: &ChatItem, locale: ReadSignal<Locale>) -> View {
+    let (name, body) = match item {
+        ChatItem::Tool { name, output, .. } => (name.clone(), output.clone()),
+        ChatItem::Assistant { text, .. } => (String::new(), text.clone()),
+        _ => return view! {}.into_view(),
+    };
+    let archive = context_tombstone_archive_ref(&body)
+        .unwrap_or("")
+        .to_string();
+    let named = !name.is_empty() && name != "attempt_completion";
+    view! {
+        <details class="context-tombstone-row" data-testid="context-tombstone-row">
+            <summary>
+                {compose_icon("archive")}
+                <span class="context-tombstone-name">{move || {
+                    let loc = locale.get();
+                    if named {
+                        tf(loc, "chat.context_tombstone_named", &[("name", &name)])
+                    } else {
+                        t(loc, "chat.context_tombstone").to_string()
+                    }
+                }}</span>
+                {(!archive.is_empty()).then(|| view! {
+                    <code class="context-tombstone-ref">{archive.clone()}</code>
+                })}
+            </summary>
+            <pre class="context-tombstone-body">{body}</pre>
+        </details>
+    }
+    .into_view()
 }
 
 /// "482" below 1k, "12.3k" above — same scale the status bar uses.
@@ -295,12 +520,38 @@ mod token_format_tests {
 
     #[test]
     fn queued_turns_do_not_occupy_a_transcript_row() {
-        use crate::dto::ChatItem;
+        use crate::dto::{AppContextNotice, ChatItem};
         assert!(renders_nothing(&ChatItem::QueuedUser {
             id: 1,
             text: "later".into(),
         }));
         assert!(!renders_nothing(&ChatItem::User("sent".into())));
+        assert!(renders_nothing(&ChatItem::AppContextNotice(
+            AppContextNotice {
+                context_id: "app".into(),
+                app_name: "plot".into(),
+                state: "ready".into(),
+                summary: String::new(),
+                structured_preview: None,
+            }
+        )));
+        let tombstone = "[compacted; full content archived at wisp-history:abc — retrieve only narrow ranges with read/grep; do not load the whole archive back into context]";
+        assert!(renders_nothing(&ChatItem::Tool {
+            name: "attempt_completion".into(),
+            ok: Some(true),
+            input: String::new(),
+            output: "final report".into(),
+            started_at_ms: None,
+            duration_ms: None,
+        }));
+        assert!(!renders_nothing(&ChatItem::Tool {
+            name: "attempt_completion".into(),
+            ok: Some(true),
+            input: String::new(),
+            output: tombstone.into(),
+            started_at_ms: None,
+            duration_ms: None,
+        }));
     }
 
     #[test]
@@ -435,7 +686,7 @@ fn streaming_reasoning_text(text: &str, max_bytes: usize) -> String {
 /// bounded so repeated signal flushes cannot copy an ever-growing string.
 #[component]
 pub(crate) fn StreamingReasoningMessage(
-    items: RwSignal<Vec<ChatItem>>,
+    items: Signal<Vec<ChatItem>>,
     source_item: usize,
     session_id: String,
     disclosure_state: RwSignal<HashMap<String, bool>>,
@@ -500,6 +751,47 @@ pub(crate) fn toggle_disclosure(
         let current = values.get(id).copied().unwrap_or(automatic);
         values.insert(id.to_string(), !current);
     });
+}
+
+pub(crate) fn nested_links_toggle(
+    locale: Locale,
+    label_key: &'static str,
+    expand_key: &'static str,
+    collapse_key: &'static str,
+    count: usize,
+    open_id: String,
+    states: RwSignal<HashMap<String, bool>>,
+    test_id: &'static str,
+) -> impl IntoView {
+    let id_expanded = open_id.clone();
+    let id_class = open_id.clone();
+    let id_click = open_id.clone();
+    let id_title = open_id.clone();
+    let id_label = open_id;
+    let count_label = count.to_string();
+    view! {
+        <button type="button" class="message-nest-toggle"
+            data-testid=test_id
+            aria-expanded=move || disclosure_open(states, &id_expanded, true).to_string()
+            title=move || t(
+                locale,
+                if disclosure_open(states, &id_title, true) { collapse_key } else { expand_key },
+            )
+            aria-label=move || {
+                let action = t(
+                    locale,
+                    if disclosure_open(states, &id_label, true) { collapse_key } else { expand_key },
+                );
+                format!("{action} ({count})")
+            }
+            on:click=move |_| toggle_disclosure(states, &id_click, true)>
+            <span class="message-nest-caret" class:collapsed=move || !disclosure_open(states, &id_class, true) aria-hidden="true">
+                {compose_icon("chevron-down")}
+            </span>
+            <span class="message-nest-label">{t(locale, label_key)}</span>
+            <span class="message-nest-count">{count_label}</span>
+        </button>
+    }
 }
 
 /// Collapsed-header label for a step group. `elapsed` is the pre-formatted run
@@ -589,7 +881,7 @@ mod steps_title_tests {
 
 pub(crate) fn render_steps_group(
     indices: Vec<usize>,
-    source: RwSignal<Vec<ChatItem>>,
+    source: Signal<Vec<ChatItem>>,
     live: bool,
     completed_turn: bool,
     turn_duration_ms: Option<u64>,
@@ -741,7 +1033,7 @@ pub(crate) fn render_steps_group(
 
 fn render_step_rows(
     indices: &[usize],
-    source: RwSignal<Vec<ChatItem>>,
+    source: Signal<Vec<ChatItem>>,
     live: bool,
     group_id: &str,
     disclosure_state: RwSignal<HashMap<String, bool>>,
@@ -769,7 +1061,7 @@ fn render_step_rows(
 
 #[allow(clippy::too_many_arguments)]
 fn render_step_row(
-    source: RwSignal<Vec<ChatItem>>,
+    source: Signal<Vec<ChatItem>>,
     index: usize,
     position: usize,
     live: bool,
@@ -1020,8 +1312,238 @@ fn render_step_row(
             }
             .into_view()
         }
+        Some(item @ (ChatItem::Usage { .. } | ChatItem::Compaction { .. })) => {
+            view! { <div class=class_for(item)>{render_process_metadata(item, locale)}</div> }.into_view()
+        }
         _ => view! {}.into_view(),
     })
+}
+
+// Shared by standalone metadata rows and metadata between folded phases.
+fn render_process_metadata(item: &ChatItem, locale: ReadSignal<Locale>) -> View {
+    match item {
+        ChatItem::Usage {
+            input,
+            output,
+            reasoning,
+            cached,
+            ..
+        } => {
+            let (input, output, reasoning, cached) = (*input, *output, *reasoning, *cached);
+            view! {
+                <div class="usage-line" title=move || t(locale.get(), "msg.usage_title")>
+                    {move || {
+                        let loc = locale.get();
+                        let mut s = tf(loc, "msg.usage", &[
+                            ("in", &fmt_tokens(input)),
+                            ("out", &fmt_tokens(output)),
+                        ]);
+                        if cached > 0 {
+                            s.push_str(&tf(loc, "msg.usage.cached", &[("c", &fmt_tokens(cached))]));
+                        }
+                        if reasoning > 0 {
+                            s.push_str(&tf(loc, "msg.usage.reasoning", &[("r", &fmt_tokens(reasoning))]));
+                        }
+                        s
+                    }}
+                </div>
+            }.into_view()
+        }
+        ChatItem::Compaction {
+            before,
+            after,
+            strategy,
+            epoch,
+            checkpoint,
+            kept_from_user_index,
+            undone,
+            can_undo,
+            undo_reason,
+        } => render_compaction_row(
+            *before,
+            *after,
+            strategy,
+            *epoch,
+            checkpoint.clone(),
+            *kept_from_user_index,
+            *undone,
+            *can_undo,
+            undo_reason.clone(),
+            locale,
+        ),
+        _ => view! {}.into_view(),
+    }
+}
+
+fn render_compaction_row(
+    before: usize,
+    after: usize,
+    strategy: &str,
+    epoch: Option<u64>,
+    checkpoint: Option<String>,
+    kept_from_user_index: Option<usize>,
+    undone: bool,
+    can_undo: bool,
+    undo_reason: Option<String>,
+    locale: ReadSignal<Locale>,
+) -> View {
+    if strategy == "auto_continue" {
+        let count = before.to_string();
+        let limit = after.to_string();
+        return view! {
+            <div class="context-compaction-flag auto" data-testid="auto-continue-flag">
+                {compose_icon("sync")}
+                <span>{move || tf(
+                    locale.get(),
+                    "chat.auto_continued",
+                    &[("count", count.as_str()), ("limit", limit.as_str())],
+                )}</span>
+            </div>
+        }
+        .into_view();
+    }
+    let automatic = strategy == "auto";
+    let strategy_key = if automatic {
+        "chat.compaction_strategy_auto"
+    } else {
+        "chat.compaction_strategy_manual"
+    };
+    let counts = format!(
+        "{} → {} tokens",
+        fmt_tokens(before as u64),
+        fmt_tokens(after as u64)
+    );
+    let reduction = (before > after).then(|| {
+        let percent = ((before - after) as f64 / before as f64 * 100.0).round();
+        format!("{percent:.0}")
+    });
+    let checkpoint_html = checkpoint
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .map(md_to_html);
+    let expanded = create_rw_signal(false);
+    window_capture_escape(move || {
+        if !expanded.get() {
+            return false;
+        }
+        expanded.set(false);
+        true
+    });
+    let undo_reason_key = undo_reason.as_deref().map(compaction_undo_reason_key);
+    let actions = use_context::<CompactionRowActions>();
+    let undo_compaction = actions.map(|actions| actions.undo);
+    let rewind_before = actions.map(|actions| actions.rewind_before);
+    view! {
+        <div
+            class="context-compaction-status context-compaction-complete"
+            class:undone=undone
+            data-testid="context-compaction-flag"
+            data-undone=undone.to_string()
+        >
+            <button
+                type="button"
+                class="context-compaction-toggle"
+                data-testid="context-compaction-expand"
+                aria-expanded=move || expanded.get().to_string()
+                title=move || t(
+                    locale.get(),
+                    if expanded.get() { "chat.compaction_collapse" } else { "chat.compaction_expand" },
+                )
+                on:click=move |_| expanded.update(|open| *open = !*open)
+            >
+                <span class="context-compaction-mark" aria-hidden="true">{compose_icon("check")}</span>
+                <span class="context-compaction-copy">
+                    <strong>{move || t(
+                        locale.get(),
+                        if undone {
+                            "chat.compaction_undone"
+                        } else if automatic {
+                            "chat.context_auto_compacted"
+                        } else {
+                            "chat.context_compacted"
+                        },
+                    )}</strong>
+                    <span class="context-compaction-detail">
+                        <span class="context-compaction-count">{counts}</span>
+                        {reduction.map(|percent| view! {
+                            <span class="context-compaction-reduction">{move || tf(locale.get(), "chat.compaction_reduction", &[("percent", &percent)])}</span>
+                        })}
+                    </span>
+                </span>
+                <span class="context-compaction-chevron" aria-hidden="true">
+                    {move || compose_icon(if expanded.get() { "chevron-up" } else { "chevron-down" })}
+                </span>
+                <span class="context-compaction-rule" aria-hidden="true"></span>
+            </button>
+            {move || expanded.get().then(|| {
+                let checkpoint_html = checkpoint_html.clone();
+                let undo_reason_key = undo_reason_key;
+                view! {
+                    <div class="context-compaction-details" data-testid="context-compaction-details">
+                        {checkpoint_html.map(|html| view! {
+                            <div class="context-compaction-checkpoint">
+                                <span class="context-compaction-checkpoint-label">{move || t(locale.get(), "chat.compaction_checkpoint")}</span>
+                                <div class="md" inner_html=html></div>
+                            </div>
+                        })}
+                        <div class="context-compaction-meta">
+                            <span>{move || tf(
+                                locale.get(),
+                                "chat.compaction_strategy",
+                                &[("strategy", &t(locale.get(), strategy_key))],
+                            )}</span>
+                            {epoch.map(|epoch| view! {
+                                <span>{move || tf(locale.get(), "chat.compaction_epoch", &[("epoch", &epoch.to_string())])}</span>
+                            })}
+                            {kept_from_user_index.map(|index| {
+                                let turn = (index + 1).to_string();
+                                view! {
+                                    <span>{move || tf(locale.get(), "chat.compaction_kept_from", &[("turn", turn.as_str())])}</span>
+                                }
+                            })}
+                        </div>
+                        <div class="context-compaction-actions">
+                            <button
+                                type="button"
+                                class="tool-btn"
+                                data-testid="undo-compaction"
+                                disabled=!can_undo
+                                title=move || undo_reason_key.map(|key| t(locale.get(), key)).unwrap_or_default()
+                                on:click=move |ev| {
+                                    ev.stop_propagation();
+                                    if !can_undo {
+                                        return;
+                                    }
+                                    if let Some(undo) = undo_compaction {
+                                        undo.call(epoch.unwrap_or(0));
+                                    }
+                                }
+                            >
+                                {compose_icon("undo-compact")}
+                                <span>{move || t(locale.get(), "chat.compaction_undo")}</span>
+                            </button>
+                            {kept_from_user_index.and_then(|index| rewind_before.map(|rewind| view! {
+                                <button
+                                    type="button"
+                                    class="tool-btn"
+                                    data-testid="rewind-before-compact"
+                                    disabled=undone
+                                    on:click=move |ev| {
+                                        ev.stop_propagation();
+                                        rewind.call(index);
+                                    }
+                                >
+                                    {compose_icon("arrow-left")}
+                                    <span>{move || t(locale.get(), "chat.compaction_rewind")}</span>
+                                </button>
+                            }))}
+                        </div>
+                    </div>
+                }
+            })}
+        </div>
+    }
+    .into_view()
 }
 
 /// Latest step of a live run as "name · detail", shown in the collapsed
@@ -1059,6 +1581,168 @@ fn execution_plan_data(
         None
     };
     (steps, counts)
+}
+
+/// The composer follows the latest accepted snapshot in the current user turn.
+/// Pending/rejected updates must not replace accepted progress; queued messages
+/// must not hide it before their turn actually starts.
+fn composer_plan_steps(items: &[ChatItem]) -> Vec<(&'static str, String)> {
+    for item in items.iter().rev() {
+        match item {
+            ChatItem::User(_) => break,
+            ChatItem::Tool {
+                name,
+                ok: Some(true),
+                output,
+                ..
+            } if name == "update_plan" => {
+                return parse_plan_steps(output);
+            }
+            _ => {}
+        }
+    }
+    vec![]
+}
+
+fn plan_step_status_key(status: &str) -> &'static str {
+    match status {
+        "done" => "execution_plan.done",
+        "running" => "execution_plan.running",
+        "cancelled" => "execution_plan.cancelled",
+        _ => "execution_plan.pending",
+    }
+}
+
+fn plan_step_icon(status: &str) -> &'static str {
+    match status {
+        "done" => "circle-check",
+        "running" => "activity-orbit",
+        "cancelled" => "circle-minus",
+        _ => "circle",
+    }
+}
+
+fn composer_plan_dismiss_key(session_id: Option<&str>, steps: &[(&str, String)]) -> String {
+    let mut key = session_id.unwrap_or_default().to_string();
+    key.push('\n');
+    for (status, text) in steps {
+        key.push_str(status);
+        key.push('\0');
+        key.push_str(text);
+        key.push('\n');
+    }
+    key
+}
+
+#[component]
+pub(crate) fn ComposerPlanProgress(
+    items: RwSignal<Vec<ChatItem>>,
+    busy: RwSignal<bool>,
+    session_id: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let locale = use_locale();
+    let open = create_rw_signal(false);
+    let dismissed = create_rw_signal(None::<String>);
+    // Equality prevents unrelated token/tool events from restarting animations.
+    let steps = create_memo(move |_| items.with(|items| composer_plan_steps(items)));
+    let done = create_memo(move |_| {
+        steps.with(|steps| steps.iter().filter(|(status, _)| *status == "done").count())
+    });
+    let total = create_memo(move |_| steps.with(Vec::len));
+    let complete = create_memo(move |_| total.get() > 0 && done.get() == total.get());
+    let current = create_memo(move |_| {
+        steps.with(|steps| {
+            steps
+                .iter()
+                .find(|(status, _)| *status == "running")
+                .or_else(|| steps.iter().find(|(status, _)| *status == "pending"))
+                .cloned()
+        })
+    });
+    let animating = create_memo(move |_| {
+        busy.get() && current.get().is_some_and(|(status, _)| status == "running")
+    });
+    let plan_key = create_memo(move |_| {
+        steps.with(|steps| composer_plan_dismiss_key(session_id.get().as_deref(), steps))
+    });
+    let hidden = create_memo(move |_| dismissed.get().as_deref() == Some(plan_key.get().as_str()));
+    create_effect(move |_| {
+        if total.get() == 0 {
+            open.set(false);
+        }
+    });
+    view! {
+        <Show when=move || { total.get() > 0 && !hidden.get() }>
+            <section class="composer-plan-progress" data-testid="composer-plan-progress"
+                class:is-running=move || animating.get() class:is-complete=move || complete.get()
+                class:is-open=move || open.get()
+                aria-label=move || t(locale.get(), "execution_plan.title")>
+                <div class="composer-plan-head">
+                    <button type="button" class="composer-plan-toggle" data-testid="composer-plan-toggle"
+                        aria-expanded=move || open.get().to_string()
+                        on:click=move |_| open.update(|open| *open = !*open)>
+                        <span class="composer-plan-mark" aria-hidden="true">
+                            {move || compose_icon(if complete.get() { "circle-check" } else if animating.get() { "activity-orbit" } else { "plan" })}
+                        </span>
+                        <div class="composer-plan-copy" role="status" aria-live="polite" aria-atomic="true">
+                            <div class="composer-plan-summary">
+                                <span class="composer-plan-label">{move || t(locale.get(), if complete.get() {
+                                    "execution_plan.complete"
+                                } else if current.get().is_none() {
+                                    "execution_plan.ended"
+                                } else if !busy.get() {
+                                    "execution_plan.idle"
+                                } else { "execution_plan.title" })}</span>
+                                <span class="composer-plan-count">{move || tf(locale.get(), "execution_plan.count", &[("done", &done.get().to_string()), ("total", &total.get().to_string())])}</span>
+                            </div>
+                            <For each=move || {
+                                if open.get() { Vec::new() } else { current.get().into_iter().collect() }
+                            } key=|step| step.clone()
+                                children=move |(_, text)| view! {
+                                    <div class="composer-plan-current" title=text.clone()>{text}</div>
+                                } />
+                        </div>
+                        <span class="execution-plan-chevron" class:expanded=move || open.get() aria-hidden="true">{compose_icon("chevron-right")}</span>
+                    </button>
+                    {move || complete.get().then(|| {
+                        let tip = t(locale.get(), "execution_plan.dismiss");
+                        view! {
+                            <button type="button" class="composer-plan-dismiss" data-testid="composer-plan-dismiss"
+                                title=tip.clone() aria-label=tip
+                                on:click=move |ev| {
+                                    ev.stop_propagation();
+                                    dismissed.set(Some(plan_key.get_untracked()));
+                                    open.set(false);
+                                }>{compose_icon("close")}</button>
+                        }
+                    })}
+                </div>
+                {move || open.get().then(|| {
+                    let rows = steps.get();
+                    view! {
+                        <ol class="execution-plan-list composer-plan-steps" data-testid="composer-plan-steps">
+                            {rows.into_iter().map(|(status, text)| {
+                                let key = plan_step_status_key(status);
+                                view! {
+                                    <li data-status=status>
+                                        <span class="execution-plan-mark" aria-hidden="true">{compose_icon(plan_step_icon(status))}</span>
+                                        <span class="execution-plan-text">{text}</span>
+                                        <span class="execution-plan-status">{move || t(locale.get(), key)}</span>
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ol>
+                    }
+                })}
+                <div class="composer-plan-track" role="progressbar"
+                    aria-label=move || t(locale.get(), "execution_plan.progress")
+                    aria-valuemin="0" aria-valuemax=move || total.get().to_string()
+                    aria-valuenow=move || done.get().to_string()>
+                    <span style:width=move || format!("{}%", done.get() as f64 / total.get().max(1) as f64 * 100.0)></span>
+                </div>
+            </section>
+        </Show>
+    }
 }
 
 fn render_execution_plan(
@@ -1116,21 +1800,10 @@ fn render_execution_plan(
                             </div>
                             <ol class="execution-plan-list">
                                 {steps.get_value().into_iter().map(|(status, text)| {
-                                    let key = match status {
-                                        "done" => "execution_plan.done",
-                                        "running" => "execution_plan.running",
-                                        "cancelled" => "execution_plan.cancelled",
-                                        _ => "execution_plan.pending",
-                                    };
-                                    let icon = match status {
-                                        "done" => "circle-check",
-                                        "running" => "activity-orbit",
-                                        "cancelled" => "circle-minus",
-                                        _ => "circle",
-                                    };
+                                    let key = plan_step_status_key(status);
                                     view! {
                                         <li data-status=status>
-                                            <span class="execution-plan-mark" aria-hidden="true">{compose_icon(icon)}</span>
+                                            <span class="execution-plan-mark" aria-hidden="true">{compose_icon(plan_step_icon(status))}</span>
                                             <span class="execution-plan-text">{text}</span>
                                             <span class="execution-plan-status">{move || t(locale.get(), key)}</span>
                                         </li>
@@ -1169,7 +1842,55 @@ fn render_execution_plan(
 
 #[cfg(test)]
 mod execution_plan_tests {
-    use super::execution_plan_data;
+    use super::{composer_plan_dismiss_key, composer_plan_steps, execution_plan_data};
+    use crate::dto::ChatItem;
+
+    #[test]
+    fn composer_plan_uses_accepted_current_turn_and_ignores_queued_followups() {
+        let plan = |ok, output: &str| ChatItem::Tool {
+            name: "update_plan".into(),
+            ok,
+            input: String::new(),
+            output: output.into(),
+            started_at_ms: None,
+            duration_ms: None,
+        };
+        let mut items = vec![
+            ChatItem::User("Analyze".into()),
+            plan(Some(true), "[x] Inspect\n[~] Analyze"),
+            ChatItem::QueuedUser {
+                id: 1,
+                text: "Next task".into(),
+            },
+            plan(None, ""),
+            plan(Some(false), "[x] Incorrect completion"),
+        ];
+        assert_eq!(
+            composer_plan_steps(&items),
+            vec![("done", "Inspect".into()), ("running", "Analyze".into())]
+        );
+        items.push(plan(Some(true), "Steps unavailable"));
+        assert!(composer_plan_steps(&items).is_empty());
+        items.push(plan(Some(true), "[x] Finished"));
+        assert_eq!(
+            composer_plan_steps(&items),
+            vec![("done", "Finished".into())]
+        );
+        items.push(ChatItem::User("Next task".into()));
+        assert!(composer_plan_steps(&items).is_empty());
+    }
+
+    #[test]
+    fn composer_plan_dismiss_key_is_scoped_to_session_and_steps() {
+        let steps = vec![("done", "Inspect".into()), ("done", "Write".into())];
+        let key = composer_plan_dismiss_key(Some("s-a"), &steps);
+        assert_eq!(key, composer_plan_dismiss_key(Some("s-a"), &steps));
+        assert_ne!(key, composer_plan_dismiss_key(Some("s-b"), &steps));
+        assert_ne!(
+            key,
+            composer_plan_dismiss_key(Some("s-a"), &[("done", "Inspect".into())])
+        );
+    }
 
     #[test]
     fn result_steps_replace_preview_counts_and_keep_cancelled_separate() {
@@ -1457,13 +2178,7 @@ pub(crate) fn RunMonitorCard(
     tool_ok: Option<bool>,
     tool_output: String,
     dismissed_runs: RwSignal<HashSet<String>>,
-    /// Only foreground `monitor_run` cards nominate their Run for the
-    /// results-review prompt. AutoRun cards cover exploratory command Runs,
-    /// which must never interrupt with a review modal (#897).
-    #[prop(optional)]
-    auto_review: bool,
-    #[prop(optional)]
-    embedded: bool,
+    #[prop(optional)] embedded: bool,
 ) -> impl IntoView {
     let locale = use_locale();
     let completed_cards = use_context::<CompletedRunCards>();
@@ -1524,41 +2239,6 @@ pub(crate) fn RunMonitorCard(
     // Manual entry point: the review button on the card opens the modal
     // directly, for any card.
     let review_modal = use_context::<crate::overlays::RunReviewModal>().map(|modal| modal.0);
-    // When a foreground-monitored SSH Run finishes successfully in this
-    // session, nominate it for the results-review prompt. The root drains the
-    // queue once the session goes idle and asks the backend whether the Run
-    // has an unresolved product decision before opening the modal, so work in
-    // progress is never interrupted and empty workspaces never prompt (#897).
-    let review_queue = auto_review
-        .then(|| use_context::<crate::overlays::PendingRunReviews>().map(|queue| queue.0))
-        .flatten();
-    if let Some(review_queue) = review_queue {
-        let prompted = Rc::new(Cell::new(false));
-        create_effect(move |previous: Option<Option<String>>| {
-            let Some(run) = selected_run.get() else {
-                return None;
-            };
-            let status = run.status.clone();
-            let was_active = matches!(
-                previous.flatten().as_deref(),
-                Some("submitted") | Some("running") | Some("cancelling")
-            );
-            if was_active
-                && status == "succeeded"
-                && run.kind == "ssh_direct"
-                && run.cleaned_at.is_none()
-                && !prompted.get()
-            {
-                prompted.set(true);
-                review_queue.update(|ids| {
-                    if !ids.contains(&run.id) {
-                        ids.push(run.id.clone());
-                    }
-                });
-            }
-            Some(status)
-        });
-    }
     view! {
         {move || {
             if !embedded
@@ -1798,7 +2478,7 @@ pub(crate) fn render_item(
     plan_mode_active: Signal<bool>,
     plan_compat: Signal<bool>,
     on_plan_decision: Callback<PlanDecision>,
-    on_question_answer: Callback<(usize, Option<String>, String)>,
+    on_question_answer: Callback<(usize, Option<String>, String, bool)>,
     on_review_jump: Callback<usize>,
     dismissed_runs: RwSignal<HashSet<String>>,
     on_branch_merge: Callback<(String, String)>,
@@ -1821,6 +2501,7 @@ pub(crate) fn render_item(
         }
         .into_view(),
         ChatItem::QueuedUser { .. } => view! {}.into_view(),
+        item if item.is_context_tombstone() => render_context_tombstone(item, locale),
         ChatItem::Assistant { text, .. } if text.trim().is_empty() => view! {}.into_view(),
         ChatItem::Assistant { text, .. } if text.starts_with("Error: ") => {
             let msg = text
@@ -1859,15 +2540,7 @@ pub(crate) fn render_item(
             }.into_view()
         }
         ChatItem::Assistant { text, .. } if compact_assistant => {
-            let project_root = use_context::<ReadSignal<Option<ProjectInfo>>>()
-                .and_then(|project| project.get().map(|project| project.root));
-            let html = enrich_md_html(
-                md_to_html(text),
-                &[],
-                &[],
-                locale.get(),
-                project_root.as_deref(),
-            );
+            let html = enrich_app_markdown(md_to_html(text), &[], &[], locale.get());
             view! {
                 <div class="assistant-wrap">
                     <div class="body md compact-markdown"
@@ -1900,6 +2573,7 @@ pub(crate) fn render_item(
                     move |_| on_memory.call((session_id.clone(), explore_turn_index))
                 })
                 on_review=Callback::new(move |_| on_review.call(session_id.clone()))
+                busy=busy
                 on_branch=Callback::new(on_branch)
                 can_branch=can_branch
                 show_actions=show_actions
@@ -1937,6 +2611,26 @@ pub(crate) fn render_item(
         // App context is rendered as a removable composer attachment instead
         // of being embedded in the conversation transcript.
         ChatItem::AppContextNotice(_) => view! {}.into_view(),
+        ChatItem::System(text) => {
+            let body = text.clone();
+            view! {
+                <details class="context-system-row" data-testid="context-system-row">
+                    <summary>{move || t(locale.get(), "chat.context_system")}</summary>
+                    <pre class="context-system-body">{body}</pre>
+                </details>
+            }
+            .into_view()
+        }
+        ChatItem::Checkpoint(text) => {
+            let html = md_to_html(text);
+            view! {
+                <div class="context-checkpoint-row" data-testid="context-checkpoint-row">
+                    <div class="context-checkpoint-label">{move || t(locale.get(), "chat.compaction_checkpoint")}</div>
+                    <div class="body md" inner_html=html></div>
+                </div>
+            }
+            .into_view()
+        }
         ChatItem::Tool { name, .. } if name == "attempt_completion" => view! {}.into_view(),
         ChatItem::Tool {
             name,
@@ -1968,7 +2662,6 @@ pub(crate) fn render_item(
                 tool_ok=*ok
                 tool_output=output.clone()
                 dismissed_runs=dismissed_runs
-                auto_review=true
             />
         }
         .into_view(),
@@ -2030,86 +2723,8 @@ pub(crate) fn render_item(
             <ToolBlock name=name.clone() ok=*ok input=input.clone() output=output.clone() />
         }
         .into_view(),
-        ChatItem::Usage {
-            input,
-            output,
-            reasoning,
-            cached,
-            ..
-        } => {
-            let (input, output, reasoning, cached) = (*input, *output, *reasoning, *cached);
-            view! {
-                <div class="usage-line" title=move || t(locale.get(), "msg.usage_title")>
-                    {move || {
-                        let loc = locale.get();
-                        let mut s = tf(loc, "msg.usage", &[
-                            ("in", &fmt_tokens(input)),
-                            ("out", &fmt_tokens(output)),
-                        ]);
-                        if cached > 0 {
-                            s.push_str(&tf(loc, "msg.usage.cached", &[("c", &fmt_tokens(cached))]));
-                        }
-                        if reasoning > 0 {
-                            s.push_str(&tf(loc, "msg.usage.reasoning", &[("r", &fmt_tokens(reasoning))]));
-                        }
-                        s
-                    }}
-                </div>
-            }.into_view()
-        }
-        ChatItem::Compaction {
-            before,
-            after,
-            strategy,
-        } => {
-            if strategy == "auto_continue" {
-                let count = before.to_string();
-                let limit = after.to_string();
-                view! {
-                    <div class="context-compaction-flag auto" data-testid="auto-continue-flag">
-                        {compose_icon("sync")}
-                        <span>{move || tf(
-                            locale.get(),
-                            "chat.auto_continued",
-                            &[("count", count.as_str()), ("limit", limit.as_str())],
-                        )}</span>
-                    </div>
-                }
-                .into_view()
-            } else {
-                let automatic = strategy == "auto";
-                let counts = format!(
-                    "{} → {} tokens",
-                    fmt_tokens(*before as u64),
-                    fmt_tokens(*after as u64)
-                );
-                let reduction = (*before > *after).then(|| {
-                    let percent = ((*before - *after) as f64 / *before as f64 * 100.0).round();
-                    format!("{percent:.0}")
-                });
-                view! {
-                    <div class="context-compaction-status context-compaction-complete" data-testid="context-compaction-flag">
-                        <span class="context-compaction-mark" aria-hidden="true">{compose_icon("check")}</span>
-                        <span class="context-compaction-copy">
-                        <strong>{move || t(
-                            locale.get(),
-                            if automatic {
-                                "chat.context_auto_compacted"
-                            } else {
-                                "chat.context_compacted"
-                            },
-                        )}</strong>
-                        <span class="context-compaction-detail">
-                            <span class="context-compaction-count">{counts}</span>
-                            {reduction.map(|percent| view! {
-                                <span class="context-compaction-reduction">{move || tf(locale.get(), "chat.compaction_reduction", &[("percent", &percent)])}</span>
-                            })}
-                        </span>
-                        </span>
-                        <span class="context-compaction-rule" aria-hidden="true"></span>
-                    </div>
-                }.into_view()
-            }
+        ChatItem::Usage { .. } | ChatItem::Compaction { .. } => {
+            render_process_metadata(item, locale)
         }
         ChatItem::AcpTool {
             title,
@@ -2188,8 +2803,6 @@ pub(crate) fn render_item(
         ChatItem::Plan(plan) => {
             let streaming = plan.state == PlanState::Streaming;
             let entries = plan.entries.clone();
-            let project_root = use_context::<ReadSignal<Option<ProjectInfo>>>()
-                .and_then(|project| project.get().map(|project| project.root));
             view! {
                 <article class="plan-card" class:streaming=streaming
                     class:compat=move || plan_compat.get() data-testid="plan-card">
@@ -2220,12 +2833,11 @@ pub(crate) fn render_item(
                                 PlanStatus::Pending => ("pending", "", "plan.status.pending"),
                             };
                             let high = entry.priority == PlanPriority::High;
-                            let html = enrich_md_html(
+                            let html = enrich_app_markdown(
                                 md_to_html(&entry.content),
                                 &[],
                                 &[],
                                 locale.get(),
-                                project_root.as_deref(),
                             );
                             let entry_artifact = on_artifact.clone();
                             let entry_file = on_file.clone();
@@ -2278,15 +2890,8 @@ pub(crate) fn render_item(
             };
             let request_id_keydown = request_id.clone();
             let request_id_click = request_id.clone();
-            let project_root = use_context::<ReadSignal<Option<ProjectInfo>>>()
-                .and_then(|project| project.get().map(|project| project.root));
-            let question_html = enrich_md_html(
-                md_to_html(&question.question),
-                &[],
-                &[],
-                locale.get(),
-                project_root.as_deref(),
-            );
+            let question_html =
+                enrich_app_markdown(md_to_html(&question.question), &[], &[], locale.get());
             view! {
                 <section class="plan-question-card" data-testid="question-card" data-state=data_state>
                     <div class="plan-question-head">
@@ -2302,10 +2907,19 @@ pub(crate) fn render_item(
                     {(pending && !options.is_empty()).then(|| view! {
                         <div class="plan-question-options">{options.into_iter().map(|option| {
                             let request_id = request_id.clone();
-                            let answer = option.label.clone();
+                            let answer = if request_id.is_some() || option.description.trim().is_empty() {
+                                option.label.clone()
+                            } else {
+                                format!(
+                                    "{}\n\n{}{}",
+                                    option.label,
+                                    t(locale.get(), "plan.question.description_prefix"),
+                                    option.description
+                                )
+                            };
                             view! {
                                 <button type="button"
-                                    on:click=move |_| on_question_answer.call((ui_index, request_id.clone(), answer.clone()))>
+                                    on:click=move |_| on_question_answer.call((ui_index, request_id.clone(), answer.clone(), true))>
                                     <strong>{option.label}</strong>
                                     {(!option.description.is_empty()).then(|| view! { <span>{option.description}</span> })}
                                 </button>
@@ -2320,11 +2934,11 @@ pub(crate) fn render_item(
                                 on:keydown=move |event: web_sys::KeyboardEvent| {
                                     if event.key() == "Enter" && !event.shift_key() {
                                         event.prevent_default();
-                                        on_question_answer.call((ui_index, request_id_keydown.clone(), freeform.get()));
+                                        on_question_answer.call((ui_index, request_id_keydown.clone(), freeform.get(), false));
                                     }
                                 } />
                             <button type="button" class="primary" disabled=move || freeform.get().trim().is_empty()
-                                on:click=move |_| on_question_answer.call((ui_index, request_id_click.clone(), freeform.get()))>
+                                on:click=move |_| on_question_answer.call((ui_index, request_id_click.clone(), freeform.get(), false))>
                                 {move || t(locale.get(), "plan.question.send")}
                             </button>
                         </div>

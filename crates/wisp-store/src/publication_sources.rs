@@ -13,6 +13,9 @@ impl Store {
         query: &str,
         offset: u32,
     ) -> Result<PublicationSourcePage> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.publication_source_page(project_id, kind, query, offset)).await;
+        }
         let query = query.trim().to_lowercase();
         let sql = match kind {
             "files" => {
@@ -31,6 +34,8 @@ impl Store {
                 m.content,m.frame_id,m.seq FROM messages m JOIN frames f ON f.id=m.frame_id \
                 WHERE f.project_id=? AND f.exploration_id IS NULL AND f.status<>'deleted' \
                 AND m.seq>0 AND m.role IN ('user','assistant') \
+                AND NOT EXISTS (SELECT 1 FROM context_epochs ce WHERE ce.frame_id=m.frame_id \
+                    AND m.seq BETWEEN ce.first_seq AND ce.initial_head_seq) \
                 AND length(m.content)<=262144 \
                 AND (instr(lower(COALESCE(f.title,'')),?)>0 OR instr(lower(m.content),?)>0) \
                 ORDER BY m.ts DESC,m.id LIMIT 51 OFFSET ?"

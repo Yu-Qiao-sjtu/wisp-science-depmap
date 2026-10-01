@@ -178,6 +178,15 @@ mod provider_form_tests {
             &models,
             "https://api.openai.com/v1"
         ));
+        let mut grok = profile("https://api.x.ai/v1", true);
+        grok.provider = "xai_oauth".into();
+        assert!(!endpoint_has_stored_key(&[grok], "https://api.x.ai"));
+        let mut chatgpt = profile("https://api.openai.com/v1", true);
+        chatgpt.provider = "openai_chatgpt".into();
+        assert!(!endpoint_has_stored_key(
+            &[chatgpt],
+            "https://api.openai.com/v1"
+        ));
     }
 }
 
@@ -251,6 +260,12 @@ pub(crate) mod tauri_args {
     }
     pub fn rewind_session(session_id: &Option<String>, user_index: usize) -> Value {
         json!({ "sessionId": session_id, "userIndex": user_index })
+    }
+    pub fn undo_compaction(session_id: &Option<String>) -> Value {
+        json!({ "sessionId": session_id })
+    }
+    pub fn load_session_context_view(session_id: &str) -> Value {
+        json!({ "sessionId": session_id })
     }
     pub fn turn_undo(session_id: &str, user_index: usize) -> Value {
         json!({ "sessionId": session_id, "userIndex": user_index })
@@ -339,6 +354,14 @@ mod tauri_args_tests {
         assert_eq!(v["sessionId"], "frame-1");
         assert_eq!(v["userIndex"], 3);
         assert!(v.get("user_index").is_none());
+
+        let v = tauri_args::undo_compaction(&sid);
+        assert_eq!(v["sessionId"], "frame-1");
+        assert!(v.get("session_id").is_none());
+
+        let v = tauri_args::load_session_context_view("frame-1");
+        assert_eq!(v["sessionId"], "frame-1");
+        assert!(v.get("session_id").is_none());
 
         let v = tauri_args::turn_undo("frame-1", 4);
         assert_eq!(v["sessionId"], "frame-1");
@@ -800,6 +823,7 @@ pub(crate) fn profile_to_form(m: &ModelProfile) -> ModelForm {
         use_for_vision: m.use_for_vision,
         use_for_image_generation: m.use_for_image_generation,
         image_generation_capable: m.image_generation_capable,
+        restore_chat_model: false,
         image_size: m.image_size.clone(),
         image_quality: m.image_quality.clone(),
         image_aspect_ratio: m.image_aspect_ratio.clone(),
@@ -935,16 +959,27 @@ pub(crate) fn apply_base_url_suggestions(form: &mut ModelForm, api_url: &str) {
     form.entries = suggested_base_url_models(&form.api_url);
 }
 
+/// A reusable API key on this endpoint. Subscription tokens (ChatGPT, Codex,
+/// SuperGrok) are never shared, so they do not count.
+fn shares_endpoint_key(profile: &ModelProfile, api_url: &str) -> bool {
+    profile.has_api_key
+        && !matches!(
+            profile.provider.as_str(),
+            "openai_codex" | "openai_chatgpt" | "xai_oauth"
+        )
+        && same_endpoint(&profile.api_url, api_url)
+}
+
 pub(crate) fn endpoint_has_stored_key(models: &[ModelProfile], api_url: &str) -> bool {
     models
         .iter()
-        .any(|profile| profile.has_api_key && same_endpoint(&profile.api_url, api_url))
+        .any(|profile| shares_endpoint_key(profile, api_url))
 }
 
 pub(crate) fn sibling_profile_id<'a>(models: &'a [ModelProfile], api_url: &str) -> Option<&'a str> {
     models
         .iter()
-        .find(|profile| profile.has_api_key && same_endpoint(&profile.api_url, api_url))
+        .find(|profile| shares_endpoint_key(profile, api_url))
         .map(|profile| profile.id.as_str())
 }
 
@@ -988,17 +1023,24 @@ pub(crate) fn model_form_to_settings(form: &ModelForm, has_api_key: bool) -> Set
     cfg
 }
 
-/// Sidebar groups and search aliases. Network / proxy settings live under
-/// General (not Models), so those keywords must match that section.
+/// Sidebar groups and search aliases. Network / proxy settings are their own
+/// item under Preferences, directly below General, and must not match Models.
 pub(crate) const SETTINGS_NAV_GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "settings.nav.preferences",
         &[
             (
                 "general",
-                "notifications updates language network proxy 通知 更新 语言 网络 代理",
+                "notifications updates language 通知 更新 语言",
             ),
-            ("session", "context tokens conversation 上下文 对话"),
+            (
+                "network",
+                "network proxy mirror 网络 代理 镜像",
+            ),
+            (
+                "session",
+                "context tokens conversation compact semantic 语义压缩 上下文 对话",
+            ),
             ("appearance", "theme font 主题 字体"),
             ("pet", "companion 桌宠"),
         ],
@@ -1006,7 +1048,7 @@ pub(crate) const SETTINGS_NAV_GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "settings.nav.ai",
         &[
-            ("models", "api key acp provider 模型 密钥 服务商"),
+            ("models", "api key acp provider chatgpt xai subscription account login 模型 密钥 服务商 订阅 账号 登录"),
             ("quick-actions", "shortcuts 快捷"),
             ("workflows", "automation 自动化"),
             ("specialists", "agents 专家 智能体"),
@@ -1059,11 +1101,13 @@ pub(crate) fn settings_nav_entry_matches(
 pub(crate) fn settings_section_label(loc: Locale, section: &str) -> String {
     match section {
         "general" => t(loc, "settings.nav.general"),
+        "network" => t(loc, "settings.nav.network"),
         "session" => t(loc, "settings.nav.session"),
         "appearance" => t(loc, "settings.nav.appearance"),
         "pet" => t(loc, "settings.nav.pet"),
         "environments" => t(loc, "settings.nav.environments"),
         "models" => t(loc, "settings.nav.models"),
+        "subscriptions" => t(loc, "settings.nav.subscriptions"),
         "quick-actions" => t(loc, "settings.nav.quick_actions"),
         "workflows" => t(loc, "settings.nav.workflows"),
         "specialists" => t(loc, "settings.nav.specialists"),
@@ -1103,27 +1147,43 @@ mod settings_section_label_tests {
     }
 
     #[test]
-    fn general_search_aliases_include_proxy_and_network() {
+    fn network_nav_has_its_own_label() {
+        assert_eq!(settings_section_label(Locale::En, "network"), "Network");
+        assert_eq!(settings_section_label(Locale::Zh, "network"), "网络");
+    }
+
+    #[test]
+    fn network_search_aliases_match_network_not_general_or_models() {
         for query in ["proxy", "网络", "代理", "network"] {
             assert!(
                 settings_nav_entry_matches(
+                    query,
+                    "settings.nav.preferences",
+                    "network",
+                    aliases("network"),
+                    Locale::Zh
+                ),
+                "{query} should match Network in zh"
+            );
+            assert!(
+                settings_nav_entry_matches(
+                    query,
+                    "settings.nav.preferences",
+                    "network",
+                    aliases("network"),
+                    Locale::En
+                ),
+                "{query} should match Network in en"
+            );
+            assert!(
+                !settings_nav_entry_matches(
                     query,
                     "settings.nav.preferences",
                     "general",
                     aliases("general"),
                     Locale::Zh
                 ),
-                "{query} should match General in zh"
-            );
-            assert!(
-                settings_nav_entry_matches(
-                    query,
-                    "settings.nav.preferences",
-                    "general",
-                    aliases("general"),
-                    Locale::En
-                ),
-                "{query} should match General in en"
+                "{query} must not match General"
             );
             assert!(
                 !settings_nav_entry_matches(

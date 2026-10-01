@@ -58,6 +58,8 @@ pub(crate) struct SessionRuntime {
     /// `queued` lock so an enqueue can never strand behind a driver that is
     /// about to exit on an empty queue.
     pub(crate) draining: AtomicBool,
+    /// Reserve replacement priority before cancelling the active workflow.
+    pub(crate) replacing: std::sync::atomic::AtomicUsize,
 }
 
 /// One parked follow-up turn (#433). `id` is assigned by the frontend so the
@@ -91,6 +93,7 @@ impl SessionRuntime {
             queued: StdMutex::new(Vec::new()),
             queued_cutins: StdMutex::new(Vec::new()),
             draining: AtomicBool::new(false),
+            replacing: std::sync::atomic::AtomicUsize::new(0),
         }
     }
     pub(crate) fn invalidate_cached_agent(&self) {
@@ -621,6 +624,9 @@ pub(crate) struct AppState {
     /// Session ids with an in-flight manual or automatic review. Reviews in
     /// unrelated conversations remain independent.
     pub(crate) reviewing: Arc<StdMutex<HashSet<String>>>,
+    /// Latest AfterTurn hook run per session; an older run's results are
+    /// dropped instead of emitted (`turn_hooks::spawn_after_turn`).
+    pub(crate) after_turn_generations: StdMutex<HashMap<String, u64>>,
     /// Per-window ephemeral scratch chat (restored on close).
     pub(crate) scratch: std::sync::RwLock<HashMap<String, scratch_commands::ScratchWindow>>,
 }

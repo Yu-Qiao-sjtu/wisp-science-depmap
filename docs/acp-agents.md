@@ -174,8 +174,9 @@ Composer references work in ACP sessions too:
 ## Reviewing ACP sessions
 
 The Reviewer specialist can review both built-in HTTP-agent sessions and ACP
-sessions. Automatic review now runs after a qualifying ACP turn, persists the
-report, and can send one correction turn back to the original ACP session when
+sessions. Automatic review now runs after a qualifying ACP turn that ended
+normally (`end_turn`; cancelled, refused, or cut-off turns are not reviewed,
+as in built-in sessions), persists the report, and can send one correction turn back to the original ACP session when
 findings are present. Manual **Review** uses the same backend selection.
 
 Reviewer backend choices are:
@@ -211,8 +212,9 @@ can be imported into the current project without copy/paste (#464).
 - Choose the local machine, a registered WSL distribution, or a configured SSH
   server. Codex sessions come from `~/.codex/sessions`; Claude Code sessions
   come from `~/.claude/projects`. The newest 500 sessions are listed 25 at a
-  time with the working directory, message count, and last activity. Click a
-  row to load a bounded preview of its first conversation turns.
+  time with the title, working directory, message count, and last activity.
+  Use the search field to match a title, project path, session ID, or source
+  path. Click a row to load a bounded preview of its first conversation turns.
 - **Import** copies the user/assistant turns into a regular Wisp session; the
   original chronology is preserved in the sidebar ordering. Wisp creates or
   reuses a `codex` or `claude` group for newly imported sessions. The dialog
@@ -223,6 +225,8 @@ can be imported into the current project without copy/paste (#464).
 - Discovery metadata is cached per app/source combination. Reopening the
   dialog or switching back to a source uses that cache; **Refresh** compares
   file size and modification time and only rereads metadata for changed files.
+  Local Codex metadata is read from complete JSONL records, so large instruction
+  preambles do not turn a title or message count into a directory-name or zero.
   Remote scans transfer a small metadata prefix, while **Import** reads the
   selected full transcript. Importing updates the visible row without starting
   another scan.

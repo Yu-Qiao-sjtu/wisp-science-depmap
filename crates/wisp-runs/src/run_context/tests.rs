@@ -1814,6 +1814,11 @@ impl RunCommandRunner for ScriptedRunRunner {
             }
         }
         self.commands.lock().unwrap().push(command.clone());
+        // Progress polls can run before the transfer future is first polled.
+        // They must not consume the scripted prepare/upload/launch responses.
+        if command.script == "poll SSH input progress" {
+            return ok_output("");
+        }
         let output = self
             .outputs
             .lock()
@@ -1842,6 +1847,46 @@ fn ok_output(stdout: &str) -> Result<RunCommandOutput, String> {
         stdout: stdout.into(),
         stderr: String::new(),
     })
+}
+
+#[tokio::test]
+async fn scripted_input_progress_does_not_consume_transfer_responses() {
+    let runner = ScriptedRunRunner::new(vec![
+        ok_output("uploaded"),
+        Err("launch disconnected".into()),
+    ]);
+    let command = |script: &str| RunCommand {
+        context_id: "ssh:gpu".into(),
+        program: "ssh".into(),
+        args: Vec::new(),
+        script: script.into(),
+        cwd: None,
+        stdin: None,
+        envs: Vec::new(),
+    };
+    for _ in 0..2 {
+        assert!(runner
+            .run(command("poll SSH input progress"), Duration::from_secs(1))
+            .await
+            .unwrap()
+            .stdout
+            .is_empty());
+    }
+    assert_eq!(
+        runner
+            .run(command("stage 1 input file(s)"), Duration::from_secs(1))
+            .await
+            .unwrap()
+            .stdout,
+        "uploaded"
+    );
+    assert_eq!(
+        runner
+            .run(command("launch SSH Run"), Duration::from_secs(1))
+            .await
+            .unwrap_err(),
+        "launch disconnected"
+    );
 }
 
 #[tokio::test]
@@ -3113,7 +3158,8 @@ async fn ssh_harvest_collect_renew_failure_aborts() {
         manifest: remote_only_manifest("run-steal"),
         files: Vec::new(),
         commands: StdMutex::new(Vec::new()),
-        collect_hold: Some(Duration::from_millis(80)),
+        // Outlasts the first renewal tick (harvest_lease_interval) with margin.
+        collect_hold: Some(Duration::from_millis(1000)),
     };
     let remote = harvest_test_remote("run-steal", &tmp, remote_only_harvest_spec());
 
@@ -3877,12 +3923,19 @@ async fn ssh_input_staging_ledgers_uploaded_files() {
         .list_remote_staging("p", "ssh:gpu", false)
         .await
         .unwrap();
-    let finished = store.get_run(&submitted.run_id).await.unwrap().unwrap();
+    let run = store.get_run(&submitted.run_id).await.unwrap();
     assert_eq!(
         entries.len(),
         1,
-        "finished={finished:?}; commands={:?}",
-        runner.commands.lock().unwrap()
+        "commands: {:?}; run: {:?}",
+        runner
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| &c.script)
+            .collect::<Vec<_>>(),
+        run
     );
     assert_eq!(entries[0].source, "run_input");
     assert_eq!(
