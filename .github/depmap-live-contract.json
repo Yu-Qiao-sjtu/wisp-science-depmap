@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-10-01T07:40:52Z",
+  "schema": "wisp.depmap-contract-attestation.v1",
+  "status": {
+    "evidence": {
+      "capability_catalog_digest": "sha256:ae022d0aa6fcca91b9decb1fe129e8d87a389ae5f50a7026b8ddbf0506631fc5",
+      "catalog_build_identity": "sha256:82552e2af52ddd9fdbe438f50b2880ba2f054d7c9b80862dd102ee00b5750748",
+      "query_contract_version": 13,
+      "server_build_identity": "wisp-depmap-mcp-contract-13"
+    }
+  }
+}
