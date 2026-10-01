@@ -1796,6 +1796,11 @@
           "name": "agentContext",
           "rust_type": "String",
           "optional": false
+        },
+        {
+          "name": "defaultSpecialistId",
+          "rust_type": "Option<String>",
+          "optional": true
         }
       ],
       "result": "Result<ProjectSummary, String>",
