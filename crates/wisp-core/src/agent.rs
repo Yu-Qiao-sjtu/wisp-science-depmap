@@ -2829,7 +2829,7 @@ mod tests {
         };
         assert_eq!(parts.len(), 3);
         assert!(
-            matches!(&parts[0], Part::Text { text, .. } if text.len() < 2000 && text.contains("full output at"))
+            matches!(&parts[0], Part::Text { text, .. } if text.len() < 2000 && text.contains("retained outside model context"))
         );
         std::fs::remove_dir_all(root).unwrap();
     }
