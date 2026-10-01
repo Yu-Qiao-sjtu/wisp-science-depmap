@@ -620,6 +620,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     { id: "reviewer", name: "Reviewer", icon: "review", color: "clay", description: "", instructions: "rubric", model_id: "", skills: [], connectors: [], builtin: true },
     { id: "reader", name: "Reader", icon: "search", color: "clay", description: "Searches project sessions", instructions: "reader rubric", model_id: "", skills: [], connectors: [], builtin: true },
     { id: "scientific_illustrator", name: "Scientific Illustrator", icon: "image", color: "clay", description: "Creates scientific figures", instructions: "illustrator rubric", model_id: "", skills: ["figure-composer", "figure-style"], connectors: [], builtin: true },
+    { id: "archivist", name: "Archivist", icon: "archive", color: "clay", description: "Drafts research archives", instructions: "archive rubric", model_id: "", skills: [], connectors: [], builtin: true },
+    { id: "recap", name: "Recap", icon: "calendar", color: "clay", description: "Drafts daily research recaps", instructions: "recap rubric", model_id: "", skills: [], connectors: [], builtin: true },
   ];
   let sessionSpecialists: Record<string, string> = {};
   let mockBrowserUrlFilters = { block: [] as { host: string; reason?: string }[], prefer: [] as { host: string; reason?: string }[] };
@@ -1668,9 +1670,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   });
   const journeyEntries: any[] = [
     journeyEntry("progress-today", "progress", journeyText("Compared normalization methods and selected a baseline", "完成归一化对比，确定后续分析方案"), 0, {manual: true, summary: journeyText("Compare low-sample performance; take method B into full-data validation.", "比较两种方法的低样本表现，选择方案 B 进入完整数据验证。")}),
-    journeyEntry("run-compare", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", status: "succeeded", occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("run-end:run-local-002", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", run_id: "run-local-002", status: "succeeded", occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("run-start:run-local-002", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", run_id: "run-local-002", status: "started", occurred_at: journeyTime(0,14,30)}),
     journeyEntry("run-clean", "run", journeyText("Completed data cleaning and quality checks", "完成数据清洗与质量检查"), 0, {source_id: "run-kinase-001", status: "succeeded", occurred_at: journeyTime(0,10,20)}),
-    journeyEntry("output-image", "artifact", "normalization_comparison.png", 0, {source_id: "journey-image-v1", content_type: "image/png", version_number: 1, occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("output-image", "artifact", "normalization_comparison.png", 0, {source_id: "journey-image-v1", run_id: "run-local-002", content_type: "image/png", version_number: 1, occurred_at: journeyTime(0,14,35)}),
     journeyEntry("output-data", "artifact", "normalized_counts.csv", 0, {source_id: "journey-data-v2", content_type: "text/csv", version_number: 2}),
     journeyEntry("output-report", "artifact", "comparison_report.md", 0, {source_id: "journey-report-v1", content_type: "text/markdown", version_number: 1}),
     journeyEntry("finding-today", "finding", journeyText("Method B is more stable at low sample sizes.", "方案 B 在低样本量下更稳定。"), 0, {manual: true}),
@@ -1682,6 +1685,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     journeyEntry("output-yesterday", "artifact", "qc_report.md", 1, {source_id: "journey-qc-v1", content_type: "text/markdown", version_number: 1}),
     journeyEntry("progress-earlier", "progress", journeyText("Imported raw data and established an analysis baseline", "导入原始数据，建立分析基线"), 2, {manual: true}),
   ];
+  const journeyRecaps: any[] = [];
+  const automation: any = {daily: {enabled: true, time: "09:00", last_run_at: null, drafted: 0, error: null, running: false}, schedules: []};
+  const recapsIn = (from: number, until: number) => journeyRecaps.filter(r => r.day_start >= from && r.day_start < until);
   let publicationRevisionId = "publication-revision-1";
   let publicationRevisionState = mockPublication === "frozen" ? "frozen" : "draft";
   const publicationItems = [
@@ -1863,7 +1869,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               index === 37 ? "请整理水稻根尖单细胞图谱研究的分析进展，核对所有样本的质控结果、细胞类型注释与文献证据，并详细记录后续验证方案。".repeat(5) : `核对文献证据与样本注释 · ${index + 1}`,
               0, {occurred_at:journeyTime(0,9,index), status:index === 36 ? "failed" : "succeeded"}));
             const result = ids.map(id => ({project_id:id,
-              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : mode === "dense" ? (id === "default" ? dense : []) : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000},
+              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : mode === "dense" ? (id === "default" ? dense : []) : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000,
+                recaps: id === "default" ? recapsIn(Number(arg("from")), Number(arg("until"))) : []},
               error: mode === "partial" && id === "other" ? "Project temporarily unavailable" : null,
             }));
             for (const row of result) if(row.error) row.history.entries=[];
@@ -1905,7 +1912,60 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const available = mode === "many" ? [...journeyEntries, ...Array.from({length:5},(_,index)=>journeyEntry(`extra-${index}`,"artifact",`additional_${index}.csv`,0,{source_id:`journey-data-extra-${index}`,content_type:"text/csv",version_number:1}))] : journeyEntries;
             const entries = mode === "empty" ? [] : available.filter(e => e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until")));
             if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-            return {entries, truncated: false};
+            return {entries, truncated: false, recaps: recapsIn(Number(arg("from")), Number(arg("until")))};
+          }
+          case "get_daily_recap_automation": return {...automation.daily};
+          case "set_daily_recap_automation":
+            automation.daily = {...automation.daily, enabled: Boolean(arg("enabled")), time: String(arg("time"))};
+            return {...automation.daily};
+          case "run_daily_recap_now":
+            automation.daily = {...automation.daily, last_run_at: Math.floor(Date.now() / 1000), drafted: 2, running: false};
+            return {...automation.daily, running: true};
+          case "list_all_schedules": return automation.schedules.map((s: any) => ({...s}));
+          case "create_schedule": {
+            const interval = Math.max(60, Number(arg("intervalSecs"))), now = Math.floor(Date.now() / 1000);
+            const prompt = String(arg("prompt") ?? "").trim();
+            const s = {id: `schedule-${automation.schedules.length + 1}`, project_id: arg("projectId") ?? "default", frame_id: arg("sessionId") ?? null,
+              name: String(arg("name") ?? "").trim() || prompt.split("\n")[0].slice(0, 80), prompt, skill: arg("skill") ?? null,
+              interval_secs: interval, enabled: true, next_run_at: arg("startAt") ?? now + interval, last_run_at: null, created_at: now, updated_at: now};
+            automation.schedules.push(s);
+            return {...s};
+          }
+          case "set_schedule_enabled": {
+            const s = automation.schedules.find((s: any) => s.id === arg("id"));
+            if (!s) throw new Error("The schedule no longer exists.");
+            s.enabled = Boolean(arg("enabled"));
+            return null;
+          }
+          case "run_schedule_now": (window as any).__ranSchedule = arg("id"); return null;
+          case "delete_schedule": automation.schedules = automation.schedules.filter((s: any) => s.id !== arg("id")); return null;
+          case "generate_research_recap": {
+            if ((window as any).__recapError) throw new Error((window as any).__recapError);
+            const from = Number(arg("from")), until = Number(arg("until"));
+            if (!journeyEntries.some(e => e.occurred_at >= from && e.occurred_at < until)) return null;
+            const old = journeyRecaps.findIndex(r => r.day_start === from);
+            const recap = {
+              id: old >= 0 ? journeyRecaps[old].id : `recap-${from}`, day_start: from, status: "draft",
+              headline: journeyText("Normalization compared; method B chosen", "完成归一化对比，选定方案 B"),
+              done: [{text: journeyText("Compared two normalization methods", "完成两种归一化方法对比"), refs: [0, 1]}],
+              findings: [{text: journeyText("Method B is more stable at low sample sizes", "方案 B 在低样本量下更稳定"), refs: [2]}],
+              issues: [], next: [{text: journeyText("Validate on the full dataset", "在完整数据集上验证"), refs: [2]}],
+              sources: [
+                {kind: "run", id: "run-local-002", title: journeyText("Completed normalization comparison", "完成两种归一化方法对比")},
+                {kind: "artifact", id: "journey-image-v1", title: "normalization_comparison.png"},
+                {kind: "record", id: "finding-today", title: journeyText("Method B is more stable at low sample sizes.", "方案 B 在低样本量下更稳定。")},
+              ],
+              model: "mock-recap-model", generated_at: Math.floor(Date.now() / 1000),
+            };
+            if (old >= 0) journeyRecaps[old] = recap; else journeyRecaps.push(recap);
+            return recap;
+          }
+          case "update_research_recap": {
+            const edit = plain(arg("edit")); const recap = journeyRecaps.find(r => r.id === edit.id);
+            if (!recap) throw new Error("This recap no longer exists");
+            const keep = (items: any[], before: any[]) => items.map((item: any) => ({text: item.text.trim(), refs: before.find((b: any) => b.text === item.text.trim())?.refs ?? []}));
+            Object.assign(recap, {status: edit.status, headline: edit.headline.trim(), done: keep(edit.done, recap.done), findings: keep(edit.findings, recap.findings), issues: keep(edit.issues, recap.issues), next: keep(edit.next, recap.next)});
+            return {...recap};
           }
           case "add_research_journal_entry": {
             if ((window as any).__journeySaveError) throw new Error("Journal write failed");
