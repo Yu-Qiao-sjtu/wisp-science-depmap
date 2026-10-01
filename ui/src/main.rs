@@ -81,8 +81,8 @@ use session_modals::{
     FileEntryOverlay, FileEntryOverlayState, FolderModalOverlay, FolderModalOverlayState,
     ModelSwitchConfirmOverlay, ModelSwitchConfirmOverlayState, ProjSettingsOverlay,
     ProjSettingsOverlayState, RenameSessionOverlay, RenameSessionOverlayState,
-    SessionTransferOverlay, SessionTransferOverlayState, ShelvedSessionsOverlay, TurnUndoOverlay,
-    TurnUndoOverlayState,
+    SessionArtifactChoice, SessionArtifactChoiceState, SessionTransferOverlay,
+    SessionTransferOverlayState, ShelvedSessionsOverlay, TurnUndoOverlay, TurnUndoOverlayState,
 };
 use settings_view::{known_effort_values, ALL_EFFORT_VALUES};
 use settings_view::{DeleteConfirm, SettingsView, SettingsViewState};
@@ -2356,6 +2356,7 @@ fn App() -> impl IntoView {
     let full_permission_enabled = create_rw_signal(false);
     let full_permission_busy = create_rw_signal(false);
     let ui_confirm = create_rw_signal::<Option<UiConfirm>>(None);
+    let delete_artifacts = SessionArtifactChoiceState::new();
     // `/share` preview dialog: Some(rows) while open, None when closed.
     let share_draft = create_rw_signal::<Option<Vec<ShareMessage>>>(None);
     let open_share = Callback::new(move |()| {
@@ -7854,6 +7855,7 @@ fn App() -> impl IntoView {
     let rename_session_target = create_rw_signal::<Option<(String, String)>>(None);
     let rename_session_input = create_rw_signal(String::new());
     let session_transfer = create_rw_signal::<Option<SessionTransfer>>(None);
+    let transfer_artifacts = SessionArtifactChoiceState::new();
     let session_transfer_busy = create_rw_signal(false);
     let session_transfer_error = create_rw_signal::<Option<String>>(None);
     let folder_modal = create_rw_signal::<Option<FolderModal>>(None);
@@ -10703,7 +10705,10 @@ fn App() -> impl IntoView {
             let Some(transfer) = session_transfer.get() else {
                 return;
             };
-            if transfer.target_project_id.is_empty() || session_transfer_busy.get() {
+            if transfer.target_project_id.is_empty()
+                || session_transfer_busy.get()
+                || (transfer.mode == SessionTransferMode::Move && transfer_artifacts.blocked())
+            {
                 return;
             }
             let target_name = proj_list
@@ -10749,6 +10754,8 @@ fn App() -> impl IntoView {
                     "id": transfer.id,
                     "targetProjectId": transfer.target_project_id,
                     "mode": transfer.mode.as_str(),
+                    "includeArtifacts": transfer.mode == SessionTransferMode::Move && transfer_artifacts.selected.get_untracked(),
+                    "artifactFingerprint": transfer_artifacts.previews.get_untracked().get(&transfer.id).map(|p|p.fingerprint.clone()),
                 }))
                 .unwrap();
                 match invoke_checked("transfer_session_to_project", args).await {
@@ -10769,6 +10776,7 @@ fn App() -> impl IntoView {
                             }
                         }
                         refresh_session_history();
+                        refresh_dir(file_cwd, file_entries);
                         let message_key = if transfer.mode == SessionTransferMode::Copy {
                             "session.copy_success"
                         } else {
@@ -10778,8 +10786,14 @@ fn App() -> impl IntoView {
                         session_transfer.set(None);
                     }
                     Err(error) => {
-                        session_transfer_error
-                            .set(Some(localize_backend(locale.get(), &js_error_text(error))));
+                        let message = localize_backend(locale.get(), &js_error_text(error));
+                        if transfer.mode == SessionTransferMode::Move
+                            && transfer_artifacts.selected.get_untracked()
+                        {
+                            transfer_artifacts.error.set(Some(message));
+                        } else {
+                            session_transfer_error.set(Some(message));
+                        }
                     }
                 }
                 session_transfer_busy.set(false);
@@ -17513,7 +17527,7 @@ fn App() -> impl IntoView {
         <SessionTransferOverlay
             state=SessionTransferOverlayState {
                 locale, session_transfer, session_transfer_busy, session_transfer_error,
-                project_info, proj_list,
+                project_info, proj_list, artifacts: transfer_artifacts,
             }
             on_save=Callback::new(save_session_transfer)
         />
@@ -17573,6 +17587,7 @@ fn App() -> impl IntoView {
         {move || ui_confirm.get().map(|action| {
             let action_ok = action.clone();
             let is_full_permission = matches!(&action, UiConfirm::EnableFullPermission);
+            let is_delete_session = matches!(&action, UiConfirm::DeleteSessions(_));
             let title_key = if is_full_permission {
                 "full_permission.confirm_title"
             } else {
@@ -17611,9 +17626,16 @@ fn App() -> impl IntoView {
                 <div class="modal confirm-modal">
                     <h2>{move || t(locale.get(), title_key)}</h2>
                     <div class="hint">{message}</div>
+                    {if let UiConfirm::DeleteSessions(ids) = action { Some(view! {
+                        <SessionArtifactChoice locale=locale ids=ids target=None state=delete_artifacts />
+                    }) } else { None }}
                     <div class="row">
                         <button on:click=move |_| ui_confirm.set(None)>{move || t(locale.get(), "settings.cancel")}</button>
-                        <button class="primary" class:danger=is_full_permission on:click=move |_| {
+                        <button class="primary" class:danger=is_full_permission
+                            disabled=move || is_delete_session && delete_artifacts.blocked()
+                            on:click=move |_| {
+                            let include_artifacts = is_delete_session && delete_artifacts.selected.get_untracked();
+                            let artifact_previews = delete_artifacts.previews.get_untracked();
                             ui_confirm.set(None);
                             match action_ok.clone() {
                                 UiConfirm::EnableFullPermission => {
@@ -17672,9 +17694,13 @@ fn App() -> impl IntoView {
                                     spawn_local(async move {
                                         let mut deleted = HashSet::new();
                                         for id in ids {
-                                            let arg = to_value(&serde_json::json!({ "id": id.clone() })).unwrap();
-                                            if invoke_checked("delete_session", arg).await.is_ok() {
-                                                deleted.insert(id);
+                                            let arg = to_value(&serde_json::json!({ "id": id.clone(),
+                                                "includeArtifacts": include_artifacts,
+                                                "artifactFingerprint": artifact_previews.get(&id).map(|p|p.fingerprint.clone()),
+                                            })).unwrap();
+                                            match invoke_checked("delete_session", arg).await {
+                                                Ok(_) => { deleted.insert(id); }
+                                                Err(error) => show_toast(&localize_backend(locale.get_untracked(), &js_error_text(error))),
                                             }
                                         }
                                         if !deleted.is_empty() {
@@ -17692,6 +17718,7 @@ fn App() -> impl IntoView {
                                                 items.set(vec![]);
                                             }
                                             refresh_session_history();
+                                            refresh_dir(file_cwd, file_entries);
                                         }
                                     });
                                 }
