@@ -4561,7 +4561,8 @@ fn App() -> impl IntoView {
         }
         let saved_attachments = attachments.get();
         let saved_mcp_app_context = mcp_app_context.get();
-        let mut refs = composer_references.get();
+        let saved_references = composer_references.get();
+        let mut refs = saved_references.clone();
         if assistant_mode.get() {
             if assistant_workspace.selected.get().is_some()
                 && (assistant_workspace.loading.get() || assistant_workspace.error.get().is_some())
@@ -4741,7 +4742,7 @@ fn App() -> impl IntoView {
                         input.set(message);
                         attachments.set(saved_attachments);
                         mcp_app_context.set(saved_mcp_app_context.clone());
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &error));
@@ -4757,7 +4758,7 @@ fn App() -> impl IntoView {
                         input.set(message);
                         attachments.set(saved_attachments);
                         mcp_app_context.set(saved_mcp_app_context.clone());
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &error));
@@ -4776,7 +4777,7 @@ fn App() -> impl IntoView {
                         active_session.set(Some(id.clone()));
                         input.set(message);
                         attachments.set(saved_attachments);
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &js_error_text(error)));
@@ -4899,7 +4900,7 @@ fn App() -> impl IntoView {
                             attachments.set(saved_attachments);
                         }
                         if composer_references.get_untracked().is_empty() {
-                            composer_references.set(refs);
+                            composer_references.set(saved_references);
                         }
                         if composer_quotes.get_untracked().is_empty() {
                             composer_quotes.set(quotes);
