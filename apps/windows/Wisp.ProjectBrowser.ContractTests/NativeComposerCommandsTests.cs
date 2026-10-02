@@ -4,7 +4,7 @@ internal static class NativeComposerCommandsTests
 {
     public static void Run()
     {
-        Check(NativeComposerCommands.Match("/", true, true).Count == 12, "all wired commands discoverable");
+        Check(NativeComposerCommands.Match("/", true, true).Count == 11, "all wired commands discoverable");
         Check(NativeComposerCommands.Match("  /FI", true, true).Single().Command == "/files", "case insensitive prefix");
         Check(NativeComposerCommands.Match("/", false, false).Count == 0, "unavailable routes not advertised");
         Check(NativeComposerCommands.Match("/", false, true).All(item => item.Command != "/upload"), "attachment capability gate");

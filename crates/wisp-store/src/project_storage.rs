@@ -295,6 +295,18 @@ impl Store {
                 }
             }
         }
+        // Scratch chat was removed. Its hidden projects were deleted on close,
+        // so only a crashed session can have left one; it must not surface as
+        // an ordinary project. The desktop deletes the sandbox directories.
+        let scratch: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM projects WHERE id LIKE 'scratch:%'")
+                .fetch_all(&store.pool)
+                .await?;
+        for id in scratch {
+            if let Err(error) = store.delete_project(&id).await {
+                tracing::warn!(project_id = %id, %error, "Failed to delete a leftover scratch project");
+            }
+        }
         Ok(store)
     }
 

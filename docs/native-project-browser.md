@@ -275,7 +275,7 @@ Manual smoke steps:
 ## Remaining feature work
 
 The preview aligns the home/workspace shell and includes native settings, project
-creation, project import, the library, the research calendar, the research journey, the publication workspace, the capability summary, issue feedback, scratch chat, and the conversation loop described below.
+creation, project import, the library, the research calendar, the research journey, the publication workspace, the capability summary, issue feedback, and the conversation loop described below.
 The macOS workspace additionally connects terminal/files, Notebook, Highlights,
 Provenance, SideChat, contexts, Runs and Agent panels. Their implementation does
 not imply complete parity behind every entry: ACP main conversations, full
@@ -407,24 +407,6 @@ app version, OS, architecture, model, and startup timing. It does not include
 the workspace path. The button does not send the message. A lost read keeps the
 composer unchanged and is not retried. A reply that arrives after the user has
 returned home does not prefill a composer or open a project. WinUI connects the same prefill behavior and also preserves edits made while the bootstrap read was pending.
-
-## Scratch chat
-
-Home **随手一聊** calls `native_scratch_open`. That command creates a hidden
-`scratch:` project, one session frame, and a writable sandbox directory under
-the desktop app-data `scratch/` folder. It does not take a project id, does not
-call `start_scratch_chat`, and does not change the WebView's active project or
-session. The preview then opens that session with the existing native
-conversation loop.
-
-**关闭** and Escape call `native_scratch_close` for that scratch project id.
-The command deletes the project row and the sandbox directory when the
-directory is inside `scratch/`. It does not restore or rewrite another project,
-and it refuses a normal project id or a scratch id whose workspace is outside
-`scratch/`. A lost open or close is not retried. Closing the preview without
-this command leaves the project and sandbox for the existing startup purge:
-that purge records the orphans before any new scratch chat can be created, so
-a chat opened while the purge is still running is spared. WinUI opens the same independent hidden conversation through `INativeScratchClient`; its close button and Escape call the scoped close command.
 
 ## Creating a project
 

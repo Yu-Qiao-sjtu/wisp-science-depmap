@@ -217,7 +217,6 @@ internal sealed partial class MainWindow : Window
         quickActions.Children.Add(ActionButton("搜索", "search", OpenSearch));
         quickActions.Children.Add(ActionButton("设置", "gear", OpenSettings));
         var projectActions = Row(6); projectActions.HorizontalAlignment = HorizontalAlignment.Right;
-        projectActions.Children.Add(ActionButton("随手一聊", null, () => _ = OpenNativeAction("scratch")));
         projectActions.Children.Add(ActionButton("导入项目", "upload", () => _ = OpenNativeAction("import"), showLabel: true));
         projectActions.Children.Add(ActionButton("新建项目", "plus", () => _ = OpenNativeAction("create"), showLabel: true, primary: true));
         actions.Children.Add(quickActions); actions.Children.Add(projectActions);

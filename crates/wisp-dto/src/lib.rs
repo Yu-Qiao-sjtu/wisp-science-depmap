@@ -18,7 +18,6 @@ pub mod native_journey;
 pub mod native_library;
 pub mod native_projects;
 pub mod native_publication;
-pub mod native_scratch;
 pub mod native_settings;
 pub mod project_browser;
 mod session_artifacts;
@@ -3012,12 +3011,6 @@ pub struct FileSearchHit {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct ScratchChatInfo {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
 }
 
 #[derive(Deserialize, Clone)]

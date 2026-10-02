@@ -85,9 +85,7 @@ pub use project_state_revisions::{ProjectStateRevision, ProjectStateRevisionSumm
 pub use project_storage::{PROJECT_DATABASE, PROJECT_METADATA};
 pub use project_sync::ProjectSyncState;
 pub use project_transfer::ProjectTransferStats;
-pub use projects::{
-    is_assistant_project_id, is_scratch_project_id, ASSISTANT_PROJECT_ID, SCRATCH_PROJECT_PREFIX,
-};
+pub use projects::{is_assistant_project_id, ASSISTANT_PROJECT_ID};
 pub use provenance::{canonical_json, canonical_json_sha256};
 pub use remote_staging::RemoteStagingEntry;
 pub use schedules::{next_slot_after, ScheduleRecord, ScheduleRunRecord};

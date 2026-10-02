@@ -1,23 +1,23 @@
 /* ---------- Projects landing screen ---------- */
 .app-hidden { display: none; }
-.app.scratch-mode {
+.app.assistant-mode {
   position: fixed; inset: 0; z-index: 95; background: var(--bg-app);
   display: flex !important; flex-direction: column;
 }
-body:has(.window-titlebar) .app.scratch-mode { top: 38px; height: calc(100% - 38px); }
-.app.scratch-mode .sidebar { display: none; }
-.app.scratch-mode .scratch-topbar { display: flex; }
-.app.scratch-mode .topbar .center-tabs,
-.app.scratch-mode .topbar > .icon-btn,
-.app.scratch-mode .topbar-actions,
-.app.scratch-mode .topbar .hint,
-.app.scratch-mode .topbar .session-specialist,
-.app.scratch-mode .topbar > .spacer { display: none; }
-.scratch-topbar {
+body:has(.window-titlebar) .app.assistant-mode { top: 38px; height: calc(100% - 38px); }
+.app.assistant-mode .sidebar { display: none; }
+.app.assistant-mode .assistant-topbar { display: flex; }
+.app.assistant-mode .topbar .center-tabs,
+.app.assistant-mode .topbar > .icon-btn,
+.app.assistant-mode .topbar-actions,
+.app.assistant-mode .topbar .hint,
+.app.assistant-mode .topbar .session-specialist,
+.app.assistant-mode .topbar > .spacer { display: none; }
+.assistant-topbar {
   display: none; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0;
 }
-.scratch-title { font-size: calc(15px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--text); }
-.scratch-topbar .scratch-close { margin-left: auto; }
+.assistant-title { font-size: calc(15px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--text); }
+.assistant-topbar .assistant-close { margin-left: auto; }
 /* The research assistant keeps exactly one conversation. */
 .app.assistant-mode .msg-branch-btn,
 .app.assistant-mode .msg-explore-btn { display: none; }

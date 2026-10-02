@@ -53,7 +53,6 @@ mod native_journey;
 mod native_library;
 mod native_projects;
 mod native_publication;
-mod native_scratch;
 mod native_settings;
 mod privacy_mode;
 pub(crate) use wisp_runs::exploration_isolation;
@@ -111,7 +110,6 @@ mod runtime_commands;
 mod runtime_config_tool;
 mod runtime_launcher;
 mod scheduler;
-mod scratch_commands;
 mod seed;
 mod session_commands;
 mod session_context_tool;
@@ -6844,23 +6842,26 @@ impl std::io::Write for SharedLogFile {
 }
 
 /// Startup work whose result nobody can see until the app is already usable:
-/// crash recovery sweeps, the scratch sandbox purge, and the extra windows a
-/// previous session left open. Each of these can take seconds to minutes (a
-/// sandbox purge walks a directory tree, every restored window boots its own
-/// WebView2), so they run after `setup` hands the event loop back.
-fn spawn_deferred_startup(
-    app: &tauri::AppHandle,
-    orphans: scratch_commands::OrphanScratchProjects,
-) {
+/// crash recovery sweeps, the removed scratch chat's sandbox purge, and the
+/// extra windows a previous session left open. Each of these can take seconds
+/// to minutes (a sandbox purge walks a directory tree, every restored window
+/// boots its own WebView2), so they run after `setup` hands the event loop back.
+fn spawn_deferred_startup(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let started = std::time::Instant::now();
-        let (store, run_manager) = {
+        let (store, run_manager, app_data) = {
             let state = app.state::<AppState>();
-            (state.store.clone(), state.run_manager.clone())
+            (
+                state.store.clone(),
+                state.run_manager.clone(),
+                state.app_data.clone(),
+            )
         };
 
-        scratch_commands::purge_orphan_scratch_projects(&store, orphans).await;
+        // Scratch chat was removed; `Store::open_application` already dropped
+        // its leftover projects, so the sandboxes are disposable.
+        let _ = std::fs::remove_dir_all(app_data.join("scratch"));
         if let Err(error) = store.recover_stale_publication_freezes(i64::MAX).await {
             tracing::warn!(target: "wisp", %error, "failed to recover interrupted Publication freezes");
         }
@@ -7074,11 +7075,6 @@ pub fn run() {
                     exploration_promotion::recover_incomplete_promotions(&store, &app_data),
                 )
             });
-            let orphan_scratch = startup.record("scratch_scan", || {
-                tauri::async_runtime::block_on(scratch_commands::collect_orphan_scratch_projects(
-                    &store, &app_data,
-                ))
-            });
             startup.record("credentials", || {
                 tauri::async_runtime::block_on(models::load_custom_credentials(&store))
                     .expect("load custom credentials")
@@ -7223,7 +7219,6 @@ pub fn run() {
                 plugin_runtime_errors: StdMutex::new(HashMap::new()),
                 reviewing: Arc::new(StdMutex::new(HashSet::new())),
                 after_turn_generations: StdMutex::new(HashMap::new()),
-                scratch: std::sync::RwLock::new(HashMap::new()),
                 assistant_windows: std::sync::RwLock::new(HashMap::new()),
             };
             app.manage(state);
@@ -7285,7 +7280,7 @@ pub fn run() {
                     }
                 });
             }
-            spawn_deferred_startup(app.handle(), orphan_scratch);
+            spawn_deferred_startup(app.handle());
             // Dev runs the bare debug binary, which does not grab focus on macOS.
             // release launches from the .app bundle and activates normally.
             #[cfg(debug_assertions)]
@@ -7415,8 +7410,6 @@ pub fn run() {
             terminal_sessions::resize_terminal,
             terminal_sessions::close_terminal,
             session_commands::new_session,
-            scratch_commands::start_scratch_chat,
-            scratch_commands::close_scratch_chat,
             research_assistant::open_research_assistant,
             research_assistant::close_research_assistant,
             session_commands::branch_session,

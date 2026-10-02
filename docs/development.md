@@ -221,9 +221,9 @@ repair the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/web
 Packaged Windows builds have no console. Each launch writes
 `%APPDATA%\science.wisp-science\wisp-science\logs\wisp.log` (overwritten on the
 next launch). The `startup finished` line breaks pre-first-paint work by phase
-(`total=…ms store=…ms skills=…ms …`). Recovery sweeps, the scratch sandbox
-purge, and restoring project windows run after the window is interactive and
-are logged as `deferred startup finished`.
+(`total=…ms store=…ms skills=…ms …`). Recovery sweeps, removing the retired
+scratch chat's sandbox folder, and restoring project windows run after the
+window is interactive and are logged as `deferred startup finished`.
 
 If the window stops responding while quitting and the process has to be killed,
 the tail of `wisp.log` shows how far the exit sequence got. Each cleanup step is
@@ -410,7 +410,7 @@ wisp-science/
   `projects::list_projects`, returning `wisp_dto::ProjectSummary` from an
   existing `Store` plus snapshots of running and approval-blocked session IDs.
   The Tauri command keeps its existing name and payload; it releases runtime
-  locks before calling the service. Project ordering, scratch-project exclusion,
+  locks before calling the service. Project ordering, hidden assistant-project exclusion,
   counts, stars, sync metadata, and best-effort enrichment fallbacks are preserved.
   `projects::project_status_counts` also serves the desktop's individual project
   summaries. This crate has no Tauri or Leptos dependency and does not open a

@@ -1083,10 +1083,8 @@ fn App() -> impl IntoView {
     let project_info = create_rw_signal::<Option<ProjectInfo>>(None);
     provide_context(project_info.read_only());
     let demo_mode = create_rw_signal(false); // true = the synthetic "Example project" is open
-    let scratch_open = create_rw_signal(false); // ephemeral scratch chat overlay
-    // The research assistant's one conversation reuses the scratch overlay
-    // shell (`scratch_open` is also true) but is persistent and never closes
-    // into a deleted project.
+    // The research assistant's one persistent conversation, shown as a
+    // full-window overlay.
     let assistant_mode = create_rw_signal(false);
     let feedback_context = create_rw_signal::<Option<String>>(None);
     let project_open_error = create_rw_signal(None::<String>);
@@ -2325,44 +2323,14 @@ fn App() -> impl IntoView {
     // carries ordinary text, but the agent now knows which workspace file a
     // "change this" request must edit.
     let composer_quotes = create_rw_signal::<Vec<ComposerQuote>>(vec![]);
-    let close_scratch = Callback::new(move |_: ()| {
+    let close_assistant = Callback::new(move |_: ()| {
         spawn_local(async move {
-            let command = if assistant_mode.get_untracked() {
-                "close_research_assistant"
-            } else {
-                "close_scratch_chat"
-            };
-            let _ = invoke(command, JsValue::UNDEFINED).await;
+            let _ = invoke("close_research_assistant", JsValue::UNDEFINED).await;
             assistant_mode.set(false);
-            scratch_open.set(false);
             items.set(vec![]);
             active_session.set(None);
             show_right.set(false);
             center_file.set(None);
-        });
-    });
-    let open_scratch = Callback::new(move |_: ()| {
-        if demo_mode.get_untracked() || assistant_mode.get_untracked() {
-            return;
-        }
-        command_palette_open.set(false);
-        action_palette_open.set(false);
-        spawn_local(async move {
-            let v = invoke("start_scratch_chat", JsValue::UNDEFINED).await;
-            let Ok(info) = serde_wasm_bindgen::from_value::<ScratchChatInfo>(v) else {
-                status.set(send_failed(locale.get(), ""));
-                return;
-            };
-            scratch_open.set(true);
-            active_session.set(Some(info.session_id));
-            items.set(vec![]);
-            attachments.set(vec![]);
-            composer_references.set(vec![]);
-            composer_quotes.set(vec![]);
-            show_sidebar.set(false);
-            show_right.set(false);
-            center_file.set(None);
-            focus_composer();
         });
     });
     // Floating action popup over a text selection: (text, source file path, x, y).
@@ -6701,7 +6669,7 @@ fn App() -> impl IntoView {
     // The research assistant is one persistent conversation: opening it binds
     // this window to it and loads its history like any other session.
     let open_assistant = Callback::new(move |_: ()| {
-        if demo_mode.get_untracked() || scratch_open.get_untracked() {
+        if demo_mode.get_untracked() || assistant_mode.get_untracked() {
             return;
         }
         command_palette_open.set(false);
@@ -6719,7 +6687,6 @@ fn App() -> impl IntoView {
                 }
             };
             assistant_mode.set(true);
-            scratch_open.set(true);
             attachments.set(vec![]);
             composer_references.set(vec![]);
             composer_quotes.set(vec![]);
@@ -9746,9 +9713,9 @@ fn App() -> impl IntoView {
             }
             return;
         }
-        if scratch_open.get() {
+        if assistant_mode.get() {
             ev.prevent_default();
-            close_scratch.call(());
+            close_assistant.call(());
             return;
         }
 
@@ -11076,7 +11043,6 @@ fn App() -> impl IntoView {
     let menu_import_project = create_rw_signal(false);
     let palette_action = {
         let new_session = palette_new_session.clone();
-        let open_scratch = open_scratch.clone();
         let project_settings = palette_project_settings.clone();
         let manage_skills = palette_manage_skills.clone();
         let run_update_check = run_update_check.clone();
@@ -11101,7 +11067,6 @@ fn App() -> impl IntoView {
                     menu_import_project.set(true);
                 }
             }
-            "scratch" => open_scratch.call(()),
             "new-window" => {
                 spawn_local(async move {
                     let _ = invoke("open_new_window", JsValue::UNDEFINED).await;
@@ -11294,15 +11259,13 @@ fn App() -> impl IntoView {
     }
     let palette_project_id = Signal::derive(move || project_info.get().map(|p| p.id));
     let has_current_project = Signal::derive(move || {
-        scratch_open.get()
+        assistant_mode.get()
             || (project_info.get().is_some() && !show_projects.get() && !demo_mode.get())
     });
     let home_page = Signal::derive(move || show_projects.get());
     let window_title = Signal::derive(move || {
         if assistant_mode.get() {
             app_window_title(Some(&t(locale.get(), "assistant.title")))
-        } else if scratch_open.get() {
-            app_window_title(Some("Scratch"))
         } else if show_projects.get() {
             app_window_title(None)
         } else if demo_mode.get() {
@@ -11348,13 +11311,9 @@ fn App() -> impl IntoView {
                 action_palette_open.set(false);
                 command_palette_open.update(|open| *open = !*open);
             }
-            "n" => {
+            "n" if !ev.shift_key() => {
                 ev.prevent_default();
-                if ev.shift_key() {
-                    open_scratch.call(());
-                } else {
-                    shortcut_action.call("new");
-                }
+                shortcut_action.call("new");
             }
             "b" => {
                 ev.prevent_default();
@@ -11491,7 +11450,7 @@ fn App() -> impl IntoView {
     // on memos: `ensure_right_tab` on an already-open pane, or a FileChanged
     // for some other path, must not rebuild what is on screen.
     let right_pane_visible =
-        create_memo(move |_| show_right.get() && !scratch_open.get() && !demo_mode.get());
+        create_memo(move |_| show_right.get() && !assistant_mode.get() && !demo_mode.get());
     let center_preview = create_memo(move |_| {
         let path = (!demo_mode.get()).then(|| center_file.get()).flatten()?;
         let file =
@@ -11524,7 +11483,7 @@ fn App() -> impl IntoView {
             privacy_hidden_project_ids=privacy_hidden_project_ids
             on_open_project=command_palette_open_project on_open_session=command_palette_open_session on_open_artifact=palette_open_artifact
             on_command=palette_action
-            on_new_session=palette_new_session on_open_scratch=open_scratch
+            on_new_session=palette_new_session
             on_project_settings=palette_project_settings
             on_manage_skills=palette_manage_skills on_attach=palette_attach />
         <PrivacyModeModal
@@ -11734,7 +11693,6 @@ fn App() -> impl IntoView {
                 calendar_journey_request.set(Some((id.clone(), day)));
                 open_project_transition.call((id, None));
             })
-            open_scratch=open_scratch
             open_assistant=open_assistant
             open_settings=Callback::new(move |section: Option<String>| open_settings_fn(section))
             open_library=Callback::new(move |_| show_library.set(true))
@@ -11800,11 +11758,10 @@ fn App() -> impl IntoView {
         <UpdateCheckOverlay state=UpdateCheckOverlayState { locale, update_check_modal, update_check_enabled, update_banner } />
         <div class="app"
             class:app-entering=move || app_shell_entering.get()
-            class:scratch-mode=move || scratch_open.get()
             class:assistant-mode=move || assistant_mode.get()
             // Onboarding lives in this shell, so hiding it on the projects
             // landing swallowed the first-run overlay entirely.
-            class:app-hidden=move || show_projects.get() && !scratch_open.get() && !show_settings.get() && !show_onboarding.get() && modal_artifact.get().is_none()
+            class:app-hidden=move || show_projects.get() && !assistant_mode.get() && !show_settings.get() && !show_onboarding.get() && modal_artifact.get().is_none()
             on:contextmenu=on_context_menu>
         <Sidebar
             state=SidebarState {
@@ -11924,16 +11881,16 @@ fn App() -> impl IntoView {
                 .map(|width| format!("--center-chat-width:{width}px"))
                 .unwrap_or_default()>
             <div class="topbar">
-                <div class="scratch-topbar">
-                    <span class="scratch-title">{move || t(locale.get(), if assistant_mode.get() { "assistant.title" } else { "scratch.title" })}</span>
-                    <button type="button" class="icon-btn scratch-close"
-                        title=move || t(locale.get(), if assistant_mode.get() { "assistant.close" } else { "scratch.close" })
-                        aria-label=move || t(locale.get(), if assistant_mode.get() { "assistant.close" } else { "scratch.close" })
-                        on:click=move |_| close_scratch.call(())>
+                <div class="assistant-topbar">
+                    <span class="assistant-title">{move || t(locale.get(), "assistant.title")}</span>
+                    <button type="button" class="icon-btn assistant-close"
+                        title=move || t(locale.get(), "assistant.close")
+                        aria-label=move || t(locale.get(), "assistant.close")
+                        on:click=move |_| close_assistant.call(())>
                         {compose_icon("close")}
                     </button>
                 </div>
-                {move || (!scratch_open.get() && !show_sidebar.get()).then(|| view! {
+                {move || (!assistant_mode.get() && !show_sidebar.get()).then(|| view! {
                     <button class="icon-btn" title=move || t(locale.get(), "sidebar.show") on:click=move |_| show_sidebar.set(true)>{compose_icon("chevron")}</button>
                 })}
                 <div class="center-tabs" role="tablist">
@@ -12135,7 +12092,7 @@ fn App() -> impl IntoView {
                 </div>
                 <button class="icon-btn" title=move || t(locale.get(), "contexts.open_terminal")
                     class:active=move || terminal_panel_open.get()
-                    disabled=move || scratch_open.get() || demo_mode.get()
+                    disabled=move || assistant_mode.get() || demo_mode.get()
                     on:click=move |_| {
                         if terminal_sessions.get_untracked().is_empty() {
                             open_terminal_for_context.call("local".into());
@@ -12152,7 +12109,7 @@ fn App() -> impl IntoView {
                     }>{compose_icon("terminal")}</button>
                 <button class="icon-btn" title=move || t(locale.get(), "center.toggle_panel")
                     class:active=move || show_right.get()
-                    disabled=move || scratch_open.get() || demo_mode.get()
+                    disabled=move || assistant_mode.get() || demo_mode.get()
                     on:click=move |_| {
                         show_right.update(|open| {
                             if *open {

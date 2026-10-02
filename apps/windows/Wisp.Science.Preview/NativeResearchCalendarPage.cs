@@ -84,36 +84,3 @@ internal sealed class NativeResearchCalendarPage : WorkspaceSheet
     }
     public override void Dispose() { disposed = true; model.Changed -= Render; model.Dispose(); base.Dispose(); }
 }
-
-internal sealed class NativeScratchPage : UserControl, IWorkspaceSheet
-{
-    private readonly WorkspaceScratchModel scratch;
-    private readonly WorkspaceConversationModel conversation;
-    private readonly NativeConversationPage page;
-    private readonly Action close;
-    private readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap };
-    private readonly Button dismiss = new() { Content = "关闭" };
-    private bool disposed;
-    public NativeScratchPage(WorkspaceScratchModel scratch, INativeSettingsClient host, WispDesign design, Func<Task<string?>> pickAttachment, Action close)
-    {
-        this.scratch = scratch; this.close = close;
-        conversation = new(new NativeConversationClient(host), host);
-        page = new(conversation, design, _ => { }, () => Task.CompletedTask, pickAttachment);
-        var root = new Grid { Background = design.Brush("bg-app") };
-        root.RowDefinitions.Add(new() { Height = GridLength.Auto }); root.RowDefinitions.Add(new() { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
-        var header = new Grid { Padding = new Thickness(20) };
-        header.Children.Add(new TextBlock { Text = "随手一聊", FontSize = 22 });
-        dismiss.HorizontalAlignment = HorizontalAlignment.Right; dismiss.Click += (_, _) => HandleEscape(); header.Children.Add(dismiss);
-        root.Children.Add(header); Grid.SetRow(error, 1); root.Children.Add(error); Grid.SetRow(page, 2); root.Children.Add(page);
-        Content = root; scratch.Changed += Update;
-        if (scratch.Session is { } session) _ = conversation.OpenAsync(session.ProjectId, session.SessionId);
-    }
-    private void Update() { error.Text = scratch.Error ?? ""; dismiss.IsEnabled = !scratch.Busy; }
-    public async void HandleEscape()
-    {
-        if (disposed || scratch.Busy) return;
-        if (await scratch.CloseAsync()) close();
-    }
-    public void Dispose() { disposed = true; page.Dispose(); scratch.Changed -= Update; scratch.Dispose(); }
-}

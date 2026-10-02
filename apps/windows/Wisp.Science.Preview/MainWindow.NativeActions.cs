@@ -85,16 +85,6 @@ internal sealed partial class MainWindow
                 projectPage = new NativePublicationPage(new(new NativePublicationClient(host), project), design, CloseProjectPage);
                 Render(); return;
             }
-            if (kind == "scratch")
-            {
-                var scratch = new WorkspaceScratchModel(new NativeScratchClient(host));
-                if (!await scratch.OpenAsync()) { localError = scratch.Error; scratch.Dispose(); Render(); return; }
-                if (windowClosed || database != model.DatabasePath || project != model.ActiveProjectId || session != model.ActiveSessionId)
-                {
-                    await scratch.CloseAsync(); scratch.Dispose(); return;
-                }
-                page = new NativeScratchPage(scratch, host, design, () => PickFile("*"), CloseSheet);
-            }
             if (page != null) MountSheet(page);
         }
         catch (Exception ex) { localError = ex.Message; Render(); }
@@ -293,7 +283,6 @@ internal sealed partial class MainWindow
             case "/journey": _ = OpenNativeAction("journey"); return true;
             case "/publication": _ = OpenNativeAction("publication"); return true;
             case "/settings": OpenSettings(); return true;
-            case "/scratch": _ = OpenNativeAction("scratch"); return true;
             default: return false;
         }
     }

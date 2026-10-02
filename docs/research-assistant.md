@@ -24,7 +24,7 @@
 
 ## 实现说明
 
-- 对话存放在隐藏项目 `assistant:research` 的固定会话 `research-assistant` 中，与随手一聊一样不出现在项目列表、最近会话、搜索或用量统计里，但不会被清理。
+- 对话存放在隐藏项目 `assistant:research` 的固定会话 `research-assistant` 中，不出现在项目列表、最近会话、搜索或用量统计里，也不会被清理。
 - 该会话的回合使用独立的系统提示词和 5 个工具（`research_projects`、`research_activity`、`research_plan`、`dispatch_to_project`、`project_session_result`），不加载文件/Shell 工具、Python/R 运行时、MCP、Skill 或 ACP 外部 Agent。
 - 计划保存在全局表 `assistant_tasks`（迁移 `0063_assistant_tasks`，幂等），不属于任何项目，不随项目导入导出。
 - 命令：`open_research_assistant`（绑定当前窗口，记住要恢复的项目）、`close_research_assistant`（恢复）。为该项目新建会话、分支或开启探索的请求会被后端拒绝。

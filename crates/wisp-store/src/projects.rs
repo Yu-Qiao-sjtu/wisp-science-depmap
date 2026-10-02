@@ -2,16 +2,8 @@ use super::Store;
 use anyhow::Result;
 use sqlx::Row;
 
-/// Ephemeral scratch-chat projects use this id prefix and never appear in user-facing lists.
-pub const SCRATCH_PROJECT_PREFIX: &str = "scratch:";
-
-pub fn is_scratch_project_id(id: &str) -> bool {
-    id.starts_with(SCRATCH_PROJECT_PREFIX)
-}
-
 /// The global research assistant keeps its one conversation in this hidden
-/// project. Like scratch it never appears in user-facing lists; unlike
-/// scratch it is never purged.
+/// project. It never appears in user-facing lists.
 pub const ASSISTANT_PROJECT_ID: &str = "assistant:research";
 
 pub fn is_assistant_project_id(id: &str) -> bool {
@@ -106,7 +98,7 @@ impl Store {
             "This database needs a desktop schema upgrade before project stars can be saved. Open it with the current WebView desktop first."
         );
         let result =
-            sqlx::query("UPDATE projects SET starred=? WHERE id=? AND id NOT LIKE 'scratch:%' AND id NOT LIKE 'assistant:%'")
+            sqlx::query("UPDATE projects SET starred=? WHERE id=? AND id NOT LIKE 'assistant:%'")
                 .bind(starred)
                 .bind(id)
                 .execute(&self.pool)
@@ -138,7 +130,7 @@ impl Store {
             return Ok(std::collections::HashSet::new());
         }
         let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM projects WHERE starred=1 AND id NOT LIKE 'scratch:%' AND id NOT LIKE 'assistant:%'",
+            "SELECT id FROM projects WHERE starred=1 AND id NOT LIKE 'assistant:%'",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -186,7 +178,7 @@ impl Store {
                     (SELECT COUNT(*) FROM artifacts a WHERE a.project_id = p.id \
                        AND a.exploration_id IS NULL) AS artifacts \
              FROM projects p \
-             WHERE p.id NOT LIKE 'scratch:%' AND p.id NOT LIKE 'assistant:%' \
+             WHERE p.id NOT LIKE 'assistant:%' \
              ORDER BY {starred_order}p.updated_at DESC, p.rowid DESC",
             listable = self.session_listable_sql().await?,
         );
@@ -205,18 +197,6 @@ impl Store {
             ));
         }
         Ok(out)
-    }
-
-    /// All scratch projects still in the database (e.g. after a crash before close).
-    pub async fn list_scratch_projects(&self) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query(
-            "SELECT id, COALESCE(workspace_dir,'') AS ws FROM projects WHERE id LIKE 'scratch:%'",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| Ok((r.try_get("id")?, r.try_get("ws")?)))
-            .collect()
     }
 
     /// Delete a project and everything under it. Explicit child deletes (SQLite

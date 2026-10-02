@@ -394,8 +394,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   }));
   const mockFolders: Array<{ id: string; name: string }> = [];
   let activeProjectId = "default";
-  let scratchOpen = false;
-  let scratchSessionId: string | null = null;
   let terminalCounter = 0;
   let mockUpdateCheck = {
     current_version: "0.9.0",
@@ -5345,22 +5343,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             snapshotSessionDefault(id);
             return id;
           }
-          case "start_scratch_chat": {
-            scratchOpen = true;
-            scratchSessionId = `scratch-${Math.random().toString(36).slice(2)}`;
-            sessionModels[scratchSessionId] = activeHttpModelId();
-            ((window as any).__scratchOpenEvents ??= []).push(true);
-            return { sessionId: scratchSessionId, projectId: "scratch:mock" };
-          }
-          case "close_scratch_chat": {
-            scratchOpen = false;
-            if (scratchSessionId) {
-              delete sessionModels[scratchSessionId];
-            }
-            scratchSessionId = null;
-            ((window as any).__scratchOpenEvents ??= []).push(false);
-            return null;
-          }
           case "open_research_assistant":
             return "research-assistant";
           case "close_research_assistant":
@@ -6804,16 +6786,6 @@ export function parallelMock(): void {
             status: "running",
           }];
           case "new_session": return `s-${Math.random().toString(36).slice(2)}`;
-          case "start_scratch_chat": {
-            scratchOpen = true;
-            scratchSessionId = `scratch-${Math.random().toString(36).slice(2)}`;
-            return { sessionId: scratchSessionId, projectId: "scratch:mock" };
-          }
-          case "close_scratch_chat": {
-            scratchOpen = false;
-            scratchSessionId = null;
-            return null;
-          }
           case "rename_session": {
             const session = sessions.find((entry) => entry.id === arg("id"));
             if (session) {

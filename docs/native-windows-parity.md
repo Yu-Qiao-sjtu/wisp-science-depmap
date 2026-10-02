@@ -189,7 +189,7 @@ landed in the WinUI preview against the shared host, with no new host commands:
   runtime and all mutations are guarded, ambiguous ones reported without retry.
 - Composer: an 环境 entry opens the hosts panel and a client-side slash
   subset (`/upload /files /outline /share /trajectory /archive /library
-  /calendar /journey /publication /settings /scratch`) routes to existing
+  /calendar /journey /publication /settings`) routes to existing
   native surfaces; unknown commands keep the draft and list the set.
 
 Automated validation: the complete C# contract harness passed, including new

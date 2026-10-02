@@ -85,16 +85,6 @@ internal static class NativeParityTests
         var hold = new TaskCompletionSource<JsonNode?>(); transport.Handler = (_, _, _) => hold.Task;
         var read = library.SearchAsync(); library.Dispose(); hold.SetResult(new JsonArray()); await read;
         Check(library.Items.Count == 1, "closed library ignores delayed search reply");
-
-        var scratch = new WorkspaceScratchModel(new NativeScratchClient(transport));
-        transport.Handler = (_, _, _) => Task.FromResult(JsonSerializer.SerializeToNode(new ScratchSession("scratch:fixture", "scratch-session")));
-        await scratch.OpenAsync();
-        Check(transport.Calls.Last().Project == null && scratch.Session?.SessionId == "scratch-session", "scratch opens an independent hidden session with empty scope");
-        transport.Handler = (_, _, _) => throw new IOException("lost close"); await scratch.CloseAsync();
-        Check(scratch.Session != null && transport.Calls.Last().Project == "scratch:fixture", "lost scratch close retains the sandbox identity without retry");
-        var invalidScratch = new WorkspaceScratchModel(new NativeScratchClient(transport));
-        transport.Handler = (_, _, _) => Task.FromResult(JsonSerializer.SerializeToNode(new ScratchSession("normal-project", "session")));
-        Check(!await invalidScratch.OpenAsync() && invalidScratch.Session == null, "scratch refuses a normal project identity");
     }
     private static async Task Conversation()
     {

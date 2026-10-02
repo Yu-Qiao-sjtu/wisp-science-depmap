@@ -310,7 +310,6 @@ test("Example project shows bundled demos as read-only transcripts", async ({ pa
   await page.goto("/");
   const sessionsBefore = (await invokeArgsList(page, "new_session")).length;
   const sendsBefore = (await invokeArgsList(page, "send_message")).length;
-  const scratchBefore = (await invokeArgsList(page, "start_scratch_chat")).length;
   // The synthetic "Example project" opens a demo view whose sidebar lists the
   // bundled demos (no per-project "Open demo" button any more).
   await page.getByText("Example project").click();
@@ -319,11 +318,9 @@ test("Example project shows bundled demos as read-only transcripts", async ({ pa
   await expect(composer(page)).not.toBeVisible();
 
   // Keyboard paths are guarded too; the read-only demo cannot be turned into
-  // either a regular or scratch conversation.
+  // a conversation.
   await page.keyboard.press("Control+n");
-  await page.keyboard.press("Control+Shift+n");
   expect((await invokeArgsList(page, "new_session")).length).toBe(sessionsBefore);
-  expect((await invokeArgsList(page, "start_scratch_chat")).length).toBe(scratchBefore);
 
   await expect(page.getByText("Help me find RNA-seq knockdown datasets")).toBeVisible();
   await expect(page.getByText("What specific samples are included in GSE153250")).toBeVisible();
@@ -14168,20 +14165,6 @@ test("selecting preview text quotes it into chat and saves a review annotation",
   await expect(page.locator(".topbar .hint")).toContainText("reviews/");
 });
 
-test("scratch chat opens from landing and closes on Escape", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator(".projects-screen")).toBeVisible();
-  await page.getByRole("button", { name: "Scratch chat" }).click();
-  await expect(page.locator(".app.scratch-mode")).toBeVisible();
-  await expect(page.locator(".scratch-title")).toHaveText("Scratch chat");
-  // Scratch chrome is title + close only — inbox/terminal/panel stay project-scoped.
-  await expect(page.locator(".topbar-actions")).toBeHidden();
-  await expect(page.locator(".scratch-close")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".app.scratch-mode")).toHaveCount(0);
-  await expect(page.locator(".projects-screen")).toBeVisible();
-});
-
 test("research assistant reopens its one conversation and closes on Escape", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".projects-screen")).toBeVisible();
@@ -14192,18 +14175,20 @@ test("research assistant reopens its one conversation and closes on Escape", asy
     ];
   });
   await page.getByTestId("open-research-assistant").click();
-  await expect(page.locator(".app.scratch-mode.assistant-mode")).toBeVisible();
-  await expect(page.locator(".scratch-title")).toHaveText("Research assistant");
+  await expect(page.locator(".app.assistant-mode")).toBeVisible();
+  await expect(page.locator(".assistant-title")).toHaveText("Research assistant");
+  // Assistant chrome is title + close only — inbox/terminal/panel stay project-scoped.
+  await expect(page.locator(".topbar-actions")).toBeHidden();
+  await expect(page.locator(".assistant-close")).toBeVisible();
   await expect(page.getByText("Yesterday you reran the DE analysis in RNA-seq.")).toBeVisible();
   // One conversation: no session list, no branches, no explorations.
   await expect(page.locator(".sidebar")).toBeHidden();
   await expect(page.locator(".msg-branch-btn").first()).toBeHidden();
   await expect(page.locator(".msg-explore-btn").first()).toBeHidden();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".app.scratch-mode")).toHaveCount(0);
+  await expect(page.locator(".app.assistant-mode")).toHaveCount(0);
   await expect(page.locator(".projects-screen")).toBeVisible();
   expect(await invokeArgsList(page, "close_research_assistant")).toHaveLength(1);
-  expect(await invokeArgsList(page, "close_scratch_chat")).toHaveLength(0);
 });
 
 test("home docs button sits to the right of settings and opens tutorials", async ({ page }) => {
@@ -14280,7 +14265,7 @@ test("Windows uses the integrated title bar without covering the project landing
   await expect(page.getByRole("menuitem", { name: "New project" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New Window" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Import project" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Scratch chat" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Scratch chat" })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Open settings" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New session" })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Open projects" })).toHaveCount(0);

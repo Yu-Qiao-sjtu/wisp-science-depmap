@@ -124,9 +124,6 @@ pub(crate) async fn open_research_assistant(
     let label = window.label().to_string();
     let bound = state.require_active(&label).map(|ap| ap.id);
     let restore = match bound {
-        Ok(id) if wisp_store::is_scratch_project_id(&id) => {
-            return Err("Close the scratch chat before opening the research assistant.".into())
-        }
         Ok(id) if wisp_store::is_assistant_project_id(&id) => None,
         Ok(id) => Some(Some(id)),
         Err(_) if crate::is_blank_window_label(&label) => Some(None),
