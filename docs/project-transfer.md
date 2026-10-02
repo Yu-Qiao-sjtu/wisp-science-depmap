@@ -1,5 +1,9 @@
 # Project transfer
 
+If a project reports that its SQLite database is unavailable, follow the
+[safe project-database recovery steps](project-database-recovery.zh-CN.md)
+before attempting to move or restore the workspace.
+
 Wisp exports a complete project in two formats:
 
 - **Export directory** creates an uncompressed project package in a selected
