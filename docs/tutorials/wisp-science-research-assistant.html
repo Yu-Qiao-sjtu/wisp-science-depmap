@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="tutorial-article" data-title-zh="科研版的个人助理来！ · 教程 | Wisp Science" data-title-en="A Personal Assistant, Built for Research · Tutorials | Wisp Science" data-desc-zh="科研版的个人助理来！" data-desc-en="A Personal Assistant, Built for Research">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="科研版的个人助理来！">
+  <title>科研版的个人助理来！ · 教程 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <link rel="stylesheet" href="../assets/tutorials.css">
+</head>
+<body class="doc-page tutorial-detail">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="../index.html#features" data-i18n="nav.features">功能</a>
+        <a href="../index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="../index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="../technology.html" data-i18n="nav.tech">技术</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" aria-current="location" data-i18n="nav.tutorials">教程</a>
+        <a href="../index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="../index.html#download"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="tutorial-reader container">
+<nav class="tutorial-breadcrumb" aria-label="教程导航" data-i18n-aria="tutorials.readerNav"><a class="tutorial-back" href="../tutorials.html#wisp-science-research-assistant" data-i18n="tutorials.back">返回教程目录</a></nav>
+<article class="tutorial-article" id="wisp-science-research-assistant" aria-labelledby="article-title">
+<header><h1 id="article-title" data-text-zh="科研版的个人助理来！" data-text-en="A Personal Assistant, Built for Research">科研版的个人助理来！</h1>
+<a href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-research-assistant.md" data-href-zh="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/wisp-science-research-assistant.md" data-href-en="https://github.com/xuzhougeng/wisp-science/blob/main/docs/wechat/en/wisp-science-research-assistant.md" data-i18n="tutorials.source">查看原文</a></header>
+<div class="tutorial-body lang-zh" lang="zh-CN">
+<p>早上打开电脑，三个项目、七八段对话、一个昨晚跑到一半的 Run。第一件事往往不是做研究，而是回忆：昨天到底做到哪了？今天先干什么？那个差异分析跑完没有？</p>
+<p>这些问题不难，只是零碎，而且每天都要问一遍。</p>
+<p>最近，个人 Agent 正在从“一次次对话”变成“一个一直在的助手”：Grok Bot、Meta 的 Muse、OpenAI 的 Dots，都在做同一件事——你面对的不再是一堆聊天窗口，而是一个记得你、知道你在忙什么的助手。</p>
+<p>Wisp Science 把这件事带进了科研：<strong>科研助理</strong>。</p>
+<blockquote>
+<p>本文为功能介绍。示例中的项目名、对话与结果均为虚构，用于说明交互方式。</p>
+</blockquote>
+<p>&lt;!-- 配图：首页右上角「科研助理」入口 --&gt;</p>
+<h2>它是谁：一条永不结束的对话</h2>
+<p>在 Wisp 首页右上角点击「科研助理」，打开的是一条<strong>不属于任何项目、也不会新建第二条</strong>的对话。</p>
+<p>没有会话列表，不用找“上次那段聊天在哪”。你每次打开，都回到同一个助理、同一条对话流；之前聊过的内容按页加载，长对话沿用 Wisp 的归档式压缩，旧消息不会被悄悄丢掉。</p>
+<p>它的定位很明确：<strong>科研秘书，不是科研劳力。</strong> 它负责知道发生了什么、记住你要做什么、把活交给对的人；真正的分析，交给项目里的对话去做。</p>
+<h2>它能做的四件事</h2>
+<h3>一、汇报：昨天做了什么</h3>
+<blockquote>
+<p><strong>你</strong>：我昨天做了什么？</p>
+<p><strong>助理</strong>：昨天有两个项目有记录：</p>
+<ul>
+<li><strong>RNA-seq 衰老队列</strong>：完成质控，3 个样本被标记为低质量；归一化比较的 Run 失败（内存不足）。</li>
+<li><strong>文献综述</strong>：新增两条发现记录，关于 SASP 标志物的定义分歧。</li>
+</ul>
+</blockquote>
+<p>助理读取的是各项目<strong>已经登记</strong>的研究活动：运行（包括失败的）、产出文件、研究记录、对话中你提出的请求，以及每日研究回顾——和首页研究日历是同一份数据，只是换成了一句话就能问。</p>
+<p>它只说记录里有的内容。没登记的事，它不会替你编。</p>
+<h3>二、记计划：今天打算做什么</h3>
+<blockquote>
+<p><strong>你</strong>：记一下，今天要把 Methods 写完，再催一下合作者的 ATAC 数据。</p>
+<p><strong>助理</strong>：已记下今天的两项计划。昨天还有一项未完成：“复核 3 个低质量样本”，已一并列入今天。</p>
+</blockquote>
+<p>计划逐条保存，带日期和状态（待办 / 完成 / 放弃）。没完成的条目会自动出现在今天的清单里。</p>
+<p>关键在于：<strong>计划存在对话之外</strong>。对话再长、压缩多少次，你说过的计划都不会被“忘掉”。</p>
+<h3>三、派活：在某个项目里开始一项工作</h3>
+<blockquote>
+<p><strong>你</strong>：在 RNA-seq 项目里开个对话，把 batch 作为协变量重跑差异分析，输出前 50 个基因。</p>
+<p><strong>助理</strong>：已在「RNA-seq 衰老队列」中新建对话“重跑差异分析（batch 协变量）”，任务已在后台开始，并记入今天的计划。</p>
+</blockquote>
+<p>助理会在目标项目里新建一条带标题的对话，把一份完整、自包含的指令发过去。之后的工作由<strong>那个项目自己的 Agent</strong> 完成——它有项目的文件、运行环境、Skill 和服务器配置。需要审批的操作，仍然在那个项目里等你确认。</p>
+<p>你不用切项目、不用新建对话、不用重新交代背景。</p>
+<h3>四、跟进：那个任务跑完没有</h3>
+<blockquote>
+<p><strong>你</strong>：刚才的差异分析怎么样了？</p>
+<p><strong>助理</strong>：已完成。共 312 个基因 FDR &lt; 0.05，前 50 个基因已保存为 <code>de_top50_batch.csv</code>。详见 RNA-seq 项目中的对话“重跑差异分析（batch 协变量）”。</p>
+</blockquote>
+<p>助理会查看派出去的对话是否还在运行，并读取它的最终回答。</p>
+<p>&lt;!-- 配图：科研助理对话中的汇报、计划与派活 --&gt;</p>
+<h2>为什么它“不干活”</h2>
+<p>科研助理没有文件读写、没有 Shell、没有 Python/R 运行时，也不连 MCP 或外部 Agent。这是刻意的设计：</p>
+<ul>
+<li><strong>分工清楚</strong>：助理管全局，项目管细节。分析的上下文、产物和运行记录，都留在它们所属的项目里，可追溯、可复现。</li>
+<li><strong>更安全</strong>：一条跨所有项目的对话，最不该有的就是随手改文件、跑命令的权限。</li>
+<li><strong>不打架</strong>：同一个问题不会一半在助理里、一半在项目里做。</li>
+</ul>
+<p>你想让它“帮忙分析一下”，它会问你放到哪个项目，然后派过去。</p>
+<h2>它现在还做不到的</h2>
+<p>坦白说清楚边界：</p>
+<ul>
+<li><strong>不会主动推送</strong>：晨报需要你开口问，它不会自己弹出来。</li>
+<li><strong>派出的任务完成后不会自动回报</strong>：需要你问一句，或去项目里看。</li>
+<li><strong>计划暂不显示在研究日历上</strong>。</li>
+<li><strong>只认登记过的记录</strong>：没有注册的文件、随手敲的终端命令，它看不到。</li>
+<li>隐私模式隐藏的项目，对助理不可见，也不能接收派活。</li>
+</ul>
+<h2>一个每天可以重复的用法</h2>
+<ul>
+<li><strong>开工时</strong>：“我昨天做了什么？今天有哪些没完成的？”</li>
+<li><strong>想到就说</strong>：“记一下……”“在某某项目里让它……”</li>
+<li><strong>收工前</strong>：“今天派出去的任务都怎么样了？哪些计划还没做？”</li>
+</ul>
+<p>三句话，一天的科研节奏就清楚了。</p>
+<p><strong>科研版的个人助理，帮你记住研究，而不是替你做研究。</strong></p>
+<p>项目与下载：<a href="https://github.com/xuzhougeng/wisp-science">Wisp Science</a></p>
+<p>继续阅读：<a href="wisp-science-research-journey.html">研究历程</a> · <a href="wisp-science-quick-start.html">快速开始</a> · <a href="wisp-science-specialists.html">专家</a></p>
+</div>
+<div class="tutorial-body lang-en" lang="en">
+<p>You open your laptop in the morning: three projects, seven or eight conversations, and a Run that was halfway done last night. The first task is often not research but recall: where did I leave off yesterday? What comes first today? Did that differential analysis finish?</p>
+<p>None of these questions is hard. They are just scattered, and you ask them every day.</p>
+<p>Personal agents are shifting from &quot;one conversation at a time&quot; to &quot;an assistant that is always there&quot;: Grok Bot, Meta's Muse, and OpenAI's Dots are all chasing the same idea. Instead of a pile of chat windows, you work with an assistant that remembers you and knows what you are working on.</p>
+<p>Wisp Science brings this to research: the <strong>Research Assistant</strong>.</p>
+<blockquote>
+<p>This article introduces a feature. Project names, conversations, and results in the examples are fictional and only illustrate the interaction.</p>
+</blockquote>
+<p>&lt;!-- Figure: the &quot;Research assistant&quot; entry in the top-right corner of the home page --&gt;</p>
+<h2>What it is: one conversation that never ends</h2>
+<p>Click &quot;Research assistant&quot; in the top-right corner of the Wisp home page. It opens a conversation that <strong>belongs to no project, and there is never a second one</strong>.</p>
+<p>There is no session list and no hunting for &quot;where was that chat last time&quot;. Every time you open it, you return to the same assistant and the same conversation. Earlier messages load page by page, and long conversations use Wisp's archive-first compaction, so old messages are never silently dropped.</p>
+<p>Its role is clear: <strong>a research secretary, not research labor.</strong> It knows what happened, remembers what you plan to do, and hands work to the right place. The actual analysis happens in project conversations.</p>
+<h2>Four things it does</h2>
+<h3>1. Report: what did I do yesterday?</h3>
+<blockquote>
+<p><strong>You</strong>: What did I do yesterday?</p>
+<p><strong>Assistant</strong>: Two projects have records from yesterday:</p>
+<ul>
+<li><strong>RNA-seq aging cohort</strong>: QC finished, and 3 samples were flagged as low quality; the normalization comparison Run failed (out of memory).</li>
+<li><strong>Literature review</strong>: two new finding records on conflicting definitions of SASP markers.</li>
+</ul>
+</blockquote>
+<p>The assistant reads the research activity each project has <strong>already registered</strong>: runs (including failed ones), output files, research records, the requests you made in conversations, and daily research reviews. It is the same data as the research calendar on the home page, just available as a one-line question.</p>
+<p>It only reports what the records contain. It will not invent what was never registered.</p>
+<h3>2. Plan: what am I doing today?</h3>
+<blockquote>
+<p><strong>You</strong>: Note that today I want to finish Methods and follow up with my collaborator about the ATAC data.</p>
+<p><strong>Assistant</strong>: Saved two plan items for today. One item from yesterday is still open, &quot;Review the 3 low-quality samples&quot;, so it is on today's list too.</p>
+</blockquote>
+<p>Plans are saved item by item, with a date and status (to do / done / dropped). Unfinished items carry over to today's list automatically.</p>
+<p>The key point: <strong>plans live outside the conversation</strong>. However long the conversation grows and however many times it is compacted, the plans you stated are never &quot;forgotten&quot;.</p>
+<h3>3. Delegate: start work in a project</h3>
+<blockquote>
+<p><strong>You</strong>: Open a conversation in the RNA-seq project, rerun the differential analysis with batch as a covariate, and output the top 50 genes.</p>
+<p><strong>Assistant</strong>: Created the conversation &quot;Rerun differential analysis (batch covariate)&quot; in &quot;RNA-seq aging cohort&quot;. The task is running in the background and has been added to today's plan.</p>
+</blockquote>
+<p>The assistant creates a titled conversation in the target project and sends it a complete, self-contained instruction. From there, <strong>that project's own agent</strong> does the work, with the project's files, runtime, Skills, and server configuration. Any action that needs approval still waits for you in that project.</p>
+<p>You do not switch projects, create a conversation, or re-explain the background.</p>
+<h3>4. Follow up: did that task finish?</h3>
+<blockquote>
+<p><strong>You</strong>: How is the differential analysis going?</p>
+<p><strong>Assistant</strong>: Done. 312 genes have FDR &lt; 0.05, and the top 50 genes were saved as <code>de_top50_batch.csv</code>. See the conversation &quot;Rerun differential analysis (batch covariate)&quot; in the RNA-seq project.</p>
+</blockquote>
+<p>The assistant checks whether delegated conversations are still running and reads their final answers.</p>
+<p>&lt;!-- Figure: reporting, planning, and delegating in the Research Assistant conversation --&gt;</p>
+<h2>Why it &quot;doesn't do the work&quot;</h2>
+<p>The Research Assistant has no file read/write, no shell, no Python/R runtime, and no MCP or external agent connections. This is deliberate:</p>
+<ul>
+<li><strong>Clear division of labor</strong>: the assistant handles the big picture, projects handle the details. Analysis context, outputs, and run records stay in the project they belong to, where they are traceable and reproducible.</li>
+<li><strong>Safer</strong>: a conversation that spans every project is the last place that should be able to casually edit files or run commands.</li>
+<li><strong>No conflicts</strong>: the same problem is never half-done in the assistant and half-done in a project.</li>
+</ul>
+<p>If you ask it to &quot;help analyze this&quot;, it asks which project the work belongs in and delegates it there.</p>
+<h2>What it cannot do yet</h2>
+<p>To be clear about the boundaries:</p>
+<ul>
+<li><strong>No proactive push</strong>: you have to ask for the morning report; it will not pop up on its own.</li>
+<li><strong>No automatic report when a delegated task finishes</strong>: ask once, or check the project.</li>
+<li><strong>Plans do not appear on the research calendar yet.</strong></li>
+<li><strong>It only knows registered records</strong>: unregistered files and ad hoc terminal commands are invisible to it.</li>
+<li>Projects hidden by privacy mode are invisible to the assistant and cannot receive delegated work.</li>
+</ul>
+<h2>A routine you can repeat every day</h2>
+<ul>
+<li><strong>When you start</strong>: &quot;What did I do yesterday? What is still unfinished?&quot;</li>
+<li><strong>Whenever something comes to mind</strong>: &quot;Note that...&quot; &quot;In project X, have it...&quot;</li>
+<li><strong>Before you finish</strong>: &quot;How are today's delegated tasks doing? Which plans are still open?&quot;</li>
+</ul>
+<p>Three questions, and the rhythm of your research day is clear.</p>
+<p><strong>A personal assistant for research that helps you remember your research, not do it for you.</strong></p>
+<p>Project and downloads: <a href="https://github.com/xuzhougeng/wisp-science">Wisp Science</a></p>
+<p>Continue reading: <a href="wisp-science-research-journey.html">Research Journey</a> · <a href="wisp-science-quick-start.html">Quick Start</a> · <a href="wisp-science-specialists.html">Specialists</a></p>
+</div>
+</article>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-agent-workflow-create.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="创建 Agent Workflow" data-text-en="Creating an Agent Workflow">创建 Agent Workflow</strong></a><a class="tutorial-next" href="wisp-science-cli.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="Wisp 命令行" data-text-en="Wisp CLI">Wisp 命令行</strong></a></nav>
+<div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-research-assistant" data-i18n="tutorials.back">返回教程目录</a></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="../index.html#top">
+        <img src="../assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="../technology.html" data-i18n="nav.tech">技术</a>
+        <a href="../mcp.html" data-i18n="nav.mcp">MCP</a>
+        <a href="../skills.html" data-i18n="nav.skills">SKILLS</a>
+        <a href="../tutorials.html" data-i18n="nav.tutorials">教程</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases" data-i18n="footer.releases">版本记录</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues" data-i18n="footer.issues">问题反馈</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="../assets/i18n.js"></script>
+</body>
+</html>

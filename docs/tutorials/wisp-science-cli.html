@@ -88,7 +88,7 @@ $credential = Get-Credential -UserName &quot;api&quot; -Message &quot;在密码�
 $env:WISP_API_KEY = $credential.GetNetworkCredential().Password
 wisp-science
 </code></pre>
-<p><code>WISP_PROVIDER</code> 可按服务协议选择 <code>openai</code>、<code>openai_responses</code>、<code>openai_codex</code> 或 <code>anthropic</code>。<code>openai_codex</code> 使用 ChatGPT Plus/Pro 订阅：先运行 <code>wisp-science login codex</code>（远程或 WSL 可加 <code>--method device</code>），之后不需要 <code>WISP_API_KEY</code>。</p>
+<p><code>WISP_PROVIDER</code> 可按服务协议选择 <code>openai</code>、<code>openai_responses</code>、<code>openai_codex</code>、<code>xai_oauth</code> 或 <code>anthropic</code>。<code>openai_codex</code> 使用 ChatGPT Plus/Pro 订阅：先运行 <code>wisp-science login codex</code>（远程或 WSL 可加 <code>--method device</code>），之后不需要 <code>WISP_API_KEY</code>。<code>xai_oauth</code> 使用 SuperGrok 或 X Premium+ 订阅：先运行 <code>wisp-science login xai</code>（设备码登录），之后同样不需要 <code>WISP_API_KEY</code>。</p>
 <p><strong>用交互模式，在同一个项目目录中继续对话。</strong></p>
 <p>运行 <code>wisp-science</code> 后，在交互模式中输入自然语言任务。例如：</p>
 <blockquote>
@@ -218,7 +218,7 @@ wisp-science run --output jsonl &quot;Read-only: check the column names and miss
 </blockquote>
 </div>
 </article>
-<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-agent-workflow-create.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="创建 Agent Workflow" data-text-en="Creating an Agent Workflow">创建 Agent Workflow</strong></a><a class="tutorial-next" href="wisp-science-acp.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="ACP配置" data-text-en="ACP Configuration">ACP配置</strong></a></nav>
+<nav class="tutorial-pagination" aria-label="相邻教程" data-i18n-aria="tutorials.pagination"><a class="tutorial-previous" href="wisp-science-research-assistant.html"><span data-i18n="tutorials.previous">上一篇</span><strong data-text-zh="科研版的个人助理来！" data-text-en="A Personal Assistant, Built for Research">科研版的个人助理来！</strong></a><a class="tutorial-next" href="wisp-science-acp.html"><span data-i18n="tutorials.next">下一篇</span><strong data-text-zh="ACP配置" data-text-en="ACP Configuration">ACP配置</strong></a></nav>
 <div class="tutorial-reader-back"><a class="tutorial-back" href="../tutorials.html#wisp-science-cli" data-i18n="tutorials.back">返回教程目录</a></div>
   </main>
 
