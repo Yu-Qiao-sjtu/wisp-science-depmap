@@ -816,7 +816,7 @@ impl Store {
         // databases and their recovery markers; only these private files are
         // disposable on every exit path.
         if let Some(pool) = staging_pool {
-            pool.close().await;
+            Self::close_pool(&pool).await;
         }
         for path in [&staging, &prepared] {
             if let Err(error) = std::fs::remove_file(path) {

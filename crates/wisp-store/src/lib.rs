@@ -297,9 +297,24 @@ impl Store {
         if result.is_err() {
             // Snapshot callers may remove a failed staging database immediately.
             // Dropping a pool alone does not wait for SQLite handles to close.
-            pool.close().await;
+            Self::close_pool(&pool).await;
         }
         result
+    }
+
+    /// Close every connection before a caller unlinks the database file.
+    /// sqlx 0.8 `Pool::close` can return while a connection that was being
+    /// released lands back in the idle queue, still holding the file open;
+    /// Windows then refuses to delete it. Close again until the pool is empty.
+    pub(crate) async fn close_pool(pool: &SqlitePool) {
+        // ponytail: bounded so an sqlx accounting quirk cannot hang cleanup.
+        for _ in 0..100 {
+            pool.close().await;
+            if pool.size() == 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     /// Every multi-statement transaction in this store writes. Take the write
