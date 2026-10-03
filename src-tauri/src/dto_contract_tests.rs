@@ -632,9 +632,26 @@ fn research_journey_contract_preserves_version_and_occurrence_time() {
             source_id: "v1".into(),
             version_number: Some(1),
             source_discarded: true,
+            run_id: Some("run".into()),
             ..Default::default()
         }],
         truncated: true,
+        recaps: vec![wisp_dto::ResearchRecap {
+            id: "recap".into(),
+            day_start: 0,
+            status: "draft".into(),
+            headline: "Compared methods".into(),
+            done: vec![wisp_dto::ResearchRecapItem {
+                text: "Ran comparison".into(),
+                refs: vec![0],
+            }],
+            sources: vec![wisp_dto::ResearchRecapSource {
+                kind: "run".into(),
+                id: "run".into(),
+                title: "Compare".into(),
+            }],
+            ..Default::default()
+        }],
     };
     let ui: wisp_dto::ResearchJourney = roundtrip(&backend);
     assert_eq!(ui, backend);
@@ -661,8 +678,8 @@ fn research_calendar_contract_preserves_project_errors_and_truncation() {
         wisp_dto::ResearchCalendarProject {
             project_id: "p".into(),
             history: wisp_dto::ResearchJourney {
-                entries: vec![],
                 truncated: true,
+                ..Default::default()
             },
             error: None,
         },
@@ -1036,4 +1053,37 @@ fn after_turn_hook_events_roundtrip_to_ui() {
         }
         _ => panic!("expected HookFailed"),
     }
+}
+
+#[test]
+fn session_artifact_preview_includes_review_token_and_retention_reasons() {
+    let preview = wisp_dto::SessionArtifactPreview {
+        fingerprint: "content-and-ownership-hash".into(),
+        artifacts: vec!["plot.svg".into()],
+        files: vec!["results/plot.svg".into()],
+        retained: vec![wisp_dto::RetainedSessionArtifact {
+            name: "uploads/input.csv".into(),
+            reason: "upload".into(),
+        }],
+    };
+    let decoded: wisp_dto::SessionArtifactPreview = roundtrip(&preview);
+    assert_eq!(decoded, preview);
+}
+
+#[test]
+fn assistant_weixin_status_contract_is_separate_from_legacy_channels() {
+    let status = wisp_dto::AssistantWeixinStatus {
+        enabled: true,
+        bound: true,
+        state: "running".into(),
+        detail: "connected".into(),
+    };
+    let dto: wisp_dto::AssistantWeixinStatus = roundtrip(&status);
+    assert!(dto.enabled && dto.bound);
+    assert_eq!(dto.state, "running");
+    assert_eq!(
+        serde_json::to_value(wisp_dto::WeixinDestination::Assistant).unwrap(),
+        "assistant"
+    );
+    assert!(serde_json::from_str::<wisp_dto::WeixinDestination>("\"invalid\"").is_err());
 }

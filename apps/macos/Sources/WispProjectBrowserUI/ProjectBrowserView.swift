@@ -6,7 +6,6 @@ public struct ProjectBrowserView: View {
     @ObservedObject private var library: NativeLibraryModel
     @ObservedObject private var calendar: NativeCalendarModel
     @ObservedObject private var capabilities: NativeCapabilitiesModel
-    @ObservedObject private var scratch: NativeScratchModel
     @AppStorage("projectBrowser.appearance") private var appearance = "system"
 
     public init(model: ProjectBrowserModel) {
@@ -14,7 +13,6 @@ public struct ProjectBrowserView: View {
         self.library = model.library
         self.calendar = model.calendar
         self.capabilities = model.capabilities
-        self.scratch = model.scratch
     }
 
     public var body: some View {
@@ -23,8 +21,6 @@ public struct ProjectBrowserView: View {
                 NativeSettingsView(databaseURL: model.databaseURL, projects: model.projects, projectID: model.projectSettingsID ?? model.activeProjectID, editProject: model.projectSettingsID != nil, initialSection: NativeSettingsSection(rawValue: model.settingsSectionID ?? "") ?? .general) { model.settingsPresented = false; model.projectSettingsID = nil; model.settingsSectionID = nil; Task { await model.refresh() } }
             } else if calendar.presented {
                 NativeCalendarPage(model: model, calendar: calendar)
-            } else if scratch.presented {
-                NativeScratchChat(model: model, scratch: model.scratch)
             } else if let project = model.projects.first(where: { $0.id == model.activeProjectID }) {
                 ProjectWorkspace(model: model, project: project)
             } else {
@@ -138,12 +134,6 @@ private struct ProjectLanding: View {
             Link(destination: URL(string: "https://wispscience.com/tutorials.html")!) { WispIcon(name: "doc") }
                 .buttonStyle(WispButtonStyle()).help("文档").accessibilityLabel("文档")
                 .accessibilityIdentifier("home-docs")
-            Button { Task { await model.scratch.open(model.calendarClient()) } } label: { Text("随手一聊") }
-                .buttonStyle(WispButtonStyle())
-                .disabled(model.scratch.busy || model.scratch.presented)
-                .help("随手一聊")
-                .accessibilityLabel("随手一聊")
-                .accessibilityIdentifier("home-scratch")
             Button { model.importOptionsPresented = true } label: {
                 HStack(spacing: 8) { WispIcon(name: "upload", size: 16); Text("导入项目") }
             }

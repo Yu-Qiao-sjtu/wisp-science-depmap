@@ -334,7 +334,6 @@ test("Example project shows bundled demos as read-only transcripts", async ({ pa
   await page.goto("/");
   const sessionsBefore = (await invokeArgsList(page, "new_session")).length;
   const sendsBefore = (await invokeArgsList(page, "send_message")).length;
-  const scratchBefore = (await invokeArgsList(page, "start_scratch_chat")).length;
   // The synthetic "Example project" opens a demo view whose sidebar lists the
   // bundled demos (no per-project "Open demo" button any more).
   await page.getByText("Example project").click();
@@ -343,11 +342,9 @@ test("Example project shows bundled demos as read-only transcripts", async ({ pa
   await expect(composer(page)).not.toBeVisible();
 
   // Keyboard paths are guarded too; the read-only demo cannot be turned into
-  // either a regular or scratch conversation.
+  // a conversation.
   await page.keyboard.press("Control+n");
-  await page.keyboard.press("Control+Shift+n");
   expect((await invokeArgsList(page, "new_session")).length).toBe(sessionsBefore);
-  expect((await invokeArgsList(page, "start_scratch_chat")).length).toBe(scratchBefore);
 
   await expect(page.getByText("Help me find RNA-seq knockdown datasets")).toBeVisible();
   await expect(page.getByText("What specific samples are included in GSE153250")).toBeVisible();
@@ -1175,92 +1172,6 @@ test("model selection stays bound to its conversation", async ({ page }) => {
   await expect(page.locator(".model-picker-label")).toHaveText("opus-4.8");
 });
 
-test("model effort is revealed on hover and saved to the model profile", async ({ page }) => {
-  await enterApp(page, "/?mockSessionModels=1");
-  await page.locator(".model-picker-btn").click();
-  await page.mouse.move(0, 0);
-
-  // Effort has no resting layout box, then overlays the model info on hover.
-  const opusRow = page.locator(".model-menu-row", { hasText: "opus-4.8" });
-  const deepseekRow = page.locator(".model-menu-row", { hasText: "deepseek-v4-pro" });
-  await expect(opusRow.locator(".model-menu-effort-tag")).toBeHidden();
-  await expect(deepseekRow.locator(".model-menu-effort-tag")).toBeHidden();
-  expect(await opusRow.locator(".model-menu-effort-tag").boundingBox()).toBeNull();
-  await opusRow.hover();
-  await expect(opusRow.locator(".model-menu-effort-tag")).toHaveText("max");
-  await expect(opusRow.locator(".model-menu-effort-tag")).toBeVisible();
-  await expect(opusRow.locator(".model-menu-effort-edit")).toBeVisible();
-  await expect(opusRow.locator(".model-menu-effort-edit svg")).toHaveCount(0);
-  const [effortBox, textBox] = await Promise.all([
-    opusRow.locator(".model-menu-effort-tag").boundingBox(),
-    opusRow.locator(".model-menu-text").boundingBox(),
-  ]);
-  expect(effortBox).not.toBeNull();
-  expect(textBox).not.toBeNull();
-  expect(effortBox!.x).toBeGreaterThanOrEqual(textBox!.x);
-  expect(effortBox!.x + effortBox!.width).toBeLessThanOrEqual(textBox!.x + textBox!.width + 1);
-
-  const menuBoxBefore = await page.locator(".model-menu").boundingBox();
-  await opusRow.locator(".model-menu-effort-edit").click();
-  const flyout = page.locator(".model-menu-effort-flyout[data-effort-for='opus']");
-  await expect(flyout).toBeVisible();
-  await expect.poll(() => flyout.evaluate((el) => el.parentElement?.classList.contains("model-picker"))).toBe(true);
-  const [menuBox, flyoutBox] = await Promise.all([
-    page.locator(".model-menu").boundingBox(),
-    flyout.boundingBox(),
-  ]);
-  expect(menuBox).not.toBeNull();
-  expect(flyoutBox).not.toBeNull();
-  expect(menuBoxBefore).not.toBeNull();
-  expect(menuBox!.x).toBeLessThan(menuBoxBefore!.x);
-  expect(flyoutBox!.x).toBeGreaterThanOrEqual(menuBox!.x + menuBox!.width + 5);
-  expect(flyoutBox!.x + flyoutBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width - 7);
-
-  // Switching editors while the first flyout is open keeps the same stable
-  // right-side anchor instead of recalculating from the already shifted menu.
-  await deepseekRow.hover();
-  await deepseekRow.locator(".model-menu-effort-edit").click();
-  const deepseekFlyout = page.locator(".model-menu-effort-flyout");
-  await expect(deepseekFlyout).toBeVisible();
-  await expect(deepseekFlyout).not.toHaveAttribute("data-effort-for", "opus");
-  const [switchedMenuBox, switchedFlyoutBox] = await Promise.all([
-    page.locator(".model-menu").boundingBox(),
-    deepseekFlyout.boundingBox(),
-  ]);
-  expect(switchedMenuBox).not.toBeNull();
-  expect(switchedFlyoutBox).not.toBeNull();
-  expect(Math.abs(switchedMenuBox!.x - menuBox!.x)).toBeLessThanOrEqual(1.5);
-  expect(switchedFlyoutBox!.x).toBeGreaterThanOrEqual(switchedMenuBox!.x + switchedMenuBox!.width + 5);
-
-  await opusRow.hover();
-  await opusRow.locator(".model-menu-effort-edit").click();
-  await expect(flyout).toBeVisible();
-  // The stored value carries the check mark.
-  await expect(
-    flyout.locator(".model-menu-effort-option[data-effort='max'] .model-menu-effort-check"),
-  ).toBeVisible();
-  await flyout.locator(".model-menu-effort-option[data-effort='high']").click();
-
-  // The effort is written onto the model profile, not the conversation.
-  await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({
-    profile: { id: "opus", reasoning_effort: "high" },
-  });
-  await expect.poll(() => lastInvokeArgs(page, "set_session_reasoning_effort")).toBeNull();
-
-  // The flyout closes, the menu stays open, and the row shows the new value.
-  await expect(page.locator(".model-menu-effort-flyout")).toHaveCount(0);
-  await expect(page.locator(".model-menu")).toBeVisible();
-  await expect(opusRow.locator(".model-menu-effort-tag")).toHaveText("high");
-
-  // "default" clears the profile value again.
-  await opusRow.locator(".model-menu-effort-edit").click();
-  await flyout.locator(".model-menu-effort-option[data-effort='default']").click();
-  await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({
-    profile: { id: "opus", reasoning_effort: "" },
-  });
-  await expect(opusRow.locator(".model-menu-effort-tag")).toHaveCount(0);
-});
-
 test("model picker uses a compact left-aligned ACP group label", async ({ page }) => {
   await enterApp(page);
   await page.locator(".model-picker-btn").click();
@@ -1278,38 +1189,6 @@ test("model picker uses a compact left-aligned ACP group label", async ({ page }
   expect(labelBox).not.toBeNull();
   expect(rowLabelBox).not.toBeNull();
   expect(Math.abs(labelBox!.x + labelPadding - rowLabelBox!.x)).toBeLessThanOrEqual(1);
-});
-
-test("Chinese reasoning effort title does not duplicate the English label", async ({ page }) => {
-  await page.goto("/?mockSessionModels=1&mockLocale=zh");
-  await page.locator(".proj-card-main").first().click();
-  await expect(page.locator(".sidebar").getByRole("button", { name: "新建会话" })).toBeVisible();
-  await page.locator(".model-picker-btn").click();
-  const opusRow = page.locator(".model-menu-row", { hasText: "opus-4.8" });
-  await opusRow.hover();
-  await opusRow.locator(".model-menu-effort-edit").click();
-
-  const title = page.locator(".model-menu-effort-flyout-label");
-  await expect(title).toHaveText("推理强度");
-  await expect(title).not.toContainText(/thinking effort/i);
-});
-
-test("effort flyout closes on Escape before the model menu", async ({ page }) => {
-  await enterApp(page, "/?mockSessionModels=1");
-  await page.locator(".model-picker-btn").click();
-  await page
-    .locator(".model-menu-row", { hasText: "opus-4.8" })
-    .locator(".model-menu-effort-edit")
-    .click();
-  await expect(page.locator(".model-menu-effort-flyout")).toBeVisible();
-
-  // One Escape closes only the flyout; the model menu stays open.
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".model-menu-effort-flyout")).toHaveCount(0);
-  await expect(page.locator(".model-menu")).toBeVisible();
-
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".model-menu")).toHaveCount(0);
 });
 
 test("Settings Models page can open ACP Agents dialog", async ({ page }) => {
@@ -1699,7 +1578,7 @@ test("plan entries render full Markdown without breaking status layout", async (
   await expect(page.getByTestId("plan-card").last().getByRole("img", { name: "High priority" })).toBeVisible();
 });
 
-test("built-in ask_user option click fills an editable answer draft", async ({ page }) => {
+test("built-in ask_user option click sends the answer immediately", async ({ page }) => {
   await openMockPlanSession(page, "native");
 
   // The built-in question tool streams through the ordinary tool events; its
@@ -1731,23 +1610,14 @@ test("built-in ask_user option click fills an editable answer draft", async ({ p
   // wry's window.prompt is a no-op, so the freeform answer must be in-app.
   await expect(card.locator(".plan-question-freeform input")).toBeVisible();
 
-  const sendCount = await invokeCount(page, "send_message");
+  // An option click is the answer: it sends at once and keeps any unrelated draft.
+  await composer(page).fill("unrelated draft");
   await card.getByRole("button", { name: "STAR" }).click();
-  await expect.poll(() => invokeCount(page, "send_message")).toBe(sendCount);
-  await expect(composer(page)).toHaveValue("STAR\n\nDescription: splice-aware, needs more RAM");
-  await expect(card).toHaveAttribute("data-state", "pending");
-
-  await card.getByRole("button", { name: "HISAT2" }).click();
-  await expect(composer(page)).toHaveValue("HISAT2\n\nDescription: lighter");
-  await card.getByRole("button", { name: "STAR" }).click();
-  await expect(composer(page)).toHaveValue("STAR\n\nDescription: splice-aware, needs more RAM");
-  await expect.poll(() => invokeCount(page, "send_message")).toBe(sendCount);
-  await composer(page).fill("STAR\n\nDescription: splice-aware, needs more RAM\n\n第 4 步先跳过");
-  await page.getByRole("button", { name: "Send" }).click();
   // ?mock=1 send_message does not update the thread, so assert at the invoke layer.
   await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
-    sessionId: "s1", message: "STAR\n\nDescription: splice-aware, needs more RAM\n\n第 4 步先跳过",
+    sessionId: "s1", message: "STAR\n\nDescription: splice-aware, needs more RAM",
   });
+  await expect(composer(page)).toHaveValue("unrelated draft");
   await expect(card).toHaveAttribute("data-state", "answered");
   await expect(card).toContainText("Answer sent to the agent");
   await expect(card.locator(".plan-question-options")).toHaveCount(0);
@@ -2490,8 +2360,7 @@ test("composer slash commands run the matching shell actions", async ({ page }) 
     message: "/notacommand",
   });
 
-  // /fork fills via the picker; Enter then sends the payload as a branch,
-  // exactly like the "Branch in new session" send-mode item.
+  // /fork fills via the picker; Enter then sends the payload as a branch.
   await composerInput.pressSequentially("/fork");
   await menu.locator(".mention-item").filter({ hasText: "/fork" }).click();
   await expect(composerInput).toHaveValue("/fork ");
@@ -3096,6 +2965,47 @@ test("command palette arrows move inside the window and scroll only at the edge"
   expect(actionMid?.scrollTop).toBe(0);
   expect(actionMid?.fullyVisible).toBe(true);
   expect(actionMid?.activeTop ?? 0).toBeGreaterThan(20);
+});
+
+test("the palette footer fade only paints while the list overflows", async ({ page }) => {
+  await enterApp(page);
+  const fadeOf = (palette: ReturnType<typeof page.locator>) => palette.locator(".project-search-foot").evaluate(
+    (foot) => {
+      const style = getComputedStyle(foot, "::before");
+      // Without overflow the fade pseudo-element is not generated at all.
+      return style.content === "none" ? "hidden" : style.opacity;
+    },
+  );
+  const settle = (palette: ReturnType<typeof page.locator>) => palette.evaluate((el) =>
+    Promise.all(el.getAnimations().map((animation) => animation.finished.catch(() => undefined))),
+  );
+
+  await page.keyboard.press("Control+p");
+  const palette = page.locator(".action-palette");
+  await expect(palette).toBeVisible();
+  await settle(palette);
+  // The full command list scrolls: the row clipped by the footer fades out.
+  await expect(palette).toHaveClass(/palette-overflow/);
+  await expect.poll(() => fadeOf(palette)).toBe("1");
+  // A filtered list that fits must not carry the fade tint.
+  await page.locator("#action-palette-input").fill("privacy");
+  await expect(palette.locator(".project-search-row")).toHaveCount(1);
+  await expect(palette).not.toHaveClass(/palette-overflow/);
+  await expect.poll(() => fadeOf(palette)).toBe("hidden");
+
+  // Ctrl+K shares the same chrome: the project/session/command list overflows
+  // on open, and a filtered empty list drops the fade.
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+k");
+  const search = page.locator(".conversation-search-dialog");
+  const searchInput = page.locator("#command-palette-input");
+  await expect(search).toBeVisible();
+  await settle(search);
+  await expect(search).toHaveClass(/palette-overflow/);
+  await expect.poll(() => fadeOf(search)).toBe("1");
+  await searchInput.fill("zzz-no-match");
+  await expect(search).not.toHaveClass(/palette-overflow/);
+  await expect.poll(() => fadeOf(search)).toBe("hidden");
 });
 
 test("the needs-you inbox opens cross-project sessions in their own window", async ({ page }) => {
@@ -4282,9 +4192,8 @@ test("long unbroken user text wraps inside the chat column", async ({ page }) =>
 
 test("side chat answers in a temporary side panel and can switch model", async ({ page }) => {
   await enterApp(page);
-  await composer(page).fill("what did the main thread miss?");
-  await page.getByRole("button", { name: "Message options" }).click();
-  await page.getByRole("button", { name: "Side chat" }).click();
+  await composer(page).fill("/btw what did the main thread miss?");
+  await composer(page).press("Enter");
 
   const panel = page.locator(".rightpane");
   await expect(panel).toBeVisible();
@@ -4323,10 +4232,10 @@ test("side chat answers in a temporary side panel and can switch model", async (
 });
 
 test("side chat composer matches the main input and keeps long drafts contained", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await enterApp(page);
-  await composer(page).fill("Check analysis progress");
-  await page.getByRole("button", { name: "Message options" }).click();
-  await page.getByRole("button", { name: "Side chat" }).click();
+  await composer(page).fill("/btw Check analysis progress");
+  await composer(page).press("Enter");
   const panel = page.locator(".rightpane");
   const input = panel.getByPlaceholder("Follow up…");
   const frame = panel.locator(".sidechat-composer-inner");
@@ -4336,6 +4245,30 @@ test("side chat composer matches the main input and keeps long drafts contained"
   await expect(input).toHaveCSS("font-family", await composer(page).evaluate(el => getComputedStyle(el).fontFamily));
   await expect(frame).toHaveCSS("border-radius", await page.locator(".composer-inner").evaluate(el => getComputedStyle(el).borderRadius));
   await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  const sideSend = frame.getByRole("button", { name: "Send", exact: true });
+  const mainSend = page.locator(".composer button.send");
+  await expect(sideSend).toHaveAttribute("title", "Send");
+  await expect(sideSend.locator("svg")).toHaveCount(1);
+  expect(await sideSend.locator("svg").innerHTML()).toBe(await mainSend.locator("svg").innerHTML());
+  await expect(sideSend).toHaveCSS("background-color", await mainSend.evaluate(el => getComputedStyle(el).backgroundColor));
+
+  const expectAlignedActions = async (compareMain = false) => {
+    // The drawer entrance animation can still be moving its bounding box.
+    await expect(async () => {
+      const model = (await panel.locator(".sidechat-model-btn").boundingBox())!;
+      const send = (await sideSend.boundingBox())!;
+      expect(send.width).toBe(send.height);
+      expect(send.height).toBe(model.height);
+      expect(Math.abs(model.y + model.height / 2 - send.y - send.height / 2)).toBeLessThanOrEqual(1);
+      expect(model.x + model.width).toBeLessThan(send.x);
+      if (compareMain) {
+        const main = (await mainSend.boundingBox())!;
+        expect(send.width).toBe(main.width);
+        expect(Math.abs(send.y + send.height / 2 - main.y - main.height / 2)).toBeLessThanOrEqual(1);
+      }
+    }).toPass({ timeout: 5000 });
+  };
+  await expectAlignedActions(true);
 
   // Escape must dismiss the menu immediately, while keeping the side panel open.
   await panel.locator(".sidechat-model-btn").click();
@@ -4349,10 +4282,14 @@ test("side chat composer matches the main input and keeps long drafts contained"
   expect((await input.boundingBox())!.height).toBeLessThanOrEqual(180);
   await expect(frame.getByRole("button", { name: "Send", exact: true })).toBeVisible();
   await input.fill("Follow-up draft");
+  await expect(sideSend).toBeEnabled();
+  await expectAlignedActions(true);
+  await page.screenshot({ path: testInfo.outputPath("side-chat-composer-wide.png") });
   await expect.poll(async () => (await input.boundingBox())!.height).toBeLessThan(80);
   await input.press("Shift+Enter");
   await expect(input).toHaveValue("Follow-up draft\n");
   await page.setViewportSize({ width: 960, height: 720 });
+  await expectAlignedActions();
   expect(await frame.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("side-chat-composer.png") });
   await input.press("Enter");
@@ -4362,9 +4299,8 @@ test("side chat composer matches the main input and keeps long drafts contained"
 
 test("side chat reports when the frozen conversation has no evidence", async ({ page }) => {
   await enterApp(page);
-  await composer(page).fill("NO_EVIDENCE_TEST");
-  await page.getByRole("button", { name: "Message options" }).click();
-  await page.getByRole("button", { name: "Side chat" }).click();
+  await composer(page).fill("/btw NO_EVIDENCE_TEST");
+  await composer(page).press("Enter");
 
   const panel = page.locator(".rightpane");
   await expect(panel.getByText(
@@ -4379,9 +4315,8 @@ test("side chat reports when the frozen conversation has no evidence", async ({ 
 
 test("side chat stays at the latest message after sending and switching tabs", async ({ page }) => {
   await enterApp(page);
-  await composer(page).fill("SIDESCROLLTEST");
-  await page.getByRole("button", { name: "Message options" }).click();
-  await page.getByRole("button", { name: "Side chat" }).click();
+  await composer(page).fill("/btw SIDESCROLLTEST");
+  await composer(page).press("Enter");
 
   const panel = page.locator(".rightpane");
   const log = panel.locator(".sidechat-log");
@@ -4923,9 +4858,8 @@ test("branch in new session starts a new frame from the current session", async 
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
 
-  await composer(page).fill("try another route");
-  await page.getByRole("button", { name: "Message options" }).click();
-  await page.getByRole("button", { name: "Branch in new session" }).click();
+  await composer(page).fill("/fork try another route");
+  await composer(page).press("Enter");
 
   await expect.poll(() => lastInvokeArgs(page, "branch_session")).toMatchObject({
     title: "try another route",
@@ -5161,6 +5095,10 @@ test("uploaded file shows up in the artifacts panel after send", async ({ page }
     buffer: Buffer.from("a,b\n1,2"),
   });
   await expect(page.locator(".composer-attachment.ready")).toHaveText("counts.csv");
+  await page.locator(".composer-attachment-open").click();
+  await expect(page.locator(".artifact-modal")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".artifact-modal")).toHaveCount(0);
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
   await expect.poll(async () => page.evaluate(() => {
@@ -6491,6 +6429,11 @@ test("pasted image attaches to the composer", async ({ page }) => {
 
   await expect(page.locator(".composer-attachment.ready")).toHaveText(/pasted_image_\d+_1\.png/);
   await expect(page.locator(".composer-attachment-row.image img")).toBeVisible();
+  await page.locator(".composer-attachment-open").click();
+  await expect(page.locator(".artifact-modal")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".artifact-modal")).toHaveCount(0);
+  await expect(page.locator(".composer-attachment-row.image")).toBeVisible();
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
   await expect.poll(async () => page.evaluate(() => {
@@ -10828,8 +10771,7 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator(".cred-help-trigger")).toHaveCount(0);
-  await expect(page.locator("[data-credential-service]")).toHaveCount(5);
+  await expect(page.locator("[data-credential-service]")).toHaveCount(6);
   await page.locator('[data-credential-service="openalex"]').click();
   await expect(page.locator(".cred-help-trigger")).toHaveCount(1);
   const openAlexHelp = page.getByRole("button", { name: "OpenAlex: About this credential" });
@@ -10928,7 +10870,7 @@ test("credential service subpages navigate, discard drafts, and update list stat
   await expect.poll(async () => (await list.boundingBox())?.height ?? 0).toBeGreaterThan(250);
   await page.screenshot({ path: test.info().outputPath("credential-services.png"), animations: "disabled" });
 
-  for (const service of ["depmap", "openalex", "infinisynapse", "scimaster", "ncbi"]) {
+  for (const service of ["depmap", "openalex", "infinisynapse", "scimaster", "ncbi", "typesafe"]) {
     await page.locator(`[data-credential-service="${service}"]`).click();
     // Escape must work immediately, while focus is still outside the detail form.
     await page.keyboard.press("Escape");
@@ -14122,6 +14064,14 @@ test("historical local images survive a cold reload and session switching withou
     }
     await expect(page.locator(".msg.assistant .resource-unresolved")).toContainText("missing image");
     await expect.poll(() => lastInvokeArgs(page, "read_artifact_version_bytes")).toEqual({ versionId: "saved-image-v1" });
+    // A bound image *link* in a table cell stays inline, not a block image box.
+    const linked = page.locator('.msg.assistant td a[data-resource-id="linked-image-link"]');
+    await expect(linked).not.toHaveClass(/resource-inline-image/);
+    await expect(linked).toHaveCSS("display", "inline");
+    const versionReads = await page.evaluate(() => (window as any).__skillInvokeLog
+      .filter((call: any) => call.cmd === "read_artifact_version_bytes")
+      .map((call: any) => call.args instanceof Map ? call.args.get("versionId") : call.args.versionId));
+    expect(versionReads).not.toContain("linked-image-v1");
     const paths = await page.evaluate(() => (window as any).__skillInvokeLog
       .filter((call: any) => call.cmd === "read_file_bytes")
       .map((call: any) => call.args instanceof Map ? call.args.get("path") : call.args.path));
@@ -14348,18 +14298,30 @@ test("selecting preview text quotes it into chat and saves a review annotation",
   await expect(page.locator(".topbar .hint")).toContainText("reviews/");
 });
 
-test("scratch chat opens from landing and closes on Escape", async ({ page }) => {
+test("research assistant reopens its one conversation and closes on Escape", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".projects-screen")).toBeVisible();
-  await page.getByRole("button", { name: "Scratch chat" }).click();
-  await expect(page.locator(".app.scratch-mode")).toBeVisible();
-  await expect(page.locator(".scratch-title")).toHaveText("Scratch chat");
-  // Scratch chrome is title + close only — inbox/terminal/panel stay project-scoped.
+  await page.evaluate(() => {
+    (window as any).__assistantHistory = [
+      { role: "user", text: "What did I do yesterday?", tool_name: null, ok: null },
+      { role: "assistant", text: "Yesterday you reran the DE analysis in RNA-seq.", tool_name: null, ok: null },
+    ];
+  });
+  await page.getByTestId("open-research-assistant").click();
+  await expect(page.locator(".app.assistant-mode")).toBeVisible();
+  await expect(page.locator(".assistant-title")).toHaveText("Research assistant");
+  // Assistant sidebars have their own header; project inbox/terminal controls stay hidden.
   await expect(page.locator(".topbar-actions")).toBeHidden();
-  await expect(page.locator(".scratch-close")).toBeVisible();
+  await expect(page.locator(".assistant-close")).toBeVisible();
+  await expect(page.getByText("Yesterday you reran the DE analysis in RNA-seq.")).toBeVisible();
+  // One conversation: no session list, no branches, no explorations.
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect(page.locator(".msg-branch-btn").first()).toBeHidden();
+  await expect(page.locator(".msg-explore-btn").first()).toBeHidden();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".app.scratch-mode")).toHaveCount(0);
+  await expect(page.locator(".app.assistant-mode")).toHaveCount(0);
   await expect(page.locator(".projects-screen")).toBeVisible();
+  expect(await invokeArgsList(page, "close_research_assistant")).toHaveLength(1);
 });
 
 test("home docs button sits to the right of settings and opens tutorials", async ({ page }) => {
@@ -14436,7 +14398,7 @@ test("Windows uses the integrated title bar without covering the project landing
   await expect(page.getByRole("menuitem", { name: "New project" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New Window" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Import project" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Scratch chat" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Scratch chat" })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Open settings" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New session" })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Open projects" })).toHaveCount(0);
@@ -15872,6 +15834,23 @@ test("open-session for the project already on screen switches conversations with
   await expect(page.locator(".app-entering")).toHaveCount(0);
 });
 
+test("an unsent composer draft stays with its own session (#1406)", async ({ page }) => {
+  await page.goto("/");
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame" });
+  await composer(page).fill("only for the first session");
+
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame-2" });
+  await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({ id: "pet-frame-2" });
+  await expect(composer(page)).toHaveValue("");
+  await composer(page).fill("second session draft");
+
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame" });
+  await expect(composer(page)).toHaveValue("only for the first session");
+  await emitTauriEvent(page, "open-session", { projectId: "other", sessionId: "pet-frame-2" });
+  await expect(composer(page)).toHaveValue("second session draft");
+});
+
 test("a sync conflict requires an explicit authoritative device choice", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => { (window as any).__failSyncConflict = true; });
@@ -16928,6 +16907,7 @@ test("specialists page configures the builtin Reader and saves a custom speciali
   await expect(page.getByText("Reader")).toBeVisible();
   await expect(page.getByText("Scientific Illustrator")).toBeVisible();
   await expect(page.getByText("DepMap Agent")).toBeVisible();
+  await expect(page.locator(".settings-list-title").filter({ hasText: /^(Archivist|Recap)$/ })).toHaveCount(2);
   // Builtin rows have no remove button.
   await expect(page.locator(".settings-list-remove")).toHaveCount(0);
 
@@ -17106,6 +17086,10 @@ test("new session can pick a specialist and it locks after the first message", a
   await agentMenu.getByRole("button", { name: /^Specialist/ }).click();
   const specialistMenu = page.getByRole("menu", { name: "Specialist" });
   await expect(specialistMenu.getByRole("button", { name: "Scientific Illustrator" })).toBeVisible();
+  // Document-drafting built-ins are configured in Settings, never chat personas.
+  for (const name of ["Reader", "Archivist", "Recap"]) {
+    await expect(specialistMenu.getByRole("button", { name, exact: true })).toHaveCount(0);
+  }
   await specialistMenu.getByRole("button", { name: "Paper hunter" }).click();
   await expect(page.locator(".session-specialist")).toHaveText("Paper hunter");
 

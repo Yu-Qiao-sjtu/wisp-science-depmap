@@ -54,10 +54,14 @@ internal sealed partial class MainWindow
         if (openingAction || nativePickerOpen || workspaceSheet != null || settingsPage != null || searchOverlay != null) return;
         openingAction = true;
         var project = model.ActiveProjectId; var session = model.ActiveSessionId; var database = model.DatabasePath;
+        var title = kind switch { "create" => "新建项目", "import" => "导入项目", "library" => "收藏", "calendar" => "研究日历", "journey" => "研究历程", "publication" => "论文证据", "capabilities" => "能力", _ => "工作区" };
+        var loading = new NativeConnectionPage(design, title, CloseSheet, () => { CloseSheet(); _ = OpenNativeAction(kind); });
+        MountSheet(loading);
         try
         {
             var host = await ConnectHostAsync();
-            if (host == null || windowClosed || database != model.DatabasePath || project != model.ActiveProjectId || session != model.ActiveSessionId) return;
+            if (windowClosed || !ReferenceEquals(workspaceSheet, loading) || database != model.DatabasePath || project != model.ActiveProjectId || session != model.ActiveSessionId) return;
+            if (host == null) { loading.Failed(localError ?? "连接失败，请重试。"); return; }
             async Task OpenCreated(ProjectSummary row)
             {
                 CloseSheet(); await model.RefreshAsync();
@@ -71,34 +75,68 @@ internal sealed partial class MainWindow
                     session == null ? null : item => { if (conversation?.Prefill(WorkspaceLibraryModel.ComposerText(item), append: true) == true) CloseSheet(); },
                     async item => { CloseSheet(); await model.OpenProjectAsync(item.SourceProjectId, item.SourceSessionId); }, CloseSheet),
                 "calendar" => new NativeResearchCalendarPage(new(new NativeCalendarClient(host), new NativePrivacyClient(host), model.Projects), design,
-                    (id, day) => MountSheet(new NativeJourneyPage(new NativeJourneyClient(host), id, design, day, CloseSheet), nested: true), CloseSheet),
-                "journey" when project != null => new NativeJourneyPage(new NativeJourneyClient(host), project, design, null, CloseSheet),
+                    (id, day) => MountSheet(new NativeJourneyPage(new NativeJourneyClient(host), id, design, day, CloseSheet,
+                        frame => MountSheet(new NativeJourneyConversationPage(new NativeConversationClient(host), id, frame, design, CloseSheet), nested: true)), nested: true), CloseSheet),
+                "journey" when project != null => new NativeJourneyPage(new NativeJourneyClient(host), project, design, null, CloseSheet,
+                    frame => MountSheet(new NativeJourneyConversationPage(new NativeConversationClient(host), project, frame, design, CloseSheet), nested: true)),
                 "capabilities" when project != null => new NativeCapabilitiesPage(host, project, design, section =>
                     { CloseSheet(); OpenSettingsSection(section); }, CloseSheet),
                 _ => null
             };
             if (kind == "publication" && project != null)
             {
+                CloseSheet();
                 projectPage?.Dispose();
                 projectPage = new NativePublicationPage(new(new NativePublicationClient(host), project), design, CloseProjectPage);
                 Render(); return;
             }
-            if (kind == "scratch")
-            {
-                var scratch = new WorkspaceScratchModel(new NativeScratchClient(host));
-                if (!await scratch.OpenAsync()) { localError = scratch.Error; scratch.Dispose(); Render(); return; }
-                if (windowClosed || database != model.DatabasePath || project != model.ActiveProjectId || session != model.ActiveSessionId)
-                {
-                    await scratch.CloseAsync(); scratch.Dispose(); return;
-                }
-                page = new NativeScratchPage(scratch, host, design, () => PickFile("*"), CloseSheet);
-            }
-            if (page != null) MountSheet(page);
+            if (page != null) { CloseSheet(); MountSheet(page); }
         }
-        catch (Exception ex) { localError = ex.Message; Render(); }
+        catch (Exception ex) { if (ReferenceEquals(workspaceSheet, loading)) loading.Failed(ex.Message); }
         finally { openingAction = false; }
     }
     private void CloseProjectPage() { projectPage?.Dispose(); projectPage = null; Render(); }
+
+    /// <summary>Run a session mutation on the groups model, then refresh the sidebar.
+    /// Failed or ambiguous mutations stay on the session list without retry.</summary>
+    private async Task SessionMutationAsync(Task<bool> mutation, string? refreshSession = null)
+    {
+        var ok = await mutation;
+        if (!ok || model.ActiveProjectId is not { } current) return;
+        await model.OpenProjectAsync(current, refreshSession ?? model.ActiveSessionId);
+    }
+
+    private async Task PromptSessionRenameAsync(BrowserSession session)
+    {
+        if (sessionGroups == null || sessionGroups.Busy) return;
+        var name = new TextBox { Text = session.Title, PlaceholderText = "会话名称" };
+        var dialog = new ContentDialog
+        {
+            Title = "重命名会话",
+            Content = name,
+            PrimaryButtonText = "保存",
+            CloseButtonText = "取消",
+            XamlRoot = root.XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        await SessionMutationAsync(sessionGroups.RenameAsync(session.Id, name.Text), session.Id == model.ActiveSessionId ? session.Id : null);
+    }
+
+    private async Task PromptSessionDeleteAsync(BrowserSession session)
+    {
+        if (sessionGroups == null || sessionGroups.Busy) return;
+        var dialog = new ContentDialog
+        {
+            Title = "删除会话",
+            Content = $"永久删除“{session.Title}”？这个会话的运行会先被停止，删除无法撤销。",
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            XamlRoot = root.XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        await SessionMutationAsync(sessionGroups.DeleteAsync(session.Id), session.Id == model.ActiveSessionId ? null : model.ActiveSessionId);
+    }
+
     private async Task EditGroup(string? id = null)
     {
         if (workspaceSheet != null || settingsPage != null || sessionGroups == null || sessionGroups.Busy) return;
@@ -113,12 +151,20 @@ internal sealed partial class MainWindow
         section.RowDefinitions.Add(new() { Height = GridLength.Auto });
         section.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
         var controls = Stack(4);
-        controls.Children.Add(Text($"会话   {model.Sessions.Count}", 11, "text-faint"));
+        var sectionHeader = new Grid();
+        sectionHeader.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        sectionHeader.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        var count = Text($"会话   {model.Sessions.Count}", 11, "text-faint");
+        count.VerticalAlignment = VerticalAlignment.Center;
+        sectionHeader.Children.Add(count); controls.Children.Add(sectionHeader);
         if (sessionGroups is { } groups)
         {
             var options = Row(4);
             var arrange = ActionButton("分组和排序", "list", () => { }, quiet: true);
             var menu = new MenuFlyout();
+            var createFolder = new MenuFlyoutItem { Text = "新建文件夹" };
+            createFolder.Click += (_, _) => _ = EditGroup(); menu.Items.Add(createFolder);
+            menu.Items.Add(new MenuFlyoutSeparator());
             foreach (var (label, value, sort) in new[] { ("最近更新", "newest", true), ("按名称排序", "name", true), ("不分组", "none", false), ("按文件夹分组", "folder", false), ("按日期分组", "date", false) })
             {
                 var choice = new ToggleMenuFlyoutItem { Text = label, IsChecked = (sort ? groups.Sort : groups.Group) == value };
@@ -126,7 +172,7 @@ internal sealed partial class MainWindow
                 menu.Items.Add(choice);
             }
             Register(menu); arrange.Flyout = menu; options.Children.Add(arrange);
-            options.Children.Add(ActionButton(groups.Selecting ? "取消选择" : "选择会话", "check", () => { groups.Selecting = !groups.Selecting; groups.Selected.Clear(); Render(); }, true, quiet: true));
+            options.Children.Add(ActionButton(groups.Selecting ? "取消选择" : "选择会话", "check", () => { groups.Selecting = !groups.Selecting; groups.Selected.Clear(); Render(); }, quiet: true));
             if (groups.Selecting)
             {
                 var move = ActionButton("移动", "folder", () => { }, quiet: true);
@@ -144,7 +190,7 @@ internal sealed partial class MainWindow
                 }
                 Register(destinations); move.Flyout = destinations; options.Children.Add(move);
             }
-            controls.Children.Add(options);
+            Grid.SetColumn(options, 1); sectionHeader.Children.Add(options);
             if (groups.Error != null) controls.Children.Add(Text(groups.Error, 11, "clay-strong"));
         }
         section.Children.Add(controls);
@@ -168,24 +214,96 @@ internal sealed partial class MainWindow
                 }
                 else
                 {
-                    var button = ContentButton(SingleLine(session.Title, 12), () => { CloseProjectPage(); _ = model.OpenSessionAsync(session.Id); }, "session-" + session.Id, session.Title);
-                    if (session.Id == model.ActiveSessionId) button.Background = design.Brush("surface-hover");
-                    list.Children.Add(button);
+                    var row = new Grid();
+                    row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+                    row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+                    var label = Stack(3); label.Children.Add(SessionTitle(session.Title, 12)); label.Children.Add(SessionMetadata(session));
+                    var button = ContentButton(label, () => { CloseProjectPage(); _ = model.OpenSessionAsync(session.Id); }, "session-" + session.Id,
+                        session.Title + " · " + NativeBrowserPresentation.Status(session.Status));
+                    design.QuietButton(button);
+                    button.Padding = new Thickness(10, 7, 10, 7);
+                    if (session.Id == model.ActiveSessionId)
+                    {
+                        button.Background = design.Brush("bg-elev");
+                        button.BorderBrush = design.Brush("border"); button.BorderThickness = new Thickness(1);
+                        label.Children.OfType<TextBlock>().First().FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+                    }
+                    row.Children.Add(button);
+                    if (sessionGroups is { } mutationGroups)
+                    {
+                        var more = ActionButton("会话操作", "more", () => { }, quiet: true);
+                        var menu = new MenuFlyout();
+                        var rename = new MenuFlyoutItem { Text = "重命名会话" };
+                        rename.Click += (_, _) => _ = PromptSessionRenameAsync(session);
+                        menu.Items.Add(rename);
+                        var pin = new MenuFlyoutItem { Text = session.Pinned == true ? "取消置顶" : "置顶" };
+                        pin.IsEnabled = session.Pinned != null;
+                        pin.Click += (_, _) => _ = SessionMutationAsync(mutationGroups.PinAsync(session.Id, session.Pinned != true),
+                            refreshSession: session.Id == model.ActiveSessionId ? session.Id : null);
+                        menu.Items.Add(pin);
+                        var delete = new MenuFlyoutItem { Text = "删除会话…" };
+                        delete.Click += (_, _) => _ = PromptSessionDeleteAsync(session);
+                        menu.Items.Add(delete);
+                        Register(menu); more.Flyout = menu;
+                        Grid.SetColumn(more, 1); row.Children.Add(more);
+                    }
+                    list.Children.Add(row);
                 }
             }
         }
         var scroll = new ScrollViewer { Content = list, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         Grid.SetRow(scroll, 1); section.Children.Add(scroll); return section;
     }
-    private void ShowFiles()
+    private void ShowFiles() => ShowPanelTab("files");
+
+    /// <summary>Open the side panel on one tab; shared by the files shortcut
+    /// and the composer slash/环境 entries.</summary>
+    private void ShowPanelTab(string tab)
     {
+        runNavigation++;
         var tabs = new NativePanelTabs(settings.PanelTabs, settings.PanelTab, NativePanelTabs.All);
-        tabs.Show("files");
+        tabs.Show(tab);
         settings.PanelTabs = tabs.Saved; settings.PanelTab = tabs.Selected;
         panelVisible = true; settings.PanelVisible = true; SaveSettings();
         if (panelPage == null) _ = EnsurePanelAndTerminalAsync();
-        else _ = panelPage.ShowFilesAsync();
+        else _ = panelPage.ShowTabAsync(tab);
         Render();
+    }
+
+    private async Task OpenRunAsync(string runId)
+    {
+        if (model.ActiveProjectId is not { } project || model.ActiveSessionId is not { } session) return;
+        var navigation = ++runNavigation;
+        var tabs = new NativePanelTabs(settings.PanelTabs, settings.PanelTab, NativePanelTabs.All);
+        tabs.Show("hosts");
+        settings.PanelTabs = tabs.Saved; settings.PanelTab = tabs.Selected;
+        panelVisible = true; settings.PanelVisible = true; SaveSettings();
+        await EnsurePanelAndTerminalAsync();
+        if (windowClosed || navigation != runNavigation || !panelVisible
+            || project != model.ActiveProjectId || session != model.ActiveSessionId || panelPage is null) return;
+        Render();
+        await panelPage.ShowRunAsync(runId);
+    }
+
+    /// <summary>Composer slash mapping. Only commands with a working native
+    /// surface are routed; anything else falls back to the hint text.</summary>
+    private bool RouteSlashCommand(string draft)
+    {
+        var command = draft.Split([' ', '\n'], 2)[0].ToLowerInvariant();
+        switch (command)
+        {
+            case "/files": ShowPanelTab("files"); return true;
+            case "/outline": _ = OpenSheet("outline"); return true;
+            case "/share": _ = OpenSheet("share"); return true;
+            case "/trajectory": _ = OpenSheet("trajectory"); return true;
+            case "/archive": _ = OpenSheet("archive"); return true;
+            case "/library": _ = OpenNativeAction("library"); return true;
+            case "/calendar": _ = OpenNativeAction("calendar"); return true;
+            case "/journey": _ = OpenNativeAction("journey"); return true;
+            case "/publication": _ = OpenNativeAction("publication"); return true;
+            case "/settings": OpenSettings(); return true;
+            default: return false;
+        }
     }
     private async Task<string?> PickFile(string extension)
     {

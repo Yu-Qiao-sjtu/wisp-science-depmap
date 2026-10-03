@@ -382,6 +382,24 @@ pub fn builtin_depmap_r_agent() -> Specialist {
     }
 }
 
+/// One-shot built-ins: they draft a structured document, not a conversation,
+/// so only their model binding is configurable.
+fn one_shot(id: &str, name: &str, icon: &str, description: &str, rubric: &str) -> Specialist {
+    Specialist {
+        id: id.into(),
+        name: name.into(),
+        icon: icon.into(),
+        color: "clay".into(),
+        description: description.into(),
+        instructions: rubric.into(),
+        model_id: String::new(),
+        review_backend: None,
+        skills: Some(vec![]),
+        connectors: Some(vec![]),
+        builtin: true,
+    }
+}
+
 /// Skills that must remain available for a Specialist even when the project's
 /// ordinary enabled-Skill subset excludes them. The rest of the project
 /// catalog remains progressively searchable; this is a required baseline, not
@@ -391,6 +409,28 @@ pub fn required_skill_names(spec: &Specialist) -> &'static [&'static str] {
         DEPMAP_SPECIALIST_ID => DEPMAP_REQUIRED_SKILLS,
         _ => &[],
     }
+}
+
+/// Drafts research archives. Unbound, it keeps using the session's model.
+pub fn builtin_archivist() -> Specialist {
+    one_shot(
+        "archivist",
+        "Archivist",
+        "archive",
+        "Drafts research archives: findings, rejected alternatives and assembled scripts for review.",
+        crate::research_archive::ARCHIVE_SYSTEM,
+    )
+}
+
+/// Drafts daily research recaps. Unbound, it uses the active model.
+pub fn builtin_recap() -> Specialist {
+    one_shot(
+        "recap",
+        "Recap",
+        "calendar",
+        "Drafts each day's research recap from recorded runs, outputs and notes.",
+        crate::research_recap::RECAP_SYSTEM,
+    )
 }
 
 async fn load_raw(store: &Store) -> Vec<Specialist> {
@@ -451,6 +491,18 @@ pub async fn ensure(store: &Store) -> Vec<Specialist> {
         }
         None => list.insert(3.min(list.len()), builtin_depmap_r_agent()),
     }
+    for (index, builtin) in [(4, builtin_archivist()), (5, builtin_recap())] {
+        match list.iter_mut().find(|s| s.id == builtin.id) {
+            Some(existing) => {
+                existing.builtin = true;
+                existing.instructions = builtin.instructions;
+                existing.review_backend = None;
+                existing.skills = Some(vec![]);
+                existing.connectors = Some(vec![]);
+            }
+            None => list.insert(index.min(list.len()), builtin),
+        }
+    }
     list
 }
 
@@ -491,7 +543,7 @@ pub async fn upsert(store: &Store, mut spec: Specialist) -> Result<Vec<Specialis
                 // surfaces retain the selected HTTP reviewer.
                 spec.model_id = profile_id.clone();
             }
-        } else if spec.id == "reader" {
+        } else if ["reader", "archivist", "recap"].contains(&spec.id.as_str()) {
             spec.review_backend = None;
             spec.skills = Some(vec![]);
             spec.connectors = Some(vec![]);
@@ -999,7 +1051,7 @@ mod tests {
     async fn ensure_materializes_builtin_specialists_once() {
         let (store, tmp) = test_store().await;
         let list = ensure(&store).await;
-        assert_eq!(list.len(), 4);
+        assert_eq!(list.len(), 6);
         let r = &list[0];
         assert_eq!(r.id, "reviewer");
         assert!(r.builtin);
@@ -1027,8 +1079,16 @@ mod tests {
             required_skill_names(depmap),
             &["depmap-knowledge-query", "depmap-coding-agent"]
         );
+        assert_eq!(list[4].id, "archivist");
+        assert_eq!(
+            list[4].instructions,
+            crate::research_archive::ARCHIVE_SYSTEM
+        );
+        assert_eq!(list[5].id, "recap");
+        assert_eq!(list[5].instructions, crate::research_recap::RECAP_SYSTEM);
+        assert!(list[4..].iter().all(|s| s.builtin && s.model_id.is_empty()));
         // Second read does not duplicate the built-ins.
-        assert_eq!(ensure(&store).await.len(), 4);
+        assert_eq!(ensure(&store).await.len(), 6);
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -1075,6 +1135,17 @@ mod tests {
         assert!(remove(&store, "reader").await.is_err());
         assert!(remove(&store, "scientific_illustrator").await.is_err());
         assert!(remove(&store, "depmap_r_agent").await.is_err());
+        assert!(remove(&store, "recap").await.is_err());
+        // One-shot built-ins only accept a model binding.
+        let mut recap = get(&store, "recap").await.unwrap();
+        recap.instructions = "replace rubric".into();
+        recap.model_id = "cheap".into();
+        recap.skills = None;
+        let list = upsert(&store, recap).await.unwrap();
+        let recap = list.iter().find(|s| s.id == "recap").unwrap();
+        assert_eq!(recap.instructions, crate::research_recap::RECAP_SYSTEM);
+        assert_eq!(recap.model_id, "cheap");
+        assert_eq!(recap.skills, Some(vec![]));
         // Editing the builtin keeps instructions but accepts a model change.
         let mut r = get(&store, "reviewer").await.unwrap();
         r.instructions = "haha".into();

@@ -4,6 +4,21 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 [basic configuration](basic-configuration.md). For HTTP model profiles see
 [model configuration](model-configuration.md).
 
+## WebView composer input smoke test
+
+For #1413, run `cd ui-tests && npx playwright test tests/composer-input.spec.ts`.
+The mocked tests inject the macOS arrow-key codes through `beforeinput`, input
+fallbacks, and programmatic drafts; they do not reproduce the native WKWebView
+timing bug itself.
+
+On macOS, use both ABC and a Chinese input method. Hold Left at the start and
+Right at the end of an empty or populated composer for several seconds, then
+repeat after moving the caret into the text. No boxes should appear. Check
+Shift/Option/Command arrow selection/navigation, multiline text, emoji, and IME
+candidate confirmation. Send with and without an attachment and confirm the
+saved message contains no U+001C–U+001F. Also check ordinary typing, selection,
+paste, and Enter/Shift+Enter on Windows and Linux.
+
 ## GitHub Pages tutorials
 
 The website's [tutorial directory](tutorials.html) links to one independent page
@@ -108,6 +123,7 @@ Prerequisites:
   `rustup target add wasm32-unknown-unknown`
 - **uv**: <https://docs.astral.sh/uv/>
 - **Trunk**: `cargo install --locked trunk`
+- **Node.js** (22+ recommended): used by frontend asset preparation.
 - **Tauri CLI v2**: `cargo install tauri-cli --version "^2"`
 - Optional: **R** with `jsonlite` for the persistent `r` tool. Wisp locates
   `Rscript` via Settings, then PATH, then well-known install locations
@@ -118,9 +134,74 @@ Prerequisites:
   Command Line Tools** (`xcode-select --install`) and uses system WebKit.
 
 ```bash
+cargo run build      # fast, one-shot desktop build; no watcher or installer
+cargo run build-win  # WinUI 3 preview, on Windows
+cargo run build-mac  # SwiftUI preview, on macOS
+cargo run dev        # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri dev      # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri build    # installers under target/release/bundle
 ```
+
+`cargo run build` uses the existing Rust/Trunk debug caches, embeds the frontend
+from `ui/dist-fast`, and skips release optimization, LTO, wasm-opt, icon
+regeneration and installer packaging. It uses the checked-in model catalog to
+avoid waiting for models.dev. Trunk still checks inputs on every build; a staging
+step preserves unchanged embedded files' timestamps so an unchanged frontend
+does not trigger a Rust rebuild. This is a local testing build: the first build
+still compiles dependencies, binaries/assets are larger and runtime performance
+can be lower than release. Source changes are picked up only when you run the
+build command again. No development server is needed to launch the result:
+
+| Command | Output / launch |
+| --- | --- |
+| `cargo run build` (Linux/macOS) | `./target/debug/wisp-tauri` |
+| `cargo run build` (Windows) | `.\target\debug\wisp-tauri.exe` |
+| `cargo run build-win` (Windows) | `.\target\native-windows\Wisp.Science.Preview.exe` |
+| `cargo run build-mac` (macOS) | `open "target/native-macos/Wisp Science Preview.app"` |
+
+Keep the generated resource folders beside the executable. Native previews
+also package the Rust service and desktop helper; they use the existing native
+UI implementations and their current feature coverage. WinUI 3 needs Windows,
+.NET 8, the Windows SDK, the Rust MSVC toolchain, Python (`python` on PATH), and
+the WebView2 Runtime. SwiftUI needs macOS 13+, Xcode Command Line Tools (Swift),
+Rust, and Python 3. The native scripts use the small `native-host.html` helper
+and do not compile the Leptos frontend. These commands do not cross-compile
+WinUI 3 from Linux/macOS or SwiftUI from Linux/Windows.
+
+For optimized builds, use `cargo run build --release` (the existing Tauri
+installer pipeline), `cargo run build-win --release` (all three executables in
+`target/native-windows-release`), or `cargo run build-mac --release` (the app in
+`target/native-macos-release`). Native builds are local previews, without
+release signing/notarization. macOS also accepts `--qa` and
+`--target aarch64-apple-darwin|x86_64-apple-darwin`; architecture builds add that
+target directory under the native output folder. Plain desktop output paths
+above assume Cargo's default target directory and host target.
+
+Published releases continue to use the unchanged release profile and frontend
+release optimization. The Windows/Linux/macOS release workflows keep their
+Tauri release builds, and macOS's published SwiftUI build explicitly uses
+`--release`. The Windows preview CI explicitly selects `-Configuration Release`
+and uploads `target/native-windows-release`; the standalone PowerShell script
+also retains its Release default. Only the local `cargo run build*` shortcuts
+default to debug. No release workflow loads `tauri.fast.conf.json`.
+
+Repository `cargo run` now compiles a dependency-free `wisp-dev` launcher;
+desktop commands no longer compile the entire headless agent just to dispatch
+a build. Other arguments and no-argument interactive startup still forward to
+`wisp-cli`, preserving the caller's working directory. Use
+`cargo run -p wisp-cli -- --help` for agent help and
+`cargo run -- --help` for build help. Bare `cargo build`/`cargo test` select the
+launcher; use `-p wisp-cli` for the agent or `--workspace` for all Rust crates.
+
+Build routing checks: `cargo test -p wisp-dev`, `node --test ui/build-fast.test.mjs`,
+`python3 scripts/test_build_native_macos.py`, and on Windows
+`powershell -NoProfile -File scripts/test_build_native_windows.ps1` use no real
+SDKs or network in their test cases. Manual smoke: build the applicable app,
+launch the output above, edit a source file and verify the running window stays
+open without rebuilding/reloading; close it, build again and verify the change
+appears. On Windows/macOS, check that opening a project starts both packaged
+Rust helpers, then repeat with `--release` and confirm the debug preview remains
+available in its separate directory.
 
 The desktop icon uses the three-wisp design by
 [SpicyChicken6 in Discussion #1154](https://github.com/xuzhougeng/wisp-science/discussions/1154),
@@ -206,9 +287,9 @@ repair the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/web
 Packaged Windows builds have no console. Each launch writes
 `%APPDATA%\science.wisp-science\wisp-science\logs\wisp.log` (overwritten on the
 next launch). The `startup finished` line breaks pre-first-paint work by phase
-(`total=…ms store=…ms skills=…ms …`). Recovery sweeps, the scratch sandbox
-purge, and restoring project windows run after the window is interactive and
-are logged as `deferred startup finished`.
+(`total=…ms store=…ms skills=…ms …`). Recovery sweeps, removing the retired
+scratch chat's sandbox folder, and restoring project windows run after the
+window is interactive and are logged as `deferred startup finished`.
 
 If the window stops responding while quitting and the process has to be killed,
 the tail of `wisp.log` shows how far the exit sequence got. Each cleanup step is
@@ -397,7 +478,7 @@ wisp-science/
   `projects::list_projects`, returning `wisp_dto::ProjectSummary` from an
   existing `Store` plus snapshots of running and approval-blocked session IDs.
   The Tauri command keeps its existing name and payload; it releases runtime
-  locks before calling the service. Project ordering, scratch-project exclusion,
+  locks before calling the service. Project ordering, hidden assistant-project exclusion,
   counts, stars, sync metadata, and best-effort enrichment fallbacks are preserved.
   `projects::project_status_counts` also serves the desktop's individual project
   summaries. This crate has no Tauri or Leptos dependency and does not open a

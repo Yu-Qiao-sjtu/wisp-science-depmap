@@ -2,13 +2,14 @@
 use crate::app_support::compose_icon;
 use crate::dto::{
     ProjectSummary, ProjectTransferProgress, ResearchCalendarProject, ResearchJourneyEntry,
+    ResearchRecap,
 };
 use crate::i18n::Locale;
 use crate::research_journey::{
     call, category, clock, date, day_key, days, j, month_of, month_start, now, shift_month, status,
 };
 use leptos::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 fn color(id: &str) -> String {
     // Stable across project reorder, rename, filtering and app restarts.
@@ -16,6 +17,29 @@ fn color(id: &str) -> String {
         hash.wrapping_mul(31).wrapping_add(byte as u32)
     });
     format!("--calendar-project:var(--calendar-color-{})", hash % 6)
+}
+
+/// Outputs fold into the run that made them; outputs of an unlisted run stay.
+fn fold_outputs(
+    entries: Vec<ResearchJourneyEntry>,
+) -> (Vec<ResearchJourneyEntry>, HashMap<String, usize>) {
+    let runs = entries
+        .iter()
+        .filter(|e| e.kind == "run")
+        .map(|e| e.source_id.clone())
+        .collect::<HashSet<_>>();
+    let mut made = HashMap::new();
+    let entries = entries
+        .into_iter()
+        .filter(|e| match e.run_id.as_ref() {
+            Some(run) if e.kind == "artifact" && runs.contains(run) => {
+                *made.entry(run.clone()).or_insert(0) += 1;
+                false
+            }
+            _ => true,
+        })
+        .collect();
+    (entries, made)
 }
 
 fn day_start(ts: i64) -> i64 {
@@ -46,6 +70,10 @@ pub(crate) fn ResearchCalendar(
     on_open_journey: Callback<(String, i64)>,
     on_close: Callback<()>,
     project_transfer: ReadSignal<Option<ProjectTransferProgress>>,
+    #[prop(optional)] compact: bool,
+    #[prop(optional)] external_refresh: Option<Signal<u32>>,
+    #[prop(optional)] ready: Option<Signal<bool>>,
+    #[prop(optional)] on_plan: Option<Callback<String>>,
 ) -> impl IntoView {
     let month = create_rw_signal(month_of(now()));
     let selected = create_rw_signal(day_start(now()));
@@ -59,8 +87,15 @@ pub(crate) fn ResearchCalendar(
             .collect::<Vec<_>>()
     };
     let history = create_local_resource(
-        move || (month.get(), project_keys(), refresh.get()),
-        move |(m, keys, _)| async move {
+        move || {
+            (
+                month.get(),
+                project_keys(),
+                refresh.get(),
+                external_refresh.map(|s| s.get()),
+            )
+        },
+        move |(m, keys, _, _)| async move {
             let ids: Vec<_> = keys.into_iter().map(|p| p.0).collect();
             if ids.is_empty() {
                 return Ok(Vec::new());
@@ -71,8 +106,15 @@ pub(crate) fn ResearchCalendar(
     // A separate bounded day read keeps drill-down usable when a busy month
     // exceeds the per-project event limit; it also respects 23/25-hour days.
     let daily = create_local_resource(
-        move || (selected.get(), project_keys(), refresh.get()),
-        move |(ts, keys, _)| async move {
+        move || {
+            (
+                selected.get(),
+                project_keys(),
+                refresh.get(),
+                external_refresh.map(|s| s.get()),
+            )
+        },
+        move |(ts, keys, _, _)| async move {
             let ids: Vec<_> = keys.into_iter().map(|p| p.0).collect();
             if ids.is_empty() {
                 return Ok(Vec::new());
@@ -106,7 +148,7 @@ pub(crate) fn ResearchCalendar(
         });
     };
     view! {
-        <section class="home-calendar" data-testid="home-research-calendar" aria-label=move || j(locale.get(),"Research calendar","研究日历")>
+        <section class="home-calendar" class:assistant-calendar-compact=compact data-testid=if compact {"assistant-research-calendar"} else {"home-research-calendar"} aria-label=move || j(locale.get(),"Research calendar","研究日历")>
             <button type="button" class="calendar-back" on:click=move |_|on_close.call(())>{compose_icon("arrow-left")}{move ||j(locale.get(),"Back to home","返回首页")}</button>
             <header class="home-calendar-heading"><div><h2>{move || j(locale.get(),"Research calendar","研究日历")}</h2><p>{move || j(locale.get(),"Recorded research across your projects, day by day.","把每个项目的探索，放回同一条时间线。")}</p></div>
                 <button type="button" class="calendar-icon" aria-label=move || j(locale.get(),"Refresh calendar","刷新日历") on:click=move |_| refresh.update(|n| *n += 1)>{compose_icon("refresh")}</button>
@@ -158,6 +200,13 @@ pub(crate) fn ResearchCalendar(
                         </div>
                         <aside class="calendar-details" data-testid="home-calendar-details" aria-live="polite">
                             <h3>{move ||day_key(selected.get())}{move ||(selected.get()==day_start(now())).then(||j(locale.get()," · Today"," · 今天"))}</h3>
+                            {compact.then(|| view! {
+                                <crate::assistant_workspace::AssistantPlans locale=locale projects=projects
+                                    selected=selected.read_only() ready=ready.unwrap_or_else(|| Signal::derive(|| true))
+                                    refresh=Signal::derive(move || (refresh.get(), external_refresh.map(|s| s.get())))
+                                    on_plan=on_plan on_retry=Callback::new(move |_| refresh.update(|n| *n += 1))/>
+                                <h4 class="assistant-records-heading">{move || j(locale.get(), "Research activity", "研究记录")}</h4>
+                            })}
                             {move || {
                                 let loc=locale.get();
                                 if daily.loading().get(){return view!{<p class="calendar-empty" role="status">{j(loc,"Loading records…","正在读取当天记录…")}</p>}.into_view();}
@@ -166,9 +215,10 @@ pub(crate) fn ResearchCalendar(
                                 let has_errors=rows.iter().any(|r|r.error.is_some());
                                 let groups:Vec<_>=rows.into_iter().filter_map(|r|{
                                     let name=projects.get().into_iter().find(|p|p.id==r.project_id)?.name;
-                                    let entries=days(&r.history.entries,"").into_iter().flat_map(|(_,entries)|entries).collect::<Vec<_>>();
+                                    let (entries,made)=fold_outputs(days(&r.history.entries,"").into_iter().flat_map(|(_,entries)|entries).collect());
                                     if entries.is_empty()&&r.error.is_none(){return None;}
-                                    Some((r.project_id,name,entries,r.error,r.history.truncated))
+                                    let recap=r.history.recaps.into_iter().find(|x|x.status!="dismissed");
+                                    Some((r.project_id,name,entries,r.error,r.history.truncated,made,recap))
                                 }).collect();
                                 if groups.is_empty(){return view!{<p class="calendar-empty">{if projects.get().is_empty(){j(loc,"Create a project to begin recording research activity.","创建项目后，已记录的研究活动会出现在这里。")}else{j(loc,"No recorded activity on this date.","当天没有已记录的研究活动。")}}</p>}.into_view();}
                                 let count=groups.iter().map(|g|g.2.len()).sum::<usize>();
@@ -176,8 +226,8 @@ pub(crate) fn ResearchCalendar(
                                 let partial=has_errors||groups.iter().any(|g|g.4);
                                 view!{<p class="calendar-detail-meta">{format!("{}{} · {} {}",if partial{j(loc,"Loaded: ","已读取：")}else{""},if loc==Locale::Zh{format!("{active} 个项目")}else{format!("{active} projects")},count,j(loc,"records","条记录"))}</p>
                                     <div class="calendar-record-groups" aria-label=j(loc,"Project records","各项目记录")>
-                                        {groups.into_iter().map(|(id,name,entries,error,truncated)|view!{
-                                            <CalendarProjectRecords locale=locale id=id name=name entries=entries error=error truncated=truncated day=selected.get() on_open_journey=on_open_journey project_transfer=project_transfer/>
+                                        {groups.into_iter().map(|(id,name,entries,error,truncated,made,recap)|view!{
+                                            <CalendarProjectRecords locale=locale id=id name=name entries=entries made=made recap=recap error=error truncated=truncated day=selected.get() on_open_journey=on_open_journey project_transfer=project_transfer compact=compact/>
                                         }).collect_view()}
                                     </div>
                                 }.into_view()
@@ -209,11 +259,14 @@ fn CalendarProjectRecords(
     id: String,
     name: String,
     mut entries: Vec<ResearchJourneyEntry>,
+    made: HashMap<String, usize>,
+    recap: Option<ResearchRecap>,
     error: Option<String>,
     truncated: bool,
     day: i64,
     on_open_journey: Callback<(String, i64)>,
     project_transfer: ReadSignal<Option<ProjectTransferProgress>>,
+    compact: bool,
 ) -> impl IntoView {
     entries.sort_by(|a, b| {
         b.occurred_at
@@ -234,13 +287,18 @@ fn CalendarProjectRecords(
                 <button type="button" class="calendar-group-toggle" aria-expanded=move ||(!collapsed.get()).to_string() aria-controls=controls.clone() on:click=move |_|collapsed.update(|v|*v=!*v)>
                     <span class="calendar-disclosure" class:collapsed=move ||collapsed.get()>{compose_icon("chevron-down")}</span><span class="calendar-dot"></span><span class="calendar-project-name">{name.clone()}</span><span class="calendar-project-count">{format!("{total} {}",j(loc,"records","条"))}</span>
                 </button>
-                <button type="button" class="calendar-project-link" aria-label=format!("{} · {}",name,j(loc,"Research journey","研究历程")) title=j(loc,"Open research journey","打开研究历程") disabled=move ||project_transfer.get().is_some_and(|t|t.is_exporting_project(&locked)) on:click=move |_|on_open_journey.call((open_id.clone(),day))>{compose_icon("external-link")}</button>
+                <button type="button" class="calendar-project-link" aria-label=format!("{} · {}",name,if compact { j(loc,"Ask about this day","询问当天进展") } else { j(loc,"Research journey","研究历程") }) title=if compact { j(loc,"Ask about this day","询问当天进展") } else { j(loc,"Open research journey","打开研究历程") } disabled=move ||project_transfer.get().is_some_and(|t|t.is_exporting_project(&locked)) on:click=move |_|on_open_journey.call((open_id.clone(),day))>{compose_icon(if compact {"arrow-up"} else {"external-link"})}</button>
             </header>
             {error.map(|e|view!{<p class="calendar-error" role="alert">{e}</p>})}
             {truncated.then(||view!{<p class="calendar-notice">{j(loc,"Latest 2,000 events shown; more records exist on this day.","当前展示当天最近 2,000 条活动，还有更多记录。")}</p>})}
             <div id=controls hidden=move ||collapsed.get()>
+                {recap.map(|r|view!{<div class="calendar-recap" data-testid="calendar-recap" data-status=r.status.clone()>
+                    <p><strong>{r.headline}</strong><small>{if r.status=="confirmed"{j(loc,"Recap · confirmed","回顾 · 已确认")}else{j(loc,"Recap · AI draft","回顾 · AI 草稿")}}</small></p>
+                    <ul>{r.done.into_iter().map(|item|view!{<li>{item.text}</li>}).collect_view()}</ul>
+                </div>})}
                 {move ||entries.with_value(|rows|rows.iter().take(limit.get()).cloned().map(|e|{
-                    let label=format!("{}{}{}",category(loc,&e.kind),if e.kind=="run"{format!(" · {}",status(loc,&e.status))}else{String::new()},if e.manual{j(loc," · Manual"," · 手动")}else{""});
+                    let outputs=made.get(&e.source_id).filter(|_|e.kind=="run").map(|n|format!(" · {n} {}",j(loc,"outputs","份产出"))).unwrap_or_default();
+                    let label=format!("{}{}{outputs}{}",category(loc,&e.kind),if e.kind=="run"{format!(" · {}",status(loc,&e.status))}else{String::new()},if e.manual{j(loc," · Manual"," · 手动")}else{""});
                     let title=if let Some(v)=e.version_number{format!("{} · v{v}",e.title)}else{e.title};
                     view!{<article class="calendar-record" data-record-id=e.id><div class="calendar-record-meta"><time>{clock(e.occurred_at)}</time><span class:calendar-error=e.status=="failed"||e.status=="lost">{label}</span></div><CalendarRecordTitle title=title locale=locale/></article>}
                 }).collect_view())}

@@ -414,11 +414,22 @@
   outline: 2px solid var(--clay); outline-offset: 2px;
 }
 .transcript-view-toggle svg { width: 14px; height: 14px; flex: 0 0 auto; }
-/* Respond to the conversation pane, including space taken by side panels. */
-@container (max-width: 900px) {
-  .topbar .transcript-view-label { display: none; }
-  .topbar .transcript-view-toggle button { width: 30px; padding: 0; }
+/* In the toolbar the switch is two icon tabs beside the other actions; the
+   hover title carries the label. A hairline separates it from the actions. */
+.topbar .transcript-view-toggle {
+  margin-right: 7px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent;
 }
+.topbar .transcript-view-toggle::before {
+  top: 0; bottom: 0; left: 0; width: calc(50% - 1px);
+  border-radius: var(--radius-xs); background: var(--clay-soft); box-shadow: none;
+}
+.topbar .transcript-view-toggle::after {
+  content: ""; position: absolute; top: 7px; bottom: 7px; right: -5px; width: 1px; background: var(--border);
+}
+.topbar .transcript-view-toggle button { width: 30px; height: 30px; padding: 0; border-radius: var(--radius-xs); }
+.topbar .transcript-view-toggle button.active { color: var(--clay); }
+.topbar .transcript-view-toggle svg { width: 16px; height: 16px; }
+.topbar .transcript-view-label { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .transcript-view-toggle::before, .transcript-view-toggle button { transition: none; }
 }
@@ -488,6 +499,41 @@
   display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto;
   padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--bg-elev) 70%, transparent);
+}
+.topbar-overflow { display: contents; }
+.topbar-action-label, .topbar .topbar-more-btn { display: none; }
+/* Narrow panes (side panels count) fold everything but the panel toggle into
+   "more"; the same buttons become labelled menu rows. */
+@container (max-width: 720px) {
+  .topbar-actions { position: relative; }
+  .topbar .topbar-more-btn { display: inline-flex; position: relative; }
+  .topbar-more-btn .topbar-more-dot { top: 4px; right: 4px; min-width: 7px; width: 7px; height: 7px; padding: 0; }
+  .topbar .topbar-overflow {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 91;
+    display: none; flex-direction: column; align-items: stretch; gap: 1px;
+    min-width: 200px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm); box-shadow: 0 8px 28px rgba(0,0,0,.14);
+    transform-origin: top right;
+    animation: motion-surface-in-soft var(--motion-duration-fast) var(--motion-ease-decelerate) both;
+  }
+  .topbar .topbar-actions.more-open .topbar-overflow { display: flex; }
+  .topbar .topbar-overflow .icon-btn {
+    width: 100%; height: 34px; justify-content: flex-start; gap: 10px; padding: 0 10px;
+    font-size: calc(13px * var(--ui-font-scale, 1)); white-space: nowrap;
+  }
+  .topbar .topbar-overflow .icon-btn:hover:not(:disabled) { background: var(--bg-sunken); }
+  .topbar .topbar-overflow .icon-btn:disabled { opacity: .45; cursor: default; }
+  .topbar .topbar-overflow .icon-btn svg { flex: 0 0 auto; }
+  .topbar .topbar-overflow .topbar-action-label { display: inline; }
+  .topbar .topbar-overflow .conversation-outline-count,
+  .topbar .topbar-overflow .inbox-badge { display: inline; position: static; margin-left: auto; }
+  /* The inbox list opens under the whole menu, not over its rows. */
+  .topbar .topbar-overflow .inbox-wrap { position: static; display: flex; }
+  .topbar .topbar-overflow .inbox-wrap .icon-btn { position: static; }
+  .topbar .topbar-overflow .transcript-view-toggle { width: 100%; margin: 0 0 6px; }
+  .topbar .topbar-overflow .transcript-view-toggle::after { top: auto; bottom: -4px; left: 0; right: 0; width: auto; height: 1px; }
+  .topbar .topbar-overflow .transcript-view-toggle button { width: auto; padding: 0 10px; }
+  .topbar .topbar-overflow .transcript-view-label { display: inline; }
 }
 
 .icon-btn {
@@ -638,10 +684,6 @@
 .conversation-outline-count { font-size: calc(10px * var(--ui-font-scale, 1)); font-weight: 600; font-variant-numeric: tabular-nums; }
 .conversation-outline-toggle:focus-visible, .conversation-outline-item:focus-visible {
   outline: 2px solid var(--clay); outline-offset: 2px;
-}
-@container (max-width: 620px) {
-  .conversation-outline-toggle { width: 30px; padding: 0; }
-  .conversation-outline-count { display: none; }
 }
 .conversation-outline-panel {
   position: absolute; z-index: 13; top: 12px; right: 12px;
@@ -1560,6 +1602,9 @@ details.tool:not([open]) > summary.head .run-dot { animation: tool-pulse 1.1s ea
 .composer-attachment-row.image { width: 238px; }
 .composer-attachment-row.error { border-color: color-mix(in srgb, var(--err) 35%, var(--border-strong)); background: color-mix(in srgb, var(--err) 5%, var(--bg-elev)); }
 .composer-attachment-row .attachment-thumbnail { flex: 0 0 auto; width: 42px; height: 42px; border-radius: var(--radius-xs); }
+.composer-attachment-open { position: absolute; inset: 0; padding: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
+.composer-attachment-row.image .composer-attachment-open { cursor: zoom-in; }
+.composer-attachment-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .composer-attachment { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.25; font-weight: 600; }
 .composer-attachment.uploading { color: var(--text-muted); }
 .composer-attachment.error { color: var(--err); }
@@ -1634,35 +1679,42 @@ details.tool:not([open]) > summary.head .run-dot { animation: tool-pulse 1.1s ea
 .model-picker { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
 .model-picker-btn { min-width: 0; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-elev); color: var(--text-muted); font: inherit; font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 500; cursor: pointer; max-width: min(220px, 38vw); transition: color .12s ease, border-color .12s ease, background .12s ease; }
 .model-picker-btn:hover, .model-picker-btn.active { color: var(--text); background: var(--bg-sunken); border-color: color-mix(in srgb, var(--clay-strong) 30%, var(--border-strong)); }
-.model-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: calc(11.5px * var(--ui-font-scale, 1)); letter-spacing: -.01em; }
-.model-picker-chev { flex: 0 0 auto; font-size: calc(9px * var(--ui-font-scale, 1)); color: var(--text-faint); margin-top: 1px; }
+.model-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; }
+.model-picker-chev { flex: 0 0 auto; display: inline-flex; color: var(--text-faint); }
+.model-picker-chev svg { width: 11px; height: 11px; }
+/* Thinking-effort pill beside the model picker: brain glyph + current value +
+   caret, opening a dropdown over the selected model's effort values. */
+.composer-effort { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
+.composer-effort-btn { min-width: 0; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-elev); color: var(--text-muted); font: inherit; font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 500; cursor: pointer; max-width: min(180px, 30vw); transition: color .12s ease, border-color .12s ease, background .12s ease; }
+.composer-effort-btn:hover, .composer-effort-btn.active { color: var(--text); background: var(--bg-sunken); border-color: color-mix(in srgb, var(--clay-strong) 30%, var(--border-strong)); }
+.composer-effort-glyph { flex: 0 0 auto; display: inline-flex; color: var(--text-faint); }
+.composer-effort-glyph svg { width: 14px; height: 14px; }
+.composer-effort-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-effort-chev { flex: 0 0 auto; display: inline-flex; color: var(--text-faint); }
+.composer-effort-chev svg { width: 11px; height: 11px; }
+.composer-effort-backdrop { position: fixed; inset: 0; z-index: 40; }
+.composer-select-menu { position: absolute; z-index: 41; bottom: calc(100% + 8px); right: 0; box-sizing: border-box; width: max-content; max-width: min(360px, calc(100vw - 16px), var(--composer-menu-width, calc(100vw - 16px))); max-height: min(320px, var(--composer-menu-height, 50vh)); overflow-y: auto; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 28px rgba(0,0,0,.14); padding: 6px; }
+.composer-effort-menu { min-width: min(180px, var(--composer-menu-width, calc(100vw - 16px))); }
+.composer-effort-menu-label { padding: 4px 10px 6px; font-size: calc(11px * var(--ui-font-scale, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
+.composer-effort-hint { max-width: 220px; padding: 4px 10px 6px; font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-faint); }
+.composer-effort-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 500; cursor: pointer; text-align: left; }
+.composer-effort-option:hover { background: var(--bg-sunken); }
+.composer-effort-option-label { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-effort-check { flex: 0 0 auto; display: inline-flex; color: var(--clay-strong); }
+.composer-effort-check svg { width: 14px; height: 14px; }
 .model-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
-.model-menu { position: absolute; z-index: 41; bottom: calc(100% + 8px); right: 0; min-width: 240px; max-height: 320px; overflow-y: auto; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 28px rgba(0,0,0,.14); padding: 6px; }
+.model-menu { min-width: min(240px, var(--composer-menu-width, calc(100vw - 16px))); }
 .model-menu-row { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-xs); }
 .model-menu-row:hover, .model-menu-row:focus-within { background: var(--bg-sunken); }
-.model-menu-pick { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; background: transparent; border: none; padding: 8px 10px; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
+.model-menu-pick { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; background: transparent; border: none; padding: 8px 10px; font: inherit; font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 500; color: var(--text); cursor: pointer; text-align: left; }
 .model-menu-pick:disabled { color: var(--text-faint); cursor: not-allowed; opacity: .62; }
 .model-menu-text { position: relative; display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
 .model-menu-label { font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-menu-sub { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-faint); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-menu-check { flex: 0 0 auto; color: var(--clay-strong); font-weight: 700; }
+.model-menu-check { flex: 0 0 auto; display: inline-flex; color: var(--clay-strong); }
+.model-menu-check svg { width: 14px; height: 14px; }
 .model-menu-del { flex: 0 0 auto; background: transparent; border: none; color: var(--text-faint); font-size: calc(15px * var(--ui-font-scale, 1)); line-height: 1; padding: 4px 8px; cursor: pointer; border-radius: var(--radius-xs); }
 .model-menu-del:hover { color: var(--err); }
-.model-menu-effort-tag { position: absolute; right: 0; bottom: 0; display: none; max-width: 48%; padding-left: 14px; background: linear-gradient(90deg, transparent 0, var(--bg-sunken) 12px); font-family: var(--font-mono); font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
-.model-menu-row:hover .model-menu-effort-tag,
-.model-menu-row:focus-within .model-menu-effort-tag { display: block; }
-.model-menu-effort-edit { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; padding: 4px 6px; background: transparent; border: none; border-radius: var(--radius-xs); color: var(--text-faint); font: inherit; font-size: calc(12px * var(--ui-font-scale, 1)); cursor: pointer; opacity: 0; transition: opacity .12s ease; }
-.model-menu-row:hover .model-menu-effort-edit,
-.model-menu-effort-edit:focus-visible,
-.model-menu-effort-edit.open { opacity: 1; }
-.model-menu-effort-edit:hover, .model-menu-effort-edit.open { background: var(--bg-sunken); color: var(--text); }
-.model-menu-effort-flyout { position: fixed; z-index: 42; width: 200px; display: flex; flex-direction: column; gap: 1px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: 0 8px 28px rgba(0,0,0,.14); }
-.model-menu-effort-flyout-label { padding: 4px 10px 6px; font-size: calc(11px * var(--ui-font-scale, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
-.model-menu-effort-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: calc(12.5px * var(--ui-font-scale, 1)); cursor: pointer; text-align: left; }
-.model-menu-effort-option:hover { background: var(--bg-sunken); }
-.model-menu-effort-option-label { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: calc(12px * var(--ui-font-scale, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model-menu-effort-check { flex: 0 0 auto; display: inline-flex; color: var(--clay-strong); }
-.model-menu-effort-check svg { width: 14px; height: 14px; }
 .model-menu-add { width: 100%; text-align: left; background: transparent; border: none; border-top: 1px solid var(--border); margin-top: 4px; padding: 9px 10px; font: inherit; font-size: calc(12.5px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--clay-strong); cursor: pointer; }
 .model-menu-add:hover { background: var(--clay-soft); }
 .model-menu-configs { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
@@ -1686,7 +1738,8 @@ details.tool:not([open]) > summary.head .run-dot { animation: tool-pulse 1.1s ea
   font: inherit; font-family: var(--font-mono); font-size: calc(12px * var(--ui-font-scale, 1));
 }
 .model-menu-config-toggle { flex: 0 0 auto; }
-.composer-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 20px; margin-top: 5px; }
+/* Hint row sits above the toolbar so the toolbar is the composer's bottom edge. */
+.composer-footer { display: grid; min-height: 20px; margin-top: 2px; }
 /* Shortcut hint stays hidden until the composer is focused (or hovered), so the
    idle composer reads as a clean input rather than a help panel. */
 .composer-hint { min-width: 0; padding: 0 2px 0 54px; font-size: calc(11px * var(--ui-font-scale, 1)); line-height: 1.35; color: var(--text-faint); user-select: none; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .15s ease; }
@@ -1991,17 +2044,18 @@ details.tool:not([open]) > summary.head .run-dot { animation: tool-pulse 1.1s ea
 .review-foot { padding: 9px 14px; color: var(--text-muted); font-size: calc(11.5px * var(--ui-font-scale, 1)); background: color-mix(in srgb, var(--clay) 5%, transparent); }
 .review-foot.resolved { color: var(--ok); }
 .review-foot.unaddressed { color: var(--warn); }
-button.send { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: var(--clay); color: var(--on-clay); border: none; border-radius: 999px; cursor: pointer; transition: background .12s ease, color .12s ease, opacity .12s ease; flex: 0 0 auto; }
-button.send svg { width: 18px; height: 18px; }
-button.send:hover:not(:disabled) { background: var(--clay-strong); }
-button.send.is-empty { background: color-mix(in srgb, var(--text) 14%, var(--bg-app)); color: var(--text-faint); }
-button.send.is-empty:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 14%, var(--bg-app)); }
-button.send:disabled { opacity: .45; cursor: default; }
-.send-split { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.send-menu-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; transition: background .12s ease, color .12s ease; }
-.send-menu-toggle svg { width: 16px; height: 16px; stroke-width: 2.25; }
-.send-menu-toggle:hover:not(:disabled) { background: var(--bg-sunken); color: var(--text); }
-.send-menu-toggle:disabled { opacity: .45; cursor: default; }
+/* Positioned so the button stays in the paint layer above the (positioned)
+   composer tools when extreme narrowness makes the two rows overlap (#650). */
+button.send, button.sidechat-send { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: var(--clay); color: var(--on-clay); border: none; border-radius: 999px; cursor: pointer; transition: background .12s ease, color .12s ease, opacity .12s ease; flex: 0 0 auto; }
+button.send svg, button.sidechat-send svg { width: 18px; height: 18px; }
+button.send:hover:not(:disabled), button.sidechat-send:hover:not(:disabled) { background: var(--clay-strong); }
+button.send.is-empty, button.sidechat-send.is-empty { background: color-mix(in srgb, var(--text) 14%, var(--bg-app)); color: var(--text-faint); }
+button.send.is-empty:hover:not(:disabled), button.sidechat-send.is-empty:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 14%, var(--bg-app)); }
+button.send:disabled, button.sidechat-send:disabled { opacity: .45; cursor: default; }
+button.stop { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: color-mix(in srgb, var(--text) 78%, var(--bg-app)); color: var(--bg-app); border: none; border-radius: 999px; cursor: pointer; transition: background .12s ease, opacity .12s ease; flex: 0 0 auto; }
+button.stop svg { width: 18px; height: 18px; }
+button.stop:hover:not(:disabled) { background: var(--text); }
+button.stop:disabled { opacity: .45; cursor: default; }
 .send-menu-backdrop { position: fixed; inset: 0; z-index: 60; }
 .send-mode-menu { position: absolute; z-index: 61; right: 0; bottom: calc(100% + 10px); width: 260px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); transform-origin: bottom right; animation: motion-surface-in-soft var(--motion-duration-fast) var(--motion-ease-decelerate) both; }
 .send-mode-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 6px 10px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: calc(14px * var(--ui-font-scale, 1)); text-align: left; cursor: pointer; }
@@ -2014,17 +2068,14 @@ button.send:disabled { opacity: .45; cursor: default; }
   .composer-tools, .composer-buttons { gap: 4px; }
   .composer-plus, .composer-compute, .composer-fast { width: 28px; height: 28px; }
   .composer-plus svg, .composer-compute svg, .composer-fast svg { width: 15px; height: 15px; }
-  .model-picker-btn { max-width: 104px; height: 28px; padding-inline: 8px; }
+  .model-picker-btn, .composer-effort-btn { max-width: 104px; height: 28px; padding-inline: 8px; }
   .context-usage-trigger { height: 28px; padding: 0 5px 0 3px; gap: 3px; }
   .context-usage-pct { font-size: calc(10px * var(--ui-font-scale, 1)); }
   button.send { width: 28px; height: 28px; }
   button.send svg { width: 16px; height: 16px; }
-  .send-menu-toggle { width: 28px; height: 28px; }
-  .send-menu-toggle svg { width: 14px; height: 14px; }
+  button.stop { width: 28px; height: 28px; }
+  button.stop svg { width: 16px; height: 16px; }
 }
-button.stop { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 14px; background: transparent; color: var(--err); border: 1px solid hsl(0 70% 50% / 0.35); border-radius: 999px; font: inherit; font-weight: 600; font-size: calc(13px * var(--ui-font-scale, 1)); cursor: pointer; flex: 0 0 auto; }
-button.stop:hover:not(:disabled) { background: hsl(0 70% 50% / 0.08); border-color: hsl(0 70% 50% / 0.55); }
-button.stop:disabled { opacity: .6; cursor: default; }
 
 .sidechat-in-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--bg-elev); }
 .sidechat-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px 6px 20px; border-bottom: 1px solid var(--border); }
@@ -2047,15 +2098,16 @@ button.stop:disabled { opacity: .6; cursor: default; }
 .sidechat-evidence-item blockquote { margin: 6px 0 0; padding-left: 9px; border-left: 2px solid var(--clay); color: var(--text); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sidechat-evidence-why { margin-top: 5px; color: var(--text-faint); font-size: calc(10.5px * var(--ui-font-scale, 1)); line-height: 1.35; }
 .sidechat-thinking { color: var(--text-faint); font-size: calc(13px * var(--ui-font-scale, 1)); }
-.sidechat-composer { flex: 0 0 auto; min-width: 0; padding: 12px 14px 14px; background: var(--bg-app); }
+.sidechat-composer { flex: 0 0 auto; min-width: 0; padding: 12px 14px 12px; background: var(--bg-app); }
 .sidechat-composer-inner { box-sizing: border-box; min-width: 0; padding-top: 12px; }
 .sidechat-quotes { flex-direction: column; align-items: stretch; flex-wrap: nowrap; max-height: 132px; margin: 0 0 8px; padding: 2px 4px 2px 0; overflow-y: auto; }
 .sidechat-quotes .composer-attachment-row { width: 100%; min-height: 44px; box-sizing: border-box; }
 .sidechat-composer textarea { min-height: 50px; max-height: 180px; field-sizing: content; }
 .sidechat-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; min-height: 32px; }
-.sidechat-model { position: relative; min-width: 0; }
+.sidechat-model { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
 .sidechat-model-btn { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(220px, 100%); height: 32px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-elev); color: var(--text-muted); font: inherit; font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 500; cursor: pointer; }
-.sidechat-model-btn svg, .sidechat-model-row svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.sidechat-model-btn svg { width: 11px; height: 11px; flex: 0 0 auto; color: var(--text-faint); }
+.sidechat-model-row svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .sidechat-model-btn span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidechat-model-btn:hover, .sidechat-model-btn.active { background: var(--bg-sunken); color: var(--text); }
 .sidechat-model-backdrop { position: fixed; inset: 0; z-index: 81; }
@@ -2063,9 +2115,7 @@ button.stop:disabled { opacity: .6; cursor: default; }
 .sidechat-model-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 9px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: calc(12.5px * var(--ui-font-scale, 1)); text-align: left; cursor: pointer; }
 .sidechat-model-row:hover, .sidechat-model-row.active { background: var(--bg-sunken); }
 .sidechat-model-group { padding: 8px 9px 4px; font-size: calc(10.5px * var(--ui-font-scale, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
-.sidechat-send { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; margin-left: auto; height: 32px; min-width: 64px; padding: 0 16px; border: none; border-radius: 999px; background: var(--clay); color: var(--on-clay); font: inherit; font-family: var(--font-ui); font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 600; cursor: pointer; transition: background .12s ease, opacity .12s ease; }
-.sidechat-send:disabled { opacity: .45; cursor: default; }
-.sidechat-send:hover:not(:disabled) { background: var(--clay-strong); }
+.sidechat-send { margin-left: auto; }
 
 /* In-flow "stopping…" banner — interrupting the kernel isn't instant, so this
    reassures the user the click landed. It sits in the composer column instead
@@ -2277,7 +2327,7 @@ button.stop:disabled { opacity: .6; cursor: default; }
   .composer-actions { gap: 8px; }
   .model-picker-btn { max-width: 126px; }
   .composer-hint { display: none; }
-  .composer-footer { display: flex; justify-content: flex-end; }
+  .composer-footer { display: none; }
   .context-usage-panel { padding: 14px 14px 16px; border-radius: var(--radius); }
 }
 

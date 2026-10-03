@@ -33,6 +33,7 @@ mod claim_catalog;
 mod codex_accounts;
 mod codex_import;
 mod codex_login;
+mod command_hooks;
 mod configure;
 mod connector_commands;
 mod context_probe;
@@ -55,7 +56,6 @@ mod native_journey;
 mod native_library;
 mod native_projects;
 mod native_publication;
-mod native_scratch;
 mod native_settings;
 mod privacy_mode;
 pub(crate) use wisp_runs::exploration_isolation;
@@ -95,8 +95,10 @@ mod publication_freeze;
 mod publication_reproduction;
 mod quick_actions;
 mod research_archive;
+mod research_assistant;
 mod research_graph;
 mod research_progress;
+mod research_recap;
 mod resource_leases;
 mod resource_refs;
 mod review;
@@ -104,14 +106,16 @@ mod workflow_approval;
 mod workflow_artifacts;
 pub(crate) use wisp_runs as run_context;
 mod native_panels;
+mod native_run_review;
 mod native_share;
 mod native_terminals;
 mod network;
+mod research_dispatch;
+mod research_dispatch_approval;
 mod runtime_commands;
 mod runtime_config_tool;
 mod runtime_launcher;
 mod scheduler;
-mod scratch_commands;
 mod seed;
 mod session_commands;
 mod session_context_tool;
@@ -165,6 +169,7 @@ use skill_commands::{copy_dir_recursive, validate_skill_name};
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind")]
 enum AgentEvent {
+    BackgroundReply(wisp_dto::BackgroundReply),
     User {
         frame_id: String,
         text: String,
@@ -338,7 +343,7 @@ enum AgentEvent {
         frame_id: String,
         questions: Vec<String>,
     },
-    /// An AfterTurn hook failed; the finished turn is unaffected.
+    /// A hook failed; the turn it ran for is unaffected.
     HookFailed {
         frame_id: String,
         hook: String,
@@ -349,6 +354,7 @@ enum AgentEvent {
 impl AgentEvent {
     fn frame_id(&self) -> &str {
         match self {
+            Self::BackgroundReply(reply) => &reply.frame_id,
             Self::User { frame_id, .. }
             | Self::MessageBoundary { frame_id, .. }
             | Self::Resources { frame_id, .. }
@@ -1040,27 +1046,7 @@ struct OnboardingState {
     has_api_key: bool,
 }
 
-/// One saved conversation for the history sidebar.
-#[derive(Serialize, Clone)]
-struct SessionInfo {
-    id: String,
-    title: String,
-    ts: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    folder_id: Option<String>,
-    /// Source session this one was branched from; the sidebar nests on it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    branched_from: Option<String>,
-    running: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pinned: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    branch_state: Option<String>,
-    /// The session's persisted system prompt was built from older
-    /// AGENTS.md / WISP.md contents; the sidebar offers a rules reload.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    stale_prompt: bool,
-}
+use wisp_dto::{SessionCursor, SessionInfo, SessionPage};
 
 const SESSION_HISTORY_PAGE_SIZE: usize = 100;
 const SESSION_TRANSCRIPT_PAGE_TURNS: usize = 20;
@@ -1068,19 +1054,6 @@ const SESSION_TRANSCRIPT_PAGE_TURNS: usize = 20;
 /// history here used to duplicate every saved tool dump immediately after a
 /// turn completed, exactly when the WebView was settling its projections.
 const FOLLOW_UP_TRANSCRIPT_TURNS: usize = 4;
-
-#[derive(Serialize, Deserialize, Clone)]
-struct SessionCursor {
-    ts: i64,
-    id: String,
-}
-
-#[derive(Serialize)]
-struct SessionPage {
-    items: Vec<SessionInfo>,
-    next_cursor: Option<SessionCursor>,
-    running_ids: Vec<String>,
-}
 
 #[derive(Serialize)]
 struct SessionTranscriptPage {
@@ -1735,6 +1708,20 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                     };
                 }
             }
+            AgentEvent::BackgroundReply(reply) => items.push(UiItem {
+                role: "assistant".into(),
+                text: reply.text.clone(),
+                tool_name: None,
+                ok: None,
+                duration_ms: None,
+                input: None,
+                model_name: None,
+                call_id: None,
+                kind: None,
+                status: None,
+                locations: None,
+                resources: Vec::new(),
+            }),
             AgentEvent::Error { message, .. } => items.push(UiItem {
                 role: "assistant".into(),
                 text: format!("Error: {message}"),
@@ -3285,8 +3272,8 @@ struct TauriOutput {
     provenance_scope: String,
     /// Per-send_message id used to attribute real-browser tabs to this turn.
     turn_id: String,
-    /// IM turns force Ask on mutating tools and skip Full Permission
-    /// auto-approval so an unattended Feishu/WeChat message cannot write/shell.
+    /// IM turns force Ask unless the assistant's owner explicitly enables
+    /// its session Full Permission. Dispatched project turns still ask.
     force_ask_mutations: bool,
     agent_trace: wisp_core::AgentTrace,
     /// Strategy label of the last compaction the agent loop reported during
@@ -3319,6 +3306,14 @@ impl TauriOutput {
             .unwrap_or(false)
     }
 
+    fn requires_im_approval(&self) -> bool {
+        approval_commands::force_ask_for_turn(
+            self.force_ask_mutations,
+            &self.frame_id,
+            self.full_permission(),
+        )
+    }
+
     fn emit(&self, event: AgentEvent) {
         self.device_hub
             .apply_agent_event(&event, Some(&self.project_id));
@@ -3347,7 +3342,7 @@ impl TauriOutput {
         allow_full_permission: bool,
     ) -> wisp_tools::ConfirmDecision {
         let _slot = workflow_approval::lock_frame(&self.frame_id).await;
-        if allow_full_permission && self.full_permission() && !self.force_ask_mutations {
+        if allow_full_permission && self.full_permission() && !self.requires_im_approval() {
             return wisp_tools::ConfirmDecision::Approved;
         }
         let (tool, preview) = parse_confirm_payload(message);
@@ -3364,22 +3359,31 @@ impl TauriOutput {
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let request = ConfirmRequest::new(&self.frame_id, message.into(), tool, preview);
-        self.confirms.lock().unwrap().insert(
-            self.frame_id.clone(),
-            PendingConfirm {
-                tx,
-                grant,
-                project_id: self.project_id.clone(),
-                request: request.clone(),
-            },
-        );
-        self.awaiting_confirm
-            .lock()
-            .unwrap()
-            .insert(self.frame_id.clone());
-        self.device_hub
-            .mark_needs_user(&self.frame_id, Some(&self.project_id));
-        emit_confirm_request(&self.app, &request, Some(&self.project_id));
+        {
+            let mut confirms = self.confirms.lock().unwrap();
+            // Enabling Full Permission takes this same lock. Recheck while
+            // registering so a concurrent `full` cannot miss a new request
+            // and leave the running turn waiting despite its updated policy.
+            if allow_full_permission && self.full_permission() && !self.requires_im_approval() {
+                return wisp_tools::ConfirmDecision::Approved;
+            }
+            confirms.insert(
+                self.frame_id.clone(),
+                PendingConfirm {
+                    tx,
+                    grant,
+                    project_id: self.project_id.clone(),
+                    request: request.clone(),
+                },
+            );
+            self.awaiting_confirm
+                .lock()
+                .unwrap()
+                .insert(self.frame_id.clone());
+            self.device_hub
+                .mark_needs_user(&self.frame_id, Some(&self.project_id));
+            emit_confirm_request(&self.app, &request, Some(&self.project_id));
+        }
 
         // There is deliberately no timeout: lack of approval must never be
         // converted into a denial that lets the same agent turn continue.
@@ -3451,6 +3455,7 @@ fn should_persist_ui_event(event: &AgentEvent) -> bool {
     matches!(
         event,
         AgentEvent::User { .. }
+            | AgentEvent::BackgroundReply(_)
             | AgentEvent::MessageBoundary { .. }
             | AgentEvent::Text { .. }
             | AgentEvent::Reasoning { .. }
@@ -3662,6 +3667,60 @@ impl Output for TauriOutput {
     fn restrict_read_paths_to_project(&self) -> bool {
         self.restrict_read_paths_to_project
     }
+    fn pre_tool_use<'a>(
+        &'a self,
+        tool: &'a str,
+        args: &'a serde_json::Value,
+    ) -> OutputFuture<'a, wisp_core::PreToolDecision> {
+        Box::pin(async move {
+            let outcome = command_hooks::fire(
+                &self.app,
+                &self.frame_id,
+                &self.project_id,
+                &self.project_root,
+                wisp_dto::HookEvent::PreToolUse,
+                Some(tool),
+                serde_json::json!({ "tool_name": tool, "tool_input": args }),
+            )
+            .await;
+            match outcome.block {
+                Some(reason) => wisp_core::PreToolDecision::Block(reason),
+                None if outcome.ask => wisp_core::PreToolDecision::Ask,
+                None => wisp_core::PreToolDecision::Continue,
+            }
+        })
+    }
+
+    fn post_tool_use<'a>(
+        &'a self,
+        tool: &'a str,
+        args: &'a serde_json::Value,
+        result: &'a wisp_tools::ToolResult,
+    ) -> OutputFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let event = if result.success {
+                wisp_dto::HookEvent::PostToolUse
+            } else {
+                wisp_dto::HookEvent::PostToolUseFailure
+            };
+            command_hooks::fire(
+                &self.app,
+                &self.frame_id,
+                &self.project_id,
+                &self.project_root,
+                event,
+                Some(tool),
+                serde_json::json!({
+                    "tool_name": tool,
+                    "tool_input": args,
+                    "tool_response": { "success": result.success, "content": result.content },
+                }),
+            )
+            .await
+            .feedback()
+        })
+    }
+
     fn acquire_tool_resources<'a>(
         &'a self,
         tool: &'a str,
@@ -3716,10 +3775,10 @@ impl Output for TauriOutput {
         })
     }
     fn approval_bypass(&self) -> bool {
-        self.full_permission() && !self.force_ask_mutations
+        self.full_permission() && !self.requires_im_approval()
     }
     fn danger_auto_approve(&self) -> bool {
-        if self.force_ask_mutations {
+        if self.requires_im_approval() {
             return false;
         }
         self.full_permission()
@@ -3730,7 +3789,7 @@ impl Output for TauriOutput {
                 .unwrap_or(false)
     }
     fn force_ask_mutations(&self) -> bool {
-        self.force_ask_mutations
+        self.requires_im_approval()
     }
     fn plan_mode(&self) -> bool {
         self.plan_mode
@@ -5989,6 +6048,20 @@ async fn register_mcp_with_approval(
                 };
                 registry.add(Box::new(tool));
             }
+            // With a TypeSafe key, a Cua Driver connection also gets the
+            // Jev-driven autopilot; without one the agent drives Cua Driver.
+            if registry.get(wisp_mcp::desktop_autopilot::NAME).is_none() {
+                if let Some(tool) = wisp_mcp::desktop_autopilot::DesktopAutopilot::for_catalog(
+                    &catalog,
+                    client.clone(),
+                    &models::typesafe_api_key(),
+                    llm_proxy(),
+                    require_approval,
+                ) {
+                    names.push(wisp_mcp::desktop_autopilot::NAME.into());
+                    registry.add(Box::new(tool));
+                }
+            }
             Ok(RegisteredMcpTools {
                 names,
                 depmap_contract,
@@ -6014,6 +6087,9 @@ pub(crate) async fn create_session_frame(
     store: &Store,
     project_id: &str,
 ) -> Result<String, String> {
+    if wisp_store::is_assistant_project_id(project_id) {
+        return Err("The research assistant keeps a single conversation.".into());
+    }
     let id = Uuid::new_v4().to_string();
     let model_id = models::active_profile_id(store).await;
     store
@@ -7158,23 +7234,26 @@ impl std::io::Write for SharedLogFile {
 }
 
 /// Startup work whose result nobody can see until the app is already usable:
-/// crash recovery sweeps, the scratch sandbox purge, and the extra windows a
-/// previous session left open. Each of these can take seconds to minutes (a
-/// sandbox purge walks a directory tree, every restored window boots its own
-/// WebView2), so they run after `setup` hands the event loop back.
-fn spawn_deferred_startup(
-    app: &tauri::AppHandle,
-    orphans: scratch_commands::OrphanScratchProjects,
-) {
+/// crash recovery sweeps, the removed scratch chat's sandbox purge, and the
+/// extra windows a previous session left open. Each of these can take seconds
+/// to minutes (a sandbox purge walks a directory tree, every restored window
+/// boots its own WebView2), so they run after `setup` hands the event loop back.
+fn spawn_deferred_startup(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let started = std::time::Instant::now();
-        let (store, run_manager) = {
+        let (store, run_manager, app_data) = {
             let state = app.state::<AppState>();
-            (state.store.clone(), state.run_manager.clone())
+            (
+                state.store.clone(),
+                state.run_manager.clone(),
+                state.app_data.clone(),
+            )
         };
 
-        scratch_commands::purge_orphan_scratch_projects(&store, orphans).await;
+        // Scratch chat was removed; `Store::open_application` already dropped
+        // its leftover projects, so the sandboxes are disposable.
+        let _ = std::fs::remove_dir_all(app_data.join("scratch"));
         if let Err(error) = store.recover_stale_publication_freezes(i64::MAX).await {
             tracing::warn!(target: "wisp", %error, "failed to recover interrupted Publication freezes");
         }
@@ -7388,11 +7467,6 @@ pub fn run() {
                     exploration_promotion::recover_incomplete_promotions(&store, &app_data),
                 )
             });
-            let orphan_scratch = startup.record("scratch_scan", || {
-                tauri::async_runtime::block_on(scratch_commands::collect_orphan_scratch_projects(
-                    &store, &app_data,
-                ))
-            });
             startup.record("credentials", || {
                 tauri::async_runtime::block_on(models::load_custom_credentials(&store))
                     .expect("load custom credentials")
@@ -7537,7 +7611,7 @@ pub fn run() {
                 plugin_runtime_errors: StdMutex::new(HashMap::new()),
                 reviewing: Arc::new(StdMutex::new(HashSet::new())),
                 after_turn_generations: StdMutex::new(HashMap::new()),
-                scratch: std::sync::RwLock::new(HashMap::new()),
+                assistant_windows: std::sync::RwLock::new(HashMap::new()),
             };
             app.manage(state);
             workflow_approval::install(app.handle().clone());
@@ -7598,7 +7672,7 @@ pub fn run() {
                     }
                 });
             }
-            spawn_deferred_startup(app.handle(), orphan_scratch);
+            spawn_deferred_startup(app.handle());
             // Dev runs the bare debug binary, which does not grab focus on macOS.
             // release launches from the .app bundle and activates normally.
             #[cfg(debug_assertions)]
@@ -7640,6 +7714,7 @@ pub fn run() {
             agent_turn::queued_turn_action,
             agent_turn::stop_agent,
             channels::channels_status,
+            channels::assistant_weixin_status,
             channels::set_feishu_channel,
             channels::feishu_bind_start,
             channels::feishu_bind_poll,
@@ -7681,6 +7756,10 @@ pub fn run() {
             scheduler::set_schedule_enabled,
             scheduler::delete_schedule,
             scheduler::run_schedule_now,
+            scheduler::list_all_schedules,
+            research_recap::get_daily_recap_automation,
+            research_recap::set_daily_recap_automation,
+            research_recap::run_daily_recap_now,
             delegation_runtime::get_dynamic_agent_options,
             delegation_runtime::get_agent_workflow_result,
             delegation_runtime::approve_agent_workflow,
@@ -7725,8 +7804,10 @@ pub fn run() {
             terminal_sessions::resize_terminal,
             terminal_sessions::close_terminal,
             session_commands::new_session,
-            scratch_commands::start_scratch_chat,
-            scratch_commands::close_scratch_chat,
+            research_assistant::open_research_assistant,
+            research_assistant::close_research_assistant,
+            research_assistant::get_research_assistant_projects,
+            research_assistant::get_research_assistant_plan,
             session_commands::branch_session,
             session_commands::preview_session_branch_merge,
             session_commands::summarize_session_branch_merge,
@@ -7772,9 +7853,13 @@ pub fn run() {
             project_commands::get_research_calendar,
             project_commands::add_research_journal_entry,
             project_commands::get_research_journey_source,
+            research_recap::generate_research_recap,
+            research_recap::update_research_recap,
             session_commands::delete_session,
+            session_commands::preview_session_artifacts,
             session_commands::rename_session,
             session_commands::set_session_pinned,
+            session_commands::set_session_shelved,
             session_commands::transfer_session_to_project,
             session_commands::list_folders,
             session_commands::create_folder,
@@ -7975,6 +8060,10 @@ pub fn run() {
             memory_commands::set_memory_enabled,
             memory_commands::get_auto_failure_analysis_settings,
             memory_commands::set_auto_failure_analysis_settings,
+            command_hooks::get_command_hooks,
+            command_hooks::set_command_hooks,
+            command_hooks::get_project_hooks,
+            command_hooks::set_project_hooks_trust,
             memory_commands::propose_turn_memory,
             memory_commands::confirm_turn_memory,
             memory_commands::create_global_memory,

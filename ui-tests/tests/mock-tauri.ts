@@ -281,6 +281,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       has_user_turn: false,
     });
   }
+  const shelvedSessionIds = new Set<string>(JSON.parse(localStorage.getItem("mock-shelved-sessions") ?? "[]"));
+  if (query.get("mockShelvedPages") === "1") {
+    mockSessions.forEach((session) => shelvedSessionIds.add(session.id));
+  }
   let activeMockFrame = mockExplorationFlow ? "exploration-mainline" : "";
   let mockBranchMergedSummary = "";
   let mockMainlineAdvanced = query.get("mockMainlineAdvanced") === "1";
@@ -391,8 +395,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   }));
   const mockFolders: Array<{ id: string; name: string }> = [];
   let activeProjectId = "default";
-  let scratchOpen = false;
-  let scratchSessionId: string | null = null;
   let terminalCounter = 0;
   let mockUpdateCheck = {
     current_version: "0.9.0",
@@ -509,6 +511,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     failure_rate_threshold: 30,
     minimum_failures: 2,
   };
+  let commandHooks: Array<{ event: string; matcher: string; command: string; enabled: boolean; timeout?: number }> = [];
+  // The active project's `.wisp/hooks.json`; null = no file.
+  let projectHooks: { path: string; hooks: typeof commandHooks; sha256: string; trusted: boolean; error: string | null } | null = null;
+  (window as any).__setMockProjectHooks = (value: typeof projectHooks) => { projectHooks = value; };
   const lastMessageBySession: Record<string, string> = {};
   const sessionDelegationEnabled: Record<string, boolean> = {};
   const sessionPlanMode: Record<string, boolean> = {};
@@ -614,6 +620,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     { id: "reader", name: "Reader", icon: "search", color: "clay", description: "Searches project sessions", instructions: "reader rubric", model_id: "", skills: [], connectors: [], builtin: true },
     { id: "scientific_illustrator", name: "Scientific Illustrator", icon: "image", color: "clay", description: "Creates scientific figures", instructions: "illustrator rubric", model_id: "", skills: ["figure-composer", "figure-style"], connectors: [], builtin: true },
     { id: "depmap_r_agent", name: "DepMap Agent", icon: "dna", color: "clay", description: "Queries validated DepMap evidence and orchestrates R-first analyses", instructions: "depmap rubric", model_id: "", skills: null, connectors: null, builtin: true },
+    { id: "archivist", name: "Archivist", icon: "archive", color: "clay", description: "Drafts research archives", instructions: "archive rubric", model_id: "", skills: [], connectors: [], builtin: true },
+    { id: "recap", name: "Recap", icon: "calendar", color: "clay", description: "Drafts daily research recaps", instructions: "recap rubric", model_id: "", skills: [], connectors: [], builtin: true },
   ];
   let sessionSpecialists: Record<string, string> = {};
   let mockBrowserUrlFilters = { block: [] as { host: string; reason?: string }[], prefer: [] as { host: string; reason?: string }[] };
@@ -858,6 +866,23 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       use_for_video_generation: false,
     },
   ];
+  if (query.get("mockComposerCatalog") === "1") {
+    mockModels[0].reasoning_effort = "high";
+    mockModels[1].model = "claude-opus-4-8";
+  }
+  if (query.has("mockComposerModel")) {
+    mockModels[0].model = query.get("mockComposerModel")!;
+    mockModels[0].api_url = "https://api.openai.com/v1";
+    mockModels[0].reasoning_effort = query.get("mockComposerEffort") ?? "";
+  }
+  if (query.get("mockComposerMenus") === "1") {
+    mockModels[0].label = "DEEPSEEK-V4-PRO";
+    mockModels.push(
+      { ...mockModels[1], id: "alias-a", label: "Shared model", model: "opus-4.8" },
+      { ...mockModels[1], id: "alias-b", label: "shared model", provider: "openai", model: "gpt-5.5" },
+      { ...mockModels[1], id: "long-name", label: "A very long custom model configuration name that should be truncated", model: "custom-reasoner" },
+    );
+  }
   const activeHttpModelId = () => mockModels.find((model) => model.active)?.id ?? mockModels[0]?.id ?? "";
   // Baked model catalog (mirrors src-tauri model_catalog): exact id match
   // within vendor namespaces, never prefix matching.
@@ -870,10 +895,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   };
   const mockCatalog: Record<string, Record<string, MockCatalogEntry>> = {
     deepseek: {
-      "deepseek-v4-pro": { context_window: 1000000, max_tokens: 384000, input_limit: null, supports_vision: false, efforts: [] },
+      "deepseek-v4-pro": { context_window: 1000000, max_tokens: 384000, input_limit: null, supports_vision: false, efforts: ["high", "max"] },
       "deepseek-v4-flash": { context_window: 1000000, max_tokens: 384000, input_limit: null, supports_vision: false, efforts: [] },
     },
     openai: {
+      "test-reasoner": { context_window: 128000, max_tokens: 4096, input_limit: null, supports_vision: false, efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] },
+      "test-no-effort": { context_window: 128000, max_tokens: 4096, input_limit: null, supports_vision: false, efforts: [] },
       "gpt-5.6-luna": { context_window: 1050000, max_tokens: 128000, input_limit: null, supports_vision: true, efforts: ["none", "low", "medium", "high", "xhigh"] },
     },
     anthropic: {
@@ -1224,6 +1251,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     scimaster_api_key: false,
     ncbi_api_key: false,
     ncbi_email: false,
+    typesafe_api_key: false,
   };
   let mockCustomCredentials: Array<{
     id: string;
@@ -1232,6 +1260,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     present: boolean;
   }> = [];
   let nextCustomCredential = 1;
+  const mockAssistantWeixin = { enabled: false, bound: false, state: "stopped", detail: "" };
   const mockChannels = {
     feishu_enabled: false,
     feishu_bound: false,
@@ -1687,9 +1716,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   });
   const journeyEntries: any[] = [
     journeyEntry("progress-today", "progress", journeyText("Compared normalization methods and selected a baseline", "完成归一化对比，确定后续分析方案"), 0, {manual: true, summary: journeyText("Compare low-sample performance; take method B into full-data validation.", "比较两种方法的低样本表现，选择方案 B 进入完整数据验证。")}),
-    journeyEntry("run-compare", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", status: "succeeded", occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("run-end:run-local-002", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", run_id: "run-local-002", status: "succeeded", occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("run-start:run-local-002", "run", journeyText("Completed normalization comparison", "完成两种归一化方法对比"), 0, {source_id: "run-local-002", run_id: "run-local-002", status: "started", occurred_at: journeyTime(0,14,30)}),
     journeyEntry("run-clean", "run", journeyText("Completed data cleaning and quality checks", "完成数据清洗与质量检查"), 0, {source_id: "run-kinase-001", status: "succeeded", occurred_at: journeyTime(0,10,20)}),
-    journeyEntry("output-image", "artifact", "normalization_comparison.png", 0, {source_id: "journey-image-v1", content_type: "image/png", version_number: 1, occurred_at: journeyTime(0,14,35)}),
+    journeyEntry("output-image", "artifact", "normalization_comparison.png", 0, {source_id: "journey-image-v1", run_id: "run-local-002", content_type: "image/png", version_number: 1, occurred_at: journeyTime(0,14,35)}),
     journeyEntry("output-data", "artifact", "normalized_counts.csv", 0, {source_id: "journey-data-v2", content_type: "text/csv", version_number: 2}),
     journeyEntry("output-report", "artifact", "comparison_report.md", 0, {source_id: "journey-report-v1", content_type: "text/markdown", version_number: 1}),
     journeyEntry("finding-today", "finding", journeyText("Method B is more stable at low sample sizes.", "方案 B 在低样本量下更稳定。"), 0, {manual: true}),
@@ -1701,6 +1731,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     journeyEntry("output-yesterday", "artifact", "qc_report.md", 1, {source_id: "journey-qc-v1", content_type: "text/markdown", version_number: 1}),
     journeyEntry("progress-earlier", "progress", journeyText("Imported raw data and established an analysis baseline", "导入原始数据，建立分析基线"), 2, {manual: true}),
   ];
+  const journeyRecaps: any[] = [];
+  const automation: any = {daily: {enabled: true, time: "09:00", last_run_at: null, drafted: 0, error: null, running: false}, schedules: []};
+  const recapsIn = (from: number, until: number) => journeyRecaps.filter(r => r.day_start >= from && r.day_start < until);
   let publicationRevisionId = "publication-revision-1";
   let publicationRevisionState = mockPublication === "frozen" ? "frozen" : "draft";
   const publicationItems = [
@@ -1882,16 +1915,35 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               index === 37 ? "请整理水稻根尖单细胞图谱研究的分析进展，核对所有样本的质控结果、细胞类型注释与文献证据，并详细记录后续验证方案。".repeat(5) : `核对文献证据与样本注释 · ${index + 1}`,
               0, {occurred_at:journeyTime(0,9,index), status:index === 36 ? "failed" : "succeeded"}));
             const result = ids.map(id => ({project_id:id,
-              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : mode === "dense" ? (id === "default" ? dense : []) : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000},
+              history:{entries:mode === "empty" ? [] : (id === "other" ? extra : mode === "dense" ? (id === "default" ? dense : []) : journeyEntries).filter(e=>e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until"))), truncated:mode === "truncated" && Number(arg("until"))-Number(arg("from"))>90000,
+                recaps: id === "default" ? recapsIn(Number(arg("from")), Number(arg("until"))) : []},
               error: mode === "partial" && id === "other" ? "Project temporarily unavailable" : null,
             }));
             for (const row of result) if(row.error) row.history.entries=[];
             if (delay) await new Promise(resolve=>setTimeout(resolve,delay));
             return result;
           }
+          case "get_research_assistant_projects": {
+            if ((window as any).__assistantProjectsDelay) await new Promise(resolve => setTimeout(resolve, (window as any).__assistantProjectsDelay));
+            if ((window as any).__assistantProjectsError) throw new Error("Project visibility unavailable");
+            const hidden = (window as any).__assistantHiddenProjects ?? (localStorage.getItem("wisp-privacy-mode-active") === "1" ? JSON.parse(localStorage.getItem("wisp-privacy-mode-projects") ?? "[]") : []);
+            const rows = await (window as any).__TAURI__.core.invoke("list_projects", {});
+            return rows.filter((project: any) => !hidden.includes(project.id));
+          }
+          case "get_research_assistant_plan": {
+            const day = String(arg("day"));
+            const items = (window as any).__assistantPlans ?? [];
+            const hidden = (window as any).__assistantHiddenProjects ?? (localStorage.getItem("wisp-privacy-mode-active") === "1" ? JSON.parse(localStorage.getItem("wisp-privacy-mode-projects") ?? "[]") : []);
+            const rows = items.filter((item: any) => !hidden.includes(item.project_id) && (item.day === day || (item.day < day && item.status === "open")));
+            if ((window as any).__assistantPlanDelay) await new Promise(resolve => setTimeout(resolve, (window as any).__assistantPlanDelay));
+            if ((window as any).__assistantPlanError) throw new Error("Plan store unavailable");
+            return rows;
+          }
           case "get_research_archive": return researchArchives[String(arg("frameId"))] ?? null;
           case "prepare_research_archive": {
             if ((window as any).__archivePrepareError) throw new Error((window as any).__archivePrepareError);
+            const prepareDelay = Number((window as any).__archivePrepareDelay ?? 0);
+            if (prepareDelay > 0) await new Promise((resolve) => setTimeout(resolve, prepareDelay));
             const frame = String(arg("frameId"));
             return researchArchives[frame] = {
               id: "archive-" + frame, project_id: "default", frame_id: frame, source_hash: "source",
@@ -1904,6 +1956,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             };
           }
           case "confirm_research_archive": {
+            const confirmDelay = Number((window as any).__archiveConfirmDelay ?? 0);
+            if (confirmDelay > 0) await new Promise((resolve) => setTimeout(resolve, confirmDelay));
             if ((window as any).__archiveFailure) throw new Error("File changed since review: scratch/trial.rds");
             const frame=String(arg("frameId")), input=plain(arg("input")), old=researchArchives[frame];
             const saved=researchArchives[frame]={...old,...input,frozen_at:Math.floor(Date.now()/1000),files:old.files.map((f:any)=>({...f,...input.files.find((v:any)=>v.path===f.path),cleanup_status:input.files.find((v:any)=>v.path===f.path)?.action==="delete"?"deleted":"",snapshot_path:f.path==="results/final.csv"?".wisp/research-archives/a/final.csv":null}))};
@@ -1920,7 +1974,60 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const available = mode === "many" ? [...journeyEntries, ...Array.from({length:5},(_,index)=>journeyEntry(`extra-${index}`,"artifact",`additional_${index}.csv`,0,{source_id:`journey-data-extra-${index}`,content_type:"text/csv",version_number:1}))] : journeyEntries;
             const entries = mode === "empty" ? [] : available.filter(e => e.occurred_at >= Number(arg("from")) && e.occurred_at < Number(arg("until")));
             if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-            return {entries, truncated: false};
+            return {entries, truncated: false, recaps: recapsIn(Number(arg("from")), Number(arg("until")))};
+          }
+          case "get_daily_recap_automation": return {...automation.daily};
+          case "set_daily_recap_automation":
+            automation.daily = {...automation.daily, enabled: Boolean(arg("enabled")), time: String(arg("time"))};
+            return {...automation.daily};
+          case "run_daily_recap_now":
+            automation.daily = {...automation.daily, last_run_at: Math.floor(Date.now() / 1000), drafted: 2, running: false};
+            return {...automation.daily, running: true};
+          case "list_all_schedules": return automation.schedules.map((s: any) => ({...s}));
+          case "create_schedule": {
+            const interval = Math.max(60, Number(arg("intervalSecs"))), now = Math.floor(Date.now() / 1000);
+            const prompt = String(arg("prompt") ?? "").trim();
+            const s = {id: `schedule-${automation.schedules.length + 1}`, project_id: arg("projectId") ?? "default", frame_id: arg("sessionId") ?? null,
+              name: String(arg("name") ?? "").trim() || prompt.split("\n")[0].slice(0, 80), prompt, skill: arg("skill") ?? null,
+              interval_secs: interval, enabled: true, next_run_at: arg("startAt") ?? now + interval, last_run_at: null, created_at: now, updated_at: now};
+            automation.schedules.push(s);
+            return {...s};
+          }
+          case "set_schedule_enabled": {
+            const s = automation.schedules.find((s: any) => s.id === arg("id"));
+            if (!s) throw new Error("The schedule no longer exists.");
+            s.enabled = Boolean(arg("enabled"));
+            return null;
+          }
+          case "run_schedule_now": (window as any).__ranSchedule = arg("id"); return null;
+          case "delete_schedule": automation.schedules = automation.schedules.filter((s: any) => s.id !== arg("id")); return null;
+          case "generate_research_recap": {
+            if ((window as any).__recapError) throw new Error((window as any).__recapError);
+            const from = Number(arg("from")), until = Number(arg("until"));
+            if (!journeyEntries.some(e => e.occurred_at >= from && e.occurred_at < until)) return null;
+            const old = journeyRecaps.findIndex(r => r.day_start === from);
+            const recap = {
+              id: old >= 0 ? journeyRecaps[old].id : `recap-${from}`, day_start: from, status: "draft",
+              headline: journeyText("Normalization compared; method B chosen", "完成归一化对比，选定方案 B"),
+              done: [{text: journeyText("Compared two normalization methods", "完成两种归一化方法对比"), refs: [0, 1]}],
+              findings: [{text: journeyText("Method B is more stable at low sample sizes", "方案 B 在低样本量下更稳定"), refs: [2]}],
+              issues: [], next: [{text: journeyText("Validate on the full dataset", "在完整数据集上验证"), refs: [2]}],
+              sources: [
+                {kind: "run", id: "run-local-002", title: journeyText("Completed normalization comparison", "完成两种归一化方法对比")},
+                {kind: "artifact", id: "journey-image-v1", title: "normalization_comparison.png"},
+                {kind: "record", id: "finding-today", title: journeyText("Method B is more stable at low sample sizes.", "方案 B 在低样本量下更稳定。")},
+              ],
+              model: "mock-recap-model", generated_at: Math.floor(Date.now() / 1000),
+            };
+            if (old >= 0) journeyRecaps[old] = recap; else journeyRecaps.push(recap);
+            return recap;
+          }
+          case "update_research_recap": {
+            const edit = plain(arg("edit")); const recap = journeyRecaps.find(r => r.id === edit.id);
+            if (!recap) throw new Error("This recap no longer exists");
+            const keep = (items: any[], before: any[]) => items.map((item: any) => ({text: item.text.trim(), refs: before.find((b: any) => b.text === item.text.trim())?.refs ?? []}));
+            Object.assign(recap, {status: edit.status, headline: edit.headline.trim(), done: keep(edit.done, recap.done), findings: keep(edit.findings, recap.findings), issues: keep(edit.issues, recap.issues), next: keep(edit.next, recap.next)});
+            return {...recap};
           }
           case "add_research_journal_entry": {
             if ((window as any).__journeySaveError) throw new Error("Journal write failed");
@@ -2241,7 +2348,11 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               },
             };
           }
+          case "set_viewed_session":
+            activeMockFrame = String(arg("id") ?? "");
+            return null;
           case "load_session":
+            activeMockFrame = String(arg("id") ?? "");
             if (mockExplorationFlow && String(arg("id") ?? "").startsWith("exploration-")) {
               activeMockFrame = String(arg("id"));
               return explorationTranscript(activeMockFrame);
@@ -2283,6 +2394,13 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                   branch_state: session.branch_state ?? null,
                 };
               }
+            }
+            if (String(arg("id") ?? "") === "research-assistant") {
+              return {
+                items: (window as any).__assistantHistory ?? [],
+                next_before_seq: null,
+                user_offset: 0,
+              };
             }
             if (quickActionSessions[String(arg("id") ?? "")]) {
               return {
@@ -2438,8 +2556,13 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                   "![schematic tree](species_fix_out/species_names_schematic_tree.png)",
                   "![missing image](figures/missing-history.png)",
                   "![saved version](figures/saved.png)",
+                  "| file |\n|-|\n| [linked plot](figures/linked.png)（pdf） |",
                 ].join("\n\n"), resources: [{
-                  id: "saved-image-link", ordinal: 0, originalReference: "figures/saved.png",
+                  id: "linked-image-link", ordinal: 0, originalReference: "figures/linked.png",
+                  artifactId: "linked-image", artifactVersionId: "linked-image-v1",
+                  displayName: "linked.png", kind: "image", mimeType: "image/png", status: "ready", error: null,
+                }, {
+                  id: "saved-image-link", ordinal: 1, originalReference: "figures/saved.png",
                   artifactId: "saved-image", artifactVersionId: "saved-image-v1",
                   displayName: "saved.png", kind: "image", mimeType: "image/png", status: "ready", error: null,
                 }] }], next_before_seq: null, user_offset: 0,
@@ -2587,21 +2710,36 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               };
             }
             return { items: [], next_before_seq: null, user_offset: 0 };
+          case "set_session_shelved": {
+            if ((window as any).__failShelve) throw new Error("Could not save conversation visibility");
+            const id = String(arg("id"));
+            if (!mockSessions.some((session) => session.id === id)) throw new Error("Session not found");
+            if (arg("shelved")) shelvedSessionIds.add(id);
+            else shelvedSessionIds.delete(id);
+            localStorage.setItem("mock-shelved-sessions", JSON.stringify([...shelvedSessionIds]));
+            ((window as any).__shelveCalls ??= []).push({ id, shelved: arg("shelved") });
+            return null;
+          }
           case "list_sessions_page": {
             ((window as any).__projectSessionRefreshes ??= []).push(activeProjectId);
             const cursor = plain(arg("cursor"));
-            const start = cursor ? mockSessions.findIndex((item) => item.id === cursor.id) + 1 : 0;
-            const items = mockSessions.slice(start, start + 100);
-            const hasMore = start + items.length < mockSessions.length;
+            const shelved = Boolean(arg("shelved"));
+            const q = String(arg("query") ?? "").toLowerCase();
+            const matching = mockSessions.filter((session) => shelvedSessionIds.has(session.id) === shelved
+              && [session.title, session.body].some((value) => String(value ?? "").toLowerCase().includes(q)));
+            const start = cursor ? matching.findIndex((item) => item.id === cursor.id) + 1 : 0;
+            const items = matching.slice(start, start + 100);
+            const hasMore = start + items.length < matching.length;
             const last = items.at(-1);
             return {
               items,
               next_cursor: hasMore && last ? { id: last.id, ts: last.ts } : null,
               running_ids: mockSessions.filter((item) => item.running).map((item) => item.id),
+              shelved_active_id: shelvedSessionIds.has(activeMockFrame) ? activeMockFrame : null,
             };
           }
           case "latest_used_session":
-            return mockSessions.find((session) => session.has_user_turn !== false)?.id ?? null;
+            return mockSessions.find((session) => session.has_user_turn !== false && !shelvedSessionIds.has(session.id))?.id ?? null;
           case "list_project_explorations":
             return mockExplorations.filter((item) =>
               !mockExplorationRoundResolved || item.exploration.status !== "discarded").map((item) => ({
@@ -2754,6 +2892,18 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "list_folders":
             ((window as any).__projectFolderRefreshes ??= []).push(activeProjectId);
             return mockFolders.map((folder) => ({ ...folder }));
+          case "preview_session_artifacts": {
+            const behavior = new URL(location.href).searchParams.get("mockSessionArtifacts");
+            if (behavior === "slow") await new Promise(resolve => setTimeout(resolve, 700));
+            if (behavior === "error") throw new Error("Target file already exists: results/plot.svg");
+            return {
+              fingerprint: `${String(arg("id"))}:${String(arg("targetProjectId") ?? "delete")}`,
+              artifacts: ["plot.svg"], files: behavior === "many"
+                ? Array.from({ length: 120 }, (_, i) => `results/figures/analysis-${i}/plot.svg`)
+                : ["results/plot.svg", ".wisp/artifacts/sha256/plot.svg"],
+              retained: [{ name: "uploads/input.csv", reason: "upload" }, { name: "shared.csv", reason: "shared" }],
+            };
+          }
           case "create_folder":
           case "rename_folder":
           case "delete_folder":
@@ -3160,6 +3310,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "list_models":
             return mockModels;
           case "model_catalog_lookup": {
+            if (query.get("mockSlowCatalog") === "1" && arg("model") === "gpt-5.6-luna") {
+              await new Promise(resolve => setTimeout(resolve, 700));
+              (window as any).__slowCatalogCompleted = true;
+            }
             return mockCatalogLookup(
               String(arg("provider") ?? ""),
               String(arg("apiUrl") ?? ""),
@@ -3511,6 +3665,9 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             return Object.entries(mockCredentials);
           case "list_custom_credentials":
             return mockCustomCredentials.map((credential) => ({ ...credential }));
+          case "assistant_weixin_status":
+            if ((window as any).__assistantWeixinStatusError) throw new Error("Assistant connection unavailable");
+            return { ...mockAssistantWeixin };
           case "channels_status":
             return { ...mockChannels, device: { ...mockChannels.device } };
           case "set_feishu_channel":
@@ -3565,15 +3722,31 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             mockChannels.feishu_pending_owner_open_id = "";
             return null;
           case "set_weixin_channel":
+            if (arg("destination") === "assistant") {
+              if ((window as any).__assistantWeixinEnableError) throw new Error("Enable failed");
+              mockAssistantWeixin.enabled = Boolean(arg("enabled"));
+              mockAssistantWeixin.state = mockAssistantWeixin.enabled ? "running" : "stopped";
+              return null;
+            }
             mockChannels.weixin_enabled = Boolean(arg("enabled"));
             mockChannels.weixin_state = mockChannels.weixin_enabled ? "running" : "stopped";
             return null;
           case "weixin_bind_start":
             return { qrcode: "mock-qr", qr_image: "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21"><rect width="21" height="21" fill="white"/><path d="M1 1h6v6H1zm2 2v2h2V3zM14 1h6v6h-6zm2 2v2h2V3zM1 14h6v6H1zm2 2v2h2v-2zM9 2h2v2H9zm2 3h2v2h-2zM8 8h3v3H8zm5 0h2v2h-2zm3 1h4v2h-4zM9 13h2v2H9zm3-2h2v4h-2zm3 2h2v2h-2zm3 0h2v4h-2zm-9 4h3v3H9zm5-1h3v2h-3zm1 3h5v1h-5z" fill="black"/></svg>') };
           case "weixin_bind_poll":
+            if (arg("destination") === "assistant") {
+              const result = (window as any).__assistantWeixinPollState ?? "confirmed";
+              if (result === "error") throw new Error("Binding failed");
+              if (result === "confirmed") mockAssistantWeixin.bound = true;
+              return result;
+            }
             mockChannels.weixin_bound = true;
             return "confirmed";
           case "weixin_unbind":
+            if (arg("destination") === "assistant") {
+              Object.assign(mockAssistantWeixin, { enabled: false, bound: false, state: "stopped", detail: "" });
+              return null;
+            }
             mockChannels.weixin_bound = false;
             mockChannels.weixin_enabled = false;
             mockChannels.weixin_state = "stopped";
@@ -4632,6 +4805,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const limit = Math.max(1, Math.min(100, Number(arg("limit") ?? 12)));
             if (requestedProject != null) {
               return mockSessions
+                .filter((session) => !shelvedSessionIds.has(session.id))
                 .filter((session) => [session.title, session.body]
                   .some((value) => String(value ?? "").toLowerCase().includes(q)))
                 .slice(0, limit)
@@ -4646,7 +4820,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                 }));
             }
             const rows = query.get("mockManySessions") === "1"
-              ? mockSessions.map((session) => ({
+              ? mockSessions.filter((session) => !shelvedSessionIds.has(session.id)).map((session) => ({
                   id: session.id,
                   project_id: "default",
                   project_name: project.name,
@@ -5124,6 +5298,35 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "delete_global_memory":
             globalMemories = globalMemories.filter((memory) => memory.id !== String(arg("id") ?? ""));
             return null;
+          case "get_command_hooks":
+            return commandHooks.map((hook) => ({ ...hook }));
+          case "set_command_hooks": {
+            const hooks = (plain(arg("hooks") ?? []) as typeof commandHooks)
+              .map((hook) => ({
+                ...hook,
+                command: String(hook.command).trim(),
+                // Like the backend: only tool events keep a matcher.
+                matcher: hook.event.includes("ToolUse") ? String(hook.matcher).trim() : "",
+              }))
+              .filter((hook) => hook.command);
+            if (hooks.some((hook) => hook.matcher === "(")) {
+              throw new Error("Invalid tool matcher '(': regex parse error");
+            }
+            commandHooks = hooks;
+            return commandHooks.map((hook) => ({ ...hook }));
+          }
+          case "get_project_hooks":
+            return projectHooks && { ...projectHooks };
+          case "set_project_hooks_trust": {
+            const sha256 = arg("sha256") as string | null;
+            if (!projectHooks) return null;
+            // Like the backend: only the content that was shown can be trusted.
+            if (sha256 && sha256 !== projectHooks.sha256) {
+              throw new Error(".wisp/hooks.json changed since it was shown. Review it again.");
+            }
+            projectHooks = { ...projectHooks, trusted: Boolean(sha256) };
+            return { ...projectHooks };
+          }
           case "get_auto_review_enabled":
             return sessionAutoReviewEnabled[String(arg("sessionId") ?? "")] ?? false;
           case "set_auto_review_enabled": {
@@ -5220,22 +5423,10 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             if (defaultSpecialist) sessionSpecialists[id] = defaultSpecialist;
             return id;
           }
-          case "start_scratch_chat": {
-            scratchOpen = true;
-            scratchSessionId = `scratch-${Math.random().toString(36).slice(2)}`;
-            sessionModels[scratchSessionId] = activeHttpModelId();
-            ((window as any).__scratchOpenEvents ??= []).push(true);
-            return { sessionId: scratchSessionId, projectId: "scratch:mock" };
-          }
-          case "close_scratch_chat": {
-            scratchOpen = false;
-            if (scratchSessionId) {
-              delete sessionModels[scratchSessionId];
-            }
-            scratchSessionId = null;
-            ((window as any).__scratchOpenEvents ??= []).push(false);
+          case "open_research_assistant":
+            return "research-assistant";
+          case "close_research_assistant":
             return null;
-          }
           case "branch_session": {
             const source = String(arg("sessionId") ?? "");
             const sourceSession = mockSessions.find((session) => session.id === source);
@@ -5376,6 +5567,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             }, 0);
             return null;
           case "send_message": {
+            if ((window as any).__sendMessageError) throw new Error(String((window as any).__sendMessageError));
             const fid = String(arg("sessionId") ?? arg("session_id") ?? "") || "t1";
             const msg = String(arg("message") ?? "");
             lastMessageBySession[fid] = msg;
@@ -6676,16 +6868,6 @@ export function parallelMock(): void {
             status: "running",
           }];
           case "new_session": return `s-${Math.random().toString(36).slice(2)}`;
-          case "start_scratch_chat": {
-            scratchOpen = true;
-            scratchSessionId = `scratch-${Math.random().toString(36).slice(2)}`;
-            return { sessionId: scratchSessionId, projectId: "scratch:mock" };
-          }
-          case "close_scratch_chat": {
-            scratchOpen = false;
-            scratchSessionId = null;
-            return null;
-          }
           case "rename_session": {
             const session = sessions.find((entry) => entry.id === arg("id"));
             if (session) {
@@ -6700,6 +6882,18 @@ export function parallelMock(): void {
               });
             }
             return null;
+          }
+          case "preview_session_artifacts": {
+            const behavior = new URL(location.href).searchParams.get("mockSessionArtifacts");
+            if (behavior === "slow") await new Promise(resolve => setTimeout(resolve, 700));
+            if (behavior === "error") throw new Error("Target file already exists: results/plot.svg");
+            return {
+              fingerprint: `${String(arg("id"))}:${String(arg("targetProjectId") ?? "delete")}`,
+              artifacts: ["plot.svg"], files: behavior === "many"
+                ? Array.from({ length: 120 }, (_, i) => `results/figures/analysis-${i}/plot.svg`)
+                : ["results/plot.svg", ".wisp/artifacts/sha256/plot.svg"],
+              retained: [{ name: "uploads/input.csv", reason: "upload" }, { name: "shared.csv", reason: "shared" }],
+            };
           }
           case "delete_session": {
             const index = sessions.findIndex((entry) => entry.id === arg("id"));

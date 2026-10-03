@@ -27,6 +27,7 @@
 - Keep the wordmark large enough for the “science” lettering to read. Compact chrome and the research-graph empty state retain a small symbol; chat greetings retain the serif typography.
 - Research graph headings use Source Serif at `--text-lg`; list/canvas stay utilitarian.
 - The projects home puts a documentation control immediately to the right of Settings. It opens the tutorials index, the same page as Help → Documentation.
+- Home actions stay on one row when space permits. In narrower desktop windows, the shortcut icons form the first row and Research assistant / Import project / New project form the second, aligned right beside the brand. At small widths the action area moves below the brand; button labels may wrap to keep every action visible.
 
 ## Queued follow-ups
 
@@ -62,16 +63,21 @@
 
 ## Native question cards
 
-- Selecting an option in a native `ask_user` card fills the composer and leaves
-  the card pending. The user can edit the answer, change the selection, or add
-  conditions before sending.
-- The generated draft contains the option label and, when present, an explicit
+- Selecting an option in a native `ask_user` card sends it immediately as the
+  next user message and settles the card; any unrelated composer draft is kept.
+  To add conditions, type a custom answer in the card's freeform field instead.
+- The sent answer contains the option label and, when present, an explicit
   `说明：` line so the option description is not lost from the submitted turn.
-- ACP `ask_user` cards continue to resolve through their protocol response path;
-  they do not use the native composer-draft behavior.
+- ACP `ask_user` cards resolve through their protocol response path instead of
+  sending a new user message.
 
 ## Composer attachments and references
 
+- The WebView composer rejects leaked macOS arrow-key control characters
+  (U+001C–U+001F) before insertion and removes them from pasted/restored drafts
+  before sending. Fallback cleanup preserves UTF-16 caret/selection positions
+  and waits for IME composition to finish; normal arrow navigation, selection,
+  tabs, newlines, and Unicode text keep their native behavior.
 - The composer keeps its top-edge resize affordance invisible at rest while preserving the full-width drag target and persisted custom height.
 - Context usage sits immediately left of the model picker as a number-free gauge; its needle sweeps from upper-left to upper-right as the active conversation fills its context window.
 - The context-usage panel opens docked in the composer column, pushing the transcript up instead of covering it. Dragging the header undocks it into a floating window that stays open while typing; a dock button or double-click returns it. There is no full-screen click-swallowing backdrop.
@@ -95,8 +101,9 @@
 
 ## Topbar and inspector chrome
 
-- The conversation topbar keeps session tabs as the primary signal. Inbox, terminal, and inspector toggles live in `.topbar-actions`.
-- The conversation outline opens from a list icon and question count in the topbar, keeping navigation off the message canvas. Compact panes hide the count while retaining the labeled icon. The outline is a bounded, scrollable card with quieter numbers and timestamps; the selected question has an accent edge, and Escape closes the card before its parent surface.
+- The conversation topbar keeps session tabs as the primary signal. The Full transcript / Model view switch (two icon tabs, labelled by hover title), outline, share, trajectory, archive, inbox, terminal, and inspector toggles all live in one `.topbar-actions` group.
+- When the conversation pane is 720 px or narrower (side panels count), everything but the inspector toggle folds into a More (⋮) menu. The same buttons become labelled rows there, with the view switch on top; a dot on More stands in for the inbox badge, the inbox list opens below the menu, and Escape closes the inbox before the menu.
+- The conversation outline opens from a list icon and question count in the topbar, keeping navigation off the message canvas. The outline is a bounded, scrollable card with quieter numbers and timestamps; the selected question has an accent edge, and Escape closes the card before its parent surface.
 - Status text appears only when non-empty (or when an API-key action is required) and truncates with a `title` for the full value.
 - Specialist labels stay quiet text, not status pills.
 - Artifact type badges are neutral mono labels; only tabular data keeps a clay accent. Prefer `--ok` / `--err` / `--clay` over one-off HSL pill colors.

@@ -1,8 +1,9 @@
 //! Turn hooks: the one place that decides what runs when a user-visible turn
 //! ends, for native and ACP sessions alike.
 //!
-//! - Stop (`run_stop`): before `Done`; may continue the turn once. Automatic
-//!   review → one correction → one follow-up review.
+//! - Stop (`run_stop`): before `Done`; may continue the turn. Automatic
+//!   review → one correction → one follow-up review, then the user's Stop
+//!   command hooks (`command_hooks`), which may continue it once more.
 //! - AfterTurn (`spawn_after_turn`): detached after `Done`; results arrive as
 //!   events. Memory proposal and follow-up questions. Running here instead of
 //!   in the webview's `Done` handler gives every origin (desktop, queue, IM,
@@ -48,6 +49,8 @@ impl HookId {
 pub(crate) struct TurnEnd<'a> {
     pub(crate) frame_id: &'a str,
     pub(crate) project_id: &'a str,
+    /// Working directory for command hooks.
+    pub(crate) project_root: &'a Path,
     /// Native `Completed` reports `None`; ACP reports its own reason.
     pub(crate) stop_reason: Option<&'a str>,
     pub(crate) resume: bool,
@@ -141,9 +144,8 @@ impl TurnDriver<'_> {
     }
 }
 
-/// Stop hooks. Review one completed analysis turn, request at most one
-/// correction, then verify the corrected transcript once. Review failures
-/// never fail the user's original turn.
+/// Stop hooks: automatic review, then the user's Stop command hooks. Hook
+/// failures never fail the user's original turn.
 pub(crate) async fn run_stop(
     state: &AppState,
     app: &AppHandle,
@@ -151,9 +153,62 @@ pub(crate) async fn run_stop(
     driver: &mut TurnDriver<'_>,
     cancel: &AtomicBool,
 ) {
-    if !end.runs_stop_hooks() || !HookId::AutoReview.enabled(&state.store, end.frame_id).await {
+    if !end.runs_stop_hooks() {
         return;
     }
+    if HookId::AutoReview.enabled(&state.store, end.frame_id).await {
+        auto_review(state, app, end, driver, cancel).await;
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(reason) = fire_stop(app, end, false).await else {
+        return;
+    };
+    // ponytail: one continuation per turn, like the Reviewer's one correction; raise the cap if hooks need more rounds.
+    let prompt = format!("A Stop hook asked you to keep working before finishing:\n{reason}");
+    let message = match driver.continue_turn(&prompt, cancel).await {
+        Err(message) => message,
+        Ok(()) if cancel.load(Ordering::SeqCst) => return,
+        // Re-check so a gate that still fails is shown, not silently passed.
+        Ok(()) => match fire_stop(app, end, true).await {
+            Some(reason) => format!("still blocking after one continuation: {reason}"),
+            None => return,
+        },
+    };
+    tracing::warn!("Stop hook for {}: {message}", end.frame_id);
+    driver.emit(AgentEvent::HookFailed {
+        frame_id: end.frame_id.to_string(),
+        hook: wisp_dto::HookEvent::Stop.as_str().into(),
+        message,
+    });
+}
+
+/// Stop command hooks; `Some(reason)` when one blocks. `stop_hook_active` is
+/// true on the re-check after a continuation, as in Claude Code.
+async fn fire_stop(app: &AppHandle, end: &TurnEnd<'_>, stop_hook_active: bool) -> Option<String> {
+    command_hooks::fire(
+        app,
+        end.frame_id,
+        end.project_id,
+        end.project_root,
+        wisp_dto::HookEvent::Stop,
+        None,
+        serde_json::json!({ "stop_hook_active": stop_hook_active }),
+    )
+    .await
+    .block
+}
+
+/// Review one completed analysis turn, request at most one correction, then
+/// verify the corrected transcript once.
+async fn auto_review(
+    state: &AppState,
+    app: &AppHandle,
+    end: &TurnEnd<'_>,
+    driver: &mut TurnDriver<'_>,
+    cancel: &AtomicBool,
+) {
     let frame_id = end.frame_id;
     let msgs = match driver.transcript().await {
         Ok(msgs) => msgs,
@@ -541,6 +596,7 @@ mod tests {
         TurnEnd {
             frame_id: "f",
             project_id: "p",
+            project_root: Path::new("."),
             stop_reason,
             resume,
             reviewer_session,

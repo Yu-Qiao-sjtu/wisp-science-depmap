@@ -4,6 +4,9 @@ use super::*;
 pub(crate) fn ProjectsScreen(
     locale: RwSignal<Locale>,
     calendar_open: RwSignal<bool>,
+    automation_open: RwSignal<bool>,
+    automation_form: RwSignal<bool>,
+    on_open_specialists: Callback<()>,
     dialog_open: RwSignal<bool>,
     running: RwSignal<HashSet<String>>,
     approval_pending: ReadSignal<HashSet<String>>,
@@ -17,7 +20,7 @@ pub(crate) fn ProjectsScreen(
     on_open_settings: Callback<()>,
     on_open_library: Callback<()>,
     on_open_demo: Callback<()>,
-    on_open_scratch: Callback<()>,
+    on_open_assistant: Callback<()>,
     on_search: Callback<()>,
     on_export_project: Callback<(String, String)>,
     project_transfer: RwSignal<Option<ProjectTransferProgress>>,
@@ -680,7 +683,7 @@ pub(crate) fn ProjectsScreen(
             }
             ev.prevent_default();
         }>
-            <div class="projects-head" prop:inert=move ||calendar_open.get()>
+            <div class="projects-head" prop:inert=move ||calendar_open.get()||automation_open.get()>
                 <div class="projects-brand">
                     <h1 class="projects-title">
                         <span class="projects-brand-mark brand-wordmark" role="img" aria-label="wisp-depmap"></span>
@@ -691,48 +694,56 @@ pub(crate) fn ProjectsScreen(
                     </p>
                 </div>
                 <div class="projects-actions">
-                    <button type="button" class="projects-icon-btn" data-testid="open-research-calendar"
-                        title=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
-                        aria-label=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
-                        on:click=move |_| calendar_open.set(true)>{compose_icon("calendar")}</button>
-                    <button type="button" class="projects-icon-btn"
-                        title=move || t(locale.get(), "sidebar.library")
-                        aria-label=move || t(locale.get(), "sidebar.library")
-                        on:click=move |_| on_open_library.call(())>
-                        {compose_icon("star")}
-                    </button>
-                    <button type="button" class="projects-icon-btn"
-                        title=move || t(locale.get(), "projects.search")
-                        aria-label=move || t(locale.get(), "projects.search")
-                        on:click=move |_| on_search.call(())>
-                        {compose_icon("search")}
-                    </button>
-                    <button type="button" class="projects-icon-btn"
-                        title=move || t(locale.get(), "sidebar.settings")
-                        aria-label=move || t(locale.get(), "sidebar.settings")
-                        on:click=move |_| on_open_settings.call(())>
-                        {compose_icon("gear")}
-                    </button>
-                    <button type="button" class="projects-icon-btn" data-testid="open-tutorials"
-                        title=move || t(locale.get(), "menu.docs")
-                        aria-label=move || t(locale.get(), "menu.docs")
-                        on:click=move |_| open_tutorials()>
-                        {compose_icon("doc")}
-                    </button>
-                    <button type="button" class="btn-ghost projects-scratch"
-                        on:click=move |_| on_open_scratch.call(())>
-                        {move || t(locale.get(), "scratch.open")}
-                    </button>
-                    <button type="button" class="btn-ghost projects-import"
-                        disabled=move || project_transfer.get().is_some_and(|transfer| transfer.is_active())
-                        on:click=move |_| import_options_open.set(true)>
-                        {compose_icon("upload")}<span>{move || t(locale.get(), "projects.import")}</span>
-                    </button>
-                    <button class="btn-primary" on:click=move |_| {
-                        creating.set(true);
-                    }>
-                        <span class="new-plus">"+"</span>{move || t(locale.get(), "projects.new")}
-                    </button>
+                    <div class="projects-quick-actions">
+                        <button type="button" class="projects-icon-btn" data-testid="open-research-calendar"
+                            title=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
+                            aria-label=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
+                            on:click=move |_| calendar_open.set(true)>{compose_icon("calendar")}</button>
+                        <button type="button" class="projects-icon-btn" data-testid="open-automation"
+                            title=move || crate::research_journey::j(locale.get(), "Automation", "自动化")
+                            aria-label=move || crate::research_journey::j(locale.get(), "Automation", "自动化")
+                            on:click=move |_| automation_open.set(true)>{compose_icon("clock")}</button>
+                        <button type="button" class="projects-icon-btn"
+                            title=move || t(locale.get(), "sidebar.library")
+                            aria-label=move || t(locale.get(), "sidebar.library")
+                            on:click=move |_| on_open_library.call(())>
+                            {compose_icon("star")}
+                        </button>
+                        <button type="button" class="projects-icon-btn"
+                            title=move || t(locale.get(), "projects.search")
+                            aria-label=move || t(locale.get(), "projects.search")
+                            on:click=move |_| on_search.call(())>
+                            {compose_icon("search")}
+                        </button>
+                        <button type="button" class="projects-icon-btn"
+                            title=move || t(locale.get(), "sidebar.settings")
+                            aria-label=move || t(locale.get(), "sidebar.settings")
+                            on:click=move |_| on_open_settings.call(())>
+                            {compose_icon("gear")}
+                        </button>
+                        <button type="button" class="projects-icon-btn" data-testid="open-tutorials"
+                            title=move || t(locale.get(), "menu.docs")
+                            aria-label=move || t(locale.get(), "menu.docs")
+                            on:click=move |_| open_tutorials()>
+                            {compose_icon("doc")}
+                        </button>
+                    </div>
+                    <div class="projects-main-actions">
+                        <button type="button" class="btn-ghost projects-assistant" data-testid="open-research-assistant"
+                            on:click=move |_| on_open_assistant.call(())>
+                            {compose_icon("sparkles")}<span>{move || t(locale.get(), "assistant.open")}</span>
+                        </button>
+                        <button type="button" class="btn-ghost projects-import"
+                            disabled=move || project_transfer.get().is_some_and(|transfer| transfer.is_active())
+                            on:click=move |_| import_options_open.set(true)>
+                            {compose_icon("upload")}<span>{move || t(locale.get(), "projects.import")}</span>
+                        </button>
+                        <button class="btn-primary" on:click=move |_| {
+                            creating.set(true);
+                        }>
+                            <span class="new-plus">"+"</span>{move || t(locale.get(), "projects.new")}
+                        </button>
+                    </div>
                 </div>
             </div>
             {move || open_error.get().map(|message| view! {
@@ -1203,6 +1214,15 @@ pub(crate) fn ProjectsScreen(
                     </div>
                 </div>
             })}
+            {move || automation_open.get().then(|| view! {<div class="home-calendar-page">
+            <crate::automation::AutomationPage
+                locale=locale
+                projects=Signal::derive(move || projects.get().into_iter().filter(|p| !project_is_hidden(&p.id)).collect())
+                form_open=automation_form
+                on_open_specialists=on_open_specialists
+                on_close=Callback::new(move |_| { automation_form.set(false); automation_open.set(false); })
+            />
+            </div>})}
             {move || calendar_open.get().then(|| view! {<div class="home-calendar-page">
             <crate::research_calendar::ResearchCalendar
                 locale=locale
@@ -1212,7 +1232,7 @@ pub(crate) fn ProjectsScreen(
                 project_transfer=project_transfer.read_only()
             />
             </div>})}
-            <div class="projects-cols" prop:inert=move ||calendar_open.get()>
+            <div class="projects-cols" prop:inert=move ||calendar_open.get()||automation_open.get()>
                 <div class="projects-col">
                     <h2>{move || t(locale.get(), "projects.title")}</h2>
                     {move || {
@@ -1500,7 +1520,7 @@ pub(crate) fn ProjectsScreen(
                     }).collect_view()}
                 </div>
             </div>
-            <div class="projects-footer" prop:inert=move ||calendar_open.get()>
+            <div class="projects-footer" prop:inert=move ||calendar_open.get()||automation_open.get()>
                 <span>{move || t(locale.get(), "projects.star_hint")}</span>
                 <button type="button" class="projects-star-link"
                     on:click=move |_| open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into())>

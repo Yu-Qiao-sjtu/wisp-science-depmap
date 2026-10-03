@@ -20,6 +20,14 @@ pub(crate) enum TurnOrigin {
 }
 
 impl TurnOrigin {
+    pub(crate) fn for_dispatch(self) -> Self {
+        if matches!(self, Self::Im) {
+            Self::Im
+        } else {
+            Self::Desktop
+        }
+    }
+
     fn force_ask_mutations(self) -> bool {
         matches!(self, Self::Im)
     }
@@ -159,6 +167,30 @@ pub(crate) async fn send_message(
 struct ManualCompactCommand {
     intent: wisp_core::CompactIntent,
     instruction: Option<String>,
+}
+
+/// UserPromptSubmit command hooks: exit 2 refuses the prompt before the turn
+/// starts; stdout becomes context for this turn.
+async fn user_prompt_hooks(
+    app: &AppHandle,
+    frame_id: &str,
+    project: &ActiveProject,
+    prompt: &str,
+) -> Result<Option<String>, String> {
+    let outcome = command_hooks::fire(
+        app,
+        frame_id,
+        &project.id,
+        &project.root,
+        wisp_dto::HookEvent::UserPromptSubmit,
+        None,
+        serde_json::json!({ "prompt": prompt }),
+    )
+    .await;
+    match outcome.block {
+        Some(reason) => Err(format!("Blocked by a UserPromptSubmit hook: {reason}")),
+        None => Ok((!outcome.context.is_empty()).then_some(outcome.context)),
+    }
 }
 
 fn parse_manual_compact_command(message: &str) -> Option<ManualCompactCommand> {
@@ -341,6 +373,12 @@ pub(crate) async fn send_message_inner(
         None => None,
     };
     let acp_agent_id = acp::resolve_agent_choice(acp_agent_id.as_deref(), saved_agent.as_deref())?;
+    // The research assistant coordinates and never works: its own prompt and
+    // tool set below, no runtimes, MCP or external agents.
+    let assistant = wisp_store::is_assistant_project_id(&ap.id);
+    if assistant && acp_agent_id.is_some() {
+        return Err("The research assistant runs on the built-in agent.".into());
+    }
     if acp_agent_id.is_some() {
         if project_write_locked {
             return Err(
@@ -424,6 +462,11 @@ pub(crate) async fn send_message_inner(
         if let Some(compute) = ssh_hosts::stored_compute_section(&state.store, &frame_id).await {
             injected_context.push(compute);
         }
+        if !resume {
+            if let Some(context) = user_prompt_hooks(&app, &frame_id, &ap, &message).await? {
+                injected_context.push(context);
+            }
+        }
         let completion_deliveries = if resume {
             Vec::new()
         } else {
@@ -489,6 +532,7 @@ pub(crate) async fn send_message_inner(
                 let end = turn_hooks::TurnEnd {
                     frame_id: &frame_id,
                     project_id: &ap.id,
+                    project_root: &ap.root,
                     stop_reason: Some(stop_reason.as_str()),
                     resume,
                     reviewer_session: false,
@@ -501,6 +545,9 @@ pub(crate) async fn send_message_inner(
                     frame_id: &frame_id,
                 };
                 turn_hooks::run_stop(state, &app, &end, &mut driver, &runtime.cancel).await;
+                if let Ok(messages) = state.store.load_messages(&frame_id).await {
+                    channels::publish_turn_answer(&frame_id, &messages);
+                }
                 state.running_turns.lock().await.remove(&frame_id);
                 mark_seen_if_viewed(state, &frame_id).await;
                 persist_and_emit_terminal_event(
@@ -679,7 +726,13 @@ pub(crate) async fn send_message_inner(
         *guard = None;
     }
     let model_label = models::session_label(&state.store, &frame_id).await;
-    let specialist = specialists::session_specialist(&state.store, &frame_id).await;
+    // A persona, delegation or plan mode would rewrite the assistant's prompt
+    // and tool set; its conversation never takes them.
+    let specialist = if assistant {
+        None
+    } else {
+        specialists::session_specialist(&state.store, &frame_id).await
+    };
     let max_context = match &specialist {
         Some(specialist) => specialists::specialist_context_window(&state.store, specialist).await,
         None => models::profile_context_window(&state.store, &session_profile_id)
@@ -689,8 +742,9 @@ pub(crate) async fn send_message_inner(
     .try_into()
     .unwrap_or(fallback_max_context);
     let delegation_enabled =
-        delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
-    let plan_mode_enabled = plan_mode::session_plan_mode(&state.store, &frame_id).await;
+        !assistant && delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
+    let plan_mode_enabled =
+        !assistant && plan_mode::session_plan_mode(&state.store, &frame_id).await;
     let (
         provider,
         api_url,
@@ -1005,7 +1059,13 @@ pub(crate) async fn send_message_inner(
                 "repaired unpaired tool_calls in {frame_id} so the provider transcript stays paired"
             );
         }
-        agent.seed_system_prompt(&skills, None);
+        if !assistant {
+            agent.seed_system_prompt(&skills, None);
+        } else if agent.ctx.is_empty() {
+            agent
+                .ctx
+                .append_system(research_assistant::ASSISTANT_SYSTEM);
+        }
         let workflow_templates = quick_actions::ensure_templates(&state.store).await;
         if let Some(message) = agent.ctx.messages.first_mut() {
             if let wisp_llm::Content::Text(prompt) = &mut message.content {
@@ -1028,20 +1088,25 @@ pub(crate) async fn send_message_inner(
             .as_ref()
             .and_then(|s| s.connectors.as_ref())
             .map(|v| v.iter().cloned().collect());
-        let wiring = wire_runtimes_and_mcp(
-            &mut agent.tools,
-            &state.runtime_manager,
-            &ap.id,
-            frame_scope.scope_key(),
-            &frame_id,
-            &state.store,
-            None,
-            connector_allow.as_ref(),
-        )
-        .await;
-        if specialist
-            .as_ref()
-            .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
+        let wiring = if assistant {
+            ToolWiringResult::default()
+        } else {
+            wire_runtimes_and_mcp(
+                &mut agent.tools,
+                &state.runtime_manager,
+                &ap.id,
+                frame_scope.scope_key(),
+                &frame_id,
+                &state.store,
+                None,
+                connector_allow.as_ref(),
+            )
+            .await
+        };
+        if !assistant
+            && specialist
+                .as_ref()
+                .is_some_and(|specialist| specialist.id == specialists::DEPMAP_SPECIALIST_ID)
         {
             // Identify the intended remote server by its canonical read-only
             // capability tool, then grant exact tools from that same connector
@@ -1081,10 +1146,15 @@ pub(crate) async fn send_message_inner(
     let agent = guard
         .as_mut()
         .ok_or_else(|| "Failed to prepare the session agent.".to_string())?;
-    if let Some(message) = agent.ctx.messages.first_mut() {
+    if let Some(message) = agent.ctx.messages.first_mut().filter(|_| !assistant) {
         if let wisp_llm::Content::Text(prompt) = &mut message.content {
             network::sync_package_guidance(prompt, &network::load(&state.store).await?);
         }
+    }
+    // The singleton agent is reused by desktop and WeChat; dispatch policy must
+    // follow this turn's origin, not whichever client first constructed it.
+    if assistant {
+        agent.tools = research_assistant::tools(&app, origin, &message);
     }
     let (auto_continue, auto_continue_limit) = load_auto_continue_settings(&state.store).await;
     apply_live_agent_settings(
@@ -1296,6 +1366,10 @@ pub(crate) async fn send_message_inner(
         );
     }
     if !resume {
+        if assistant {
+            agent.ctx.inject_user(research_assistant::now_note());
+            agent.ctx.inject_user(research_assistant::DISPATCH_POLICY);
+        }
         if let Some(context) = rt.mcp_app_context_injection() {
             agent.ctx.inject_user(context);
         }
@@ -1314,6 +1388,9 @@ pub(crate) async fn send_message_inner(
             resolve_reader_references(&state.store, &refs, &frame_id, &message, &rt.cancel).await?
         {
             agent.ctx.inject_user(injection);
+        }
+        if let Some(context) = user_prompt_hooks(&app, &frame_id, &ap, &message).await? {
+            agent.ctx.inject_user(context);
         }
         // Context resolved before the turn belongs before the user's actual
         // request. Observations and review corrections injected later remain
@@ -1606,6 +1683,7 @@ pub(crate) async fn send_message_inner(
     let turn_end = |stop_reason| turn_hooks::TurnEnd {
         frame_id: &frame_id,
         project_id: &ap.id,
+        project_root: &ap.root,
         stop_reason,
         resume,
         reviewer_session,
@@ -1703,6 +1781,9 @@ pub(crate) async fn send_message_inner(
     // The UI uses this marker so it keeps the optimistic user bubble instead of
     // rolling the draft back; the visual Error card stays prefix-free.
     let turn_started = resume || agent.ctx.messages.len() > turn_start;
+    if result.is_ok() {
+        channels::publish_turn_answer(&frame_id, &agent.ctx.messages);
+    }
     drop(guard);
     // After the persist flush so the seen snapshot covers the final messages.
     mark_seen_if_viewed(state, &frame_id).await;
@@ -2303,6 +2384,14 @@ mod queue_tests {
         let _queued = tokio::time::timeout(std::time::Duration::from_secs(1), queued)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn assistant_dispatch_preserves_remote_approval_policy_without_reusing_queue_ids() {
+        assert!(TurnOrigin::Im.for_dispatch().force_ask_mutations());
+        assert!(!TurnOrigin::Desktop.for_dispatch().force_ask_mutations());
+        assert_eq!(TurnOrigin::Queued(42).for_dispatch(), TurnOrigin::Desktop);
+        assert_eq!(TurnOrigin::Im.for_dispatch().queue_id(), None);
     }
 
     #[test]

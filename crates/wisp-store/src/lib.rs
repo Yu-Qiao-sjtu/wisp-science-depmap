@@ -12,6 +12,7 @@ mod artifacts;
 mod ask_user_requests;
 mod bridge_checkpoints;
 mod claim_records;
+mod assistant_tasks;
 mod codex_imports;
 mod context_epochs;
 mod execution_contexts;
@@ -44,6 +45,7 @@ mod runs;
 mod schedules;
 mod scientific_evidence;
 pub mod secrets;
+mod session_artifacts;
 mod session_imports;
 mod sessions;
 mod storage_prefs;
@@ -63,6 +65,7 @@ pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
 pub use bridge_checkpoints::BridgeCheckpointRecord;
 pub use claim_records::ClaimRecordRow;
+pub use assistant_tasks::{AssistantTask, ASSISTANT_TASK_STATUSES};
 pub use context_epochs::{ContextEpochRecord, OpenContextEpoch};
 pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{
@@ -89,7 +92,7 @@ pub use project_state_revisions::{ProjectStateRevision, ProjectStateRevisionSumm
 pub use project_storage::{PROJECT_DATABASE, PROJECT_METADATA};
 pub use project_sync::ProjectSyncState;
 pub use project_transfer::ProjectTransferStats;
-pub use projects::{is_scratch_project_id, SCRATCH_PROJECT_PREFIX};
+pub use projects::{is_assistant_project_id, ASSISTANT_PROJECT_ID};
 pub use provenance::{canonical_json, canonical_json_sha256};
 pub use remote_staging::RemoteStagingEntry;
 pub use schedules::{next_slot_after, ScheduleRecord, ScheduleRunRecord};
@@ -211,6 +214,8 @@ const RESEARCH_ARCHIVES_MIGRATION: &str = "0061_research_archives";
 const CONTEXT_EPOCHS_MIGRATION: &str = "0062_context_epochs";
 pub(crate) const CONTEXT_EPOCH_IDENTITY_MIGRATION: &str = "0063_context_epoch_identity";
 const ACP_AGENT_SELECTION_MIGRATION: &str = "0064_acp_agent_selection";
+const SESSION_SHELVED_MIGRATION: &str = "0065_session_shelved";
+const SESSION_FILE_OPERATIONS_MIGRATION: &str = "0066_session_file_operations";
 
 #[derive(Clone)]
 pub struct Store {
@@ -301,21 +306,45 @@ impl Store {
             .max_connections(4)
             .connect_with(opts)
             .await?;
-        // WAL journaling so a crash mid-turn can't corrupt the DB and committed
-        // messages survive (pairs with incremental message persistence).
-        if wal {
-            sqlx::query("PRAGMA journal_mode=WAL")
-                .execute(&pool)
-                .await?;
+        let result = async {
+            // WAL journaling so a crash mid-turn can't corrupt the DB and committed
+            // messages survive (pairs with incremental message persistence).
+            if wal {
+                sqlx::query("PRAGMA journal_mode=WAL")
+                    .execute(&pool)
+                    .await?;
+            }
+            Self::migrate(&pool).await?;
+            let store = Self {
+                pool: pool.clone(),
+                registry: None,
+                project_scope: None,
+            };
+            store.ensure_local_execution_context().await?;
+            Ok(store)
         }
-        Self::migrate(&pool).await?;
-        let store = Self {
-            pool,
-            registry: None,
-            project_scope: None,
-        };
-        store.ensure_local_execution_context().await?;
-        Ok(store)
+        .await;
+        if result.is_err() {
+            // Snapshot callers may remove a failed staging database immediately.
+            // Dropping a pool alone does not wait for SQLite handles to close.
+            Self::close_pool(&pool).await;
+        }
+        result
+    }
+
+    /// Close every connection before a caller unlinks the database file.
+    /// sqlx 0.8 `Pool::close` can return while a connection that was being
+    /// released lands back in the idle queue, still holding the file open;
+    /// Windows then refuses to delete it. Close again until the pool is empty.
+    pub(crate) async fn close_pool(pool: &SqlitePool) {
+        // ponytail: bounded so an sqlx accounting quirk cannot hang cleanup.
+        for _ in 0..100 {
+            pool.close().await;
+            if pool.size() == 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     /// Every multi-statement transaction in this store writes. Take the write
@@ -490,6 +519,15 @@ impl Store {
             .execute(pool)
             .await;
             Self::record_migration(pool, FRAME_SEEN_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, SESSION_SHELVED_MIGRATION).await? {
+            Self::add_columns_if_missing(
+                pool,
+                "frames",
+                &[("shelved", "INTEGER NOT NULL DEFAULT 0")],
+            )
+            .await?;
+            Self::record_migration(pool, SESSION_SHELVED_MIGRATION).await?;
         }
         if !Self::migration_applied(pool, SESSION_PINNED_MIGRATION).await? {
             Self::add_columns_if_missing(
@@ -868,6 +906,12 @@ impl Store {
     /// Idempotent repair for schema objects that numbered migrations can miss
     /// after a large version skip. Only CREATE IF NOT EXISTS / ADD COLUMN.
     async fn ensure_schema_compat(pool: &SqlitePool) -> Result<()> {
+        sqlx::raw_sql(include_str!(
+            "../migrations/0062_session_file_operations.sql"
+        ))
+        .execute(pool)
+        .await?;
+        Self::record_migration(pool, SESSION_FILE_OPERATIONS_MIGRATION).await?;
         // Partial legacy stores may contain only run tables. Install the
         // notebook triggers only when their target tables exist; retry this
         // additive migration on every open until the notebook schema exists.
@@ -882,6 +926,14 @@ impl Store {
                 .await?;
             Self::record_migration(pool, RESEARCH_ARCHIVES_MIGRATION).await?;
         }
+        // Mainline daily recaps, one per project and local day.
+        sqlx::raw_sql(include_str!("../migrations/0060_research_recaps.sql"))
+            .execute(pool)
+            .await?;
+        // The research assistant's dated plan items.
+        sqlx::raw_sql(include_str!("../migrations/0063_assistant_tasks.sql"))
+            .execute(pool)
+            .await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS folders (\
              id TEXT PRIMARY KEY, \
@@ -917,6 +969,7 @@ impl Store {
                 ("folder_id", "TEXT"),
                 ("seen_at", "INTEGER NOT NULL DEFAULT 0"),
                 ("pinned", "INTEGER NOT NULL DEFAULT 0"),
+                ("shelved", "INTEGER NOT NULL DEFAULT 0"),
                 ("branched_from", "TEXT"),
                 ("reasoning_effort", "TEXT"),
                 ("service_tier", "TEXT"),

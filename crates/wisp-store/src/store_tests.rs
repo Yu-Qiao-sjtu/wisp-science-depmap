@@ -480,7 +480,7 @@ async fn token_usage_folds_usage_events_into_root_sessions() {
         .await
         .unwrap();
     store
-        .create_project("scratch:usage", "Scratch", "/tmp/scratch")
+        .create_project(crate::ASSISTANT_PROJECT_ID, "Assistant", "/tmp/assistant")
         .await
         .unwrap();
     store
@@ -542,11 +542,11 @@ async fn token_usage_folds_usage_events_into_root_sessions() {
         .await
         .unwrap();
     store
-        .create_frame("scratch", "scratch:usage", "OPERON", "m")
+        .create_frame("assistant", crate::ASSISTANT_PROJECT_ID, "OPERON", "m")
         .await
         .unwrap();
     store
-        .append_session_ui_event("scratch", 1, &usage(999, 999, "scratch-model"))
+        .append_session_ui_event("assistant", 1, &usage(999, 999, "assistant-model"))
         .await
         .unwrap();
     let tool_call = |name: &str, preview: &str| {
@@ -594,7 +594,7 @@ async fn token_usage_folds_usage_events_into_root_sessions() {
         .await
         .unwrap();
     store
-        .append_session_ui_event("scratch", 2, &tool_call("use_skill", "scratch-skill"))
+        .append_session_ui_event("assistant", 2, &tool_call("use_skill", "assistant-skill"))
         .await
         .unwrap();
     // A session with no usage events must not appear at all.
@@ -604,7 +604,7 @@ async fn token_usage_folds_usage_events_into_root_sessions() {
         .unwrap();
 
     let workspaces = store.token_usage_by_project().await.unwrap();
-    assert_eq!(workspaces.len(), 2, "scratch usage stays out of Settings");
+    assert_eq!(workspaces.len(), 2, "assistant usage stays out of Settings");
     let workspace = workspaces
         .iter()
         .find(|workspace| workspace.project_id == "p")
@@ -4944,6 +4944,8 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             CONTEXT_EPOCHS_MIGRATION.to_string(),
             CONTEXT_EPOCH_IDENTITY_MIGRATION.to_string(),
             ACP_AGENT_SELECTION_MIGRATION.to_string(),
+            SESSION_SHELVED_MIGRATION.to_string(),
+            SESSION_FILE_OPERATIONS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();
@@ -8443,11 +8445,9 @@ async fn publication_evidence_retains_message_artifacts_during_undo_and_session_
 }
 
 #[tokio::test]
-async fn scratch_projects_hidden_from_user_lists() {
-    use crate::{is_scratch_project_id, SCRATCH_PROJECT_PREFIX};
-
+async fn assistant_project_hidden_from_user_lists() {
     let tmp = std::env::temp_dir().join(format!(
-        "wisp_store_scratch_{}.sqlite",
+        "wisp_store_assistant_{}.sqlite",
         uuid::Uuid::new_v4()
     ));
     let store = Store::open(&tmp).await.unwrap();
@@ -8455,12 +8455,11 @@ async fn scratch_projects_hidden_from_user_lists() {
         .create_project("real", "Real", "/tmp/real")
         .await
         .unwrap();
-    let scratch_id = format!("{SCRATCH_PROJECT_PREFIX}temp");
+    let assistant_id = crate::ASSISTANT_PROJECT_ID;
     store
-        .create_project(&scratch_id, "Scratch", "/tmp/scratch")
+        .create_project(assistant_id, "Assistant", "/tmp/assistant")
         .await
         .unwrap();
-    assert!(is_scratch_project_id(&scratch_id));
 
     store
         .create_frame("f-real", "real", "OPERON", "m")
@@ -8471,11 +8470,11 @@ async fn scratch_projects_hidden_from_user_lists() {
         .await
         .unwrap();
     store
-        .create_frame("f-scratch", &scratch_id, "OPERON", "m")
+        .create_frame("f-assistant", assistant_id, "OPERON", "m")
         .await
         .unwrap();
     store
-        .append_message("f-scratch", 1, &Message::user("scratch"))
+        .append_message("f-assistant", 1, &Message::user("assistant"))
         .await
         .unwrap();
 
@@ -8494,6 +8493,33 @@ async fn scratch_projects_hidden_from_user_lists() {
     assert!(hits.iter().all(|h| h.project_id == "real"));
 
     let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
+async fn opening_the_application_store_deletes_leftover_scratch_projects() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("global.sqlite");
+    let store = Store::open(&path).await.unwrap();
+    store
+        .create_project("real", "Real", "/tmp/real")
+        .await
+        .unwrap();
+    // Scratch chat was removed; a crash could leave its hidden project behind.
+    store
+        .create_project("scratch:orphan", "Scratch", "/tmp/scratch")
+        .await
+        .unwrap();
+    store
+        .create_frame("f-scratch", "scratch:orphan", "OPERON", "m")
+        .await
+        .unwrap();
+    store.pool.close().await;
+    let store = Store::open_application(&path).await.unwrap();
+    assert!(store.get_project("scratch:orphan").await.unwrap().is_none());
+    assert!(store.get_project("real").await.unwrap().is_some());
+    let projects = store.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    store.pool.close().await;
 }
 
 fn exploration_test_artifact(
@@ -9934,11 +9960,11 @@ async fn project_star_persists_and_preserves_recency() {
     assert_eq!(store.list_projects().await.unwrap()[0].0, "new");
     assert!(store.set_project_starred("missing", true).await.is_err());
     store
-        .create_project("scratch:test", "Scratch", "")
+        .create_project(crate::ASSISTANT_PROJECT_ID, "Assistant", "")
         .await
         .unwrap();
     assert!(store
-        .set_project_starred("scratch:test", true)
+        .set_project_starred(crate::ASSISTANT_PROJECT_ID, true)
         .await
         .is_err());
     // Simulate an older database and rerun the idempotent migration.
