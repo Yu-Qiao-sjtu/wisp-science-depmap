@@ -402,7 +402,7 @@ pub(super) mod tests {
                     id,
                     &identity.lane,
                     &json!({
-                        "type": "ext_ready", "protocol_version": 2,
+                        "type": "ext_ready", "product": "wisp-depmap", "protocol_version": 2,
                         "tabs": [{ "id": 7, "url": url, "title": url, "active": true }]
                     })
                     .to_string(),

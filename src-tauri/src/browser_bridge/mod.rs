@@ -48,12 +48,17 @@ mod workspace;
 
 const BRIDGE_ADDR: &str = "127.0.0.1:18765";
 const REQUIRED_PROTOCOL: i64 = 2;
-const EXTENSION_ID: &str = "gnkjgagleagkgdlkkcianolobfdoocnp";
-const EXTENSION_ORIGIN: &str = "chrome-extension://gnkjgagleagkgdlkkcianolobfdoocnp";
+const BRIDGE_PRODUCT: &str = "wisp-depmap";
+/// Chrome extension id derived from this package's own public key. It must
+/// stay different from Wisp Science so both unpacked extensions can stay loaded.
+const EXTENSION_ID: &str = "ldebonhjofgkeglioppkhaojngchcged";
+const EXTENSION_ORIGIN: &str = "chrome-extension://ldebonhjofgkeglioppkhaojngchcged";
+const WISP_SCIENCE_EXTENSION_ORIGIN: &str = "chrome-extension://gnkjgagleagkgdlkkcianolobfdoocnp";
+const WISP_SCIENCE_BRIDGE: &str = "ws://127.0.0.1:28765";
 const BROWSER_DISCONNECTED_CODE: &str = "browser_extension_disconnected";
 const BROWSER_DISCONNECTED_MARKER: &str = "WISP_BROWSER_DISCONNECTED";
 const DISCONNECTED_ASSISTANT_INSTRUCTION: &str = "Live web retrieval is unavailable. Do not answer live, latest, current, or URL-specific questions from prior knowledge. Tell the user this turn contains no live web retrieval, relay the install steps, and wait until status is connected. Only continue from memory if they explicitly ask for a knowledge-only answer.";
-const STALE_ASSISTANT_INSTRUCTION: &str = "A connected extension is older than this Wisp build, so parts of the browser toolset will fail. Call browser_setup with action=update_extension first. It verifies and prepares the managed extension directory and automatically reloads compatible extension versions. If the result says manual_reload_required, relay current and bundled versions plus extension_path exactly, then ask the user to Reload Wisp Real Browser Bridge on chrome://extensions and call browser_setup again to recheck. Do not claim the newer tools exist until update_required is false.";
+const STALE_ASSISTANT_INSTRUCTION: &str = "A connected extension is older than this Wisp DepMap build, so parts of the browser toolset will fail. Call browser_setup with action=update_extension first. It verifies and prepares the managed extension directory and automatically reloads compatible extension versions. If the result says manual_reload_required, relay current and bundled versions plus extension_path exactly, then ask the user to Reload Wisp DepMap Browser Bridge on chrome://extensions and call browser_setup again to recheck. Leave the Wisp Science extension installed. Do not claim the newer tools exist until update_required is false.";
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 const AUTO_LAUNCH_WAIT: Duration = Duration::from_secs(15);
@@ -253,11 +258,17 @@ fn refusal_summary(refusal: Option<&RefusedConnection>) -> Value {
     };
     let session = &refusal.session;
     let explanation = match refusal.origin.as_deref() {
+        Some(origin) if origin == WISP_SCIENCE_EXTENSION_ORIGIN => format!(
+            "The Wisp Science browser extension reached the Wisp DepMap {session} port. That extension stays on {WISP_SCIENCE_BRIDGE} in the Wisp Science application-data directory. Leave it installed. Load the Wisp DepMap Browser Bridge from extension_path as a second unpacked extension; its id is {EXTENSION_ID} and its popup reads Connected to Wisp DepMap."
+        ),
+        Some(origin) if origin.starts_with("product:") => format!(
+            "An extension reached the {session} port and identified itself as {origin}. Wisp DepMap only claims product {BRIDGE_PRODUCT}. Leave the Wisp Science extension on {WISP_SCIENCE_BRIDGE} and load DepMap's own unpacked extension from extension_path."
+        ),
         Some(origin) if !origin.is_empty() => format!(
-            "An extension at {origin} reached the {session} port and Wisp refused it, because this bridge only accepts {EXTENSION_ORIGIN}. Its own popup can still read Connected to Wisp while Wisp reports connected=false. Load the bundled extension from extension_path (a repacked or third-party copy gets a different id), and remove any other loopback bridge extension."
+            "An extension at {origin} reached the {session} port and Wisp DepMap refused it, because this bridge only accepts {EXTENSION_ORIGIN}. Its own popup can still read Connected to Wisp DepMap while DepMap reports connected=false. Load the bundled extension from extension_path. Leave the Wisp Science extension installed; it is a different extension and uses {WISP_SCIENCE_BRIDGE}."
         ),
         _ => format!(
-            "A client reached the {session} port without completing the Wisp extension handshake, so no session was claimed and Wisp reports connected=false. Another browser bridge or a plain HTTP client is probably using this port; stop it, then reload the Wisp extension."
+            "A client reached the {session} port without completing the Wisp DepMap extension handshake, so no session was claimed and DepMap reports connected=false. Another browser bridge or a plain HTTP client is probably using this port; stop it, then reload the Wisp DepMap extension. Leave the Wisp Science extension installed."
         ),
     };
     json!({
@@ -457,8 +468,9 @@ impl BrowserBridge {
                 "Open chrome://extensions in the Chrome/Chromium profile Wisp should control."
                     .to_string(),
                 "Enable Developer mode.".to_string(),
+                "Leave the Wisp Science browser extension installed. Load this folder as a second unpacked extension.".to_string(),
                 format!("Click Load unpacked and select this exact folder: {path}"),
-                "Open the Wisp Real Browser Bridge extension popup and confirm Connected to Wisp."
+                "Open the Wisp DepMap Browser Bridge extension popup and confirm Connected to Wisp DepMap."
                     .to_string(),
             ]
         });
@@ -730,6 +742,24 @@ impl BrowserBridge {
         {
             return;
         }
+        if message_type == "ext_ready" && !handshake_claims_depmap(&message) {
+            let claimed = message
+                .get("product")
+                .and_then(Value::as_str)
+                .unwrap_or("missing")
+                .to_string();
+            slot.client = None;
+            slot.tabs.clear();
+            slot.selected_tab = None;
+            slot.meta = SessionMeta::default();
+            fail_pending(slot, "browser extension is not the Wisp DepMap bridge");
+            state.last_refusal = Some(RefusedConnection {
+                session: session.to_string(),
+                origin: Some(format!("product:{claimed}")),
+                reason: "handshake product is not wisp-depmap".into(),
+            });
+            return;
+        }
         let retry_auto_close = message_type == "ext_ready";
         match message_type {
             "ext_ready" | "tabs_update" => {
@@ -985,7 +1015,7 @@ impl BrowserBridge {
             return Err(errors::structured(
                 errors::EXTENSION_STALE,
                 &format!(
-                    "connected extension {version} (protocol {}) does not provide '{capability}'. Call browser_setup with action=update_extension to prepare and load Wisp Real Browser Bridge {bundled_version}. Do not pretend the new tool exists.",
+                    "connected extension {version} (protocol {}) does not provide '{capability}'. Call browser_setup with action=update_extension to prepare and load Wisp DepMap Browser Bridge {bundled_version}. Leave the Wisp Science extension installed. Do not pretend the new tool exists.",
                     slot.meta.protocol_version,
                 ),
                 false,
@@ -2088,6 +2118,10 @@ fn launch_plan_available(
 
 fn allowed_extension_origin(origin: Option<&str>) -> bool {
     origin == Some(EXTENSION_ORIGIN)
+}
+
+fn handshake_claims_depmap(message: &Value) -> bool {
+    message.get("product").and_then(Value::as_str) == Some(BRIDGE_PRODUCT)
 }
 
 fn forbidden_response() -> ErrorResponse {
@@ -4112,12 +4146,14 @@ mod tests {
             .map(|nibble| char::from(b'a' + nibble))
             .collect();
         assert_eq!(EXTENSION_ORIGIN, format!("chrome-extension://{id}"));
+        assert_ne!(id, "gnkjgagleagkgdlkkcianolobfdoocnp");
     }
 
     #[test]
     fn bridge_accepts_extension_origins_only() {
-        assert!(allowed_extension_origin(Some(
-            "chrome-extension://gnkjgagleagkgdlkkcianolobfdoocnp"
+        assert!(allowed_extension_origin(Some(EXTENSION_ORIGIN)));
+        assert!(!allowed_extension_origin(Some(
+            WISP_SCIENCE_EXTENSION_ORIGIN
         )));
         assert!(!allowed_extension_origin(Some(
             "chrome-extension://abcdefghijklmnop"
@@ -4219,8 +4255,8 @@ mod tests {
         assert_eq!(info["live_retrieval"], false);
         assert_eq!(info["code"], BROWSER_DISCONNECTED_CODE);
         assert_eq!(info["required_protocol"], 2);
-        assert_eq!(info["bundled_extension_version"], "0.3.1");
-        assert_eq!(info["extension_version"], "0.3.1");
+        assert_eq!(info["bundled_extension_version"], "0.4.0");
+        assert_eq!(info["extension_version"], "0.4.0");
         assert!(info["assistant_instruction"]
             .as_str()
             .unwrap()
@@ -4394,7 +4430,7 @@ mod tests {
         bridge
             .handle_text(
                 1,
-                r#"{"type":"ext_ready","tabs":[{"id":42,"url":"https://example.com","title":"Example","active":true}]}"#,
+                r#"{"type":"ext_ready","product":"wisp-depmap","tabs":[{"id":42,"url":"https://example.com","title":"Example","active":true}]}"#,
             )
             .await;
 
@@ -4551,7 +4587,7 @@ mod tests {
         bridge
             .handle_text(
                 1,
-                r#"{"type":"ext_ready","tabs":[{"id":7,"url":"https://example.com","title":"Example","active":true}]}"#,
+                r#"{"type":"ext_ready","product":"wisp-depmap","tabs":[{"id":7,"url":"https://example.com","title":"Example","active":true}]}"#,
             )
             .await;
 
@@ -4727,7 +4763,7 @@ mod tests {
         bridge
             .handle_text(
                 2,
-                r#"{"type":"ext_ready","tabs":[{"id":22,"url":"https://workspace.example","title":"Workspace","active":true}]}"#,
+                r#"{"type":"ext_ready","product":"wisp-depmap","tabs":[{"id":22,"url":"https://workspace.example","title":"Workspace","active":true}]}"#,
             )
             .await;
         let result = WebScanTool::new(bridge)
@@ -4851,7 +4887,7 @@ mod tests {
         bridge
             .handle_text(
                 1,
-                r#"{"type":"ext_ready","tabs":[{"id":1,"url":"https://example.com","title":"E","active":true}]}"#,
+                r#"{"type":"ext_ready","product":"wisp-depmap","tabs":[{"id":1,"url":"https://example.com","title":"E","active":true}]}"#,
             )
             .await;
         let result = WebScanTool::new(bridge)
@@ -4961,6 +4997,18 @@ mod tests {
         let explanation = foreign["explanation"].as_str().unwrap();
         assert!(explanation.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
         assert!(explanation.contains("Connected to Wisp"));
+        assert!(explanation.contains("Wisp Science"));
+
+        let science = refusal_summary(Some(&RefusedConnection {
+            session: "shared".into(),
+            origin: Some(WISP_SCIENCE_EXTENSION_ORIGIN.into()),
+            reason: "HTTP error: 403 Forbidden".into(),
+        }));
+        let science_explanation = science["explanation"].as_str().unwrap();
+        assert!(science_explanation.contains("Wisp Science"));
+        assert!(science_explanation.contains("28765"));
+        assert!(science_explanation.contains("extension_path"));
+        assert!(science_explanation.contains("Leave it installed"));
 
         let unfinished = refusal_summary(Some(&RefusedConnection {
             session: "workspace".into(),
@@ -4970,7 +5018,26 @@ mod tests {
         assert!(unfinished["explanation"]
             .as_str()
             .unwrap()
-            .contains("without completing the Wisp extension handshake"));
+            .contains("without completing the Wisp DepMap extension handshake"));
+    }
+
+    #[tokio::test]
+    async fn wisp_science_product_does_not_claim_the_depmap_session() {
+        let bridge = Arc::new(BrowserBridge::new(PathBuf::from("extension")));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        bridge.install_client(1, tx).await;
+        bridge
+            .handle_text(
+                1,
+                r#"{"type":"ext_ready","product":"wisp-science","protocol_version":2,"extension_version":"0.4.0","tabs":[{"id":1,"url":"https://example.com","title":"E","active":true}]}"#,
+            )
+            .await;
+        let info = bridge.setup_info().await;
+        assert_eq!(info["sessions"]["shared"]["connected"], false);
+        assert_eq!(info["sessions"]["shared"]["tabs"].as_u64(), Some(0));
+        let explanation = info["refused_connection"]["explanation"].as_str().unwrap();
+        assert!(explanation.contains(BRIDGE_PRODUCT));
+        assert!(explanation.contains("28765"));
     }
 
     #[tokio::test]
@@ -4994,7 +5061,10 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         bridge.install_client(1, tx).await;
         bridge
-            .handle_text(1, r#"{"type":"ext_ready","protocol_version":1,"tabs":[]}"#)
+            .handle_text(
+                1,
+                r#"{"type":"ext_ready","product":"wisp-depmap","protocol_version":1,"tabs":[]}"#,
+            )
             .await;
         let info = bridge.setup_info().await;
         assert_eq!(info["reload_required"], true);
@@ -5008,7 +5078,7 @@ mod tests {
         let status = bridge.extension_status().await;
         assert!(status.connected);
         assert_eq!(status.current_version.as_deref(), Some("0.2.1"));
-        assert_eq!(status.bundled_version.as_deref(), Some("0.3.1"));
+        assert_eq!(status.bundled_version.as_deref(), Some("0.4.0"));
         assert!(status.update_required);
         assert!(!status.automatic_reload_available);
         assert!(status.integrity_verified);
@@ -5030,6 +5100,7 @@ mod tests {
                 1,
                 &json!({
                     "type": "ext_ready",
+                    "product": "wisp-depmap",
                     "protocol_version": 2,
                     "extension_version": "0.3.0",
                     "capabilities": ["runtime_reload"],
@@ -5068,8 +5139,9 @@ mod tests {
                 2,
                 &json!({
                     "type": "ext_ready",
+                    "product": "wisp-depmap",
                     "protocol_version": 2,
-                    "extension_version": "0.3.1",
+                    "extension_version": "0.4.0",
                     "capabilities": ["runtime_reload", "article_scan"],
                     "tabs": []
                 })
@@ -5081,7 +5153,7 @@ mod tests {
         assert_eq!(update.outcome, "updated");
         assert!(update.status.connected);
         assert!(!update.status.update_required);
-        assert_eq!(update.status.current_version.as_deref(), Some("0.3.1"));
+        assert_eq!(update.status.current_version.as_deref(), Some("0.4.0"));
     }
 
     #[test]
@@ -5221,7 +5293,7 @@ mod tests {
         bridge
             .handle_text(
                 1,
-                r#"{"type":"ext_ready","tabs":[{"id":42,"url":"https://already.example","title":"Mine","active":true}]}"#,
+                r#"{"type":"ext_ready","product":"wisp-depmap","tabs":[{"id":42,"url":"https://already.example","title":"Mine","active":true}]}"#,
             )
             .await;
 

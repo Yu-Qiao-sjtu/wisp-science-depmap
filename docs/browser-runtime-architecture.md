@@ -1,7 +1,8 @@
 # Browser Runtime architecture
 
-Wisp extension 0.3.1 treats the Chrome extension as a **controlled access adapter**.
-The desktop process owns sessions, waits, staging, and approval.
+Wisp DepMap extension 0.4.0 treats the Chrome extension as a **controlled access adapter**.
+The desktop process owns sessions, waits, staging, and approval. This bridge is a
+separate Chrome extension from Wisp Science.
 
 ```
 Agent tools
@@ -10,6 +11,19 @@ Agent tools
         -> ws://127.0.0.1:<allocated-port>/<instance-token>  project workspace
             -> Manifest V3 extension (browser-extension/)
 ```
+
+## Coexistence with Wisp Science
+
+Wisp Science listens on `ws://127.0.0.1:28765` and is loaded from
+`%APPDATA%/science.wisp-science/wisp-science/browser-extension`. DepMap listens
+on `18765` for the shared session, uses extension id `ldebonhjofgkeglioppkhaojngchcged`,
+and stages its package only under `%APPDATA%/science.wisp-depmap/`. The handshake
+`product` is `wisp-depmap`. A connection from the Science extension id is
+refused, and the installer refuses to write into `science.wisp-science`.
+
+Install DepMap with **Load unpacked** on its own folder. Leave the Wisp Science
+extension installed. The two extensions can stay enabled in the same Chrome or
+Edge profile because their ids differ.
 
 ## Sessions
 

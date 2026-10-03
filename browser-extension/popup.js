@@ -6,7 +6,7 @@ async function refresh() {
   const result = await chrome.runtime.sendMessage({ type: "wisp_bridge_status" });
   status.className = result?.connected ? "ok" : "bad";
   status.textContent = result?.connected
-    ? (result.paused ? "Connected (paused)" : "Connected to Wisp")
+    ? (result.paused ? "Connected (paused)" : "Connected to Wisp DepMap")
     : (result?.error || "Wisp is not connected");
   meta.textContent = [
     "v" + (result?.extension_version || "?"),
