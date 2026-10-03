@@ -156,6 +156,42 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tail["evidence"]["truncated"])
         self.assertIsNone(tail["evidence"]["next_cursor"])
 
+    async def test_cursor_past_the_preview_is_a_coverage_gap(self):
+        relative = "depmap-26q1-full/results/pairs.csv.gz"
+        payload = "gene,value\n" + "".join(f"G{index},{index}\n" for index in range(8))
+        uri = self.index_bytes(relative, gzip.compress(payload.encode("utf-8")))
+        refused = await self.service.read_resource(uri, max_rows=1, cursor=500)
+        self.assertEqual(refused["evidence"]["status"], "COVERAGE_GAP")
+        self.assertEqual(refused["evidence"]["reason_code"], "NO_ENTITY_KEYED_READER")
+        self.assertEqual(refused["evidence"]["rows"], [])
+
+    async def test_registered_reader_artifact_is_not_scannable(self):
+        relative = "depmap-26q1-full/associations/pairs.csv"
+        uri = self.index_resource(relative, "gene,value\nESR1,1\n")
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS reader_registry "
+                "(query_mode TEXT, module_pattern TEXT, adapter TEXT, formats TEXT)"
+            )
+            db.execute(
+                "INSERT INTO reader_registry VALUES (?,?,?,?)",
+                ("association", "depmap-26q1-full/associations/%", "association_adapter", "csv"),
+            )
+            db.commit()
+        write_index_digest(index)
+        refused = await self.service.read_resource(uri, max_rows=20, cursor=0)
+        self.assertEqual(refused["evidence"]["status"], "INELIGIBLE")
+        self.assertEqual(refused["evidence"]["reason_code"], "ARTIFACT_PAGING_IS_NOT_A_QUERY")
+        self.assertEqual(refused["evidence"]["query_mode"], "association")
+        self.assertEqual(refused["evidence"]["rows"], [])
+
+    async def test_invalid_query_is_an_evidence_status(self):
+        result = await self.service.tf_dependency_evidence(target="GPX4")
+        self.assertEqual(result["evidence"]["status"], "INELIGIBLE")
+        self.assertTrue(result["evidence"]["schema_error"])
+        self.assertIn("source", result["evidence"]["reason"])
+
     async def test_csv_resource_pages_honor_max_rows_greater_than_one(self):
         relative = "analysis-modules/tf/tf_order.csv"
         payload = "TF\n" + "".join(f"TF{index}\n" for index in range(8))

@@ -31,7 +31,14 @@ per entity. DoRothEA is not reconstructed from the browser.
 Provider schema (`services/depmap_api/provider_schema.py`): MCP advertised
 arguments match runtime validators. `coverage` is catalog-conditional. Each
 mode/tool has its own `limit` maximum. Invalid combinations return an
-`INELIGIBLE` envelope with `schema_error: true` (HTTP 422), not a traceback.
+`INELIGIBLE` envelope with `schema_error: true`, including from the MCP tool,
+not a traceback or an execution error. `depmap_read_resource` is a provenance
+preview. An artifact owned by a registered reader is not scannable, and a
+cursor past the preview window is `COVERAGE_GAP`, not a row of evidence.
+The same envelope is what an MCP tool returns; a validator failure is not an
+execution error. `depmap_read_resource` is a provenance preview. An artifact
+owned by a registered reader is not scannable, and a cursor past the preview
+window is `COVERAGE_GAP`, not a row of evidence.
 True Love queries are scope-typed (`scope=lineage|pancancer`). A lineage
 request does not filter the pan-cancer catalog; a missing lineage table is
 `NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
