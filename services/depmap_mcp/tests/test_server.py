@@ -187,7 +187,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refused["evidence"]["rows"], [])
 
     async def test_invalid_query_is_an_evidence_status(self):
-        result = await self.service.tf_dependency_evidence(target="GPX4")
+        result = await self.service.tf_dependency_evidence(view="universe", target="GPX4")
         self.assertEqual(result["evidence"]["status"], "INELIGIBLE")
         self.assertTrue(result["evidence"]["schema_error"])
         self.assertIn("source", result["evidence"]["reason"])
