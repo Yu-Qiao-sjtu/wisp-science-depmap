@@ -15,6 +15,7 @@ node_modules
 dist
 /ui/dist-dev/
 /ui/dist-test/
+/ui/dist-fast/
 /ui/vendor-runtime/
 web-dist/
 .wisp/

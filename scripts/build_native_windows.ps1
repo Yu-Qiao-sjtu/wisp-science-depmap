@@ -7,9 +7,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Native design assets are stale.' }
     & $Python scripts/sync_native_settings_contract.py --check
     if ($LASTEXITCODE -ne 0) { throw 'Native settings contract is stale.' }
-    cargo build --locked -p wisp-service
-    if ($LASTEXITCODE -ne 0) { throw 'Rust query service build failed.' }
+    $rustArgs = @('build', '--locked', '--target-dir', (Join-Path $repo 'target'))
+    $rustProfile = 'debug'
     $output = Join-Path $repo 'target/native-windows'
+    if ($Configuration -eq 'Release') {
+        $rustArgs += '--release'
+        $rustProfile = 'release'
+        $output = Join-Path $repo 'target/native-windows-release'
+    }
+    & cargo @rustArgs -p wisp-service
+    if ($LASTEXITCODE -ne 0) { throw 'Rust query service build failed.' }
     $hostAssets = Join-Path $repo 'target/native-windows-host-assets'
     New-Item -ItemType Directory -Force -Path $hostAssets | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'ui/native-host.html') -Destination (Join-Path $hostAssets 'native-host.html')
@@ -20,15 +27,15 @@ try {
         # drive path becomes a `c:` URL and crashes when joining native-host.html.
         # Resolve this relative path against src-tauri/tauri.conf.json instead.
         $env:TAURI_CONFIG = Get-Content -LiteralPath (Join-Path $repo 'src-tauri/tauri.native-windows.conf.json') -Raw
-        cargo build --locked -p wisp-tauri --features custom-protocol
+        & cargo @rustArgs -p wisp-tauri --features custom-protocol
         if ($LASTEXITCODE -ne 0) { throw 'Native settings host build failed.' }
     } finally { $env:TAURI_CONFIG = $previousTauriConfig }
     dotnet publish apps/windows/Wisp.Science.Preview -c $Configuration -p:Platform=x64 -o $output
     if ($LASTEXITCODE -ne 0) { throw 'WinUI preview build failed.' }
-    Copy-Item -LiteralPath (Join-Path $repo 'target/debug/wisp-service.exe') -Destination $output
+    Copy-Item -LiteralPath (Join-Path $repo "target/$rustProfile/wisp-service.exe") -Destination $output
     $hostOutput = Join-Path $output 'settings-host'
     New-Item -ItemType Directory -Force -Path $hostOutput | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repo 'target/debug/wisp-tauri.exe') -Destination $hostOutput
+    Copy-Item -LiteralPath (Join-Path $repo "target/$rustProfile/wisp-tauri.exe") -Destination $hostOutput
     foreach ($resource in @('skills', 'python', 'r', 'browser-extension', 'seed')) {
         # Replace only this known output resource, preventing stale removed files.
         $targetResource = [IO.Path]::GetFullPath((Join-Path $hostOutput $resource))

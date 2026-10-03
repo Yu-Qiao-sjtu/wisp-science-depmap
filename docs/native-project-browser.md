@@ -106,11 +106,18 @@ The Windows App SDK and SDK build tools are restored from pinned NuGet packages;
 Visual Studio's packaging workload is not required. From the repository root:
 
 ```powershell
-pwsh -File scripts/build_native_windows.ps1 -Launch
+cargo run build-win
+.\target\native-windows\Wisp.Science.Preview.exe
+# Or build and launch in one step:
+pwsh -File scripts/build_native_windows.ps1 -Configuration Debug -Launch
 ```
 
-Use `-Python C:/path/to/python.exe` if Python is not on PATH. The output is
+Use the script's `-Python C:/path/to/python.exe` if Python is not on PATH. The debug output is
 `target/native-windows/Wisp.Science.Preview.exe` with its companion files.
+`cargo run build-win --release` builds the UI and both Rust helpers in release
+mode under `target/native-windows-release`. Calling the PowerShell script
+without `-Configuration` retains its Release default; CI explicitly selects
+Release and uploads that separate directory.
 The directory includes the .NET and Windows App SDK runtimes, `wisp-service.exe`,
 and a full desktop settings host under `settings-host/`;
 copy the entire directory, not just the executable. This is an unsigned local x64

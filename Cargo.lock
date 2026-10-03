@@ -7209,6 +7209,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wisp-dev"
+version = "1.16.0"
+
+[[package]]
 name = "wisp-dto"
 version = "1.16.0"
 dependencies = [

@@ -38,10 +38,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - run: python scripts/test_sync_native_settings_contract.py
+      - run: powershell -NoProfile -File scripts/test_build_native_windows.ps1
       - run: cargo test --locked -p wisp-app -p wisp-service -p wisp-dto
       - run: dotnet run --project apps/windows/Wisp.ProjectBrowser.ContractTests -- contracts/project-browser/v1/projects.json
-      - run: pwsh -File scripts/build_native_windows.ps1
+      - run: pwsh -File scripts/build_native_windows.ps1 -Configuration Release
       - uses: actions/upload-artifact@v4
         with:
           name: Wisp-Science-WinUI-Preview-x64
-          path: target/native-windows/
+          path: target/native-windows-release/
+          if-no-files-found: error

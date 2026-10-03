@@ -69,6 +69,12 @@ jobs:
       - name: Run MCP process-tree shutdown regression
         run: cargo test -p wisp-mcp --test process_tree_shutdown
 
+      - name: Test repository build launcher
+        run: cargo test --locked -p wisp-dev
+
+      - name: Test incremental frontend asset staging
+        run: node --test ui/build-fast.test.mjs
+
       - name: Run project storage startup and migration regressions
         run: cargo test -p wisp-store project_storage::tests
 
