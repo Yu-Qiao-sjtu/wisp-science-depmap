@@ -1,12 +1,16 @@
 mod acp;
 mod agent_workflows;
 mod app_overlays;
+mod assistant_remote;
+mod assistant_workspace;
+mod automation;
 mod bindings;
 mod channels_view;
 mod chat_find;
 mod chat_render;
 mod context_menu;
 mod dto;
+mod hooks_settings;
 mod i18n;
 mod library;
 mod mcp_app;
@@ -52,7 +56,7 @@ use bindings::{
     native_drop_in_composer, open_browser_extension_page, open_external_url, open_tutorials,
     pasted_image_count, preserve_chat_prepend_position, preview_selection,
     restore_chat_session_scroll, schedule_chat_follow, set_saved_marks, set_window_title,
-    CHAT_SCROLLER_ID, CHAT_THREAD_ID,
+    setup_scrollbar_reveal, CHAT_SCROLLER_ID, CHAT_THREAD_ID,
 };
 use context_menu::{ContextMenuPortal, CtxMenu};
 use dto::*;
@@ -79,9 +83,9 @@ use session_modals::{
     FileEntryOverlay, FileEntryOverlayState, FolderModalOverlay, FolderModalOverlayState,
     ModelSwitchConfirmOverlay, ModelSwitchConfirmOverlayState, ProjSettingsOverlay,
     ProjSettingsOverlayState, RenameSessionOverlay, RenameSessionOverlayState,
-    SessionTransferOverlay, SessionTransferOverlayState, TurnUndoOverlay, TurnUndoOverlayState,
+    SessionArtifactChoice, SessionArtifactChoiceState, SessionTransferOverlay,
+    SessionTransferOverlayState, ShelvedSessionsOverlay, TurnUndoOverlay, TurnUndoOverlayState,
 };
-use settings_view::{known_effort_values, ALL_EFFORT_VALUES};
 use settings_view::{DeleteConfirm, SettingsView, SettingsViewState};
 use sidebar::{Sidebar, SidebarState};
 use std::cell::{Cell, RefCell};
@@ -91,7 +95,8 @@ use text::{
     dom_value, event_target_checked, event_target_value, file_kind, format_bytes,
     group_artifact_indices, ime_composing, is_runtime_code_selection, join_path, md_to_html,
     note_composition_end, opens_in_system_browser, parent_path, provider_defaults,
-    runtime_language, user_message_presentation, DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL,
+    runtime_language, sanitize_composer_text, user_message_presentation, DEEPSEEK_FLASH_MODEL,
+    DEEPSEEK_PRO_MODEL,
 };
 use trajectory::TrajectoryOverlay;
 use wasm_bindgen::prelude::*;
@@ -120,6 +125,43 @@ const SIDE_CHAT_INPUT_ID: &str = "side-chat-input";
 
 fn service_tier_enabled(value: &str) -> bool {
     matches!(value.trim(), "priority" | "fast")
+}
+
+/// Bound both composer menus to the space above their trigger, including at
+/// large UI scales or in short windows. Recomputed each time a menu opens.
+fn composer_menu_bounds(ev: &web_sys::MouseEvent) -> String {
+    let Some(anchor) = ev
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        // Leptos delegates clicks to the window; current_target is not the
+        // button. Resolve the trigger even when its label or SVG was clicked.
+        .and_then(|target| target.closest("button").ok().flatten())
+    else {
+        return String::new();
+    };
+    let rect = anchor.get_bounding_client_rect();
+    format!(
+        "--composer-menu-height:{}px;--composer-menu-width:{}px",
+        (rect.top() - 16.0).max(0.0),
+        (rect.right() - 8.0).max(0.0),
+    )
+}
+
+/// Short localized label for a reasoning-effort value in the composer pill;
+/// free-form values fall back to the raw string.
+fn effort_display_label(loc: Locale, value: &str) -> String {
+    let key = match value.trim() {
+        "none" => Some("composer.effort.none"),
+        "minimal" => Some("composer.effort.minimal"),
+        "low" => Some("composer.effort.low"),
+        "medium" => Some("composer.effort.medium"),
+        "high" => Some("composer.effort.high"),
+        "xhigh" => Some("composer.effort.xhigh"),
+        "max" => Some("composer.effort.max"),
+        "ultra" => Some("composer.effort.ultra"),
+        _ => None,
+    };
+    key.map_or_else(|| value.to_string(), |k| t(loc, k).to_string())
 }
 
 fn supports_fast_service_tier(profile: &ModelProfile) -> bool {
@@ -188,6 +230,14 @@ pub(crate) fn window_capture_escape(mut close_topmost: impl FnMut() -> bool + 's
             );
         }
     });
+}
+
+/// The topbar "more" button only takes up space in the narrow (folded) layout.
+fn topbar_more_visible() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|doc| doc.query_selector("[data-testid='topbar-more']").ok().flatten())
+        .is_some_and(|el| el.get_bounding_client_rect().width() > 0.0)
 }
 
 fn session_highlight_count(session: Option<String>, items: &[LibraryItemSummary]) -> usize {
@@ -536,6 +586,9 @@ fn App() -> impl IntoView {
     let active_branch_state = create_rw_signal::<Option<String>>(None);
     let archive_frame = create_rw_signal::<Option<String>>(None);
     let archive_busy = create_rw_signal(false);
+    // The archive review collapses to a background pill while minimized; the
+    // flow keeps running and any other conversation stays usable.
+    let archive_minimized = create_rw_signal(false);
     let archived_sessions = create_rw_signal(HashSet::<String>::new());
     {
         let closed = store_value(false);
@@ -592,16 +645,35 @@ fn App() -> impl IntoView {
             });
         }
     });
+    // The displayed conversation can be shelved while remaining open. Its
+    // title and branch controls must not depend on membership in the sidebar.
+    let opened_shelved_metadata =
+        create_rw_signal::<Option<(String, String, Option<String>)>>(None);
+    let active_session_metadata = create_memo(
+        move |previous: Option<&(Option<String>, String, Option<String>)>| {
+            let active = active_session.get();
+            let row = sessions
+                .with(|rows| {
+                    rows.iter()
+                        .find(|row| Some(&row.id) == active.as_ref())
+                        .map(|row| (row.id.clone(), row.title.clone(), row.branch_state.clone()))
+                })
+                .or_else(|| {
+                    opened_shelved_metadata
+                        .get()
+                        .filter(|(id, ..)| Some(id) == active.as_ref())
+                });
+            if let Some((_, title, branch_state)) = row {
+                (active, title, branch_state)
+            } else if let Some(previous) = previous.filter(|previous| previous.0 == active) {
+                previous.clone()
+            } else {
+                (active, String::new(), None)
+            }
+        },
+    );
     create_effect(move |_| {
-        let active = active_session.get();
-        let state = active.and_then(|id| {
-            sessions.with(|rows| {
-                rows.iter()
-                    .find(|session| session.id == id)
-                    .and_then(|session| session.branch_state.clone())
-            })
-        });
-        active_branch_state.set(state);
+        active_branch_state.set(active_session_metadata.get().2);
     });
     let conversation_branches =
         create_rw_signal::<HashMap<String, Vec<SessionBranchLink>>>(HashMap::new());
@@ -668,18 +740,9 @@ fn App() -> impl IntoView {
     let center_conversation_title = create_memo(move |_| {
         let loc = locale.get();
         let _ = transcript_projection_epoch.get();
-        if let Some(id) = active_session.get() {
-            if let Some(title) = sessions.with(|sessions| {
-                sessions
-                    .iter()
-                    .find(|session| session.id == id)
-                    .and_then(|session| {
-                        let clean = user_message_presentation(&session.title).body;
-                        (!clean.trim().is_empty()).then_some(clean)
-                    })
-            }) {
-                return title;
-            }
+        let title = user_message_presentation(&active_session_metadata.get().1).body;
+        if !title.trim().is_empty() {
+            return title;
         }
         items.with_untracked(|items| {
             items
@@ -1030,7 +1093,25 @@ fn App() -> impl IntoView {
     let project_info = create_rw_signal::<Option<ProjectInfo>>(None);
     provide_context(project_info.read_only());
     let demo_mode = create_rw_signal(false); // true = the synthetic "Example project" is open
-    let scratch_open = create_rw_signal(false); // ephemeral scratch chat overlay
+
+    // The research assistant's one persistent conversation, shown as a
+    // full-window overlay.
+    let assistant_mode = create_rw_signal(false);
+    let assistant_remote_open = create_rw_signal(false);
+    let close_assistant_remote = Callback::new(move |_: ()| {
+        assistant_remote_open.set(false);
+        if let Some(button) = document()
+            .get_element_by_id("assistant-remote-toggle")
+            .and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = button.focus();
+        }
+    });
+    create_effect(move |_| {
+        if !assistant_mode.get() {
+            assistant_remote_open.set(false);
+        }
+    });
     let feedback_context = create_rw_signal::<Option<String>>(None);
     let project_open_error = create_rw_signal(None::<String>);
     let project_transfer = create_rw_signal(None::<ProjectTransferProgress>);
@@ -1043,25 +1124,27 @@ fn App() -> impl IntoView {
     let project_transition_target = Rc::new(RefCell::new(None::<String>));
     let project_open_gate = Rc::new(RefCell::new(ProjectOpenGate::default()));
     let model_menu_open = create_rw_signal(false);
-    // Per-model effort flyout inside the model menu: (model id, left, top) in
-    // viewport coordinates. Rendered `position: fixed` so the menu's scroll
-    // box doesn't clip it.
-    let effort_menu_for = create_rw_signal(None::<(String, f64, f64)>);
-    // Shift the parent model menu left only while its right-side effort flyout
-    // is open, keeping both surfaces adjacent and inside the viewport.
-    let effort_menu_shift = create_rw_signal(0.0_f64);
-    // The effort flyout is a sibling of the scrollable model menu; collapse it
-    // whenever its parent picker closes.
-    create_effect(move |_| {
-        if !model_menu_open.get() {
-            effort_menu_for.set(None);
+    // Thinking-effort pill beside the model picker: a dropdown over the
+    // selected model's effort values (ZCode-style, per-model persisted).
+    let composer_effort_open = create_rw_signal(false);
+    let composer_menu_style = create_rw_signal(String::new());
+    let composer_model_efforts = use_model_efforts(move || {
+        if active_acp_agent_id.get().is_some() {
+            return None;
         }
+        let profile = session_profile(
+            &models.get(),
+            &session_model_ids.get(),
+            active_session.get().as_deref(),
+        )
+        .cloned()?;
+        Some((profile.provider, profile.api_url, profile.model))
     });
     // Persist a reasoning-effort default onto the model profile itself
     // (Cursor-style per-model effort). Sessions without an explicit override
     // inherit the new default on their next turn.
     let apply_model_effort = Callback::new(move |(id, effort): (String, String)| {
-        effort_menu_for.set(None);
+        composer_effort_open.set(false);
         model_settings.apply_model_effort(id, effort);
     });
     let model_switch_confirm = create_rw_signal::<Option<(String, String, bool)>>(None);
@@ -1149,7 +1232,6 @@ fn App() -> impl IntoView {
             }
         });
     });
-    let send_mode_menu_open = create_rw_signal(false);
     // Queue (#433): monotonic key for optimistic queued follow-ups, shared with the
     // backend queue item so edit/cancel/cut-in target the same row.
     // A window-scoped seed prevents queue ID collisions across session windows.
@@ -1161,7 +1243,6 @@ fn App() -> impl IntoView {
     // Native ask_user option clicks stage an editable answer here. The tuple
     // stores the last generated draft so selecting another option can replace
     // it without overwriting text the user has already edited.
-    let native_question_draft = create_rw_signal::<Option<(String, usize, String)>>(None);
     let side_chat_input = create_rw_signal(String::new());
     let side_chat_quotes = create_rw_signal::<Vec<ComposerQuote>>(vec![]);
     let side_chat_items = create_rw_signal::<Vec<SideChatItem>>(vec![]);
@@ -1480,6 +1561,17 @@ fn App() -> impl IntoView {
     mirror_privacy_mode(privacy_active_initial, &privacy_projects_initial);
     let privacy_mode_active = create_rw_signal(privacy_active_initial);
     let privacy_hidden_project_ids = create_rw_signal(privacy_projects_initial);
+    let assistant_workspace = assistant_workspace::use_assistant_workspace(
+        assistant_mode,
+        Signal::derive(move || busy.get()),
+        Signal::derive(move || {
+            if privacy_mode_active.get() {
+                privacy_hidden_project_ids.get().into_iter().collect()
+            } else {
+                Vec::new()
+            }
+        }),
+    );
     let privacy_mode_modal_open = create_rw_signal(false);
     // Top-nav project switcher dropdown + Project Settings modal.
     let show_proj_menu = create_rw_signal(false);
@@ -1954,10 +2046,10 @@ fn App() -> impl IntoView {
     let sel_artifact = create_rw_signal(0usize);
     let show_art_preview = create_rw_signal(false);
     let modal_artifact = create_rw_signal(None::<ModalArtifact>); // (path, name, kind)
-    // Background output updates change navigation, not the mounted viewer.
-    // Reading `artifacts` in the modal's render closure remounts the image and
-    // provenance on every change, replaying the overlay animation and losing
-    // zoom, the selected provenance tab, and unsent code edits.
+                                                                  // Background output updates change navigation, not the mounted viewer.
+                                                                  // Reading `artifacts` in the modal's render closure remounts the image and
+                                                                  // provenance on every change, replaying the overlay animation and losing
+                                                                  // zoom, the selected provenance tab, and unsent code edits.
     let modal_image_nav = create_memo(move |_| {
         let Some((path, _, kind)) = modal_artifact.get() else {
             return (None, None);
@@ -1977,6 +2069,8 @@ fn App() -> impl IntoView {
     let research_graph = create_rw_signal(ResearchGraph::default());
     let show_research_graph = create_rw_signal(false);
     let home_calendar_open = create_rw_signal(false);
+    let home_automation_open = create_rw_signal(false);
+    let home_automation_form = create_rw_signal(false);
     let home_dialog_open = create_rw_signal(false);
     let calendar_journey_request = create_rw_signal(None::<(String, i64)>);
     let journey_initial_day = create_rw_signal(None::<i64>);
@@ -2187,6 +2281,37 @@ fn App() -> impl IntoView {
         side_chat_busy.set(false);
         *previous_session = current_session;
     });
+    // Unsent composer text belongs to its session (#1406): carrying it into the
+    // next session invited sending it to the wrong conversation. In-memory only,
+    // like the stashes above.
+    let composer_drafts_by_session = create_rw_signal::<HashMap<String, String>>(HashMap::new());
+    let previous_draft_session = Rc::new(RefCell::new(None::<String>));
+    create_effect(move |_| {
+        let current_session = active_session.get();
+        let mut previous_session = previous_draft_session.borrow_mut();
+        if *previous_session == current_session {
+            return;
+        }
+        let outgoing = input.get_untracked();
+        composer_drafts_by_session.update(|drafts| {
+            if let Some(session_id) = previous_session.as_ref() {
+                if outgoing.trim().is_empty() {
+                    drafts.remove(session_id);
+                } else {
+                    drafts.insert(session_id.clone(), outgoing);
+                }
+            }
+        });
+        let restored = current_session.as_ref().and_then(|session_id| {
+            composer_drafts_by_session.with_untracked(|drafts| drafts.get(session_id).cloned())
+        });
+        // Text typed with no session open belongs to the session that gets
+        // lazily created from it (plan-mode / context toggles), so keep it.
+        if previous_session.is_some() || restored.is_some() {
+            input.set(restored.unwrap_or_default());
+        }
+        *previous_session = current_session;
+    });
     // Dedicated project windows use the same guarded transition as every
     // interactive project-open path. The callback is built after `load_session`.
     let dedicated_project_id = url_project_param();
@@ -2234,38 +2359,14 @@ fn App() -> impl IntoView {
     // carries ordinary text, but the agent now knows which workspace file a
     // "change this" request must edit.
     let composer_quotes = create_rw_signal::<Vec<ComposerQuote>>(vec![]);
-    let close_scratch = Callback::new(move |_: ()| {
+    let close_assistant = Callback::new(move |_: ()| {
         spawn_local(async move {
-            let _ = invoke("close_scratch_chat", JsValue::UNDEFINED).await;
-            scratch_open.set(false);
+            let _ = invoke("close_research_assistant", JsValue::UNDEFINED).await;
+            assistant_mode.set(false);
             items.set(vec![]);
             active_session.set(None);
             show_right.set(false);
             center_file.set(None);
-        });
-    });
-    let open_scratch = Callback::new(move |_: ()| {
-        if demo_mode.get_untracked() {
-            return;
-        }
-        command_palette_open.set(false);
-        action_palette_open.set(false);
-        spawn_local(async move {
-            let v = invoke("start_scratch_chat", JsValue::UNDEFINED).await;
-            let Ok(info) = serde_wasm_bindgen::from_value::<ScratchChatInfo>(v) else {
-                status.set(send_failed(locale.get(), ""));
-                return;
-            };
-            scratch_open.set(true);
-            active_session.set(Some(info.session_id));
-            items.set(vec![]);
-            attachments.set(vec![]);
-            composer_references.set(vec![]);
-            composer_quotes.set(vec![]);
-            show_sidebar.set(false);
-            show_right.set(false);
-            center_file.set(None);
-            focus_composer();
         });
     });
     // Floating action popup over a text selection: (text, source file path, x, y).
@@ -2306,6 +2407,7 @@ fn App() -> impl IntoView {
     let full_permission_enabled = create_rw_signal(false);
     let full_permission_busy = create_rw_signal(false);
     let ui_confirm = create_rw_signal::<Option<UiConfirm>>(None);
+    let delete_artifacts = SessionArtifactChoiceState::new();
     // `/share` preview dialog: Some(rows) while open, None when closed.
     let share_draft = create_rw_signal::<Option<Vec<ShareMessage>>>(None);
     let open_share = Callback::new(move |()| {
@@ -3158,6 +3260,27 @@ fn App() -> impl IntoView {
                 }
                 refresh_transcript_projections(&frame_id);
             }
+            AgentEvent::BackgroundReply(reply) => {
+                flush_now();
+                route_items(
+                    active_cb,
+                    items_cb,
+                    transcripts_cb,
+                    &reply.frame_id,
+                    |items| {
+                        let index = process_item_insert_index(items);
+                        items.insert(
+                            index,
+                            ChatItem::Assistant {
+                                text: reply.text,
+                                model: None,
+                                resources: Vec::new(),
+                            },
+                        );
+                    },
+                );
+                refresh_transcript_projections(&reply.frame_id);
+            }
             AgentEvent::MessageBoundary { frame_id, seq } => {
                 let needs_seq = conversation_outlines_cb.with_untracked(|outlines| {
                     outlines
@@ -3850,12 +3973,18 @@ fn App() -> impl IntoView {
             // Follow-up suggestions are optional; only a failed memory draft
             // is worth a status line.
             AgentEvent::HookFailed { hook, message, .. } => {
+                let locale = locale_cb.get_untracked();
+                let message = localize_backend(locale, &message);
                 if hook == "memory_proposal" {
-                    let locale = locale_cb.get_untracked();
+                    status_cb.set(tf(locale, "memory.proposal.failed", &[("msg", &message)]));
+                } else if hook == "project_hooks" {
+                    status_cb.set(t(locale, "hooks.project_notice"));
+                } else if HookEvent::ALL.iter().any(|event| event.as_str() == hook) {
+                    // User command hooks; built-in follow-ups stay silent.
                     status_cb.set(tf(
                         locale,
-                        "memory.proposal.failed",
-                        &[("msg", &localize_backend(locale, &message))],
+                        "hooks.failed",
+                        &[("hook", &hook), ("msg", &message)],
                     ));
                 }
             }
@@ -4475,19 +4604,42 @@ fn App() -> impl IntoView {
         if demo_mode.get_untracked() {
             return;
         }
+        // Also cover restored/programmatic drafts that bypass DOM input events.
+        let message = sanitize_composer_text(&input.get()).into_owned();
         // Shell-owned slash commands never reach the model; the picker inserts
         // the same text, so typed and picked commands behave identically.
         if action == ComposerSendAction::Normal {
             if let Some(runner) = slash_command_runner.get_untracked() {
-                if runner.call(input.get()) {
+                if runner.call(message.clone()) {
                     return;
                 }
             }
         }
-        let message = input.get();
         let saved_attachments = attachments.get();
         let saved_mcp_app_context = mcp_app_context.get();
-        let refs = composer_references.get();
+        let saved_references = composer_references.get();
+        let mut refs = saved_references.clone();
+        if assistant_mode.get() {
+            if assistant_workspace.selected.get().is_some()
+                && (assistant_workspace.loading.get() || assistant_workspace.error.get().is_some())
+            {
+                show_toast(research_journey::j(
+                    locale.get(),
+                    "Wait for the project context to load, or clear the selected project.",
+                    "请等项目上下文读取完成，或取消项目选择。",
+                ));
+                return;
+            }
+            if let Some(project) = assistant_workspace.selected_project() {
+                let reference = ComposerReferenceChip::Project {
+                    id: project.id,
+                    name: project.name,
+                };
+                if !refs.iter().any(|item| item.key() == reference.key()) {
+                    refs.push(reference);
+                }
+            }
+        }
         let quotes = composer_quotes.get();
         let paths = attachment_paths(&saved_attachments);
         let display_message = message_with_composer_context(&message, &paths, &refs, &quotes);
@@ -4515,7 +4667,7 @@ fn App() -> impl IntoView {
         });
         if message.trim().is_empty()
             && paths.is_empty()
-            && refs.is_empty()
+            && composer_references.with(|references| references.is_empty())
             && quotes.is_empty()
             && saved_mcp_app_context.is_none()
         {
@@ -4523,26 +4675,6 @@ fn App() -> impl IntoView {
         }
         let active = active_session.get();
         let creates_session = active.is_none();
-        if action == ComposerSendAction::Normal {
-            if let Some((question_session, question_index, _)) =
-                native_question_draft.get_untracked()
-            {
-                if active.as_deref() == Some(question_session.as_str()) {
-                    route_items(
-                        active_session,
-                        items,
-                        transcripts,
-                        &question_session,
-                        |rows| {
-                            if let Some(ChatItem::Question(card)) = rows.get_mut(question_index) {
-                                card.state = QuestionState::Answered;
-                            }
-                        },
-                    );
-                    native_question_draft.set(None);
-                }
-            }
-        }
         let pending_fast = pending_service_tier.get();
         // Any prior send-failed hint (e.g. the max_tokens truncation notice) is
         // stale once a new turn is committed; the Ok path never cleared it, so it
@@ -4574,10 +4706,10 @@ fn App() -> impl IntoView {
         if let Some(id) = active.as_ref() {
             dismiss_follow_up_questions(follow_up_questions, id);
         }
-        // Queue (#433): a plain send into a busy session parks behind the
-        // running turn — cancellable / restorable to the composer until the
-        // driver runs it — instead of a dialog. Cut-in / interrupt-replace are
-        // explicit dropdown choices.
+        // Queue (#433): a send into a busy session parks behind the running
+        // turn — cancellable / restorable to the composer until the driver
+        // runs it — instead of a dialog. Cut-in / interrupt-replace live on
+        // the parked row itself.
         if queued && action == ComposerSendAction::Normal {
             let Some(session) = active.clone() else {
                 return;
@@ -4666,7 +4798,7 @@ fn App() -> impl IntoView {
                         input.set(message);
                         attachments.set(saved_attachments);
                         mcp_app_context.set(saved_mcp_app_context.clone());
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &error));
@@ -4682,7 +4814,7 @@ fn App() -> impl IntoView {
                         input.set(message);
                         attachments.set(saved_attachments);
                         mcp_app_context.set(saved_mcp_app_context.clone());
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &error));
@@ -4701,7 +4833,7 @@ fn App() -> impl IntoView {
                         active_session.set(Some(id.clone()));
                         input.set(message);
                         attachments.set(saved_attachments);
-                        composer_references.set(refs);
+                        composer_references.set(saved_references);
                         composer_quotes.set(quotes);
                         feedback_context.set(attached_feedback.clone());
                         status.set(send_failed(locale.get(), &js_error_text(error)));
@@ -4734,22 +4866,12 @@ fn App() -> impl IntoView {
                 pages.entry(id.clone()).or_default().window_user_start = usize::MAX;
             });
             route_items(active_session, items, transcripts, &id, |rows| {
-                if queued {
-                    // Cut-in (#433): a direct guide-append from the dropdown folds
-                    // into the running turn immediately, so it carries no queue id
-                    // (id 0 = transient, no edit/cancel controls).
-                    rows.push(ChatItem::QueuedUser {
-                        id: 0,
-                        text: display_message.clone(),
-                    });
-                } else {
-                    rows.push(ChatItem::User(display_message.clone()));
-                    rows.push(ChatItem::Assistant {
-                        text: String::new(),
-                        model: turn_model.clone(),
-                        resources: Vec::new(),
-                    });
-                }
+                rows.push(ChatItem::User(display_message.clone()));
+                rows.push(ChatItem::Assistant {
+                    text: String::new(),
+                    model: turn_model.clone(),
+                    resources: Vec::new(),
+                });
             });
             if !activates_session {
                 begin_pending_turn(pending_turns, running, &id);
@@ -4770,8 +4892,8 @@ fn App() -> impl IntoView {
                 references: reference_args,
                 resume: false,
                 acp_agent_id: agent_id.clone(),
-                guide: (action == ComposerSendAction::GuideAppend).then_some(true),
-                replace: (action == ComposerSendAction::InterruptReplace).then_some(true),
+                guide: None,
+                replace: None,
             })
             .unwrap();
             match invoke_checked("send_message", args).await {
@@ -4834,7 +4956,7 @@ fn App() -> impl IntoView {
                             attachments.set(saved_attachments);
                         }
                         if composer_references.get_untracked().is_empty() {
-                            composer_references.set(refs);
+                            composer_references.set(saved_references);
                         }
                         if composer_quotes.get_untracked().is_empty() {
                             composer_quotes.set(quotes);
@@ -6461,11 +6583,7 @@ fn App() -> impl IntoView {
             running,
         );
         active_session.set(Some(id.clone()));
-        active_branch_state.set(sessions.with_untracked(|rows| {
-            rows.iter()
-                .find(|session| session.id == id)
-                .and_then(|session| session.branch_state.clone())
-        }));
+        active_branch_state.set(active_session_metadata.get_untracked().2);
         let epoch = transcript_load_epoch.get_untracked().wrapping_add(1);
         transcript_load_epoch.set(epoch);
         transcript_loading.set(Some(id.clone()));
@@ -6616,6 +6734,37 @@ fn App() -> impl IntoView {
                 restore_chat_session_scroll(&id);
                 return;
             }
+        });
+    });
+    // The research assistant is one persistent conversation: opening it binds
+    // this window to it and loads its history like any other session.
+    let open_assistant = Callback::new(move |_: ()| {
+        if demo_mode.get_untracked() || assistant_mode.get_untracked() {
+            return;
+        }
+        command_palette_open.set(false);
+        action_palette_open.set(false);
+        spawn_local(async move {
+            let session_id = match invoke_checked("open_research_assistant", JsValue::UNDEFINED)
+                .await
+                .map(|value| value.as_string())
+            {
+                Ok(Some(id)) => id,
+                Ok(None) => return,
+                Err(error) => {
+                    status.set(js_error_text(error));
+                    return;
+                }
+            };
+            assistant_mode.set(true);
+            attachments.set(vec![]);
+            composer_references.set(vec![]);
+            composer_quotes.set(vec![]);
+            show_sidebar.set(false);
+            show_right.set(false);
+            center_file.set(None);
+            load_session.call(session_id);
+            focus_composer();
         });
     });
     let toggle_model_view = Callback::new(move |_| {
@@ -7109,6 +7258,7 @@ fn App() -> impl IntoView {
             "archive" => {
                 input.set(String::new());
                 archive_frame.set(active_session.get_untracked());
+                archive_minimized.set(false);
                 return true;
             }
             "compact" => {
@@ -7565,37 +7715,9 @@ fn App() -> impl IntoView {
     // source: resolve the bridge's pending request; the answer returns inside
     // the agent's still-running turn.
     let on_question_answer = Callback::new(
-        move |(ui_index, request_id, answer, fill_only): (usize, Option<String>, String, bool)| {
+        move |(ui_index, request_id, answer): (usize, Option<String>, String)| {
             let answer = answer.trim().to_string();
             if answer.is_empty() {
-                return;
-            }
-            // Native option clicks stage an editable composer draft. The card
-            // remains pending until the user submits the resulting message.
-            // ACP responses still resolve immediately because they are a
-            // protocol reply to a live bridge request, not a new turn.
-            if fill_only && request_id.is_none() {
-                let Some(session_id) = active_session.get_untracked() else {
-                    return;
-                };
-                let previous = native_question_draft.get_untracked();
-                let current_input = input.get_untracked();
-                let draft = if previous.as_ref().is_some_and(
-                    |(previous_session, previous_index, previous_text)| {
-                        *previous_session == session_id
-                            && *previous_index == ui_index
-                            && current_input == *previous_text
-                    },
-                ) {
-                    answer.clone()
-                } else if current_input.trim().is_empty() {
-                    answer.clone()
-                } else {
-                    format!("{}\n\n{}", current_input.trim_end(), answer)
-                };
-                input.set(draft.clone());
-                native_question_draft.set(Some((session_id, ui_index, draft)));
-                focus_composer();
                 return;
             }
             // Settle the card before sending: the send appends rows, so the
@@ -7617,7 +7739,6 @@ fn App() -> impl IntoView {
                 None => {
                     // The send callback reads the composer synchronously, so
                     // swap the answer in and restore any draft right after.
-                    native_question_draft.set(None);
                     let draft = input.get_untracked();
                     input.set(answer);
                     send.call(ComposerSendAction::Normal);
@@ -7857,9 +7978,21 @@ fn App() -> impl IntoView {
     });
 
     let ctx_menu = create_rw_signal::<Option<CtxMenu>>(None);
+    let show_shelved_sessions = create_rw_signal(false);
+    let shelved_sessions_revision = create_rw_signal(0u64);
+    let shelved_project_id = create_memo(move |_| {
+        project_info.with(|project| project.as_ref().map(|project| project.id.clone()))
+    });
+    create_effect(move |_| {
+        shelved_project_id.get();
+        show_shelved_sessions.set(false);
+        opened_shelved_metadata.set(None);
+    });
+
     let rename_session_target = create_rw_signal::<Option<(String, String)>>(None);
     let rename_session_input = create_rw_signal(String::new());
     let session_transfer = create_rw_signal::<Option<SessionTransfer>>(None);
+    let transfer_artifacts = SessionArtifactChoiceState::new();
     let session_transfer_busy = create_rw_signal(false);
     let session_transfer_error = create_rw_signal::<Option<String>>(None);
     let folder_modal = create_rw_signal::<Option<FolderModal>>(None);
@@ -8852,9 +8985,18 @@ fn App() -> impl IntoView {
     // Close on any click that bubbles to the window; the bell and the dropdown
     // stop propagation (same pattern as the titlebar menus — a fixed backdrop
     // would be clipped to the topbar, whose backdrop-filter contains it).
-    window_event_listener(ev::click, move |_| {
+    // Narrow panes fold the topbar actions into a "more" menu (same close rule).
+    let topbar_more_open = create_rw_signal(false);
+    window_event_listener(ev::click, move |ev| {
         if inbox_open.get_untracked() {
             inbox_open.set(false);
+        }
+        // Delegated `on:click` also runs on window, so stop_propagation can't
+        // shield the toggle; skip it (and the inbox nested in the menu) here.
+        if topbar_more_open.get_untracked()
+            && !event_inside_selector(&ev, ".topbar-more-btn, .topbar-overflow .inbox-wrap")
+        {
+            topbar_more_open.set(false);
         }
     });
     {
@@ -8913,6 +9055,30 @@ fn App() -> impl IntoView {
         set_saved_marks(&serde_json::to_string(&texts).unwrap_or_default());
     });
     let open_session = load_session.clone();
+    let set_session_shelved = Callback::new(move |(id, shelved): (String, bool)| {
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({ "id": id, "shelved": shelved })).unwrap();
+            match invoke_checked("set_session_shelved", args).await {
+                Ok(_) => {
+                    refresh_session_history();
+                    shelved_sessions_revision.update(|revision| *revision += 1);
+                    show_toast(&t(
+                        locale.get_untracked(),
+                        if shelved {
+                            "session.shelved_done"
+                        } else {
+                            "session.restored_done"
+                        },
+                    ));
+                }
+                Err(error) => show_toast(&localize_backend(
+                    locale.get_untracked(),
+                    &js_error_text(error),
+                )),
+            }
+        });
+    });
+
     let on_ctx_pick = {
         let open_session = open_session.clone();
         let sessions = sessions;
@@ -9311,7 +9477,10 @@ fn App() -> impl IntoView {
             }
             if let Some(act) = context_menu::session_action(&action, &payload) {
                 match act {
-                    context_menu::SessionAction::Open(id) => open_session.call(id),
+                    context_menu::SessionAction::Open(id) => {
+                        show_shelved_sessions.set(false);
+                        open_session.call(id);
+                    }
                     context_menu::SessionAction::AbandonExploration(id) => {
                         ui_confirm.set(Some(UiConfirm::AbandonExploration(id)));
                     }
@@ -9411,6 +9580,9 @@ fn App() -> impl IntoView {
                                 });
                             }
                         });
+                    }
+                    context_menu::SessionAction::SetShelved { id, shelved } => {
+                        set_session_shelved.call((id, shelved));
                     }
                     context_menu::SessionAction::SetPinned { id, pinned } => {
                         spawn_local(async move {
@@ -9600,7 +9772,10 @@ fn App() -> impl IntoView {
             trajectory_open.set(false);
             return;
         }
-        if archive_frame.get().is_some() && modal_artifact.get().is_none() {
+        if archive_frame.get().is_some()
+            && !archive_minimized.get()
+            && modal_artifact.get().is_none()
+        {
             ev.prevent_default();
             if !archive_busy.get() {
                 archive_frame.set(None);
@@ -9634,6 +9809,11 @@ fn App() -> impl IntoView {
             command_palette_open.set(false);
             return;
         }
+        if show_shelved_sessions.get() {
+            ev.prevent_default();
+            show_shelved_sessions.set(false);
+            return;
+        }
         if show_onboarding.get() {
             ev.prevent_default();
             if onboard_step.get() > 0 {
@@ -9643,12 +9823,6 @@ fn App() -> impl IntoView {
             }
             return;
         }
-        if scratch_open.get() {
-            ev.prevent_default();
-            close_scratch.call(());
-            return;
-        }
-
         if branch_merge_detail.get().is_some() {
             ev.prevent_default();
             branch_merge_detail.set(None);
@@ -9723,10 +9897,23 @@ fn App() -> impl IntoView {
             return;
         }
 
+        if assistant_remote_open.get() {
+            ev.prevent_default();
+            close_assistant_remote.call(());
+            return;
+        }
         if inbox_open.get() {
             ev.prevent_default();
             inbox_open.set(false);
             return;
+        }
+        if topbar_more_open.get() {
+            topbar_more_open.set(false);
+            // The pane may have widened since; an unseen menu must not eat Escape.
+            if topbar_more_visible() {
+                ev.prevent_default();
+                return;
+            }
         }
         if show_settings.get()
             && settings_section.get() == "workflows"
@@ -9747,10 +9934,21 @@ fn App() -> impl IntoView {
             return;
         }
 
-        if show_projects.get() {
+        if show_projects.get() && !assistant_mode.get() {
             if home_calendar_open.get() && !home_dialog_open.get() {
                 ev.prevent_default();
                 home_calendar_open.set(false);
+                return;
+            }
+            // The inline task form closes before its page.
+            if home_automation_form.get() && !home_dialog_open.get() {
+                ev.prevent_default();
+                home_automation_form.set(false);
+                return;
+            }
+            if home_automation_open.get() && !home_dialog_open.get() {
+                ev.prevent_default();
+                home_automation_open.set(false);
                 return;
             }
             if project_transfer
@@ -9874,19 +10072,14 @@ fn App() -> impl IntoView {
             specialist_menu_open.set(false);
             return;
         }
-        if effort_menu_for.get().is_some() {
+        if composer_effort_open.get() {
             ev.prevent_default();
-            effort_menu_for.set(None);
+            composer_effort_open.set(false);
             return;
         }
         if model_menu_open.get() {
             ev.prevent_default();
             model_menu_open.set(false);
-            return;
-        }
-        if send_mode_menu_open.get() {
-            ev.prevent_default();
-            send_mode_menu_open.set(false);
             return;
         }
         if right_tab_add_menu_open.get() {
@@ -9929,6 +10122,15 @@ fn App() -> impl IntoView {
         }
 
         // --- drag cancel ---
+        if assistant_mode.get() && assistant_workspace.close_drawer() {
+            ev.prevent_default();
+            return;
+        }
+        if assistant_mode.get() {
+            ev.prevent_default();
+            close_assistant.call(());
+            return;
+        }
         if dragging.get() {
             ev.prevent_default();
             dragging.set(false);
@@ -10064,6 +10266,8 @@ fn App() -> impl IntoView {
     });
 
     window_event_listener(ev::resize, move |_| {
+        model_menu_open.set(false);
+        composer_effort_open.set(false);
         let (viewport_w, viewport_h) = viewport_size();
         if let Some(geom) = context_usage_geom.get_untracked() {
             let clamped =
@@ -10224,6 +10428,8 @@ fn App() -> impl IntoView {
                     .map(|(_, day)| day);
                 calendar_journey_request.set(None);
                 home_calendar_open.set(false);
+                home_automation_open.set(false);
+                home_automation_form.set(false);
                 journey_initial_day.set(None);
                 let request_epoch = transition_epoch.get().wrapping_add(1);
                 transition_epoch.set(request_epoch);
@@ -10661,7 +10867,10 @@ fn App() -> impl IntoView {
             let Some(transfer) = session_transfer.get() else {
                 return;
             };
-            if transfer.target_project_id.is_empty() || session_transfer_busy.get() {
+            if transfer.target_project_id.is_empty()
+                || session_transfer_busy.get()
+                || (transfer.mode == SessionTransferMode::Move && transfer_artifacts.blocked())
+            {
                 return;
             }
             let target_name = proj_list
@@ -10707,6 +10916,8 @@ fn App() -> impl IntoView {
                     "id": transfer.id,
                     "targetProjectId": transfer.target_project_id,
                     "mode": transfer.mode.as_str(),
+                    "includeArtifacts": transfer.mode == SessionTransferMode::Move && transfer_artifacts.selected.get_untracked(),
+                    "artifactFingerprint": transfer_artifacts.previews.get_untracked().get(&transfer.id).map(|p|p.fingerprint.clone()),
                 }))
                 .unwrap();
                 match invoke_checked("transfer_session_to_project", args).await {
@@ -10727,6 +10938,7 @@ fn App() -> impl IntoView {
                             }
                         }
                         refresh_session_history();
+                        refresh_dir(file_cwd, file_entries);
                         let message_key = if transfer.mode == SessionTransferMode::Copy {
                             "session.copy_success"
                         } else {
@@ -10736,8 +10948,14 @@ fn App() -> impl IntoView {
                         session_transfer.set(None);
                     }
                     Err(error) => {
-                        session_transfer_error
-                            .set(Some(localize_backend(locale.get(), &js_error_text(error))));
+                        let message = localize_backend(locale.get(), &js_error_text(error));
+                        if transfer.mode == SessionTransferMode::Move
+                            && transfer_artifacts.selected.get_untracked()
+                        {
+                            transfer_artifacts.error.set(Some(message));
+                        } else {
+                            session_transfer_error.set(Some(message));
+                        }
                     }
                 }
                 session_transfer_busy.set(false);
@@ -10954,7 +11172,6 @@ fn App() -> impl IntoView {
     let menu_import_project = create_rw_signal(false);
     let palette_action = {
         let new_session = palette_new_session.clone();
-        let open_scratch = open_scratch.clone();
         let project_settings = palette_project_settings.clone();
         let manage_skills = palette_manage_skills.clone();
         let run_update_check = run_update_check.clone();
@@ -10979,7 +11196,6 @@ fn App() -> impl IntoView {
                     menu_import_project.set(true);
                 }
             }
-            "scratch" => open_scratch.call(()),
             "new-window" => {
                 spawn_local(async move {
                     let _ = invoke("open_new_window", JsValue::UNDEFINED).await;
@@ -11174,13 +11390,13 @@ fn App() -> impl IntoView {
     }
     let palette_project_id = Signal::derive(move || project_info.get().map(|p| p.id));
     let has_current_project = Signal::derive(move || {
-        scratch_open.get()
+        assistant_mode.get()
             || (project_info.get().is_some() && !show_projects.get() && !demo_mode.get())
     });
     let home_page = Signal::derive(move || show_projects.get());
     let window_title = Signal::derive(move || {
-        if scratch_open.get() {
-            app_window_title(Some("Scratch"))
+        if assistant_mode.get() {
+            app_window_title(Some(&t(locale.get(), "assistant.title")))
         } else if show_projects.get() {
             app_window_title(None)
         } else if demo_mode.get() {
@@ -11226,13 +11442,9 @@ fn App() -> impl IntoView {
                 action_palette_open.set(false);
                 command_palette_open.update(|open| *open = !*open);
             }
-            "n" => {
+            "n" if !ev.shift_key() => {
                 ev.prevent_default();
-                if ev.shift_key() {
-                    open_scratch.call(());
-                } else {
-                    shortcut_action.call("new");
-                }
+                shortcut_action.call("new");
             }
             "b" => {
                 ev.prevent_default();
@@ -11286,7 +11498,10 @@ fn App() -> impl IntoView {
     // streaming text updates.
     let latest_user_item = create_memo(move |_| {
         let _ = transcript_projection_epoch.get();
-        items.with_untracked(|rows| rows.iter().rposition(|item| matches!(item, ChatItem::User(_))))
+        items.with_untracked(|rows| {
+            rows.iter()
+                .rposition(|item| matches!(item, ChatItem::User(_)))
+        })
     });
     // Undo eligibility changes at turn boundaries, but the assistant Markdown
     // does not. Publish the one eligible index separately so adding/removing
@@ -11366,7 +11581,7 @@ fn App() -> impl IntoView {
     // on memos: `ensure_right_tab` on an already-open pane, or a FileChanged
     // for some other path, must not rebuild what is on screen.
     let right_pane_visible =
-        create_memo(move |_| show_right.get() && !scratch_open.get() && !demo_mode.get());
+        create_memo(move |_| show_right.get() && !assistant_mode.get() && !demo_mode.get());
     let center_preview = create_memo(move |_| {
         let path = (!demo_mode.get()).then(|| center_file.get()).flatten()?;
         let file =
@@ -11399,7 +11614,7 @@ fn App() -> impl IntoView {
             privacy_hidden_project_ids=privacy_hidden_project_ids
             on_open_project=command_palette_open_project on_open_session=command_palette_open_session on_open_artifact=palette_open_artifact
             on_command=palette_action
-            on_new_session=palette_new_session on_open_scratch=open_scratch
+            on_new_session=palette_new_session
             on_project_settings=palette_project_settings
             on_manage_skills=palette_manage_skills on_attach=palette_attach />
         <PrivacyModeModal
@@ -11600,6 +11815,7 @@ fn App() -> impl IntoView {
                 sync_actions_available, command_palette_open, project_transfer,
                 privacy_mode_active, privacy_hidden_project_ids,
                 menu_new_project, menu_import_project, home_calendar_open, home_dialog_open,
+                home_automation_open, home_automation_form,
             }
             open_project=switch_project
             open_project_folder=Callback::new(move |id| open_project_with_files.call((id, None, true)))
@@ -11608,7 +11824,7 @@ fn App() -> impl IntoView {
                 calendar_journey_request.set(Some((id.clone(), day)));
                 open_project_transition.call((id, None));
             })
-            open_scratch=open_scratch
+            open_assistant=open_assistant
             open_settings=Callback::new(move |section: Option<String>| open_settings_fn(section))
             open_library=Callback::new(move |_| show_library.set(true))
             open_project_export=open_project_export
@@ -11651,13 +11867,13 @@ fn App() -> impl IntoView {
                 left=Signal::derive(move || if show_sidebar.get() { sidebar_w.get() } else { 0.0 })
                 graph=research_graph.read_only()
                 artifact_open=Signal::derive(move || modal_artifact.get().is_some()
-                    || archive_frame.get().is_some()
+                    || (archive_frame.get().is_some() && !archive_minimized.get())
                     || show_settings.get() || show_library.get() || show_publication_workspace.get()
                     || show_proj_settings.get() || show_capabilities.get())
                 on_close=Callback::new(move |_| show_research_graph.set(false))
                 on_artifact=Callback::new(move |target| modal_artifact.set(Some(target)))
                 on_session=Callback::new(move |id| { show_research_graph.set(false); load_session.call(id); })
-                on_archive=Callback::new(move |id|archive_frame.set(Some(id)))
+                on_archive=Callback::new(move |id|{archive_frame.set(Some(id));archive_minimized.set(false);})
             />
         })}
         <SshConnectivityOverlay
@@ -11673,10 +11889,10 @@ fn App() -> impl IntoView {
         <UpdateCheckOverlay state=UpdateCheckOverlayState { locale, update_check_modal, update_check_enabled, update_banner } />
         <div class="app"
             class:app-entering=move || app_shell_entering.get()
-            class:scratch-mode=move || scratch_open.get()
+            class:assistant-mode=move || assistant_mode.get()
             // Onboarding lives in this shell, so hiding it on the projects
             // landing swallowed the first-run overlay entirely.
-            class:app-hidden=move || show_projects.get() && !scratch_open.get() && !show_settings.get() && !show_onboarding.get() && modal_artifact.get().is_none()
+            class:app-hidden=move || show_projects.get() && !assistant_mode.get() && !show_settings.get() && !show_onboarding.get() && modal_artifact.get().is_none()
             on:contextmenu=on_context_menu>
         <Sidebar
             state=SidebarState {
@@ -11699,6 +11915,7 @@ fn App() -> impl IntoView {
                 action_palette_open.set(false);
                 command_palette_open.set(true);
             })
+            open_shelved=Callback::new(move |_| show_shelved_sessions.set(true))
             new_folder=Callback::new(new_folder)
             open_files=Callback::new(move |ev| { show_publication_workspace.set(false); show_research_graph.set(false); open_files(ev); })
             research_journey_open=show_research_graph.read_only()
@@ -11789,22 +12006,37 @@ fn App() -> impl IntoView {
             />
         })}
 
+        {move || (assistant_mode.get() && assistant_remote_open.get()).then(|| view! {
+            <assistant_remote::AssistantRemote locale=locale on_close=close_assistant_remote/>
+        })}
         <div class="workspace-main">
+        {move || assistant_mode.get().then(|| view! {
+            <assistant_workspace::AssistantHeader locale=locale state=assistant_workspace on_close=close_assistant
+                on_remote=Callback::new(move |_| assistant_remote_open.set(true))
+                on_toggle=Callback::new(move |left| {
+                    compose_menu_open.set(false);
+                    model_menu_open.set(false);
+                    composer_effort_open.set(false);
+                    context_usage_open.set(false);
+                    agent_menu_open.set(false);
+                    reviewer_model_menu_open.set(false);
+                    compute_menu_open.set(false);
+                    specialist_menu_open.set(false);
+                    assistant_workspace.toggle(left);
+                })/>
+            <assistant_workspace::AssistantProjects locale=locale state=assistant_workspace/>
+            <button type="button" class="assistant-drawer-backdrop"
+                hidden=move || !assistant_workspace.narrow.get() || !(assistant_workspace.left.get() || assistant_workspace.right.get())
+                aria-label=move || research_journey::j(locale.get(), "Close sidebar", "关闭侧栏")
+                on:click=move |_| { assistant_workspace.close_drawer(); }></button>
+        })}
         <main class="center" class:split=move || center_split_on.get()
+            inert=move || (assistant_mode.get() && assistant_workspace.narrow.get() && (assistant_workspace.left.get() || assistant_workspace.right.get())).then_some("")
             style=move || center_chat_w.get()
                 .map(|width| format!("--center-chat-width:{width}px"))
                 .unwrap_or_default()>
             <div class="topbar">
-                <div class="scratch-topbar">
-                    <span class="scratch-title">{move || t(locale.get(), "scratch.title")}</span>
-                    <button type="button" class="icon-btn scratch-close"
-                        title=move || t(locale.get(), "scratch.close")
-                        aria-label=move || t(locale.get(), "scratch.close")
-                        on:click=move |_| close_scratch.call(())>
-                        {compose_icon("close")}
-                    </button>
-                </div>
-                {move || (!scratch_open.get() && !show_sidebar.get()).then(|| view! {
+                {move || (!assistant_mode.get() && !show_sidebar.get()).then(|| view! {
                     <button class="icon-btn" title=move || t(locale.get(), "sidebar.show") on:click=move |_| show_sidebar.set(true)>{compose_icon("chevron")}</button>
                 })}
                 <div class="center-tabs" role="tablist">
@@ -11901,7 +12133,11 @@ fn App() -> impl IntoView {
                     }
                 }}
                 <div class="spacer"></div>
-                <div class="topbar-actions">
+                <div class="topbar-actions" class:more-open=move || topbar_more_open.get()>
+                // Wide panes show these inline; narrow ones fold them into the
+                // "more" menu below, where the same buttons reveal their labels.
+                <div class="topbar-overflow" id="topbar-overflow" data-testid="topbar-overflow"
+                    on:click=move |_| topbar_more_open.set(false)>
                 {move || active_session.get().is_some().then(|| view! {
                     <TranscriptViewToggle />
                 })}
@@ -11919,6 +12155,7 @@ fn App() -> impl IntoView {
                             aria-controls="conversation-outline-panel"
                             on:click=move |_| conversation_outline_open.update(|open| *open = !*open)>
                             {compose_icon("list")}
+                            <span class="topbar-action-label">{move || t(locale.get(), "outline.title")}</span>
                             <span class="conversation-outline-count" aria-hidden="true">{count}</span>
                         </button>
                     })
@@ -11935,6 +12172,7 @@ fn App() -> impl IntoView {
                     disabled=move || demo_mode.get() || !can_share.get()
                     on:click=move |_| open_share.call(())>
                     {compose_icon("share")}
+                    <span class="topbar-action-label">{move || t(locale.get(), "share.topbar")}</span>
                 </button>
                 <button type="button" class="icon-btn" data-testid="trajectory-topbar"
                     title=move || t(locale.get(), "trajectory.topbar")
@@ -11942,12 +12180,16 @@ fn App() -> impl IntoView {
                     class:active=move || trajectory_open.get()
                     on:click=move |_| trajectory_open.set(true)>
                     {compose_icon("timeline")}
+                    <span class="topbar-action-label">{move || t(locale.get(), "trajectory.topbar")}</span>
                 </button>
                 <button type="button" class="icon-btn" data-testid="archive-topbar"
                     title=move ||research_journey::j(locale.get(),"Archive research","研究归档")
                     aria-label=move ||research_journey::j(locale.get(),"Archive research","研究归档")
                     disabled=move ||demo_mode.get() || busy.get() || active_session.get().is_none() || active_is_exploration.get()
-                    on:click=move |_|archive_frame.set(active_session.get_untracked())>{compose_icon("archive")}</button>
+                    on:click=move |_|{archive_frame.set(active_session.get_untracked());archive_minimized.set(false);}>
+                    {compose_icon("archive")}
+                    <span class="topbar-action-label">{move ||research_journey::j(locale.get(),"Archive research","研究归档")}</span>
+                </button>
                 <div class="inbox-wrap">
                     <button class="icon-btn"
                         class:active=move || inbox_open.get()
@@ -11962,6 +12204,7 @@ fn App() -> impl IntoView {
                             inbox_open.set(opening);
                         }>
                         {compose_icon("bell")}
+                        <span class="topbar-action-label">{move || t(locale.get(), "sess_status.needs_you")}</span>
                         {move || {
                             let n = inbox_here_count.get();
                             (n > 0).then(|| view! { <span class="inbox-badge">{n}</span> })
@@ -11983,6 +12226,7 @@ fn App() -> impl IntoView {
                                         <button type="button" class="inbox-item"
                                             on:click=move |_| {
                                                 inbox_open.set(false);
+                                                topbar_more_open.set(false);
                                                 palette_open_session.call((project_id.clone(), session_id.clone()));
                                             }>
                                             <span class="inbox-item-project">{s.project_name.clone()}</span>
@@ -12006,7 +12250,7 @@ fn App() -> impl IntoView {
                 </div>
                 <button class="icon-btn" title=move || t(locale.get(), "contexts.open_terminal")
                     class:active=move || terminal_panel_open.get()
-                    disabled=move || scratch_open.get() || demo_mode.get()
+                    disabled=move || assistant_mode.get() || demo_mode.get()
                     on:click=move |_| {
                         if terminal_sessions.get_untracked().is_empty() {
                             open_terminal_for_context.call("local".into());
@@ -12020,10 +12264,26 @@ fn App() -> impl IntoView {
                             terminal_add_menu_open.set(false);
                             terminal_panel_open.set(should_open);
                         }
-                    }>{compose_icon("terminal")}</button>
+                    }>
+                    {compose_icon("terminal")}
+                    <span class="topbar-action-label">{move || t(locale.get(), "contexts.open_terminal")}</span>
+                </button>
+                </div>
+                <button type="button" class="icon-btn topbar-more-btn" data-testid="topbar-more"
+                    class:active=move || topbar_more_open.get()
+                    title=move || t(locale.get(), "queue.more")
+                    aria-label=move || t(locale.get(), "queue.more")
+                    aria-expanded=move || topbar_more_open.get().to_string()
+                    aria-controls="topbar-overflow"
+                    on:click=move |_| topbar_more_open.update(|open| *open = !*open)>
+                    {compose_icon("more")}
+                    {move || (inbox_here_count.get() > 0).then(|| view! {
+                        <span class="inbox-badge topbar-more-dot" aria-hidden="true"></span>
+                    })}
+                </button>
                 <button class="icon-btn" title=move || t(locale.get(), "center.toggle_panel")
                     class:active=move || show_right.get()
-                    disabled=move || scratch_open.get() || demo_mode.get()
+                    disabled=move || assistant_mode.get() || demo_mode.get()
                     on:click=move |_| {
                         show_right.update(|open| {
                             if *open {
@@ -12820,8 +13080,8 @@ fn App() -> impl IntoView {
                     {move || (!model_view.get() && thread_items.with(|l| l.is_empty()) && !(transcript_loading.get().is_some() && transcript_loading.get() == active_session.get()) && transcript_page_error.get().is_none_or(|(id, _)| active_session.get().as_deref() != Some(id.as_str()))).then(|| view! {
                         <div class="empty">
                             <span class="empty-logo brand-wordmark" role="img" aria-label="wisp-depmap"></span>
-                            <h1>{move || empty_title(locale.get(), empty_title_idx.get())}</h1>
-                            <p>{move || empty_subtitle(locale.get(), empty_subtitle_idx.get())}</p>
+                            <h1>{move || if assistant_mode.get() { t(locale.get(), "assistant.title").to_string() } else { empty_title(locale.get(), empty_title_idx.get()) }}</h1>
+                            <p>{move || if assistant_mode.get() { t(locale.get(), "assistant.empty").to_string() } else { empty_subtitle(locale.get(), empty_subtitle_idx.get()) }}</p>
                         </div>
                     })}
                     // Keyed rows (#65): the key is a content fingerprint, so a
@@ -14061,6 +14321,14 @@ fn App() -> impl IntoView {
                     on:dragover=on_drag_over
                     on:dragleave=on_drag_leave
                     on:drop=on_drop>
+                    {move || (assistant_mode.get() && assistant_workspace.selected.get().is_some()).then(|| view! {
+                        <div class="assistant-context" data-testid="assistant-project-context">
+                            {compose_icon("folder")}
+                            <span>{move || assistant_workspace.selected_project().map(|project| project.name).unwrap_or_else(|| research_journey::j(locale.get(), "Project context unavailable", "项目上下文暂不可用").into())}</span>
+                            <button type="button" aria-label=move || research_journey::j(locale.get(), "Clear project context", "取消项目上下文")
+                                on:click=move |_| assistant_workspace.selected.set(None)>{compose_icon("close")}</button>
+                        </div>
+                    })}
                     <div class="composer-resizer"
                         title=move || t(locale.get(), "composer.resize_hint")
                         on:mousedown=on_composer_resize_start></div>
@@ -14152,6 +14420,18 @@ fn App() -> impl IntoView {
                                         <span class="composer-attachment-icon">{compose_icon("doc")}</span>
                                     }.into_view())
                                 };
+                                // Full-card overlay rather than a wrapping button, so the remove
+                                // button stays a sibling and needs no propagation guard.
+                                let open = path.map(|path| {
+                                    let name = name.clone();
+                                    // Same kind fallback as sent-message file cards.
+                                    let modal_kind = file_kind(&path).unwrap_or("text").to_string();
+                                    view! {
+                                        <button type="button" class="composer-attachment-open"
+                                            aria-label=name.clone()
+                                            on:click=move |_| modal_artifact.set(Some((path.clone(), name.clone(), modal_kind.clone())))></button>
+                                    }
+                                });
                                 view! {
                                     <div class=format!("composer-attachment-row {state} {kind}")
                                         title=hover>
@@ -14160,6 +14440,7 @@ fn App() -> impl IntoView {
                                             <span class=format!("composer-attachment {state}")>{name}</span>
                                             <span class="composer-attachment-meta">{move || t(locale.get(), meta_key)}</span>
                                         </span>
+                                        {open}
                                         <button type="button" class="composer-attachment-remove"
                                             title=move || t(locale.get(), "composer.remove_attachment")
                                             aria-label=move || t(locale.get(), "composer.remove_attachment")
@@ -14283,17 +14564,22 @@ fn App() -> impl IntoView {
                                 }
                             }
                             prop:value={move || input.get()}
+                            on:beforeinput:undelegated=composer_before_input
                             on:input=move |ev: web_sys::Event| {
-                                let Some(input_event) = ev.dyn_ref::<web_sys::InputEvent>() else {
-                                    return;
-                                };
+                                let input_event = ev.dyn_ref::<web_sys::InputEvent>();
                                 let Some(textarea) = ev.target()
                                     .and_then(|target| target.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
                                 else {
                                     return;
                                 };
-                                let v = textarea.value();
-                                let input_type = input_event.input_type();
+                                // Do not rewrite the DOM while an IME owns marked
+                                // text; compositionend repairs it after commit.
+                                let v = if input_event.is_some_and(|ev| ev.is_composing()) {
+                                    textarea.value()
+                                } else {
+                                    composer_input_value(&textarea)
+                                };
+                                let input_type = input_event.map(|ev| ev.input_type()).unwrap_or_default();
                                 let prior_mode = picker_mode.get_untracked();
                                 let prior_range = picker_token_range.get_untracked();
                                 let manual_edit = matches!(
@@ -14330,6 +14616,13 @@ fn App() -> impl IntoView {
                                 }
                                 input.set(v);
                             }
+                            on:compositionend=move |ev: web_sys::CompositionEvent| {
+                                if let Some(textarea) = ev.target()
+                                    .and_then(|target| target.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+                                {
+                                    input.set(composer_input_value(&textarea));
+                                }
+                            }
                             on:keydown:undelegated=on_send
                             on:paste=on_paste
                             prop:placeholder=move || {
@@ -14340,6 +14633,8 @@ fn App() -> impl IntoView {
                                     t(locale.get(), "exploration.mainline_frozen_placeholder").into()
                                 } else if composer_scope_locked.get() {
                                     t(locale.get(), "exploration.read_only_placeholder").into()
+                                } else if assistant_mode.get() {
+                                    research_journey::j(locale.get(), "Ask about your research, or plan the next step…", "聊聊研究进展，或安排下一步…").into()
                                 } else {
                                     tf(
                                         locale.get(),
@@ -14419,6 +14714,19 @@ fn App() -> impl IntoView {
                                 </div>
                             }
                         })}
+                    </div>
+                    <div class="composer-footer">
+                        <div class="composer-hint">{move || {
+                            if send_with_modifier.get() {
+                                tf(
+                                    locale.get(),
+                                    "composer.hint_modifier",
+                                    &[("modifier", if is_mac() { "Cmd" } else { "Ctrl" })],
+                                )
+                            } else {
+                                t(locale.get(), "composer.hint").into()
+                            }
+                        }}</div>
                     </div>
                     <div class="composer-actions">
                         <div class="composer-tools">
@@ -14923,7 +15231,7 @@ fn App() -> impl IntoView {
                                                 <span>{move || t(locale.get(), "composer.specialist.none")}</span>
                                                 {move || session_specialist.get().is_none().then(|| view! { <span class="agent-menu-check">{compose_icon("check")}</span> })}
                                             </button>
-                                            {move || specialists.get().into_iter().filter(|specialist| specialist.id != "reviewer" && specialist.id != "reader").map(|specialist| {
+                                            {move || specialists.get().into_iter().filter(|specialist| !["reviewer", "reader", "archivist", "recap"].contains(&specialist.id.as_str())).map(|specialist| {
                                                 let id = specialist.id.clone();
                                                 let selected_id = id.clone();
                                                 view! {
@@ -15156,43 +15464,14 @@ fn App() -> impl IntoView {
                                     </button>
                                 }
                             })}
-                            {move || fast_profile.get().map(|_| {
-                                let enabled = fast_enabled.get();
-                                let session_override = fast_is_session_override.get();
-                                let saving = service_tier_busy.get();
-                                let running_now = busy.get();
-                                let loaded = fast_loaded.get();
-                                let key = if running_now {
-                                    "composer.fast.running"
-                                } else if saving || !loaded {
-                                    "composer.fast.saving"
-                                } else {
-                                    match (enabled, session_override) {
-                                        (true, true) => "composer.fast.on_session",
-                                        (true, false) => "composer.fast.on_profile",
-                                        (false, true) => "composer.fast.off_session",
-                                        (false, false) => "composer.fast.off_profile",
-                                    }
-                                };
-                                let title = t(locale.get(), key).to_string();
-                                view! {
-                                    <button type="button" class="composer-fast"
-                                        class:enabled=enabled
-                                        class:pending=saving || !loaded
-                                        data-testid="composer-fast-toggle"
-                                        aria-pressed=enabled.to_string()
-                                        aria-label=title.clone()
-                                        title=title
-                                        disabled=running_now || saving || !loaded
-                                        on:click=move |_| toggle_fast.call(())>
-                                        {compose_icon("bolt")}
-                                    </button>
-                                }
-                            })}
                             {move || (!models.get().is_empty() || !acp_agents.get().is_empty()).then(|| view! {
                                 <div class="model-picker">
                                     <button type="button" class="model-picker-btn" class:active=move || model_menu_open.get()
-                                        on:click=move |_| model_menu_open.update(|o| *o = !*o)>
+                                        on:click=move |ev| {
+                                            composer_menu_style.set(composer_menu_bounds(&ev));
+                                            composer_effort_open.set(false);
+                                            model_menu_open.update(|o| *o = !*o);
+                                        }>
                                         <span class="model-picker-label">{move || {
                                             if let Some(id) = active_acp_agent_id.get() {
                                                 acp_agents.get().into_iter().find(|agent| agent.id == id).map(|agent| agent.label).unwrap_or_else(|| "ACP Agent".into())
@@ -15204,16 +15483,11 @@ fn App() -> impl IntoView {
                                                 model_label(&l, selected.as_deref()).unwrap_or_default()
                                             }
                                         }}</span>
-                                        <span class="model-picker-chev">"▾"</span>
+                                        <span class="model-picker-chev">{compose_icon("chevron-down")}</span>
                                     </button>
                                     {move || model_menu_open.get().then(|| view! {
                                         <div class="model-menu-backdrop" on:click=move |_| model_menu_open.set(false)></div>
-                                        <div class="model-menu"
-                                            style=move || effort_menu_for.get()
-                                                .map(|_| format!("right:{:.0}px", effort_menu_shift.get()))
-                                                .unwrap_or_default()
-                                            on:click=move |_| effort_menu_for.set(None)
-                                            on:scroll=move |_| effort_menu_for.set(None)>
+                                        <div class="model-menu composer-select-menu" style=move || composer_menu_style.get()>
                                             {move || {
                                                 let list = models.get();
                                                 let selected = active_session.get().and_then(|session_id| {
@@ -15221,20 +15495,21 @@ fn App() -> impl IntoView {
                                                 });
                                                 let acp_selected = active_acp_agent_id.get().is_some();
                                                 let acp_locked = acp_selected && session_has_items.get();
+                                                let profiles = list.clone();
                                                 list.into_iter().filter(ModelProfile::is_chat_model).map(|m| {
                                                     let pick_id = m.id.clone();
                                                     let pick_label = m.label.clone();
                                                     let pick_supports_vision = m.supports_vision;
+                                                    let duplicate_label = profiles.iter().filter(|other| other.is_chat_model()
+                                                        && other.label.trim().eq_ignore_ascii_case(m.label.trim())).count() > 1;
+                                                    let detail = format!("{} · {}", m.provider, m.model);
+                                                    let tooltip = format!("{}\n{}", m.label, detail);
                                                     let is_active = !acp_selected
                                                         && selected.as_deref().map_or(m.active, |id| id == m.id);
-                                                    let show_sub = !m.model.is_empty() && m.model != m.label;
-                                                    let effort = m.reasoning_effort.clone();
-                                                    let effort_id = m.id.clone();
-                                                    let effort_id_open = m.id.clone();
-                                                    let effort_id_expanded = m.id.clone();
                                                     view! {
                                                         <div class="model-menu-row" class:active=is_active>
                                                             <button type="button" class="model-menu-pick"
+                                                                title=tooltip
                                                                 disabled=acp_locked
                                                                 on:click=move |_| {
                                                                 if acp_locked {
@@ -15258,74 +15533,9 @@ fn App() -> impl IntoView {
                                                             }>
                                                                 <span class="model-menu-text">
                                                                     <span class="model-menu-label">{m.label.clone()}</span>
-                                                                    {show_sub.then(|| view! { <span class="model-menu-sub">{m.model.clone()}</span> })}
-                                                                    {(!effort.is_empty()).then(|| view! {
-                                                                        <span class="model-menu-effort-tag">{effort}</span>
-                                                                    })}
+                                                                    {duplicate_label.then(|| view! { <span class="model-menu-sub">{detail}</span> })}
                                                                 </span>
-                                                                {is_active.then(|| view! { <span class="model-menu-check">"✓"</span> })}
-                                                            </button>
-                                                            <button type="button" class="model-menu-effort-edit"
-                                                                class:open=move || effort_menu_for.get().as_ref().is_some_and(|(open_id, _, _)| open_id == &effort_id_open)
-                                                                title=move || t(locale.get(), "settings.reasoning_effort")
-                                                                attr:aria-expanded=move || if effort_menu_for.get().as_ref().is_some_and(|(open_id, _, _)| open_id == &effort_id_expanded) { "true" } else { "false" }
-                                                                on:click=move |ev| {
-                                                                    ev.stop_propagation();
-                                                                    if effort_menu_for.get_untracked().as_ref().is_some_and(|(open_id, _, _)| open_id == &effort_id) {
-                                                                        effort_menu_for.set(None);
-                                                                        return;
-                                                                    }
-                                                                    let Some(el) = ev.target().and_then(|target| target.dyn_into::<web_sys::HtmlElement>().ok()) else { return; };
-                                                                    let rect = el.get_bounding_client_rect();
-                                                                    let menu_rect = el
-                                                                        .closest(".model-menu")
-                                                                        .ok()
-                                                                        .flatten()
-                                                                        .map(|menu| menu.get_bounding_client_rect());
-                                                                    let menu_right = menu_rect
-                                                                        .as_ref()
-                                                                        .map(|menu| menu.right())
-                                                                        .unwrap_or(rect.right());
-                                                                    let menu_left = menu_rect
-                                                                        .as_ref()
-                                                                        .map(|menu| menu.left())
-                                                                        .unwrap_or(rect.left());
-                                                                    // When switching directly from one model's effort editor to
-                                                                    // another, the menu is already shifted left. Recover its
-                                                                    // unshifted coordinates before calculating the next flyout.
-                                                                    let applied_shift = if effort_menu_for.get_untracked().is_some() {
-                                                                        effort_menu_shift.get_untracked()
-                                                                    } else {
-                                                                        0.0
-                                                                    };
-                                                                    let base_menu_right = menu_right + applied_shift;
-                                                                    let base_menu_left = menu_left + applied_shift;
-                                                                    // Keep in sync with the flyout width in chat.css.
-                                                                    const FLYOUT_WIDTH: f64 = 200.0;
-                                                                    // Generous height allowance (default + every known level + label)
-                                                                    // so the flyout never runs past the viewport bottom.
-                                                                    const FLYOUT_MAX_HEIGHT: f64 = 340.0;
-                                                                    let window = web_sys::window();
-                                                                    let viewport_w = window
-                                                                        .as_ref()
-                                                                        .and_then(|w| w.inner_width().ok())
-                                                                        .and_then(|w| w.as_f64())
-                                                                        .unwrap_or(1280.0);
-                                                                    let viewport_h = window
-                                                                        .and_then(|w| w.inner_height().ok())
-                                                                        .and_then(|h| h.as_f64())
-                                                                        .unwrap_or(800.0);
-                                                                    let desired_left = base_menu_right + 6.0;
-                                                                    let max_left = (viewport_w - FLYOUT_WIDTH - 8.0).max(8.0);
-                                                                    let shift = (desired_left - max_left)
-                                                                        .max(0.0)
-                                                                        .min((base_menu_left - 8.0).max(0.0));
-                                                                    let left = desired_left - shift;
-                                                                    let top = (rect.top() - 4.0).clamp(8.0, (viewport_h - FLYOUT_MAX_HEIGHT - 8.0).max(8.0));
-                                                                    effort_menu_shift.set(shift);
-                                                                    effort_menu_for.set(Some((effort_id.clone(), left, top)));
-                                                                }>
-                                                                <span class="model-menu-effort-edit-label">{move || t(locale.get(), "menu.edit")}</span>
+                                                                {is_active.then(|| view! { <span class="model-menu-check">{compose_icon("check")}</span> })}
                                                             </button>
                                                         </div>
                                                     }
@@ -15372,7 +15582,12 @@ fn App() -> impl IntoView {
                                                                         );
                                                                         provisional_acp_selection.set(Some((frame_id.clone(), agent_id.clone())));
                                                                         active_acp_agent_id.set(Some(agent_id));
+                                                                        // Move the draft into the new session instead
+                                                                        // of leaving a copy stashed on the old one.
+                                                                        let draft = input.get_untracked();
+                                                                        input.set(String::new());
                                                                         active_session.set(Some(frame_id));
+                                                                        input.set(draft);
                                                                         refresh_session_history();
                                                                         focus_composer();
                                                                         show_toast(&t(locale.get(), "composer.acp_new_session_toast"));
@@ -15382,7 +15597,7 @@ fn App() -> impl IntoView {
                                                                     <span class="model-menu-label">{agent.label.clone()}</span>
                                                                     <span class="model-menu-sub">"ACP · local stdio"</span>
                                                                 </span>
-                                                                {active.then(|| view! { <span class="model-menu-check">"✓"</span> })}
+                                                                {active.then(|| view! { <span class="model-menu-check">{compose_icon("check")}</span> })}
                                                             </button>
                                                         </div>
                                                     }
@@ -15581,151 +15796,162 @@ fn App() -> impl IntoView {
                                                 acp_form_msg.set(None);
                                             }>{move || t(locale.get(), "models.manage")}</button>
                                         </div>
-                                        {move || effort_menu_for.get().and_then(|(id, left, top)| {
-                                            let profile = models.get().into_iter().find(|m| m.id == id)?;
-                                            let current = profile.reasoning_effort.clone();
-                                            let mut values: Vec<String> = known_effort_values(&profile.provider, &profile.model)
-                                                .unwrap_or(ALL_EFFORT_VALUES)
-                                                .iter()
-                                                .map(|v| v.to_string())
-                                                .collect();
-                                            // Keep a stored value visible even when the curated list
-                                            // for this model doesn't include it.
-                                            if !current.is_empty() && !values.iter().any(|v| v == &current) {
-                                                values.push(current.clone());
-                                            }
-                                            let default_selected = current.is_empty();
-                                            let style = format!("left:{left:.0}px;top:{top:.0}px");
-                                            let default_id = id.clone();
-                                            Some(view! {
-                                                <div class="model-menu-effort-flyout" style=style data-effort-for=id.clone()
-                                                    on:click=|ev| ev.stop_propagation()>
-                                                    <div class="model-menu-effort-flyout-label">{move || t(locale.get(), "settings.reasoning_effort")}</div>
-                                                    <button type="button" class="model-menu-effort-option" data-effort="default"
-                                                        on:click=move |_| apply_model_effort.call((default_id.clone(), String::new()))>
-                                                        <span class="model-menu-effort-option-label">{move || t(locale.get(), "settings.reasoning_effort.default")}</span>
-                                                        {default_selected.then(|| view! { <span class="model-menu-effort-check">{compose_icon("check")}</span> })}
-                                                    </button>
-                                                    {values.into_iter().map(|lvl| {
-                                                        let selected = !default_selected && lvl == current;
-                                                        let pick = lvl.clone();
-                                                        let option_id = id.clone();
-                                                        view! {
-                                                            <button type="button" class="model-menu-effort-option" data-effort=lvl.clone()
-                                                                on:click=move |_| apply_model_effort.call((option_id.clone(), pick.clone()))>
-                                                                <span class="model-menu-effort-option-label">{lvl}</span>
-                                                                {selected.then(|| view! { <span class="model-menu-effort-check">{compose_icon("check")}</span> })}
-                                                            </button>
-                                                        }
-                                                    }).collect_view()}
-                                                </div>
-                                            })
-                                        })}
                                     })}
                                 </div>
                             })}
-                            {move || busy.get().then(|| view! {
-                                <button type="button" class="stop"
-                                    disabled=move || active_session.get() == stopping_session.get()
-                                    on:click=move |_| stop.call(())>
-                                    {move || t(locale.get(), if active_session.get() == stopping_session.get() { "composer.stopping" } else { "composer.stop" })}
-                                </button>
-                            })}
-                            <div class="send-split"
-                                style:display=move || if busy.get() && !composer_has_draft() { "none" } else { "inline-flex" }>
-                                <button type="button" class="send-menu-toggle"
-                                    disabled=composer_blocked
-                                    aria-label=move || t(locale.get(), "composer.send_options")
-                                    title=move || t(locale.get(), "composer.send_options")
-                                    on:click=move |_| send_mode_menu_open.update(|o| *o = !*o)>
-                                    {compose_icon("chevron-down")}
-                                </button>
-                                <button type="button" class="send"
-                                    class:is-empty=move || !composer_has_draft()
-                                    disabled=composer_blocked
-                                    aria-label=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
-                                    title=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
-                                    on:click=move |_| send.call(ComposerSendAction::Normal)>
-                                    {compose_icon("arrow-up")}
-                                </button>
-                                {move || send_mode_menu_open.get().then(|| view! {
-                                    <div class="send-menu-backdrop" on:click=move |_| send_mode_menu_open.set(false)></div>
-                                    <div class="send-mode-menu">
-                                        {move || (busy.get() && active_acp_agent_id.get().is_none()).then(|| view! {
-                                            <button type="button" class="send-mode-item"
-                                                disabled=composer_blocked
-                                                on:click=move |_| {
-                                                    send_mode_menu_open.set(false);
-                                                    send.call(ComposerSendAction::GuideAppend);
-                                                }>
-                                                <span class="compose-item-icon">{compose_icon("up")}</span>
-                                                <span>{move || t(locale.get(), "composer.cut_in_now")}</span>
-                                            </button>
-                                        })}
-                                        {move || busy.get().then(|| view! {
-                                            <button type="button" class="send-mode-item"
-                                                disabled=composer_blocked
-                                                on:click=move |_| {
-                                                    send_mode_menu_open.set(false);
-                                                    send.call(ComposerSendAction::InterruptReplace);
-                                                }>
-                                                <span class="compose-item-icon">{compose_icon("sync")}</span>
-                                                <span>{move || t(locale.get(), "composer.interrupt_replace")}</span>
-                                            </button>
-                                        })}
-                                        <button type="button" class="send-mode-item"
-                                            disabled=move || side_chat_busy.get()
-                                            on:click=move |_| {
-                                                send_mode_menu_open.set(false);
-                                                let q = message_with_attachments(&input.get(), &attachment_paths(&attachments.get()));
-                                                if q.trim().is_empty() {
-                                                    ensure_right_tab(
-                                                        RightTab::SideChat,
-                                                        show_right,
-                                                        open_right_tabs,
-                                                        right_tab,
-                                                    );
-                                                } else {
-                                                    input.set(String::new());
-                                                    attachments.set(vec![]);
-                                                    send_side_chat((q, vec![], false));
-                                                }
+                            {move || {
+                                // ACP agents own their model and effort configuration;
+                                // the pill only makes sense for HTTP profiles.
+                                if active_acp_agent_id.get().is_some() {
+                                    return None;
+                                }
+                                let profile = session_profile(
+                                    &models.get(),
+                                    &session_model_ids.get(),
+                                    active_session.get().as_deref(),
+                                )
+                                .cloned()?;
+                                let current = profile.reasoning_effort.clone();
+                                let values = composer_model_efforts.get().unwrap_or_default();
+                                let unverified = !current.is_empty() && !values.contains(&current);
+                                let profile_id = profile.id.clone();
+                                // The pill label closure owns its copy so the
+                                // dropdown closure below can still capture `current`.
+                                let pill_current = current.clone();
+                                Some(view! {
+                                    <div class="composer-effort">
+                                        <button type="button" class="composer-effort-btn"
+                                            class:active=move || composer_effort_open.get()
+                                            data-testid="composer-effort-trigger"
+                                            aria-expanded=move || composer_effort_open.get().to_string()
+                                            aria-controls="composer-effort-menu"
+                                            aria-label=move || t(locale.get(), "composer.effort")
+                                            title=move || t(locale.get(), "composer.effort")
+                                            on:click=move |ev| {
+                                                composer_menu_style.set(composer_menu_bounds(&ev));
+                                                model_menu_open.set(false);
+                                                composer_effort_open.update(|o| *o = !*o);
                                             }>
-                                            <span class="compose-item-icon">{compose_icon("chat")}</span>
-                                            <span>{move || t(locale.get(), "composer.side_chat")}</span>
+                                            <span class="composer-effort-glyph">{compose_icon("brain")}</span>
+                                            <span class="composer-effort-value" data-testid="composer-effort-value">{move || {
+                                                if pill_current.is_empty() {
+                                                    t(locale.get(), "composer.effort.default")
+                                                } else {
+                                                    effort_display_label(locale.get(), &pill_current)
+                                                }
+                                            }}</span>
+                                            <span class="composer-effort-chev">{compose_icon("chevron-down")}</span>
                                         </button>
-                                        {move || (active_branch_state.get().is_none()
-                                            && !active_is_exploration.get()).then(|| view! {
-                                            <button type="button" class="send-mode-item"
-                                                on:click=move |_| {
-                                                    send_mode_menu_open.set(false);
-                                                    send.call(ComposerSendAction::BranchNew);
-                                                }>
-                                                <span class="compose-item-icon">{compose_icon("branch")}</span>
-                                                <span>{move || t(locale.get(), "composer.branch_session")}</span>
-                                            </button>
+                                        {move || composer_effort_open.get().then(|| {
+                                            // Own everything this body consumes: moving a
+                                            // captured variable out would make it FnOnce,
+                                            // which dynamic views can't take.
+                                            let default_id = profile_id.clone();
+                                            let list_id = profile_id.clone();
+                                            let values = values.clone();
+                                            view! {
+                                            <div class="composer-effort-backdrop"
+                                                on:click=move |_| composer_effort_open.set(false)></div>
+                                            <div class="composer-effort-menu composer-select-menu" id="composer-effort-menu"
+                                                style=move || composer_menu_style.get()
+                                                data-testid="composer-effort-menu">
+                                                <div class="composer-effort-menu-label">{move || t(locale.get(), "settings.reasoning_effort")}</div>
+                                                {unverified.then(|| view! { <div class="composer-effort-hint">{move || t(locale.get(), "composer.effort.unverified")}</div> })}
+                                                <button type="button" class="composer-effort-option" data-effort="default"
+                                                    on:click=move |_| apply_model_effort.call((default_id.clone(), String::new()))>
+                                                    <span class="composer-effort-option-label">{move || t(locale.get(), "composer.effort.default")}</span>
+                                                    {current.is_empty().then(|| view! {
+                                                        <span class="composer-effort-check">{compose_icon("check")}</span>
+                                                    })}
+                                                </button>
+                                                {values.into_iter().map(|lvl| {
+                                                    let selected = !current.is_empty() && lvl == current;
+                                                    let pick = lvl.clone();
+                                                    let option_id = list_id.clone();
+                                                    view! {
+                                                        <button type="button" class="composer-effort-option" data-effort=lvl.clone()
+                                                            on:click=move |_| apply_model_effort.call((option_id.clone(), pick.clone()))>
+                                                            <span class="composer-effort-option-label">{effort_display_label(locale.get(), &lvl)}</span>
+                                                            {selected.then(|| view! {
+                                                                <span class="composer-effort-check">{compose_icon("check")}</span>
+                                                            })}
+                                                        </button>
+                                                    }
+                                                }).collect_view()}
+                                            </div>
+                                            }
                                         })}
                                     </div>
-                                })}
-                            </div>
+                                })
+                            }}
+                            {move || fast_profile.get().map(|_| {
+                                let enabled = fast_enabled.get();
+                                let session_override = fast_is_session_override.get();
+                                let saving = service_tier_busy.get();
+                                let running_now = busy.get();
+                                let loaded = fast_loaded.get();
+                                let key = if running_now {
+                                    "composer.fast.running"
+                                } else if saving || !loaded {
+                                    "composer.fast.saving"
+                                } else {
+                                    match (enabled, session_override) {
+                                        (true, true) => "composer.fast.on_session",
+                                        (true, false) => "composer.fast.on_profile",
+                                        (false, true) => "composer.fast.off_session",
+                                        (false, false) => "composer.fast.off_profile",
+                                    }
+                                };
+                                let title = t(locale.get(), key).to_string();
+                                view! {
+                                    <button type="button" class="composer-fast"
+                                        class:enabled=enabled
+                                        class:pending=saving || !loaded
+                                        data-testid="composer-fast-toggle"
+                                        aria-pressed=enabled.to_string()
+                                        aria-label=title.clone()
+                                        title=title
+                                        disabled=running_now || saving || !loaded
+                                        on:click=move |_| toggle_fast.call(())>
+                                        {compose_icon("bolt")}
+                                    </button>
+                                }
+                            })}
+                            // Stop and Send share one slot: typing a draft mid-turn
+                            // swaps Stop for Send.
+                            {move || (busy.get() && !composer_has_draft()).then(|| view! {
+                                <button type="button" class="stop"
+                                    disabled=move || active_session.get() == stopping_session.get()
+                                    aria-label=move || t(locale.get(), if active_session.get() == stopping_session.get() { "composer.stopping" } else { "composer.stop" })
+                                    title=move || t(locale.get(), if active_session.get() == stopping_session.get() { "composer.stopping" } else { "composer.stop" })
+                                    on:click=move |_| stop.call(())>
+                                    {compose_icon("stop")}
+                                </button>
+                            })}
+                            <button type="button" class="send"
+                                style:display=move || if busy.get() && !composer_has_draft() { "none" } else { "inline-flex" }
+                                class:is-empty=move || !composer_has_draft()
+                                disabled=composer_blocked
+                                aria-label=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
+                                title=move || t(locale.get(), if busy.get() { "composer.queue_button" } else { "composer.send" })
+                                on:click=move |_| send.call(ComposerSendAction::Normal)>
+                                {compose_icon("arrow-up")}
+                            </button>
                         </div>
-                    </div>
-                    <div class="composer-footer">
-                        <div class="composer-hint">{move || {
-                            if send_with_modifier.get() {
-                                tf(
-                                    locale.get(),
-                                    "composer.hint_modifier",
-                                    &[("modifier", if is_mac() { "Cmd" } else { "Ctrl" })],
-                                )
-                            } else {
-                                t(locale.get(), "composer.hint").into()
-                            }
-                        }}</div>
                     </div>
                 </div>
             </div>
         </main>
+
+        {move || assistant_mode.get().then(|| view! {
+            <assistant_workspace::AssistantCalendar locale=locale state=assistant_workspace
+                project_transfer=project_transfer.read_only()
+                on_draft=Callback::new(move |prompt: String| {
+                    input.update(|draft| { if !draft.trim().is_empty() { draft.push_str("\n\n"); } draft.push_str(&prompt); });
+                    if assistant_workspace.narrow.get_untracked() { assistant_workspace.right.set(false); }
+                    focus_composer();
+                })/>
+        })}
 
         {move || right_pane_visible.get().then(|| view! {
             <div class="resizer" on:mousedown=on_resize_start></div>
@@ -17161,6 +17387,10 @@ fn App() -> impl IntoView {
                                                 </div>
                                             })}
                                             <button type="button" class="sidechat-send"
+                                                class:is-empty=move || side_chat_input.get().trim().is_empty()
+                                                    && side_chat_quotes.get().is_empty()
+                                                aria-label=move || t(locale.get(), "composer.send")
+                                                title=move || t(locale.get(), "composer.send")
                                                 disabled=move || side_chat_busy.get()
                                                     || (side_chat_input.get().trim().is_empty()
                                                         && side_chat_quotes.get().is_empty())
@@ -17169,7 +17399,7 @@ fn App() -> impl IntoView {
                                                     side_chat_quotes.get(),
                                                     true,
                                                 ))>
-                                                {move || t(locale.get(), "composer.send")}
+                                                {compose_icon("arrow-up")}
                                             </button>
                                         </div>
                                       </div>
@@ -17434,7 +17664,7 @@ fn App() -> impl IntoView {
         <SessionTransferOverlay
             state=SessionTransferOverlayState {
                 locale, session_transfer, session_transfer_busy, session_transfer_error,
-                project_info, proj_list,
+                project_info, proj_list, artifacts: transfer_artifacts,
             }
             on_save=Callback::new(save_session_transfer)
         />
@@ -17448,9 +17678,13 @@ fn App() -> impl IntoView {
                 // immediate paint.
                 sessions.update(|rows| {
                     if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
-                        row.title = title;
+                        row.title = title.clone();
                     }
                 });
+                if active_session.get_untracked().as_deref() == Some(id.as_str()) {
+                    let branch_state = active_session_metadata.get_untracked().2;
+                    opened_shelved_metadata.set(Some((id, title, branch_state)));
+                }
                 refresh_session_history();
             })
         />
@@ -17490,6 +17724,7 @@ fn App() -> impl IntoView {
         {move || ui_confirm.get().map(|action| {
             let action_ok = action.clone();
             let is_full_permission = matches!(&action, UiConfirm::EnableFullPermission);
+            let is_delete_session = matches!(&action, UiConfirm::DeleteSessions(_));
             let title_key = if is_full_permission {
                 "full_permission.confirm_title"
             } else {
@@ -17528,9 +17763,16 @@ fn App() -> impl IntoView {
                 <div class="modal confirm-modal">
                     <h2>{move || t(locale.get(), title_key)}</h2>
                     <div class="hint">{message}</div>
+                    {if let UiConfirm::DeleteSessions(ids) = action { Some(view! {
+                        <SessionArtifactChoice locale=locale ids=ids target=None state=delete_artifacts />
+                    }) } else { None }}
                     <div class="row">
                         <button on:click=move |_| ui_confirm.set(None)>{move || t(locale.get(), "settings.cancel")}</button>
-                        <button class="primary" class:danger=is_full_permission on:click=move |_| {
+                        <button class="primary" class:danger=is_full_permission
+                            disabled=move || is_delete_session && delete_artifacts.blocked()
+                            on:click=move |_| {
+                            let include_artifacts = is_delete_session && delete_artifacts.selected.get_untracked();
+                            let artifact_previews = delete_artifacts.previews.get_untracked();
                             ui_confirm.set(None);
                             match action_ok.clone() {
                                 UiConfirm::EnableFullPermission => {
@@ -17589,9 +17831,13 @@ fn App() -> impl IntoView {
                                     spawn_local(async move {
                                         let mut deleted = HashSet::new();
                                         for id in ids {
-                                            let arg = to_value(&serde_json::json!({ "id": id.clone() })).unwrap();
-                                            if invoke_checked("delete_session", arg).await.is_ok() {
-                                                deleted.insert(id);
+                                            let arg = to_value(&serde_json::json!({ "id": id.clone(),
+                                                "includeArtifacts": include_artifacts,
+                                                "artifactFingerprint": artifact_previews.get(&id).map(|p|p.fingerprint.clone()),
+                                            })).unwrap();
+                                            match invoke_checked("delete_session", arg).await {
+                                                Ok(_) => { deleted.insert(id); }
+                                                Err(error) => show_toast(&localize_backend(locale.get_untracked(), &js_error_text(error))),
                                             }
                                         }
                                         if !deleted.is_empty() {
@@ -17609,6 +17855,7 @@ fn App() -> impl IntoView {
                                                 items.set(vec![]);
                                             }
                                             refresh_session_history();
+                                            refresh_dir(file_cwd, file_entries);
                                         }
                                     });
                                 }
@@ -17765,7 +18012,7 @@ fn App() -> impl IntoView {
                 conn_form_kind, conn_test_msg, custom_conn_tools, custom_conn_tools_loading,
                 custom_conn_tool_errors, pet_status, ssh_hosts, execution_contexts,
                 default_execution_context, runtime_interpreter_form, probing_context_id,
-                delete_confirm,
+                delete_confirm, auto_failure_analysis,
             }
             open_project=switch_project
             go_settings_section=Callback::new(move |section: String| go_settings_section(&section))
@@ -17914,6 +18161,7 @@ fn App() -> impl IntoView {
                 });
             })
             open_terminal_session=activate_terminal_session
+            save_auto_failure_analysis=save_auto_failure_analysis
         />
 
         {(!is_windows()).then(|| view! {
@@ -18022,9 +18270,28 @@ fn App() -> impl IntoView {
                 compact_idle_prompt.set(None);
             })
         />
+        {move || show_shelved_sessions.get().then(|| view! {
+            <ShelvedSessionsOverlay
+                locale=locale
+                revision=shelved_sessions_revision.read_only()
+                on_close=Callback::new(move |_| show_shelved_sessions.set(false))
+                on_open=Callback::new(move |session: SessionInfo| {
+                    let id = session.id.clone();
+                    opened_shelved_metadata.set(Some((session.id, session.title, session.branch_state)));
+                    show_shelved_sessions.set(false);
+                    load_session.call(id);
+                })
+                on_restore=Callback::new(move |id| set_session_shelved.call((id, false)))
+                on_context=Callback::new(move |(ev, session): (web_sys::MouseEvent, SessionInfo)| {
+                    let id = session.id.clone();
+                    opened_shelved_metadata.set(Some((session.id, session.title, session.branch_state)));
+                    ctx_menu.set(Some(context_menu::shelved_session_menu(ev.client_x() as f64, ev.client_y() as f64, &id, locale.get_untracked())));
+                })
+            />
+        })}
         <ContextMenuPortal menu=ctx_menu.read_only() set_menu=ctx_menu.write_only() on_pick=on_ctx_pick />
         {move ||archive_frame.get().map(|id|view!{
-            <research_archive::ArchiveReview locale=locale frame_id=id busy=archive_busy
+            <research_archive::ArchiveReview locale=locale frame_id=id busy=archive_busy minimized=archive_minimized
                 on_close=Callback::new(move |_|archive_frame.set(None))
                 on_frozen=Callback::new(move |id:String|{archived_sessions.update(|s|{s.insert(id);});refresh_session_history();})
                 on_continue=Callback::new(move |id|{archive_frame.set(None);show_research_graph.set(false);refresh_session_history();load_session.call(id);})
@@ -18040,6 +18307,7 @@ pub fn main() {
     // A panic cannot be recovered on wasm32: it traps without running
     // destructors or restoring the shadow stack, so log every one loudly.
     console_error_panic_hook::set_once();
+    setup_scrollbar_reveal();
     let is_pet_window = window().location().search().ok().is_some_and(|query| {
         query
             .split('&')

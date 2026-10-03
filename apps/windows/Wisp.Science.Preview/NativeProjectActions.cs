@@ -31,9 +31,14 @@ internal abstract class NativeActionPage : WorkspaceSheet
         Design.ApplyTypography(Form); Design.ApplyTypography(Results);
         formHost.IsEnabled = !State.Busy; resultsHost.IsEnabled = !State.Busy;
         progress.Visibility = State.Busy ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var action in HeaderActions.Children.OfType<Control>()) action.IsEnabled = !State.Busy;
         error.Text = State.Error ?? ""; error.Visibility = State.Error == null ? Visibility.Collapsed : Visibility.Visible;
     }
-    protected void SetContentEnabled(bool enabled) { formHost.IsEnabled = resultsHost.IsEnabled = enabled; }
+    protected void SetContentEnabled(bool enabled)
+    {
+        formHost.IsEnabled = resultsHost.IsEnabled = enabled;
+        foreach (var action in HeaderActions.Children.OfType<Control>()) action.IsEnabled = enabled;
+    }
     protected TextBox Field(string title, string text, Action<string> changed, bool multiline = false)
     {
         var input = new TextBox { Header = title, Text = text, AcceptsReturn = multiline, TextWrapping = TextWrapping.Wrap, MinHeight = multiline ? 85 : 32 };
@@ -43,7 +48,8 @@ internal abstract class NativeActionPage : WorkspaceSheet
     protected Button Button(string title, Func<Task> action)
     {
         var button = new Button { Content = title };
-        Design.BindTypography(button);
+        Design.ActionButton(button, title is "保存" or "创建项目" or "导入" or "创建论文证据");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, title);
         button.Click += async (_, _) => await action(); return button;
     }
     protected Expander Disclosure(string title, UIElement content, bool expanded = false)
@@ -57,11 +63,16 @@ internal abstract class NativeActionPage : WorkspaceSheet
     }
     public override void HandleEscape()
     {
-        foreach (var combo in Form.Children.OfType<ComboBox>())
+        foreach (var combo in Descendants(Form).OfType<ComboBox>())
             if (combo.IsDropDownOpen) { combo.IsDropDownOpen = false; return; }
-        foreach (var picker in Form.Children.OfType<CalendarDatePicker>())
+        foreach (var picker in Descendants(Form).OfType<CalendarDatePicker>())
             if (picker.IsCalendarOpen) { picker.IsCalendarOpen = false; return; }
         if (!State.Busy) base.HandleEscape();
+    }
+    private static IEnumerable<UIElement> Descendants(Panel panel)
+    {
+        foreach (var child in panel.Children)
+        { yield return child; if (child is Panel nested) foreach (var descendant in Descendants(nested)) yield return descendant; }
     }
     public override void Dispose() { State.Changed -= Update; if (ownsState) State.Dispose(); base.Dispose(); }
 }
@@ -76,6 +87,8 @@ internal sealed class NativeNewProjectPage : NativeActionPage
         Form.Children.Add(Button("选择文件夹", async () => { if (await pickDirectory() is { } path) directory.Text = path; }));
         Field("项目描述", model.Description, s => model.Description = s, true);
         var context = Field("项目指令", model.AgentContext, s => model.AgentContext = s, true);
+        Form.Children.Remove(context);
+        Form.Children.Add(Disclosure("项目指令（可选）", context));
         var standard = new CheckBox { Content = "使用标准科研目录结构", IsChecked = model.StandardLayout };
         standard.Checked += (_, _) => { model.SetStandardLayout(true); context.Text = model.AgentContext; };
         standard.Unchecked += (_, _) => { model.SetStandardLayout(false); context.Text = model.AgentContext; };
@@ -90,6 +103,7 @@ internal sealed class NativeImportProjectPage : NativeActionPage
         Func<ProjectSummary, Task> opened, Action close) : base(design, "导入项目", model, close)
     {
         var path = "";
+        Form.Children.Add(Mute("选择从 Wisp 导出的项目 ZIP 归档，导入后打开项目。"));
         var input = Field("项目归档（ZIP）", "", s => path = s);
         Form.Children.Add(Button("选择归档", async () => { if (await pickArchive() is { } selected) input.Text = selected; }));
         Form.Children.Add(Button("导入", async () =>
@@ -97,6 +111,7 @@ internal sealed class NativeImportProjectPage : NativeActionPage
             if (string.IsNullOrWhiteSpace(path)) { model.Fail("请选择项目归档。"); return; }
             if (await model.ImportAsync(path) && model.Created is { } row) await opened(row);
         }));
+        NativeActionWrap.GroupButtons(Form);
     }
 }
 
@@ -120,12 +135,14 @@ internal sealed class NativeLibraryPage : NativeActionPage
     {
         this.model = model; this.insert = insert; this.source = source;
         Field("搜索标题、代码或项目", model.Query, s => model.Query = s);
-        var filters = new ComboBox { Header = "类型" };
+        var filters = new ComboBox { PlaceholderText = "类型", MinWidth = 160 };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(filters, "收藏类型");
         foreach (var (label, kind) in new[] { ("全部", ""), ("代码", "code"), ("图片", "figure"), ("文本", "text") })
             filters.Items.Add(new ComboBoxItem { Content = label, Tag = kind });
         filters.SelectedIndex = 0;
         filters.SelectionChanged += async (_, _) => { model.Kind = (string)((ComboBoxItem)filters.SelectedItem).Tag; await Search(); };
-        Form.Children.Add(filters); Form.Children.Add(Button("搜索", Search));
+        var filterActions = new NativeActionWrap(); filterActions.Children.Add(filters); filterActions.Children.Add(Button("搜索", Search));
+        Form.Children.Add(filterActions);
         _ = Search();
     }
     private async Task Search() { await model.SearchAsync(); RenderItems(); }
@@ -133,18 +150,20 @@ internal sealed class NativeLibraryPage : NativeActionPage
     {
         if (model.Closed) return;
         Results.Children.Clear();
-        if (model.Items.Count == 0 && model.Error == null) Results.Children.Add(Mute("收藏库是空的"));
+        if (model.Items.Count == 0 && model.Error == null) Results.Children.Add(Design.EmptyState("star", "暂无匹配的收藏", "可调整搜索条件；在对话中收藏的代码、图片和文本会显示在这里。"));
         foreach (var item in model.Items)
         {
             var card = new StackPanel { Spacing = 8 };
             card.Children.Add(new TextBlock { Text = item.Title, FontSize = 18, TextWrapping = TextWrapping.Wrap });
             card.Children.Add(Mute(item.SourceProjectName + " / " + item.SourceSessionTitle));
-            card.Children.Add(new TextBox { Text = item.CodePreview, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180 });
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            if (!string.IsNullOrWhiteSpace(item.CodePreview))
+                card.Children.Add(new TextBox { Text = item.CodePreview, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 180 });
+            else if (!string.IsNullOrWhiteSpace(item.SourcePath)) card.Children.Add(Mute(item.SourcePath));
+            var actions = new NativeActionWrap();
             if (insert != null) actions.Children.Add(Button("填入对话框", () => { insert(item); return Task.CompletedTask; }));
             actions.Children.Add(Button("打开来源", () => source(item)));
             actions.Children.Add(Button("删除", async () => { await model.DeleteAsync(item.Id); RenderItems(); }));
-            card.Children.Add(actions); Results.Children.Add(card);
+            card.Children.Add(actions); Results.Children.Add(Design.Card(card));
         }
     }
 }
@@ -168,7 +187,8 @@ internal sealed class NativePublicationPage : NativeActionPage
         Form.Children.Add(create);
         model.Changed += UpdateCreate;
         UpdateCreate();
-        Form.Children.Add(Button("刷新", Load)); _ = Load();
+        var refresh = Design.ToolButton("刷新", "refresh"); refresh.Click += async (_, _) => await Load();
+        HeaderActions.Children.Add(refresh); _ = Load();
     }
     private void UpdateCreate()
     {
@@ -186,44 +206,26 @@ internal sealed class NativePublicationPage : NativeActionPage
         if (model.Workspace is not { } value) return;
         if (value.Publication is { } publication)
         {
-            Results.Children.Add(new TextBlock { Text = publication.Title + "\n" + publication.Description, TextWrapping = TextWrapping.Wrap });
-            if (value.Revision is { } version) Results.Children.Add(Mute(version.Label + " · " + version.State));
-            foreach (var item in value.Items.OrderBy(i => i.Ordinal)) Results.Children.Add(Mute(item.Kind + " · " + item.Title));
-        }
-        if (value.Publications.Count == 0) Results.Children.Add(Mute("尚无论文证据"));
-    }
-}
-
-internal sealed class NativeJourneyPage : NativeActionPage
-{
-    public NativeJourneyPage(INativeJourneyClient client, string projectId, WispDesign design, DateTime? day, Action close)
-        : base(design, "研究历程", new WorkspaceActionModel(), close)
-    {
-        var first = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-        var from = new CalendarDatePicker { Header = "开始日期", Date = new DateTimeOffset(day ?? first) };
-        var until = new CalendarDatePicker { Header = "结束日期（含）", Date = new DateTimeOffset(day ?? first.AddMonths(1).AddDays(-1)) };
-        Form.Children.Add(from); Form.Children.Add(until);
-        JourneyPage? loaded = null;
-        var query = "";
-        void RenderEntries()
-        {
-            Results.Children.Clear();
-            if (loaded == null) return;
-            if (loaded.Truncated) Results.Children.Add(Warn("结果已截断，请缩小日期范围。"));
-            foreach (var item in loaded.Entries.Where(e => e.Title.Contains(query.Trim(), StringComparison.CurrentCultureIgnoreCase)).OrderByDescending(e => e.OccurredAt))
-                Results.Children.Add(Mute($"{DateTimeOffset.FromUnixTimeSeconds(item.OccurredAt).LocalDateTime:g} · {item.Title}"));
-            if (Results.Children.Count == 0) Results.Children.Add(Mute("暂无匹配的研究记录。"));
-        }
-        Field("搜索已载入的记录", "", text => { query = text; RenderEntries(); });
-        async Task Load()
-        {
-            if (from.Date == null || until.Date == null || from.Date > until.Date) { State.Fail("请选择有效日期范围。"); return; }
-            await State.RunAsync(() => client.ReadAsync(projectId, WorkspaceCalendarModel.Unix(from.Date.Value.Date), WorkspaceCalendarModel.Unix(until.Date.Value.Date.AddDays(1))), rows =>
+            Results.Children.Add(Design.Text(publication.Title, 24));
+            if (!string.IsNullOrWhiteSpace(publication.Description)) Results.Children.Add(new TextBlock { Text = publication.Description, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
+            if (value.Revision is { } version)
             {
-                loaded = rows; RenderEntries();
-            });
+                Results.Children.Add(Design.Text("版本 · " + version.Label, 18));
+                Results.Children.Add(Mute("状态 · " + version.State + "   /   " + value.Items.Count + " 项证据"));
+            }
+            else Results.Children.Add(Mute("尚未选择论文版本。"));
+            Results.Children.Add(Mute("当前展示已登记证据。条目编辑、证据绑定与复现操作尚未接入此页面。"));
+            foreach (var group in value.Items.OrderBy(i => i.Ordinal).GroupBy(i => i.Kind))
+            {
+                var rows = new StackPanel { Spacing = 8 };
+                foreach (var item in group) rows.Children.Add(new Border { Padding = new Thickness(12), CornerRadius = new CornerRadius(8),
+                    Background = Design.Brush("bg-sunken"), Child = new TextBlock { Text = item.Title, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } });
+                Results.Children.Add(Disclosure(WorkspaceJourneyModel.KindLabel(group.Key) + $" · {group.Count()}", rows, true));
+            }
+            if (value.Items.Count == 0) Results.Children.Add(Mute("当前版本尚未登记证据条目。"));
         }
-        Form.Children.Add(Button("读取历程", Load)); _ = Load();
+        if (value.Publications.Count == 0) Results.Children.Add(Mute("尚无论文证据。填写论文标题和版本标签，创建第一份记录。"));
+        else if (value.Publication == null) Results.Children.Add(Mute("论文记录存在，但当前未返回可展示的版本。请刷新。"));
     }
 }
 
@@ -247,13 +249,23 @@ internal sealed class NativeCapabilitiesPage : NativeActionPage
             foreach (var error in value.bootstrap?["errors"]?.AsArray() ?? []) Results.Children.Add(Warn(error?.GetValue<string>() ?? ""));
             var skills = value.skills?.AsArray().OfType<JsonObject>().Where(s => s["enabled"]?.GetValue<bool>() == true).ToArray() ?? [];
             var connections = value.connections?["connections"]?.AsArray().Count(c => c?["enabled"]?.GetValue<bool>() == true) ?? 0;
+            var capabilities = new NativeActionWrap();
             foreach (var (label, count, section) in new[] {
                 ("内置技能", skills.Count(s => s["scope"]?.GetValue<string>() == "bundled"), "skills"),
                 ("项目技能", skills.Count(s => s["scope"]?.GetValue<string>() != "bundled"), "skills"),
                 ("连接", connections, "connections"), ("记忆文件", value.memory?["files"]?.AsArray().Count ?? 0, "memory") })
-                Results.Children.Add(Button($"{label} · {count}", () => { settings(section); return Task.CompletedTask; }));
+            {
+                var button = Button($"{label} · {count}", () => { settings(section); return Task.CompletedTask; });
+                var content = new StackPanel { Spacing = 6 };
+                content.Children.Add(Design.Text(count.ToString(), 24)); content.Children.Add(Design.Text(label, 14));
+                content.Children.Add(Mute("查看与管理"));
+                button.Content = content; button.Width = 220; button.HorizontalContentAlignment = HorizontalAlignment.Left;
+                capabilities.Children.Add(button);
+            }
+            Results.Children.Add(capabilities);
         });
-        Form.Children.Add(Button("刷新", Load)); _ = Load();
+        var refresh = Design.ToolButton("刷新", "refresh"); refresh.Click += async (_, _) => await Load();
+        HeaderActions.Children.Add(refresh); _ = Load();
     }
 }
 

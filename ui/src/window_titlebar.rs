@@ -53,7 +53,6 @@ const HOME_FILE_ITEMS: &[MenuItem] = &[
     ("new-project", "projects.new", "Ctrl+N"),
     ("new-window", "command.new_window", ""),
     ("import-project", "projects.import", ""),
-    ("scratch", "command.scratch", "Ctrl+Shift+N"),
     ("settings", "command.settings", "Ctrl+,"),
     ("", "", ""), // separator
     ("quit", "menu.quit", ""),

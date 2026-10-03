@@ -113,8 +113,6 @@ pub(crate) fn capabilities() -> Value {
         "journey_schema": wisp_dto::native_journey::SCHEMA,
         "publication": wisp_dto::native_publication::COMMANDS,
         "publication_schema": wisp_dto::native_publication::SCHEMA,
-        "scratch": wisp_dto::native_scratch::COMMANDS,
-        "scratch_schema": wisp_dto::native_scratch::SCHEMA,
         "privacy": ["get_privacy_mode"],
     })
 }
@@ -193,10 +191,6 @@ async fn dispatch(broker: &Broker, request: &Request) -> Result<Value, String> {
     if wisp_dto::native_publication::COMMANDS.contains(&request.command.as_str()) {
         let state = broker.app.state::<crate::AppState>();
         return crate::native_publication::execute(&state.store, request).await;
-    }
-    if wisp_dto::native_scratch::COMMANDS.contains(&request.command.as_str()) {
-        let state = broker.app.state::<crate::AppState>();
-        return crate::native_scratch::execute(&state.store, &state.app_data, request).await;
     }
     if wisp_dto::native_conversations::COMMANDS.contains(&request.command.as_str()) {
         return crate::native_conversations::dispatch(broker, request).await;
@@ -380,6 +374,21 @@ pub(crate) async fn invoke_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_host_bundle_uses_an_asset_directory_not_a_drive_url() {
+        let override_config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.native-windows.conf.json")).unwrap();
+        let build: tauri::utils::config::BuildConfig =
+            serde_json::from_value(override_config["build"].clone()).unwrap();
+        let Some(tauri::utils::config::FrontendDist::Directory(path)) = build.frontend_dist else {
+            panic!("native Windows assets must not be interpreted as a c: URL");
+        };
+        assert_eq!(
+            path,
+            std::path::Path::new("../target/native-windows-host-assets")
+        );
+    }
+
     use super::*;
     #[test]
     fn native_auth_rejects_browser_origins_and_missing_or_wrong_tokens() {
@@ -403,12 +412,10 @@ mod tests {
         assert!(!COMMANDS.contains(&"native_research_calendar"));
         assert!(!COMMANDS.contains(&"native_research_journey"));
         assert!(!COMMANDS.contains(&"native_publication_create"));
-        assert!(!COMMANDS.contains(&"native_scratch_open"));
         assert!(!COMMANDS.contains(&"native_conversation_attach"));
         assert!(!COMMANDS.contains(&"native_conversation_enqueue"));
         assert!(!COMMANDS.contains(&"get_privacy_mode"));
         assert!(!COMMANDS.contains(&"set_privacy_mode"));
-        assert!(!COMMANDS.contains(&"start_scratch_chat"));
         let advertised = capabilities();
         assert_eq!(advertised["projects"][0], "native_project_create");
         assert_eq!(
@@ -437,12 +444,6 @@ mod tests {
             advertised["publication_schema"],
             wisp_dto::native_publication::SCHEMA
         );
-        assert_eq!(advertised["scratch"][0], "native_scratch_open");
-        assert_eq!(advertised["scratch"][1], "native_scratch_close");
-        assert_eq!(
-            advertised["scratch_schema"],
-            wisp_dto::native_scratch::SCHEMA
-        );
         assert_eq!(advertised["privacy"][0], "get_privacy_mode");
         assert!(advertised["conversations"]
             .as_array()
@@ -466,13 +467,10 @@ mod tests {
                     && command != "native_research_journey"
                     && command != "native_publication_workspace"
                     && command != "native_publication_create"
-                    && command != "native_scratch_open"
-                    && command != "native_scratch_close"
                     && command != "native_conversation_attach"
                     && command != "native_conversation_enqueue"
                     && command != "get_privacy_mode"
                     && command != "set_privacy_mode"
-                    && command != "start_scratch_chat"
             }));
     }
 }

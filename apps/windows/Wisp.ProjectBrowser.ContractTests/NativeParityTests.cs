@@ -85,16 +85,6 @@ internal static class NativeParityTests
         var hold = new TaskCompletionSource<JsonNode?>(); transport.Handler = (_, _, _) => hold.Task;
         var read = library.SearchAsync(); library.Dispose(); hold.SetResult(new JsonArray()); await read;
         Check(library.Items.Count == 1, "closed library ignores delayed search reply");
-
-        var scratch = new WorkspaceScratchModel(new NativeScratchClient(transport));
-        transport.Handler = (_, _, _) => Task.FromResult(JsonSerializer.SerializeToNode(new ScratchSession("scratch:fixture", "scratch-session")));
-        await scratch.OpenAsync();
-        Check(transport.Calls.Last().Project == null && scratch.Session?.SessionId == "scratch-session", "scratch opens an independent hidden session with empty scope");
-        transport.Handler = (_, _, _) => throw new IOException("lost close"); await scratch.CloseAsync();
-        Check(scratch.Session != null && transport.Calls.Last().Project == "scratch:fixture", "lost scratch close retains the sandbox identity without retry");
-        var invalidScratch = new WorkspaceScratchModel(new NativeScratchClient(transport));
-        transport.Handler = (_, _, _) => Task.FromResult(JsonSerializer.SerializeToNode(new ScratchSession("normal-project", "session")));
-        Check(!await invalidScratch.OpenAsync() && invalidScratch.Session == null, "scratch refuses a normal project identity");
     }
     private static async Task Conversation()
     {
@@ -109,7 +99,8 @@ internal static class NativeParityTests
             _ => JsonValue.Create(true)
         });
         var conversation = new WorkspaceConversationModel(new NativeConversationClient(transport), transport);
-        await conversation.OpenAsync("p", "s"); await conversation.AttachAsync("C:/data.csv");
+        await conversation.OpenAsync("p", "s");
+        Check(await conversation.AttachAsync("C:/data.csv"), "attachment reports authoritative success before clearing an upload command");
         Check(conversation.CanSend && conversation.Attachments.Single().Path == "uploads/data.csv", "attachment-only composer can send project-relative copy");
         await conversation.OpenAsync("p", "s2"); Check(conversation.Attachments.Length == 0, "attachments do not leak into another session");
         await conversation.OpenAsync("p", "s"); Check(conversation.Attachments.Length == 1, "unsent attachments return with their session draft");
@@ -137,6 +128,16 @@ internal static class NativeParityTests
         Check(!conversation.Draft.Contains("GitHub issue"), "late feedback cannot refill after leaving the session");
         await conversation.OpenAsync("p", "s4"); await conversation.PrepareIssueReportAsync();
         Check(conversation.Draft.Contains("GitHub issue") && !conversation.Draft.Contains("secret-path") && transport.Calls.Count(c => c.Command == "native_conversation_send") == 1, "feedback fills composer without workspace path or send");
+        running = false; await conversation.RefreshAsync(); conversation.Draft = "/upload";
+        transport.Handler = (cmd, args, project) => cmd == "native_conversation_attach" ? throw new IOException("lost attachment") : handler(cmd, args, project);
+        Check(!await conversation.AttachAsync("C:/lost.csv") && conversation.Draft == "/upload", "failed attachment preserves upload command and reports failure");
+        var attachmentHold = new TaskCompletionSource<JsonNode?>();
+        transport.Handler = (cmd, args, project) => cmd == "native_conversation_attach" ? attachmentHold.Task : handler(cmd, args, project);
+        var attaching = conversation.AttachAsync("C:/late.csv");
+        await conversation.OpenAsync("p", "s5"); conversation.Draft = "new draft";
+        attachmentHold.SetResult(JsonSerializer.SerializeToNode(new ComposerAttachment("uploads/late.csv", "late.csv"), ConversationSnapshot.JsonOptions));
+        Check(!await attaching && conversation.Draft == "new draft" && conversation.Attachments.Length == 0,
+            "late attachment cannot report success or clear another session draft");
         var count = transport.Calls.Count; conversation.Pause(); await conversation.RefreshAsync();
         Check(transport.Calls.Count == count, "paused conversations stop background snapshot reads");
     }

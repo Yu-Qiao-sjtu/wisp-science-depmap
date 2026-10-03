@@ -17,6 +17,7 @@ dist
 /ui/dist-test/
 /ui/dist-browser/
 /ui/dist-debug/
+/ui/dist-fast/
 /ui/vendor-runtime/
 web-dist/
 # local release artifacts (multi-GB analysis module packages, catalogs)

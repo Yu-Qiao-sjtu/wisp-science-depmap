@@ -150,7 +150,7 @@ async fn project_stars_require_explicit_write_mode_and_preserve_activity() {
         .await
         .unwrap();
     store
-        .create_project("scratch:hidden", "Scratch", "scratch")
+        .create_project("assistant:research", "Assistant", "assistant")
         .await
         .unwrap();
     let before = store.list_projects().await.unwrap();
@@ -177,7 +177,7 @@ async fn project_stars_require_explicit_write_mode_and_preserve_activity() {
     for row in &after {
         assert_eq!(row.4, before.iter().find(|old| old.0 == row.0).unwrap().4);
     }
-    for id in ["missing", "scratch:hidden"] {
+    for id in ["missing", "assistant:research"] {
         let input = format!(
             "{}\n",
             json!({"schema":SCHEMA,"id":"bad","type":"set_project_starred","project_id":id,"starred":true})

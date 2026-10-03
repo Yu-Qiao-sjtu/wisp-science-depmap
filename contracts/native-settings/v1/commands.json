@@ -1618,6 +1618,11 @@
           "name": "enabled",
           "rust_type": "bool",
           "optional": false
+        },
+        {
+          "name": "destination",
+          "rust_type": "Option<WeixinDestination>",
+          "optional": true
         }
       ],
       "result": "Result<(), String>",
@@ -1840,6 +1845,11 @@
           "name": "qrcode",
           "rust_type": "String",
           "optional": false
+        },
+        {
+          "name": "destination",
+          "rust_type": "Option<WeixinDestination>",
+          "optional": true
         }
       ],
       "result": "Result<String, String>",
@@ -1853,7 +1863,13 @@
     },
     {
       "command": "weixin_unbind",
-      "arguments": [],
+      "arguments": [
+        {
+          "name": "destination",
+          "rust_type": "Option<WeixinDestination>",
+          "optional": true
+        }
+      ],
       "result": "Result<(), String>",
       "source": "src-tauri/src/channels/mod.rs"
     },

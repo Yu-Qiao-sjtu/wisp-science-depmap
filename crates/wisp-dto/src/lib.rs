@@ -18,9 +18,10 @@ pub mod native_journey;
 pub mod native_library;
 pub mod native_projects;
 pub mod native_publication;
-pub mod native_scratch;
 pub mod native_settings;
 pub mod project_browser;
+mod session_artifacts;
+pub use session_artifacts::*;
 
 mod mcp_app_child;
 pub use mcp_app_child::*;
@@ -230,9 +231,18 @@ pub struct MessageResource {
     pub error: Option<String>,
 }
 
+/// A complete reply delivered after the coordinating turn has ended.
+/// Shared by the native backend and the frontend event contract.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BackgroundReply {
+    pub frame_id: String,
+    pub text: String,
+}
+
 #[derive(Deserialize, Clone)]
 #[serde(tag = "kind")]
 pub enum AgentEvent {
+    BackgroundReply(BackgroundReply),
     User {
         frame_id: String,
         text: String,
@@ -2069,6 +2079,23 @@ fn default_resume_last_session() -> bool {
     true
 }
 
+/// Separate WeChat bindings; omitted destinations retain the project channel.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WeixinDestination {
+    #[default]
+    Projects,
+    Assistant,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AssistantWeixinStatus {
+    pub enabled: bool,
+    pub bound: bool,
+    pub state: String,
+    pub detail: String,
+}
+
 /// Mirror of `src-tauri` `channels::ChannelsStatus` (snake_case wire shape,
 /// same style as `Settings`).
 #[derive(Deserialize, Clone, Default)]
@@ -2418,8 +2445,10 @@ pub struct AskUserResolved {
     pub expired: bool,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct SessionInfo {
+    #[serde(default)]
+    pub running: bool,
     pub id: String,
     pub title: String,
     pub ts: i64,
@@ -2640,11 +2669,35 @@ pub struct SessionCursor {
     pub id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SessionPage {
+    /// Prevent the active shelved conversation from being reinserted as a draft.
+    #[serde(default)]
+    pub shelved_active_id: Option<String>,
     pub items: Vec<SessionInfo>,
     pub next_cursor: Option<SessionCursor>,
     pub running_ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod session_page_contract_tests {
+    use super::*;
+
+    #[test]
+    fn session_pages_accept_legacy_payloads_and_round_trip_shelved_active_id() {
+        let mut page: SessionPage = serde_json::from_value(serde_json::json!({
+            "items": [{"id":"f","title":"Draft","ts":1}],
+            "next_cursor": null,
+            "running_ids": []
+        }))
+        .unwrap();
+        assert!(page.shelved_active_id.is_none());
+        assert!(!page.items[0].running);
+        page.shelved_active_id = Some("hidden".into());
+        let decoded: SessionPage =
+            serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
+        assert_eq!(decoded.shelved_active_id.as_deref(), Some("hidden"));
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -3005,12 +3058,6 @@ pub struct FileSearchHit {
 }
 
 #[derive(Deserialize, Clone)]
-pub struct ScratchChatInfo {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-}
-
-#[derive(Deserialize, Clone)]
 pub struct ProjectInfo {
     #[serde(default)]
     pub id: String,
@@ -3050,6 +3097,18 @@ pub struct ProjectSummary {
     /// keeping the existing wire contract for every other project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_sync: Option<String>,
+}
+
+/// A saved research-assistant plan item, separate from recorded activity.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResearchAssistantPlanItem {
+    pub id: String,
+    pub day: String,
+    pub title: String,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub session_id: Option<String>,
+    pub status: String,
 }
 
 /// Read-only scan result shown before an orphaned workspace is registered and
@@ -3941,6 +4000,73 @@ impl Default for AutoFailureAnalysisSettings {
     }
 }
 
+/// Lifecycle point a user command hook runs at. Names match Claude Code /
+/// Codex hooks so existing scripts read the same `hook_event_name`.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookEvent {
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+}
+
+impl HookEvent {
+    pub const ALL: [Self; 5] = [
+        Self::UserPromptSubmit,
+        Self::PreToolUse,
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
+        Self::Stop,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::Stop => "Stop",
+        }
+    }
+
+    /// Only tool events filter by `CommandHook::matcher`.
+    pub fn matches_tools(self) -> bool {
+        matches!(
+            self,
+            Self::PreToolUse | Self::PostToolUse | Self::PostToolUseFailure
+        )
+    }
+}
+
+/// A user-defined shell command run at a lifecycle event (Settings → Hooks).
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct CommandHook {
+    pub event: HookEvent,
+    /// Tool-name regex for tool events; empty or `*` matches every tool.
+    #[serde(default)]
+    pub matcher: String,
+    pub command: String,
+    pub enabled: bool,
+    /// Seconds before the command is stopped; `None` is the 60 s default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// The active project's `.wisp/hooks.json`, as the Hooks page reviews it.
+/// Its hooks run only while the file still has the content the user trusted.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProjectHooks {
+    pub path: String,
+    pub hooks: Vec<CommandHook>,
+    /// SHA-256 of the file; trusting records it.
+    pub sha256: String,
+    pub trusted: bool,
+    /// The file could not be read as hooks; nothing in it runs.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct TurnMemoryProposal {
     pub session_id: String,
@@ -4721,13 +4847,13 @@ pub struct ExecutionContext {
     pub last_probe_error: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WorkspaceListing {
     pub entries: Vec<WorkspaceEntry>,
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WorkspaceEntry {
     pub path: String,
     pub kind: String,
@@ -5526,6 +5652,8 @@ pub struct NetworkSettings {
 
 mod research_journey;
 pub use research_journey::*;
+mod automation;
+pub use automation::*;
 mod research_archive;
 pub use research_archive::*;
 /// Host-authored logical binding. Never accepts an iframe-supplied connector.

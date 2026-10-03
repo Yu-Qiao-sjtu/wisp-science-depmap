@@ -312,10 +312,19 @@ async fn resolve_reference_sessions(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "The current session no longer exists.".to_string())?;
 
+    let assistant_projects = if wisp_store::is_assistant_project_id(&target_project) {
+        Some(crate::research_assistant::visible_projects(store).await?)
+    } else {
+        None
+    };
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
     for project_id in project_ids {
-        if project_id != &target_project {
+        if let Some(visible) = &assistant_projects {
+            if !visible.iter().any(|project| &project.0 == project_id) {
+                return Err(format!("No visible project has id '{project_id}'."));
+            }
+        } else if project_id != &target_project {
             return Err("#project can only read sessions from the current project.".into());
         }
         let project = store
@@ -324,7 +333,7 @@ async fn resolve_reference_sessions(
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("Project '{project_id}' no longer exists."))?;
         for (id, title, ..) in store
-            .list_sessions(project_id)
+            .list_sessions_page(project_id, None, usize::MAX)
             .await
             .map_err(|error| error.to_string())?
         {
@@ -1099,6 +1108,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_project_references_respect_visibility_at_send_time() {
+        let database = std::env::temp_dir().join(format!(
+            "wisp_reader_assistant_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(&database).await.unwrap();
+        for project in [wisp_store::ASSISTANT_PROJECT_ID, "visible", "other"] {
+            store.create_project(project, project, "").await.unwrap();
+        }
+        for (frame, project) in [
+            ("assistant", wisp_store::ASSISTANT_PROJECT_ID),
+            ("saved", "visible"),
+            ("ordinary", "other"),
+        ] {
+            store
+                .create_frame(frame, project, "OPERON", "model")
+                .await
+                .unwrap();
+        }
+        store
+            .append_message("saved", 1, &Message::user("Recent project work"))
+            .await
+            .unwrap();
+        let selected = vec!["visible".into()];
+        let sessions = resolve_reference_sessions(&store, &selected, &[], "assistant")
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "saved");
+        assert!(
+            resolve_reference_sessions(&store, &selected, &[], "ordinary")
+                .await
+                .is_err()
+        );
+        crate::privacy_mode::save(&store, true, &selected)
+            .await
+            .unwrap();
+        assert!(
+            resolve_reference_sessions(&store, &selected, &[], "assistant")
+                .await
+                .unwrap_err()
+                .contains("No visible project")
+        );
+        assert!(
+            resolve_reference_sessions(&store, &["missing".into()], &[], "assistant")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn exploration_targets_can_resolve_saved_session_references() {
         let database = std::env::temp_dir().join(format!(
             "wisp_reader_exploration_reference_{}.sqlite",
@@ -1226,6 +1286,21 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(ids, HashSet::from(["source".into(), "reference".into()]));
         assert!(!ids.contains("exploration"));
+        store
+            .set_session_shelved("reference", "project", true)
+            .await
+            .unwrap();
+        let visible = resolve_reference_sessions(&store, &["project".into()], &[], "exploration")
+            .await
+            .unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "source");
+        let explicit =
+            resolve_reference_sessions(&store, &[], &["reference".into()], "exploration")
+                .await
+                .unwrap();
+        assert_eq!(explicit.len(), 1);
+        assert_eq!(explicit[0].id, "reference");
 
         drop(store);
         let _ = std::fs::remove_file(database);

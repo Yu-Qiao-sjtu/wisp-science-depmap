@@ -826,6 +826,14 @@ async fn agent_loop_execute(
                 &name
             };
             let event_name = tools.event_name(&name, &args);
+            let blocked = match output.pre_tool_use(&event_name, &args).await {
+                crate::PreToolDecision::Block(reason) => Some(reason),
+                crate::PreToolDecision::Ask => {
+                    env.set_hook_ask(true);
+                    None
+                }
+                crate::PreToolDecision::Continue => None,
+            };
             let (span_kind, is_mcp) = plan_tool_spans(&name, &event_name);
             let tool_span = turn_span.map(|span| {
                 let child = span.child(span_kind, format!("agent.{}", span_kind.as_str()));
@@ -843,7 +851,7 @@ async fn agent_loop_execute(
             } else {
                 None
             };
-            let producing = provenance::is_producing(&name);
+            let producing = blocked.is_none() && provenance::is_producing(&name);
             let root = producing.then(|| env.project_root().to_path_buf());
             let source = provenance::source_of(&name, &args);
             // Registered before the pre-snapshot so concurrent sessions of the
@@ -871,71 +879,76 @@ async fn agent_loop_execute(
                 Default::default()
             };
             let t0 = std::time::Instant::now();
-            let (schema, guard_arguments) =
-                resolve_guardrail_tool_input(tools, &name, requested_name, &args);
-            let path = if name == "use_mcp_tool" {
-                DispatchPath::DeferredMcp
-            } else if name == "delegate_tasks" {
-                DispatchPath::Delegated
+            let mut result = if let Some(reason) = &blocked {
+                output.tool_call(&event_name, reason);
+                ToolResult::fail(format!("Blocked by a PreToolUse hook: {reason}"))
             } else {
-                DispatchPath::Direct
-            };
-            let guard_ctx = GuardrailContext {
-                path: path.clone(),
-                tool: requested_name.to_string(),
-                arguments: guard_arguments,
-                schema,
-                allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
-                approval_required: false,
-                approval_granted: false,
-                stale_approval: false,
-                output: None,
-                output_contract: None,
-                claim_catalog: None,
-            };
-            let chain = GuardrailChain::production();
-            let mut outcome = evaluate_tool_input(&chain, guard_ctx, tool_span.as_ref());
-            if name == "delegate_tasks" {
-                let handoff = evaluate_handoff(
-                    &chain,
-                    GuardrailContext {
-                        path: DispatchPath::Delegated,
-                        tool: requested_name.to_string(),
-                        arguments: args.clone(),
-                        schema: None,
-                        allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
-                        approval_required: false,
-                        approval_granted: false,
-                        stale_approval: false,
-                        output: None,
-                        output_contract: None,
-                        claim_catalog: None,
-                    },
-                    tool_span.as_ref(),
-                );
-                if handoff.decision.rank_for_merge() > outcome.decision.rank_for_merge() {
-                    outcome = handoff;
+                let (schema, guard_arguments) =
+                    resolve_guardrail_tool_input(tools, &name, requested_name, &args);
+                let path = if name == "use_mcp_tool" {
+                    DispatchPath::DeferredMcp
+                } else if name == "delegate_tasks" {
+                    DispatchPath::Delegated
+                } else {
+                    DispatchPath::Direct
+                };
+                let guard_ctx = GuardrailContext {
+                    path: path.clone(),
+                    tool: requested_name.to_string(),
+                    arguments: guard_arguments,
+                    schema,
+                    allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                    approval_required: false,
+                    approval_granted: false,
+                    stale_approval: false,
+                    output: None,
+                    output_contract: None,
+                    claim_catalog: None,
+                };
+                let chain = GuardrailChain::production();
+                let mut outcome = evaluate_tool_input(&chain, guard_ctx, tool_span.as_ref());
+                if name == "delegate_tasks" {
+                    let handoff = evaluate_handoff(
+                        &chain,
+                        GuardrailContext {
+                            path: DispatchPath::Delegated,
+                            tool: requested_name.to_string(),
+                            arguments: args.clone(),
+                            schema: None,
+                            allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                            approval_required: false,
+                            approval_granted: false,
+                            stale_approval: false,
+                            output: None,
+                            output_contract: None,
+                            claim_catalog: None,
+                        },
+                        tool_span.as_ref(),
+                    );
+                    if handoff.decision.rank_for_merge() > outcome.decision.rank_for_merge() {
+                        outcome = handoff;
+                    }
                 }
-            }
-            let dispatch_args = match &outcome.decision {
-                GuardrailDecision::Transform { value, .. } => value.clone(),
-                _ => args.clone(),
-            };
-            let result = match &outcome.decision {
-                GuardrailDecision::Allow | GuardrailDecision::Transform { .. } => {
-                    tools
-                        .run_scoped(&name, &dispatch_args, env, ctx.active_turn_allowed_tools())
-                        .await
-                }
-                GuardrailDecision::RequestApproval { reason } => {
-                    wisp_tools::ToolResult::fail(reason.clone()).stop_batch()
-                }
-                GuardrailDecision::Reject {
-                    severity: GuardrailSeverity::Terminal,
-                    reason,
-                } => wisp_tools::ToolResult::fail(reason.clone()).stop_batch(),
-                GuardrailDecision::Reject { reason, .. } => {
-                    wisp_tools::ToolResult::fail(reason.clone())
+                let dispatch_args = match &outcome.decision {
+                    GuardrailDecision::Transform { value, .. } => value.clone(),
+                    _ => args.clone(),
+                };
+                match &outcome.decision {
+                    GuardrailDecision::Allow | GuardrailDecision::Transform { .. } => {
+                        tools
+                            .run_scoped(&name, &dispatch_args, env, ctx.active_turn_allowed_tools())
+                            .await
+                    }
+                    GuardrailDecision::RequestApproval { reason } => {
+                        wisp_tools::ToolResult::fail(reason.clone()).stop_batch()
+                    }
+                    GuardrailDecision::Reject {
+                        severity: GuardrailSeverity::Terminal,
+                        reason,
+                    } => wisp_tools::ToolResult::fail(reason.clone()).stop_batch(),
+                    GuardrailDecision::Reject { reason, .. } => {
+                        wisp_tools::ToolResult::fail(reason.clone())
+                    }
                 }
             };
             let tool_status = if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
@@ -965,6 +978,7 @@ async fn agent_loop_execute(
                 span.end(tool_status);
             }
             env.set_span(None);
+            env.set_hook_ask(false);
             if let Some(next) = result.allowed_next_tools.clone() {
                 ctx.set_active_turn_allowed_tools(next);
             }
@@ -1018,10 +1032,17 @@ async fn agent_loop_execute(
                     });
                 }
             }
+            // After provenance, so files a hook writes (formatters) are not
+            // attributed to the tool.
+            if blocked.is_none() {
+                if let Some(feedback) = output.post_tool_use(&event_name, &args, &result).await {
+                    result.content = format!("{}\n\n[Hook feedback]\n{feedback}", result.content);
+                }
+            }
             let (content, tool_text, ok) =
                 model_tool_result(&result, ctx.supports_vision, vision_provider, &name, &args)
                     .await;
-            output.tool_result(&tools.event_name(&name, &args), ok, &tool_text, duration_ms);
+            output.tool_result(&event_name, ok, &tool_text, duration_ms);
             ctx.append_tool(
                 &tc.id,
                 &name,
@@ -2595,6 +2616,104 @@ mod tests {
             .content
             .as_text()
             .contains("invalidated later calls"));
+    }
+
+    struct HookOutput;
+
+    impl Output for HookOutput {
+        fn pre_tool_use<'a>(
+            &'a self,
+            tool: &'a str,
+            _args: &'a serde_json::Value,
+        ) -> crate::OutputFuture<'a, crate::PreToolDecision> {
+            Box::pin(async move {
+                match tool {
+                    "guarded" => crate::PreToolDecision::Block("not here".into()),
+                    "asked" => crate::PreToolDecision::Ask,
+                    _ => crate::PreToolDecision::Continue,
+                }
+            })
+        }
+
+        fn post_tool_use<'a>(
+            &'a self,
+            tool: &'a str,
+            _args: &'a serde_json::Value,
+            result: &'a ToolResult,
+        ) -> crate::OutputFuture<'a, Option<String>> {
+            assert_ne!(tool, "guarded", "blocked calls never reach PostToolUse");
+            Box::pin(async move { (tool == "work").then(|| format!("saw {}", result.content)) })
+        }
+
+        // `asked` is Allow by policy; only the hook's `ask` reaches this.
+        fn confirm(&self, _message: &str) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_hooks_block_before_running_and_feed_back_after() {
+        let guarded_runs = Arc::new(AtomicUsize::new(0));
+        let work_runs = Arc::new(AtomicUsize::new(0));
+        let provider = SequenceProvider::new([
+            Completion {
+                tool_calls: vec![
+                    call("guarded-1", "guarded", serde_json::json!({})),
+                    call("work-1", "work", serde_json::json!({})),
+                    call("asked-1", "asked", serde_json::json!({})),
+                ],
+                finish_reason: Some("tool_calls".into()),
+                ..Completion::default()
+            },
+            Completion {
+                content: "done".into(),
+                finish_reason: Some("stop".into()),
+                ..Completion::default()
+            },
+        ]);
+        let asked_runs = Arc::new(AtomicUsize::new(0));
+        let mut tools = Registry::builtins();
+        tools.add(Box::new(CountingTool {
+            name: "guarded",
+            runs: guarded_runs.clone(),
+        }));
+        tools.add(Box::new(CountingTool {
+            name: "work",
+            runs: work_runs.clone(),
+        }));
+        tools.add(Box::new(CountingTool {
+            name: "asked",
+            runs: asked_runs.clone(),
+        }));
+        let mut ctx = ContextManager::new(100_000);
+
+        agent_loop(
+            &mut ctx,
+            &provider,
+            None,
+            &tools,
+            Path::new("."),
+            &HookOutput,
+            "go",
+            0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(guarded_runs.load(Ordering::SeqCst), 0);
+        assert_eq!(work_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(asked_runs.load(Ordering::SeqCst), 0);
+        let results: Vec<String> = ctx
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::Tool)
+            .map(|message| message.content.as_text())
+            .collect();
+        assert_eq!(results.len(), 3);
+        assert!(results[0].contains("Blocked by a PreToolUse hook: not here"));
+        assert!(results[1].contains("ran\n\n[Hook feedback]\nsaw ran"));
+        assert!(results[2].contains("denied by the user"), "{}", results[2]);
     }
 
     #[tokio::test]

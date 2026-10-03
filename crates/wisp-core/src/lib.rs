@@ -81,7 +81,9 @@ pub use orchestration::{
     DelegationMode, DelegationPlan, DelegationPlanStep, RunActivitySpec, WorkflowTaskKind,
     DYNAMIC_DELEGATION_SCHEMA_VERSION, MAX_DELEGATION_TASKS,
 };
-pub use output::{NullOutput, Output, OutputFuture, StreamSinkAdapter, ToolEnvAdapter};
+pub use output::{
+    NullOutput, Output, OutputFuture, PreToolDecision, StreamSinkAdapter, ToolEnvAdapter,
+};
 pub use provenance::ProvenanceRecord;
 pub use release_gate::{
     build_release_gate, load_bundled_depmap_acu_corpus, load_bundled_depmap_release_lock,

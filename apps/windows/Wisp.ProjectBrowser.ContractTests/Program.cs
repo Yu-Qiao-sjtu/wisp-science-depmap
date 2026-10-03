@@ -2,7 +2,11 @@ using System.Text.Json;
 using Wisp.ProjectBrowser.Contracts;
 
 // Stand in for an incompatible desktop intercepting the settings-host launch.
-if (args.SequenceEqual(new[] { "--native-settings-host" })) return;
+if (args.SequenceEqual(new[] { "--native-settings-host" }))
+{
+    if (int.TryParse(Environment.GetEnvironmentVariable("WISP_TEST_HOST_EXIT_CODE"), out var exitCode)) Environment.ExitCode = exitCode;
+    return;
+}
 
 if (args.Length is 2 or 3 && args[0] == "--database")
 {
@@ -53,12 +57,30 @@ await NativeCalendarContractTests.Run(Path.GetFullPath(Path.Combine(fixtureDirec
 await NativePrivacyContractTests.Run(Path.GetFullPath(Path.Combine(fixtureDirectory, "../../native-privacy/v1/mode.json")));
 await NativeJourneyContractTests.Run(Path.GetFullPath(Path.Combine(fixtureDirectory, "../../native-journey/v1/range.json")));
 await NativePublicationContractTests.Run(Path.GetFullPath(Path.Combine(fixtureDirectory, "../../native-publication/v1/workspace.json")));
-await NativeScratchContractTests.Run(Path.GetFullPath(Path.Combine(fixtureDirectory, "../../native-scratch/v1/open.json")));
 await NativeConversationContractTests.Run(args[0]);
 
 NativePanelTabsTests.Run();
+NativeWorkspaceLayoutTests.Run();
+NativePanelViewStateTests.Run();
+NativeFileListPresentationTests.Run();
+NativeActionLayoutTests.Run();
+await NativeSideChatPresentationTests.RunAsync();
+NativeToolPresentationTests.Run();
+NativeSettingsSearchTests.Run();
+NativeComposerCommandsTests.Run();
+NativeTranscriptRowsTests.Run();
+NativeTranscriptActivityTests.Run();
+await NativeTerminalStreamingTests.RunAsync();
+await WorkspaceJourneyTests.RunAsync();
+NativeBrowserPresentationTests.Run();
+await NativeComposerEffortTests.RunAsync();
+await NativeComposerOptionsTests.RunAsync(Path.GetFullPath(Path.Combine(fixtureDirectory, "../../native-conversations/v1/composer-options.json")));
+NativeTranscriptTests.Run();
+await NativeWorkspaceActionsTests.RunAsync();
 await AppearanceSettingsTests.RunAsync();
 await WorkspaceActionTests.RunAsync();
+await NativeRunNavigationTests.RunAsync();
+await NativeRunReviewTests.RunAsync(args[0]);
 await WorkspaceConversationTests.RunAsync(args[0]);
 await NativeParityTests.RunAsync();
 await NativeSettingsEditorTests.RunAsync();

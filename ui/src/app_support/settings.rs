@@ -1053,6 +1053,10 @@ pub(crate) const SETTINGS_NAV_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("workflows", "automation 自动化"),
             ("specialists", "agents 专家 智能体"),
             ("memory", "notes habits 笔记 习惯"),
+            (
+                "hooks",
+                "hook command stop tool review failure 钩子 命令 审查 工具失败",
+            ),
         ],
     ),
     (
@@ -1112,6 +1116,7 @@ pub(crate) fn settings_section_label(loc: Locale, section: &str) -> String {
         "workflows" => t(loc, "settings.nav.workflows"),
         "specialists" => t(loc, "settings.nav.specialists"),
         "memory" => t(loc, "settings.nav.memory"),
+        "hooks" => t(loc, "settings.nav.hooks"),
         "skills" => t(loc, "settings.nav.skills"),
         "plugins" => t(loc, "settings.nav.plugins"),
         "browser" => t(loc, "settings.nav.browser"),
@@ -1322,6 +1327,23 @@ pub(crate) const CRED_GROUPS: &[CredGroup] = &[
                 secret: false,
             },
         ],
+    },
+    CredGroup {
+        id: "typesafe",
+        name_key: "cred.typesafe.name",
+        about_key: "cred.typesafe.about",
+        configured_key: "cred.typesafe.configured",
+        unconfigured_key: "cred.typesafe.unconfigured",
+        hint_key: "cred.typesafe.hint",
+        links: &[CredLink {
+            label_key: "cred.typesafe.link",
+            url: "https://console.typesafe.ai",
+        }],
+        fields: &[CredField {
+            id: "typesafe_api_key",
+            label_key: "cred.typesafe_api_key.label",
+            secret: true,
+        }],
     },
 ];
 

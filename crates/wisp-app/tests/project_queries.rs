@@ -57,7 +57,7 @@ async fn preserves_project_identity_order_metadata_and_visible_counts() {
         .unwrap()
         .is_empty());
 
-    for id in ["older", "newer", "same-time", "scratch:hidden"] {
+    for id in ["older", "newer", "same-time", "assistant:research"] {
         db.project(id).await;
     }
     db.store
@@ -324,12 +324,12 @@ async fn native_session_navigation_uses_home_limit_project_scope_and_read_only_p
     let db = TestDb::new().await;
     db.project("p").await;
     db.project("other").await;
-    db.project("scratch:hidden").await;
+    db.project("assistant:research").await;
     for n in 0..7 {
         db.session(&format!("s{n}"), "p").await;
     }
     db.session("private", "other").await;
-    db.session("scratch", "scratch:hidden").await;
+    db.session("assistant", "assistant:research").await;
     db.store
         .create_frame("draft", "p", "test", "mock")
         .await
@@ -342,7 +342,7 @@ async fn native_session_navigation_uses_home_limit_project_scope_and_read_only_p
     assert_eq!(recent.len(), 5);
     assert!(recent
         .iter()
-        .all(|s| !s.project_id.starts_with("scratch:") && s.id != "draft"));
+        .all(|s| !s.project_id.starts_with("assistant:") && s.id != "draft"));
     assert!(recent.iter().all(|s| s.pinned.is_none()));
     db.store.set_session_pinned("s0", "p", true).await.unwrap();
     db.store

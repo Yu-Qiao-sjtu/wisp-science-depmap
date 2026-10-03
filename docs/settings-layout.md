@@ -13,7 +13,7 @@ The sidebar groups the existing pages by purpose:
 | Group | Pages |
 | --- | --- |
 | Preferences / 基础偏好 | General, Session, Appearance, Pet |
-| AI configuration / AI 配置 | Models, Quick actions, Workflows, Specialists, Memory |
+| AI configuration / AI 配置 | Models, Quick actions, Workflows, Specialists, Memory, Hooks |
 | Tools & connections / 工具与连接 | Skills, Plugins, Browser, Connections, Remote Access |
 | System & resources / 系统与资源 | Credentials, Permissions, Environments, Storage, Usage |
 
@@ -41,6 +41,7 @@ an error and preserves the previous selection so it can be retried.
 | Remote access | Project synchronization and messages/devices in adjacent cards | Synchronization owns its Save/Cancel controls; each channel retains its own configuration |
 | Browser | Browser behavior followed by block/prefer list cards | Existing controls save immediately |
 | Specialists | Built-in and custom lists follow their content height | Existing create/edit actions are unchanged |
+| Hooks | Default hooks, command hooks, then the active project's `.wisp/hooks.json` ([hooks.md](hooks.md)) | Toggles and thresholds apply immediately; a command hook saves with its form; project trust applies on click |
 
 Memory, browser and specialist lists no longer reserve an empty fraction of the
 window when they contain only a few items. Remote access has one page scroll area,

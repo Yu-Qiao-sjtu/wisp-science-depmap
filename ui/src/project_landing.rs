@@ -10,6 +10,8 @@ use wasm_bindgen::JsValue;
 pub(super) struct ProjectLandingState {
     pub(super) home_dialog_open: RwSignal<bool>,
     pub(super) home_calendar_open: RwSignal<bool>,
+    pub(super) home_automation_open: RwSignal<bool>,
+    pub(super) home_automation_form: RwSignal<bool>,
     pub(super) show_projects: RwSignal<bool>,
     pub(super) demo_mode: RwSignal<bool>,
     pub(super) items: RwSignal<Vec<ChatItem>>,
@@ -37,7 +39,7 @@ pub(super) fn ProjectLanding(
     open_project_folder: Callback<String>,
     open_project_session: Callback<(String, String)>,
     open_project_journey: Callback<(String, i64)>,
-    open_scratch: Callback<()>,
+    open_assistant: Callback<()>,
     open_settings: Callback<Option<String>>,
     open_library: Callback<()>,
     open_project_export: Callback<(String, String)>,
@@ -45,6 +47,8 @@ pub(super) fn ProjectLanding(
     let ProjectLandingState {
         home_calendar_open,
         home_dialog_open,
+        home_automation_open,
+        home_automation_form,
         show_projects,
         demo_mode,
         items,
@@ -88,6 +92,9 @@ pub(super) fn ProjectLanding(
                 <ProjectsScreen
                     locale=locale
                     calendar_open=home_calendar_open
+                    automation_open=home_automation_open
+                    automation_form=home_automation_form
+                    on_open_specialists=Callback::new(move |_| open_settings.call(Some("specialists".into())))
                     dialog_open=home_dialog_open
                     running=running
                     approval_pending=approval_pending.read_only()
@@ -101,7 +108,7 @@ pub(super) fn ProjectLanding(
                     on_open_settings=on_open_settings
                     on_open_library=open_library
                     on_open_demo=on_open_demo
-                    on_open_scratch=open_scratch
+                    on_open_assistant=open_assistant
                     on_search=Callback::new(move |_| command_palette_open.set(true))
                     on_export_project=open_project_export
                     project_transfer=project_transfer
