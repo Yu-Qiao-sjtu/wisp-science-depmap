@@ -577,7 +577,7 @@ fn depmap_route_schema() -> Value {
                     "cancer_direction_discovery", "mutation_anchor_discovery",
                     "mutation_to_dependency", "dependency_to_mutation", "gene_evidence",
                     "expression_biomarker_model",
-                    "tf_activity_to_dependency", "true_love_gene_catalog",
+                    "tf_activity_to_dependency", "pathway_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
                     "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
@@ -593,6 +593,7 @@ fn depmap_route_schema() -> Value {
             "drug": {"type":"string"},
             "event": {"type":"string","enum":["damaging","hotspot"]},
             "transcription_factor": {"type":"string"},
+            "pathway": {"type":"string"},
             "catalog": {"type":"string","enum":["stable_negative_rank1","negative_r_lt_minus_0_3","positive_reciprocal_top20"]},
             "partner_gene": {"type":"string"},
             "contrast_id": {"type":"string"},
@@ -622,7 +623,7 @@ fn depmap_route_schema() -> Value {
                     "mutation_anchor_discovery", "mutation_to_dependency",
                     "dependency_to_mutation",
                     "expression_biomarker_model",
-                    "tf_activity_to_dependency", "true_love_gene_catalog",
+                    "tf_activity_to_dependency", "pathway_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
                     "coamplification_evidence", "three_d_evidence",
                     "gene_evidence", "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
@@ -679,6 +680,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
     let drug = non_empty_arg(args, "drug");
     let event = non_empty_arg(args, "event");
     let transcription_factor = non_empty_arg(args, "transcription_factor");
+    let pathway = non_empty_arg(args, "pathway");
     let catalog = non_empty_arg(args, "catalog");
     let partner_gene = non_empty_arg(args, "partner_gene");
     let contrast_id = non_empty_arg(args, "contrast_id");
@@ -770,6 +772,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "tf_activity_to_dependency" => {
             if transcription_factor.is_none() {
                 missing.push("transcription_factor");
+            }
+        }
+        "pathway_activity_to_dependency" => {
+            if target_gene.is_none() {
+                missing.push("target_gene");
             }
         }
         "true_love_gene_catalog" => {
@@ -918,7 +925,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "Query the indexed target eligibility and validated model-cache state. Start computation only when the user explicitly requests training and the target is not already cached.",
                 vec!["search_mcp_tools", "use_mcp_tool"],
             ),
-            "tf_activity_to_dependency" | "true_love_gene_catalog" => (
+            "tf_activity_to_dependency" | "pathway_activity_to_dependency" | "true_love_gene_catalog" => (
                 "L1_DIRECT",
                 false,
                 "Use the matching bounded MCP evidence tool and return its structured scientific rows.",
@@ -1285,8 +1292,23 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             },
             "single_call": true,
             "entity_class": "tf_activity",
-            "forbidden_tools": ["depmap_biomarker_model_evidence"]
+            "forbidden_tools": ["depmap_biomarker_model_evidence", "depmap_read_resource"]
         }),
+        ("pathway_activity_to_dependency", _) if !requires_user_input => {
+            let mut arguments = json!({
+                "gene": target_gene,
+                "limit": 20
+            });
+            if let Some(name) = pathway.as_deref() {
+                arguments["pathway"] = json!(name);
+            }
+            json!({
+                "tool": "depmap_pathway_dependency_evidence",
+                "arguments": arguments,
+                "single_call": true,
+                "forbidden_tools": ["depmap_read_resource"]
+            })
+        },
         ("true_love_gene_catalog", Some(_)) if !requires_user_input => json!({
             "tool": "depmap_true_love_evidence",
             "arguments": {
@@ -4134,6 +4156,7 @@ mod tests {
         assert!(intents.contains(&json!("expression_biomarker_model")));
         assert!(intents.contains(&json!("analysis_inventory")));
         assert!(intents.contains(&json!("tf_activity_to_dependency")));
+        assert!(intents.contains(&json!("pathway_activity_to_dependency")));
         assert!(intents.contains(&json!("true_love_gene_catalog")));
         assert!(intents.contains(&json!("tcga_expression_survival")));
         assert!(intents.contains(&json!("subtype_evidence")));
@@ -4260,6 +4283,10 @@ mod tests {
                 "depmap_3d_evidence",
             ),
             (
+                json!({"intent":"pathway_activity_to_dependency","target_gene":"ESR1"}),
+                "depmap_pathway_dependency_evidence",
+            ),
+            (
                 json!({"intent":"tf_activity_to_dependency","transcription_factor":"STAT3","target_gene":"GPX4"}),
                 "depmap_tf_dependency_evidence",
             ),
@@ -4318,7 +4345,7 @@ mod tests {
         );
         assert_eq!(
             activity["recommended_query"]["forbidden_tools"],
-            json!(["depmap_biomarker_model_evidence"])
+            json!(["depmap_biomarker_model_evidence", "depmap_read_resource"])
         );
 
         let ambiguous = depmap_route(&json!({
