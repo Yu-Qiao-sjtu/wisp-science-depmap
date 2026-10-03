@@ -62,7 +62,7 @@ never report a bare "not connected" when either is set:
   returns `updated`, call `browser_setup` again and continue only when
   `update_required=false`. If it returns `manual_reload_required`, relay the
   current and bundled versions plus `extension_path` verbatim, ask the user to
-  **Reload** Wisp Real Browser Bridge on `chrome://extensions`, and wait. Older
+  **Reload** Wisp DepMap Browser Bridge on `chrome://extensions`, and wait. Leave the Wisp Science extension installed. Older
   unpacked extensions cannot accept Wisp's automatic service-worker reload.
 
 One exception: the user says the extension is already installed. Chrome

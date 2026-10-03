@@ -1,7 +1,8 @@
-// Wisp Real Browser Bridge protocol constants (Protocol v2).
+// Wisp DepMap Browser Bridge protocol constants (Protocol v2).
 var WISP_PROTOCOL = {
   version: 2,
-  extensionVersion: "0.3.1",
+  extensionVersion: "0.4.0",
+  product: "wisp-depmap",
   capabilities: [
     "article_scan",
     "asset_download",
@@ -20,19 +21,21 @@ var WISP_PROTOCOL = {
 function readBridgeConfig() {
   var session = "shared";
   var endpoint = "ws://127.0.0.1:18765";
+  var product = WISP_PROTOCOL.product || "wisp-depmap";
   try {
     if (typeof WISP_BRIDGE_CONFIG === "object" && WISP_BRIDGE_CONFIG) {
       if (WISP_BRIDGE_CONFIG.session) session = String(WISP_BRIDGE_CONFIG.session);
       if (WISP_BRIDGE_CONFIG.endpoint) endpoint = String(WISP_BRIDGE_CONFIG.endpoint);
     }
   } catch (_) {}
-  return { session: session, endpoint: endpoint };
+  return { session: session, endpoint: endpoint, product: product };
 }
 
 function handshakePayload(tabs, paused) {
   var cfg = readBridgeConfig();
   return {
     type: "ext_ready",
+    product: cfg.product,
     protocol_version: WISP_PROTOCOL.version,
     extension_version: WISP_PROTOCOL.extensionVersion,
     capabilities: WISP_PROTOCOL.capabilities,
