@@ -2992,7 +2992,38 @@ def build_mcp_server(
             family, gene, source, target, cohort, contrast, omic, limit
         )
 
+    _withhold_unregistered_catalog_tools(mcp, service.catalog_readers)
     return mcp
+
+
+# One MCP tool, one catalog query mode. A verified index that does not register
+# the mode must not advertise the tool.
+_SINGLE_MODE_TOOLS = {
+    "depmap_lineage_dependencies": "lineage_dependency",
+    "depmap_model_gene_effect": "model_gene_effect",
+    "depmap_cross_platform_validation": "cross_platform_validation",
+    "depmap_pan_cancer_dependencies": "pan_cancer_dependency",
+    "depmap_lineage_direction_discovery": "lineage_directions",
+    "depmap_3d_evidence": "three_d",
+    "depmap_subtype_evidence": "subtype",
+    "depmap_coamplification_evidence": "coamplification",
+    "depmap_codependency_evidence": "pair",
+    "depmap_tf_dependency_evidence": "tf_dependency",
+    "depmap_biomarker_model_evidence": "biomarker_target",
+    "depmap_true_love_evidence": "true_love",
+    "depmap_mutation_anchor_evidence": "mutation_anchor",
+    "depmap_lineage_mutation_dependency": "lineage_mutation_dependency",
+    "tcga_gene_expression_survival": "tcga_expression_survival",
+}
+
+
+def _withhold_unregistered_catalog_tools(mcp: FastMCP, registry: CatalogReaderRegistry) -> None:
+    registered = registry.registered_modes()
+    if registered is None:
+        return
+    for tool_name, mode in _SINGLE_MODE_TOOLS.items():
+        if mode not in registered and mcp._tool_manager.get_tool(tool_name) is not None:
+            mcp.remove_tool(tool_name)
 
 
 def _is_loopback(host: str) -> bool:
