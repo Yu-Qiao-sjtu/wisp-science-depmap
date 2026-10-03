@@ -1387,6 +1387,13 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(universe["request"]["view"], "universe")
         bulk = await self.service.tf_dependency_evidence(limit=5)
         self.assertEqual(self.queries[-1], {"mode": "tf_dependency", "limit": 5})
+        by_target = await self.service.tf_dependency_evidence(target="gpx4", limit=8)
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "tf_dependency", "target": "GPX4", "limit": 8},
+        )
+        self.assertEqual(by_target["request"]["target"], "GPX4")
+        self.assertNotIn("transcription_factor", by_target["request"])
 
     async def test_biomarker_model_intent_bridges_target_to_indexed_query(self):
         result = await self.service.biomarker_model_evidence("gpx4")
