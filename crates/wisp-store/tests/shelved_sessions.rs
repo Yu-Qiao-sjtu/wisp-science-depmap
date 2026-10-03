@@ -77,7 +77,7 @@ async fn shelving_filters_discovery_preserves_references_and_survives_reopen() {
             .await
             .unwrap()
             .iter()
-            .filter(|v| v.as_str() == "0061_session_shelved")
+            .filter(|v| v.as_str() == "0065_session_shelved")
             .count(),
         1
     );

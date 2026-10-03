@@ -10865,7 +10865,7 @@ test("credential service subpages navigate, discard drafts, and update list stat
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
   const list = page.getByTestId("credential-service-list");
-  await expect(list.locator("button")).toHaveCount(5);
+  await expect(list.locator("button")).toHaveCount(6);
   await expect(list.locator("input")).toHaveCount(0);
   await expect.poll(async () => (await list.boundingBox())?.height ?? 0).toBeGreaterThan(250);
   await page.screenshot({ path: test.info().outputPath("credential-services.png"), animations: "disabled" });

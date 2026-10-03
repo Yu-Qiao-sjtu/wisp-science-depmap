@@ -98,7 +98,7 @@ test("a blank task needs a prompt; an hourly task shows its interval", async ({ 
   await form.getByTestId("automation-save").click();
   const row = automation.locator(".automation-row");
   await expect(row.locator("strong")).toHaveText("Check the cluster queue");
-  await expect(row).toContainText("wisp-science · Every 6 h");
+  await expect(row).toContainText("wisp-depmap · Every 6 h");
 });
 
 test("Chinese automation page labels follow the locale", async ({ page }) => {
