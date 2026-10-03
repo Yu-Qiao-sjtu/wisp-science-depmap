@@ -20,6 +20,7 @@ from services.depmap_api.app import (
     _canonical_lineage_label,
     _coerce_csv_value,
     _coverage_gap_reason,
+    _typed_coverage_status,
     _r_query_command,
     _run_analysis_catalog_query,
     create_app,
@@ -970,6 +971,19 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(
             _coverage_gap_reason(stderr),
             "source not found or ineligible: ESR1",
+        )
+        self.assertEqual(
+            _typed_coverage_status("source not found or ineligible: ESR1"),
+            "INELIGIBLE",
+        )
+        self.assertEqual(_typed_coverage_status("source block not found"), "NOT_TESTED")
+        self.assertEqual(_typed_coverage_status("target not found"), "NOT_OBSERVED")
+        self.assertEqual(
+            _typed_coverage_status("drug or target not found"), "NOT_OBSERVED"
+        )
+        self.assertEqual(
+            _typed_coverage_status("gene is absent from the precomputed core index"),
+            "NOT_TESTED",
         )
 
     def test_invalid_or_ambiguous_queries_are_rejected(self):

@@ -675,6 +675,23 @@ def _coverage_gap(stderr: str) -> bool:
     return _coverage_gap_reason(stderr) is not None
 
 
+def _typed_coverage_status(reason: str) -> str:
+    """Map a helper coverage sentence onto the evidence status set."""
+    lowered = reason.lower()
+    if "ineligible" in lowered or "did not satisfy" in lowered:
+        return "INELIGIBLE"
+    if "target" in lowered or "drug" in lowered:
+        return "NOT_OBSERVED"
+    return "NOT_TESTED"
+
+
+def _normalize_coverage_status(result: dict[str, Any]) -> dict[str, Any]:
+    if str(result.get("status") or "").lower() != "not_testable":
+        return result
+    reason = str(result.get("reason") or "")
+    return {**result, "status": _typed_coverage_status(reason)}
+
+
 def _r_query_command(settings: Settings, query: dict[str, Any]) -> list[str]:
     command = [
         settings.rscript,
@@ -715,10 +732,11 @@ async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, An
     stderr_text = stderr[-MAX_STDERR_BYTES:].decode("utf-8", errors="replace").strip()
     if process.returncode != 0:
         if _coverage_gap(stderr_text):
+            reason = _coverage_gap_reason(stderr_text) or "not covered"
             return {
                 "mode": query["mode"],
-                "status": "not_testable",
-                "reason": _coverage_gap_reason(stderr_text) or "not covered",
+                "status": _typed_coverage_status(reason),
+                "reason": reason,
             }
         LOGGER.error("R query failed with exit code %s: %s", process.returncode, stderr_text)
         raise HTTPException(status_code=500, detail="DepMap query helper failed")
@@ -731,7 +749,7 @@ async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, An
         raise HTTPException(status_code=500, detail="DepMap query returned invalid JSON")
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
         raise HTTPException(status_code=413, detail="DepMap response exceeds 4 MiB")
-    return result
+    return _normalize_coverage_status(result)
 
 
 def _run_core_query(settings: Settings, gene: str) -> dict[str, Any]:
@@ -4188,11 +4206,12 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
     if query["mode"] == "core":
         result = await asyncio.to_thread(_run_core_query, settings, query["gene"])
         if not result["summary"]:
+            reason = "gene is absent from the precomputed core index"
             return {
                 "mode": "core",
-                "status": "not_testable",
+                "status": _typed_coverage_status(reason),
                 "gene": query["gene"].strip().upper(),
-                "reason": "gene is absent from the precomputed core index",
+                "reason": reason,
             }
         if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
             raise HTTPException(status_code=413, detail="DepMap response exceeds 4 MiB")
