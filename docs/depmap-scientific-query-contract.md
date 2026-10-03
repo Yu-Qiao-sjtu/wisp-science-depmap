@@ -15,7 +15,10 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
 
 `lineage_dependency` / `pan_cancer_dependency` add exact-gene statuses
 (`FOUND` / `NOT_RETAINED` / `NOT_TESTED`) and a one-pass common-essential
-sidecar join (`exclude_common_essential`). The predicate runs on the complete
+sidecar join (`exclude_common_essential`). A named `common_essential_source`
+means the label file loaded and each row has a boolean; a missing file omits
+the source. A missing confounder sidecar is `ANNOTATION_UNAVAILABLE`; a gene
+absent from a loaded sidecar is `NOT_OBSERVED`. The predicate runs on the complete
 retained ranking before `cursor`/`limit`; pages expose complete pre/post-filter
 counts, `matched_row_count`, and `next_cursor`. A requested exclusion fails
 closed as `NOT_COMPUTED` when the versioned sidecar cannot be read, and the
