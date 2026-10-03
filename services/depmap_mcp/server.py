@@ -2623,10 +2623,12 @@ def build_mcp_server(
         title="DepMap TF activity to CRISPR dependency evidence",
         description=(
             "Query the completed TF-activity module. view=universe pages the frozen TF "
-            "list (tf_order) without reconstructing DoRothEA. Omit transcription_factor "
-            "for bulk ranking with matched_row_count. With a TF, return exact pair or "
-            "that TF's bounded ranking. FDR is BH-adjusted within each TF among pairs "
-            "with at least 800 observations."
+            "list (tf_order) without reconstructing DoRothEA. Omit both selectors for "
+            "bulk ranking. A transcription factor returns that TF's bounded ranking or "
+            "an exact pair. A target alone returns the bounded ranking of retained TF "
+            "activities for that dependency gene. NOT_RETAINED means the pair or target "
+            "was outside the sparse retained table, not that no association exists. "
+            "FDR is BH-adjusted within each TF among pairs with at least 800 observations."
         ),
         annotations=READ_ONLY,
         structured_output=True,

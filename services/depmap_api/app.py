@@ -583,10 +583,10 @@ class QueryRequest(BaseModel):
             and self.cursor not in {None, 0}
         ):
             raise ValueError("cursor is available only for dependency ranking pages")
-        if self.mode == "tf_dependency" and self.target is not None and self.source is None:
-            raise ValueError("tf_dependency target requires source")
-        if self.mode == "tf_dependency" and self.view == "universe" and self.source is not None:
-            raise ValueError("tf_dependency universe view does not take a source")
+        if self.mode == "tf_dependency" and self.view == "universe" and (
+            self.source is not None or self.target is not None
+        ):
+            raise ValueError("tf_dependency universe view does not take a source or target")
         if self.mode == "lineage_mutation_dependency" and self.source is None and self.target is None:
             raise ValueError("lineage_mutation_dependency requires source, target, or both")
         if self.model_id is not None and not re.fullmatch(r"ACH-\d{6}", self.model_id.strip().upper()):
@@ -3912,6 +3912,58 @@ def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[
             universe_size=len(universe),
             manifest=manifest,
             provenance=[str(root / "manifest.json"), str(order_path)],
+        )
+    if source is None and target is not None:
+        target_order = root / "target_gene_order.csv"
+        if target_order.is_file():
+            targets = {
+                str(row.get("symbol") or row.get("target_gene") or "").strip().upper()
+                for row in _iter_csv_records(target_order)
+            }
+            if target not in targets:
+                return _evidence_response(
+                    "NOT_TESTED",
+                    mode="tf_dependency",
+                    reason="target gene is absent from the Gene Effect target universe",
+                    target=target,
+                    entity_class="tf_activity",
+                    universe_size=len(universe),
+                    rows=[],
+                    returned_count=0,
+                    manifest=manifest,
+                    provenance=[str(order_path), str(target_order)],
+                )
+        matched = filter_before_limit(
+            _iter_csv_records(hits_path),
+            lambda row: str(row.get("target_gene") or "").upper() == target,
+        )
+        page, matched_count = bound_after_rank(
+            matched,
+            key=lambda row: (
+                str(row.get("direction") or ""),
+                int(row.get("rank") or 10**9),
+                str(row.get("TF") or ""),
+            ),
+            limit=limit,
+        )
+        status = "FOUND" if page else "NOT_RETAINED"
+        return _evidence_response(
+            status,
+            mode="tf_dependency",
+            reason=(
+                "bounded target-keyed TF-activity ranking from the completed table"
+                if page
+                else "target is in the tested universe; no TF-activity row was retained"
+            ),
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rows=page,
+            returned_count=len(page),
+            matched_row_count=matched_count,
+            rejection_reason=None if status == "FOUND" else status,
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(hits_path)],
         )
     if source is None:
         matched = list(_iter_csv_records(hits_path))

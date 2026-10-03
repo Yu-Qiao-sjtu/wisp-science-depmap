@@ -137,9 +137,12 @@ class QueryContractTests(unittest.TestCase):
         bulk = QueryRequest(mode="tf_dependency", limit=5)
         self.assertNotIn("source", bulk.bounded_dict())
 
-    def test_tf_dependency_requires_tf_source(self):
+    def test_tf_dependency_accepts_target_keyed_ranking(self):
+        ranked = QueryRequest(mode="tf_dependency", target="GPX4", limit=20)
+        self.assertEqual(ranked.bounded_dict()["target"], "GPX4")
+        self.assertNotIn("source", ranked.bounded_dict())
         with self.assertRaises(ValueError):
-            QueryRequest(mode="tf_dependency", target="GPX4")
+            QueryRequest(mode="tf_dependency", view="universe", target="GPX4")
 
     def test_biomarker_target_requires_dependency_target(self):
         request = QueryRequest(mode="biomarker_target", target="GPX4")
@@ -2393,6 +2396,19 @@ class TfActivityReaderTests(DepMapApiTests):
         untested = self._query(
             {"mode": "tf_dependency", "source": "STAT3", "target": "ABSENTTARGET"}
         )
+        self.assertEqual(untested["status"], "NOT_TESTED")
+
+    def test_target_keyed_ranking_is_bounded(self):
+        ranked = self._query({"mode": "tf_dependency", "target": "ZFP36L1", "limit": 5})
+        self.assertEqual(ranked["status"], "FOUND")
+        self.assertEqual(ranked["matched_row_count"], 2)
+        self.assertEqual(
+            {row["TF"] for row in ranked["rows"]},
+            {"STAT3", "ATF5"},
+        )
+        absent = self._query({"mode": "tf_dependency", "target": "GPX4", "limit": 5})
+        self.assertEqual(absent["status"], "NOT_RETAINED")
+        untested = self._query({"mode": "tf_dependency", "target": "ABSENTTARGET"})
         self.assertEqual(untested["status"], "NOT_TESTED")
 
     def test_universe_and_bulk_ranking_are_bounded_query_surfaces(self):
