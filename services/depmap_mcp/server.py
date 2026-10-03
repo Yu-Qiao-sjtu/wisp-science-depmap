@@ -20,7 +20,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
@@ -30,6 +30,9 @@ from services.depmap_mcp.artifact_integrity import (
 )
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
+# Provenance previews stay inside this row window. A later cursor is not an
+# entity lookup, whether or not a scientific reader is registered.
+PROVENANCE_ROW_CAP = 500
 MAX_MODEL_STRING_CHARS = 4096
 QUERY_FAILURE_STATUSES = frozenset({"QUERY_ERROR", "MODULE_UNAVAILABLE"})
 LOGGER = logging.getLogger("depmap_mcp")
@@ -772,6 +775,41 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _registered_reader_mode(db: sqlite3.Connection, relative: str) -> str | None:
+    """Return the query mode whose catalog pattern owns this artifact path."""
+    import fnmatch
+
+    try:
+        rows = db.execute(
+            "SELECT query_mode, module_pattern FROM reader_registry"
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    for mode, pattern in rows:
+        for part in str(pattern or "").split("|"):
+            glob = part.strip().replace("%", "*")
+            if glob and fnmatch.fnmatch(relative, glob):
+                return str(mode)
+    return None
+
+
+def _schema_error_item(query: dict[str, Any], exc: ValidationError) -> dict[str, Any]:
+    messages: list[str] = []
+    for err in exc.errors():
+        msg = str(err.get("msg") or "invalid argument")
+        if msg.lower().startswith("value error, "):
+            msg = msg[13:]
+        messages.append(msg)
+    return {
+        "query": query,
+        "status": "INELIGIBLE",
+        "schema_error": True,
+        "reason": "; ".join(messages) or "invalid query",
+        "rows": [],
+        "returned_count": 0,
+    }
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -1088,6 +1126,9 @@ class DepMapEvidenceService:
                     "WHERE artifact_path=?",
                     (relative,),
                 ).fetchone()
+                registered_reader = (
+                    _registered_reader_mode(db, relative) if hit else None
+                )
         except (OSError, sqlite3.Error):
             LOGGER.exception("artifact catalog lookup failed")
             return self._envelope(
@@ -1121,6 +1162,43 @@ class DepMapEvidenceService:
                 integrity.diagnostic,
             )
             return integrity_failure(integrity.reason_code or "ARTIFACT_INTEGRITY_FAILED")
+        if registered_reader:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "INELIGIBLE",
+                    "reason_code": "ARTIFACT_PAGING_IS_NOT_A_QUERY",
+                    "reason": (
+                        "this artifact belongs to a registered scientific reader; "
+                        "page that query instead of scanning the file"
+                    ),
+                    "query_mode": registered_reader,
+                    "uri": uri,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
+        if cursor >= PROVENANCE_ROW_CAP:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "COVERAGE_GAP",
+                    "reason_code": "NO_ENTITY_KEYED_READER",
+                    "reason": (
+                        "a cursor past the provenance preview is not an entity lookup; "
+                        "report the coverage gap instead of scanning the artifact"
+                    ),
+                    "uri": uri,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
         if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
             return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"integrity_state":"VERIFIED","content":"binary artifact; use its registered scientific query adapter"})
         if path.name.endswith(".csv.gz") or path.suffix.lower() in {".csv", ".tsv"}:
@@ -1140,30 +1218,44 @@ class DepMapEvidenceService:
                     reader = csv.DictReader(handle, delimiter=delimiter)
                     rows = []
                     total_row_count = 0
+                    preview_only = False
                     for index, row in enumerate(reader):
+                        if index >= PROVENANCE_ROW_CAP:
+                            preview_only = True
+                            break
                         if cursor <= index < cursor + max_rows:
                             rows.append(row)
                         total_row_count += 1
                 returned_count = len(rows)
                 next_cursor = (
-                    cursor + returned_count
-                    if cursor + returned_count < total_row_count
-                    else None
+                    None
+                    if preview_only
+                    else (
+                        cursor + returned_count
+                        if cursor + returned_count < total_row_count
+                        else None
+                    )
                 )
+                evidence = {
+                    "status": "FOUND" if total_row_count else "NOT_RETAINED",
+                    "uri": uri,
+                    "integrity_state": "VERIFIED",
+                    "content": rows,
+                    "rows": rows,
+                    "returned_count": returned_count,
+                    "total_row_count": total_row_count,
+                    "truncated": next_cursor is not None or preview_only,
+                    "next_cursor": next_cursor,
+                }
+                if preview_only:
+                    evidence["reason_code"] = "PROVENANCE_PREVIEW_ONLY"
+                    evidence["reason"] = (
+                        "only a provenance preview is available; a later cursor is not an entity lookup"
+                    )
                 return self._envelope(
                     tool="depmap_read_resource",
                     request=request,
-                    evidence={
-                        "status": "FOUND" if total_row_count else "NOT_RETAINED",
-                        "uri": uri,
-                        "integrity_state": "VERIFIED",
-                        "content": rows,
-                        "rows": rows,
-                        "returned_count": returned_count,
-                        "total_row_count": total_row_count,
-                        "truncated": next_cursor is not None,
-                        "next_cursor": next_cursor,
-                    },
+                    evidence=evidence,
                 )
             except (OSError, EOFError, UnicodeError, csv.Error):
                 LOGGER.exception("verified indexed table failed during bounded read")
@@ -1271,7 +1363,10 @@ class DepMapEvidenceService:
         }
 
     async def _execute(self, query: dict[str, Any]) -> dict[str, Any]:
-        validated = QueryRequest.model_validate(query).bounded_dict()
+        try:
+            validated = QueryRequest.model_validate(query).bounded_dict()
+        except ValidationError as exc:
+            return _schema_error_item(query, exc)
         try:
             async with self.semaphore:
                 resolution, result = await self.catalog_readers.read(
@@ -2398,7 +2493,7 @@ def build_mcp_server(
     async def depmap_data_coverage(module: str | None = None, scope: str | None = None, lineage: str | None = None, modality: str | None = None, release: str | None = None, limit: int = 50) -> dict[str, Any]:
         return await service.data_coverage(module, scope, lineage, modality, release, limit)
 
-    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI through the artifact index and return a bounded text/table preview or binary metadata. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
+    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI for a bounded provenance preview. Artifacts owned by a registered reader are not scannable. A cursor past the preview window is a coverage gap, not an entity lookup. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
     async def depmap_read_resource(
         uri: str, max_rows: int = 20, cursor: int = 0
     ) -> dict[str, Any]:
