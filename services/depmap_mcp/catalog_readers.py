@@ -51,6 +51,7 @@ MODE_ALIASES = {
     "lineage_mutation_dependency": "lineage_mutation_dependency",
     "synthetic_lethal": "synthetic_lethal",
     "tf_dependency": "tf_dependency",
+    "pathway_dependency": "pathway_dependency",
     "biomarker_target": "biomarker_target",
     "true_love": "true_love",
     "analysis_catalog": "analysis_catalog",

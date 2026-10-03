@@ -227,9 +227,14 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
         self.assertEqual(result["request"]["gene"], "ESR1")
-        self.assertEqual(result["evidence"]["query_count"], 11)
+        self.assertEqual(result["evidence"]["query_count"], 12)
+        self.assertIn(
+            {"mode": "pathway_dependency", "target": "ESR1", "limit": 3},
+            self.queries,
+        )
         self.assertTrue(result["evidence_id"].startswith("depmap-26q1-"))
-        self.assertEqual(self.queries[1]["lineage"], "Breast")
+        lineage_query = next(query for query in self.queries if query.get("lineage") == "Breast")
+        self.assertEqual(lineage_query["mode"], "lineage_catalog")
         item = result["evidence"]["items"][0]["result"]
         self.assertNotIn("provenance", item)
         self.assertNotIn("manifest", item)
@@ -486,6 +491,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "cross_platform_dependency_validation",
                 "pan_cancer_dependency_summary",
                 "tf_activity_to_dependency",
+                "pathway_activity_to_dependency",
                 "expression_biomarker_model",
                 "true_love_gene_catalog",
                 "tcga_expression_survival",
@@ -852,6 +858,22 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["request"]["gene"], "PTK7")
         self.assertEqual(result["request"]["lineage"], "Liver")
+
+    async def test_pathway_dependency_evidence_is_gene_keyed(self):
+        result = await self.service.pathway_dependency_evidence("esr1", "Estrogen", 14)
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "pathway_dependency",
+                "target": "ESR1",
+                "pathway": "Estrogen",
+                "limit": 14,
+            },
+        )
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["analysis_label"],
+            "pathway_activity_to_crispr_dependency",
+        )
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
@@ -1643,6 +1665,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_pair_evidence",
                         "depmap_codependency_evidence",
                         "depmap_tf_dependency_evidence",
+                        "depmap_pathway_dependency_evidence",
                         "depmap_biomarker_model_evidence",
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",

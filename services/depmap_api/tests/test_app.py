@@ -141,6 +141,15 @@ class QueryContractTests(unittest.TestCase):
         ranked = QueryRequest(mode="tf_dependency", target="GPX4", limit=20)
         self.assertEqual(ranked.bounded_dict()["target"], "GPX4")
         self.assertNotIn("source", ranked.bounded_dict())
+
+    def test_pathway_dependency_is_gene_keyed(self):
+        request = QueryRequest(mode="pathway_dependency", target="ESR1", limit=14)
+        self.assertEqual(request.bounded_dict()["target"], "ESR1")
+        self.assertNotIn("pathway", request.bounded_dict())
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="pathway_dependency", pathway="Estrogen")
+
+    def test_tf_dependency_requires_tf_source(self):
         with self.assertRaises(ValueError):
             QueryRequest(mode="tf_dependency", view="universe", target="GPX4")
 
@@ -2433,6 +2442,65 @@ class TfActivityReaderTests(DepMapApiTests):
         )
         payload = self._query({"mode": "tf_dependency", "source": "MYC"})
         self.assertEqual(payload["status"], "MODULE_UNAVAILABLE")
+
+
+class PathwayDependencyReaderTests(unittest.TestCase):
+    def setUp(self):
+        self._host = DepMapApiTests()
+        self._host.setUp()
+        self.settings = self._host.settings
+        self.headers = self._host.headers
+        directory = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "progeny_dependency"
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "progeny_pathway_dependency_associations.csv").write_text(
+            "pathway,target_gene,pearson_r,p_value,fdr,n\n"
+            "Estrogen,ESR1,-0.28,1e-9,1e-8,1000\n"
+            "Androgen,ESR1,0.01,0.8,0.9,1000\n"
+            "Estrogen,GATA3,-0.2,0.01,0.05,1000\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self._host.tearDown()
+
+    def _query(self, payload):
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post("/api/v1/query", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_gene_keyed_panel_is_one_bounded_query(self):
+        panel = self._query(
+            {"mode": "pathway_dependency", "target": "esr1", "limit": 20}
+        )
+        self.assertEqual(panel["status"], "FOUND")
+        self.assertEqual(panel["matched_row_count"], 2)
+        self.assertEqual(panel["rows"][0]["pathway"], "Estrogen")
+        missing = self._query({"mode": "pathway_dependency", "target": "NOGENE"})
+        self.assertEqual(missing["status"], "NOT_TESTED")
+        other = self._query(
+            {
+                "mode": "pathway_dependency",
+                "target": "ESR1",
+                "pathway": "Hypoxia",
+            }
+        )
+        self.assertEqual(other["status"], "NOT_RETAINED")
+
+    def test_missing_table_is_coverage_gap(self):
+        path = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "progeny_dependency"
+            / "progeny_pathway_dependency_associations.csv"
+        )
+        path.unlink()
+        gap = self._query({"mode": "pathway_dependency", "target": "ESR1"})
+        self.assertEqual(gap["status"], "COVERAGE_GAP")
 
 
 if __name__ == "__main__":
