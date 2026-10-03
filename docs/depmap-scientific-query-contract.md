@@ -5,6 +5,8 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
 `services/depmap_api/scientific_query.py`:
 
 1. Coverage first: `MODULE_UNAVAILABLE` → `NOT_COMPUTED` → `COVERAGE_GAP`.
+   A helper gap is `INELIGIBLE`, `NOT_OBSERVED`, or `NOT_TESTED` with the helper
+   sentence kept as `reason`. `not_testable` is not an evidence status.
 2. Exact keys are matched on the full table **before** any `limit`.
 3. Ranked pages report `matched_row_count` separately from the bounded page.
 4. `INELIGIBLE` requires recorded counts versus declared thresholds.
