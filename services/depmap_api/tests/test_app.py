@@ -20,6 +20,7 @@ from services.depmap_api.app import (
     _canonical_lineage_label,
     _coerce_csv_value,
     _coverage_gap_reason,
+    _typed_coverage_status,
     _r_query_command,
     _run_analysis_catalog_query,
     create_app,
@@ -137,9 +138,21 @@ class QueryContractTests(unittest.TestCase):
         bulk = QueryRequest(mode="tf_dependency", limit=5)
         self.assertNotIn("source", bulk.bounded_dict())
 
+    def test_tf_dependency_accepts_target_keyed_ranking(self):
+        ranked = QueryRequest(mode="tf_dependency", target="GPX4", limit=20)
+        self.assertEqual(ranked.bounded_dict()["target"], "GPX4")
+        self.assertNotIn("source", ranked.bounded_dict())
+
+    def test_pathway_dependency_is_gene_keyed(self):
+        request = QueryRequest(mode="pathway_dependency", target="ESR1", limit=14)
+        self.assertEqual(request.bounded_dict()["target"], "ESR1")
+        self.assertNotIn("pathway", request.bounded_dict())
+        with self.assertRaises(ValueError):
+            QueryRequest(mode="pathway_dependency", pathway="Estrogen")
+
     def test_tf_dependency_requires_tf_source(self):
         with self.assertRaises(ValueError):
-            QueryRequest(mode="tf_dependency", target="GPX4")
+            QueryRequest(mode="tf_dependency", view="universe", target="GPX4")
 
     def test_biomarker_target_requires_dependency_target(self):
         request = QueryRequest(mode="biomarker_target", target="GPX4")
@@ -958,6 +971,19 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(
             _coverage_gap_reason(stderr),
             "source not found or ineligible: ESR1",
+        )
+        self.assertEqual(
+            _typed_coverage_status("source not found or ineligible: ESR1"),
+            "INELIGIBLE",
+        )
+        self.assertEqual(_typed_coverage_status("source block not found"), "NOT_TESTED")
+        self.assertEqual(_typed_coverage_status("target not found"), "NOT_OBSERVED")
+        self.assertEqual(
+            _typed_coverage_status("drug or target not found"), "NOT_OBSERVED"
+        )
+        self.assertEqual(
+            _typed_coverage_status("gene is absent from the precomputed core index"),
+            "NOT_TESTED",
         )
 
     def test_invalid_or_ambiguous_queries_are_rejected(self):
@@ -2396,6 +2422,19 @@ class TfActivityReaderTests(DepMapApiTests):
         )
         self.assertEqual(untested["status"], "NOT_TESTED")
 
+    def test_target_keyed_ranking_is_bounded(self):
+        ranked = self._query({"mode": "tf_dependency", "target": "ZFP36L1", "limit": 5})
+        self.assertEqual(ranked["status"], "FOUND")
+        self.assertEqual(ranked["matched_row_count"], 2)
+        self.assertEqual(
+            {row["TF"] for row in ranked["rows"]},
+            {"STAT3", "ATF5"},
+        )
+        absent = self._query({"mode": "tf_dependency", "target": "GPX4", "limit": 5})
+        self.assertEqual(absent["status"], "NOT_RETAINED")
+        untested = self._query({"mode": "tf_dependency", "target": "ABSENTTARGET"})
+        self.assertEqual(untested["status"], "NOT_TESTED")
+
     def test_universe_and_bulk_ranking_are_bounded_query_surfaces(self):
         universe = self._query({"mode": "tf_dependency", "view": "universe", "limit": 2})
         self.assertEqual(universe["status"], "FOUND")
@@ -2418,6 +2457,65 @@ class TfActivityReaderTests(DepMapApiTests):
         )
         payload = self._query({"mode": "tf_dependency", "source": "MYC"})
         self.assertEqual(payload["status"], "MODULE_UNAVAILABLE")
+
+
+class PathwayDependencyReaderTests(unittest.TestCase):
+    def setUp(self):
+        self._host = DepMapApiTests()
+        self._host.setUp()
+        self.settings = self._host.settings
+        self.headers = self._host.headers
+        directory = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "progeny_dependency"
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "progeny_pathway_dependency_associations.csv").write_text(
+            "pathway,target_gene,pearson_r,p_value,fdr,n\n"
+            "Estrogen,ESR1,-0.28,1e-9,1e-8,1000\n"
+            "Androgen,ESR1,0.01,0.8,0.9,1000\n"
+            "Estrogen,GATA3,-0.2,0.01,0.05,1000\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self._host.tearDown()
+
+    def _query(self, payload):
+        with TestClient(create_app(self.settings)) as client:
+            response = client.post("/api/v1/query", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_gene_keyed_panel_is_one_bounded_query(self):
+        panel = self._query(
+            {"mode": "pathway_dependency", "target": "esr1", "limit": 20}
+        )
+        self.assertEqual(panel["status"], "FOUND")
+        self.assertEqual(panel["matched_row_count"], 2)
+        self.assertEqual(panel["rows"][0]["pathway"], "Estrogen")
+        missing = self._query({"mode": "pathway_dependency", "target": "NOGENE"})
+        self.assertEqual(missing["status"], "NOT_TESTED")
+        other = self._query(
+            {
+                "mode": "pathway_dependency",
+                "target": "ESR1",
+                "pathway": "Hypoxia",
+            }
+        )
+        self.assertEqual(other["status"], "NOT_RETAINED")
+
+    def test_missing_table_is_coverage_gap(self):
+        path = (
+            self.settings.knowledge_root
+            / "depmap-26q1-full"
+            / "progeny_dependency"
+            / "progeny_pathway_dependency_associations.csv"
+        )
+        path.unlink()
+        gap = self._query({"mode": "pathway_dependency", "target": "ESR1"})
+        self.assertEqual(gap["status"], "COVERAGE_GAP")
 
 
 if __name__ == "__main__":

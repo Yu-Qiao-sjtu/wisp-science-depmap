@@ -5,6 +5,8 @@ DepMap issue examples (a gene, a cancer, a captured trajectory) are
 `services/depmap_api/scientific_query.py`:
 
 1. Coverage first: `MODULE_UNAVAILABLE` → `NOT_COMPUTED` → `COVERAGE_GAP`.
+   A helper gap is `INELIGIBLE`, `NOT_OBSERVED`, or `NOT_TESTED` with the helper
+   sentence kept as `reason`. `not_testable` is not an evidence status.
 2. Exact keys are matched on the full table **before** any `limit`.
 3. Ranked pages report `matched_row_count` separately from the bounded page.
 4. `INELIGIBLE` requires recorded counts versus declared thresholds.
@@ -20,12 +22,13 @@ absent from a loaded sidecar is `NOT_OBSERVED`. The predicate runs on the comple
 retained ranking before `cursor`/`limit`; pages expose complete pre/post-filter
 counts, `matched_row_count`, and `next_cursor`. A requested exclusion fails
 closed as `NOT_COMPUTED` when the versioned sidecar cannot be read, and the
-envelope records sidecar source/version/provenance. `tf_dependency` reads the installed
+envelope records sidecar source/version/provenance. `pathway_dependency` reads the installed PROGENy association table by dependency gene and returns one bounded pathway panel. Paging that CSV is not the lookup. `tf_dependency` reads the installed
 TF-activity module in-process: keys in the frozen `tf_order` universe return
 `FOUND` / `NOT_RETAINED` / `NOT_TESTED` / `NOT_OBSERVED`, never HTTP 500.
 TF-activity queries also page the frozen `tf_order` universe (`view=universe`)
 and bulk `top_hits` rankings, reporting `matched_row_count` separately from the
-bounded page. A universe-wide intent with an advertised `bulk_ranking` capability
+bounded page. A target without a transcription factor is the same bounded
+ranking keyed by dependency gene. A universe page still rejects both selectors. A universe-wide intent with an advertised `bulk_ranking` capability
 plans that one page. `NOT_RETAINED` stays absence from the retained set. Without
 a bulk capability the planner returns a typed fallback instead of an exact lookup
 per entity. DoRothEA is not reconstructed from the browser.
@@ -33,7 +36,14 @@ per entity. DoRothEA is not reconstructed from the browser.
 Provider schema (`services/depmap_api/provider_schema.py`): MCP advertised
 arguments match runtime validators. `coverage` is catalog-conditional. Each
 mode/tool has its own `limit` maximum. Invalid combinations return an
-`INELIGIBLE` envelope with `schema_error: true` (HTTP 422), not a traceback.
+`INELIGIBLE` envelope with `schema_error: true`, including from the MCP tool,
+not a traceback or an execution error. `depmap_read_resource` is a provenance
+preview. An artifact owned by a registered reader is not scannable, and a
+cursor past the preview window is `COVERAGE_GAP`, not a row of evidence.
+The same envelope is what an MCP tool returns; a validator failure is not an
+execution error. `depmap_read_resource` is a provenance preview. An artifact
+owned by a registered reader is not scannable, and a cursor past the preview
+window is `COVERAGE_GAP`, not a row of evidence.
 True Love queries are scope-typed (`scope=lineage|pancancer`). A lineage
 request does not filter the pan-cancer catalog; a missing lineage table is
 `NOT_COMPUTED` or `COVERAGE_GAP`. Pair definitions stay labeled and are not
@@ -51,6 +61,10 @@ authorizes only the named kind.
 New computation is a gated Run behind a non-exfiltrating remote-compute
 gateway. Tests use fakes; missing knowledge context or MCP dropout is
 `MODULE_UNAVAILABLE` / `configuration_blocked`, not folder guessing or live SSH.
+
+An evidence `artifact_uri` is `depmap://{release}/{catalog-relative path}`.
+A filesystem tail inside that URI is an opaque location, not a redacted catalog id.
+Free-text previews still hide absolute paths.
 
 Scientific envelopes use progressive disclosure: default layer is status,
 bounded top rows, and filter/truncation flags; manifests and evidence IDs are

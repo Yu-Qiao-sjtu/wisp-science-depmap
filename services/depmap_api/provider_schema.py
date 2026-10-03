@@ -32,6 +32,7 @@ MODE_LIMIT_MAX: dict[str, int] = {
     "three_d": 100,
     "tcga_expression_survival": 100,
     "tf_dependency": 100,
+    "pathway_dependency": 20,
     "biomarker_target": 20,
     "top": 20,
 }
@@ -52,6 +53,7 @@ TOOL_LIMIT_MAX: dict[str, int] = {
     "depmap_synthetic_lethal_evidence": 100,
     "depmap_3d_evidence": 100,
     "depmap_tf_activity_dependency": 100,
+    "depmap_pathway_dependency_evidence": 20,
     "depmap_subtype_evidence": 100,
     "depmap_coamplification_evidence": 100,
     "depmap_drug_evidence": 20,

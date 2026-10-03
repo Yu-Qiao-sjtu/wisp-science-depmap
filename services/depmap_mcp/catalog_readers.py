@@ -16,6 +16,7 @@ from services.depmap_mcp.artifact_integrity import (
     sqlite_like_pattern,
     verify_cataloged_artifact,
 )
+from services.depmap_api.scientific_query import CatalogArtifactError
 from services.depmap_mcp.portable_refs import PortableReferences
 
 
@@ -51,6 +52,7 @@ MODE_ALIASES = {
     "lineage_mutation_dependency": "lineage_mutation_dependency",
     "synthetic_lethal": "synthetic_lethal",
     "tf_dependency": "tf_dependency",
+    "pathway_dependency": "pathway_dependency",
     "biomarker_target": "biomarker_target",
     "true_love": "true_love",
     "analysis_catalog": "analysis_catalog",
@@ -281,9 +283,9 @@ class CatalogReaderRegistry:
                 resolution.analysis_ids,
             )
             if error:
-                return resolution, {
+                return self._catalog_incomplete(resolution, error), {
                     "status": "MODULE_UNAVAILABLE",
-                    "reason_code": error,
+                    "reason_code": error[0],
                 }
         bound_query = {
             **query,
@@ -292,7 +294,22 @@ class CatalogReaderRegistry:
             "_catalog_matrix_blocks": list(resolution.matrix_blocks),
             "_catalog_reader_id": resolution.reader_id,
         }
-        result = await runner(settings, bound_query if self.enabled else query)
+        try:
+            result = await runner(settings, bound_query if self.enabled else query)
+        except CatalogArtifactError as exc:
+            relative = self._relative_artifact(exc.path)
+            failed = self._catalog_incomplete(
+                resolution,
+                ("TRUNCATED_COMPRESSED_ARTIFACT", (relative,) if relative else ()),
+            )
+            uris = (
+                [f"depmap://{self.release}/{relative}"] if relative else []
+            )
+            return failed, {
+                "status": "QUERY_ERROR",
+                "reason_code": "TRUNCATED_COMPRESSED_ARTIFACT",
+                "artifact_uris": uris,
+            }
         if result is None:
             return resolution, {
                 "status": "NOT_RETAINED",
@@ -308,15 +325,53 @@ class CatalogReaderRegistry:
         if self.enabled:
             resolution, error = self._bind_result_provenance(resolution, result)
             if error:
-                return resolution, {
+                return self._catalog_incomplete(resolution, error), {
                     "status": "MODULE_UNAVAILABLE",
-                    "reason_code": error,
+                    "reason_code": error[0],
                 }
         return resolution, result
 
+    def registered_modes(self) -> set[str] | None:
+        """Reader modes in a verified index. None when the index is absent or partial."""
+        if not self.enabled:
+            return None
+        active_index, index_integrity = self._verify_index()
+        if index_integrity.state != VERIFIED:
+            return None
+        with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+            tables = {
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "reader_registry" not in tables:
+                return None
+            return {row[0] for row in db.execute("SELECT query_mode FROM reader_registry")}
+
+    def _catalog_incomplete(
+        self,
+        resolution: CatalogResolution,
+        error: tuple[str, tuple[str, ...]],
+    ) -> CatalogResolution:
+        reason_code, paths = error
+        return replace(
+            resolution,
+            state="CATALOG_INCOMPLETE",
+            reason=reason_code,
+            artifact_uris=paths or resolution.artifact_uris,
+            validated_provenance_count=0,
+        )
+
+    def _relative_artifact(self, path: Path) -> str | None:
+        try:
+            return path.resolve().relative_to(self.knowledge_root).as_posix()
+        except (OSError, ValueError):
+            return None
+
     def _bind_result_provenance(
         self, resolution: CatalogResolution, result: Any
-    ) -> tuple[CatalogResolution, str | None]:
+    ) -> tuple[CatalogResolution, tuple[str, tuple[str, ...]] | None]:
         """Bind the adapter's actual inputs back to COMPLETE indexed artifacts."""
         values: list[str] = []
 
@@ -351,7 +406,7 @@ class CatalogReaderRegistry:
                         "reader returned provenance outside the knowledge root path=%r",
                         value,
                     )
-                    return resolution, "PROVENANCE_OUTSIDE_KNOWLEDGE_ROOT"
+                    return resolution, ("PROVENANCE_OUTSIDE_KNOWLEDGE_ROOT", ())
             if path == self.index.name:
                 _active_index, index_integrity = self._verify_index()
                 if index_integrity.state != VERIFIED:
@@ -362,7 +417,10 @@ class CatalogReaderRegistry:
                     )
                     return (
                         resolution,
-                        index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE",
+                        (
+                            index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE",
+                            (),
+                        ),
                     )
                 validated_index_count += 1
                 continue
@@ -391,7 +449,7 @@ class CatalogReaderRegistry:
         self,
         paths: tuple[str, ...],
         allowed_analysis_ids: tuple[str, ...] = (),
-    ) -> tuple[dict[str, tuple[Any, ...]] | None, str | None]:
+    ) -> tuple[dict[str, tuple[Any, ...]] | None, tuple[str, tuple[str, ...]] | None]:
         if not paths:
             return {}, None
         unique = tuple(dict.fromkeys(paths))
@@ -412,7 +470,7 @@ class CatalogReaderRegistry:
                 index_integrity.reason_code,
                 index_integrity.diagnostic,
             )
-            return None, index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE"
+            return None, (index_integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE", ())
         with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
             rows = db.execute(
                 f"""SELECT f.artifact_path,f.analysis_id,f.artifact_kind,
@@ -431,7 +489,7 @@ class CatalogReaderRegistry:
                 "reader used provenance outside COMPLETE catalog entries paths=%r",
                 missing,
             )
-            return None, "PROVENANCE_NOT_CATALOGED"
+            return None, ("PROVENANCE_NOT_CATALOGED", tuple(missing))
         for path in unique:
             row = found[path]
             integrity = verify_cataloged_artifact(
@@ -447,5 +505,5 @@ class CatalogReaderRegistry:
                     integrity.reason_code,
                     integrity.diagnostic,
                 )
-                return None, integrity.reason_code or "CORRUPT_ARTIFACT"
+                return None, (integrity.reason_code or "CORRUPT_ARTIFACT", (path,))
         return found, None

@@ -34,6 +34,7 @@ from services.depmap_api.provider_schema import (
     schema_violation,
 )
 from services.depmap_api.scientific_query import (
+    CatalogArtifactError,
     EVIDENCE_STATUSES,
     bound_after_rank,
     classify_coverage,
@@ -113,6 +114,7 @@ MODE_REQUIRED_FIELDS = {
     "top": {"module", "source", "limit"},
     "lineage": {"event", "lineage", "source", "target"},
     "pathway": {"pathway", "target"},
+    "pathway_dependency": {"target"},
     "drug": {"drug", "target", "omic"},
     "lineage_network": {"family", "lineage", "source"},
     "lineage_cnv": {"lineage", "source"},
@@ -147,6 +149,7 @@ MODE_OPTIONAL_FIELDS = {
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"source", "target", "limit", "view"},
+    "pathway_dependency": {"pathway", "limit"},
     "biomarker_target": set(),
 }
 LINEAGE_NETWORK_FAMILIES = {
@@ -464,7 +467,7 @@ class QueryRequest(BaseModel):
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
-        "true_love", "synthetic_lethal", "three_d",
+        "true_love", "synthetic_lethal", "three_d", "pathway_dependency",
         "tcga_expression_survival",
         "tf_dependency",
         "biomarker_target",
@@ -583,10 +586,10 @@ class QueryRequest(BaseModel):
             and self.cursor not in {None, 0}
         ):
             raise ValueError("cursor is available only for dependency ranking pages")
-        if self.mode == "tf_dependency" and self.target is not None and self.source is None:
-            raise ValueError("tf_dependency target requires source")
-        if self.mode == "tf_dependency" and self.view == "universe" and self.source is not None:
-            raise ValueError("tf_dependency universe view does not take a source")
+        if self.mode == "tf_dependency" and self.view == "universe" and (
+            self.source is not None or self.target is not None
+        ):
+            raise ValueError("tf_dependency universe view does not take a source or target")
         if self.mode == "lineage_mutation_dependency" and self.source is None and self.target is None:
             raise ValueError("lineage_mutation_dependency requires source, target, or both")
         if self.model_id is not None and not re.fullmatch(r"ACH-\d{6}", self.model_id.strip().upper()):
@@ -672,6 +675,23 @@ def _coverage_gap(stderr: str) -> bool:
     return _coverage_gap_reason(stderr) is not None
 
 
+def _typed_coverage_status(reason: str) -> str:
+    """Map a helper coverage sentence onto the evidence status set."""
+    lowered = reason.lower()
+    if "ineligible" in lowered or "did not satisfy" in lowered:
+        return "INELIGIBLE"
+    if "target" in lowered or "drug" in lowered:
+        return "NOT_OBSERVED"
+    return "NOT_TESTED"
+
+
+def _normalize_coverage_status(result: dict[str, Any]) -> dict[str, Any]:
+    if str(result.get("status") or "").lower() != "not_testable":
+        return result
+    reason = str(result.get("reason") or "")
+    return {**result, "status": _typed_coverage_status(reason)}
+
+
 def _r_query_command(settings: Settings, query: dict[str, Any]) -> list[str]:
     command = [
         settings.rscript,
@@ -712,10 +732,11 @@ async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, An
     stderr_text = stderr[-MAX_STDERR_BYTES:].decode("utf-8", errors="replace").strip()
     if process.returncode != 0:
         if _coverage_gap(stderr_text):
+            reason = _coverage_gap_reason(stderr_text) or "not covered"
             return {
                 "mode": query["mode"],
-                "status": "not_testable",
-                "reason": _coverage_gap_reason(stderr_text) or "not covered",
+                "status": _typed_coverage_status(reason),
+                "reason": reason,
             }
         LOGGER.error("R query failed with exit code %s: %s", process.returncode, stderr_text)
         raise HTTPException(status_code=500, detail="DepMap query helper failed")
@@ -728,7 +749,7 @@ async def run_r_query(settings: Settings, query: dict[str, Any]) -> dict[str, An
         raise HTTPException(status_code=500, detail="DepMap query returned invalid JSON")
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
         raise HTTPException(status_code=413, detail="DepMap response exceeds 4 MiB")
-    return result
+    return _normalize_coverage_status(result)
 
 
 def _run_core_query(settings: Settings, gene: str) -> dict[str, Any]:
@@ -1007,9 +1028,12 @@ def _read_csv_records(path: Path) -> list[dict[str, Any]]:
 
 def _iter_csv_records(path: Path, *, strict: bool = False):
     opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle, strict=strict):
-            yield {key: _coerce_csv_value(value) for key, value in row.items()}
+    try:
+        with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle, strict=strict):
+                yield {key: _coerce_csv_value(value) for key, value in row.items()}
+    except (EOFError, gzip.BadGzipFile) as exc:
+        raise CatalogArtifactError(path, exc) from exc
 
 
 def _filter_csv_records(
@@ -3857,6 +3881,84 @@ def _tf_hits_path(root: Path) -> Path | None:
     return None
 
 
+def _pathway_association_path(settings: Settings) -> Path | None:
+    directory = settings.knowledge_root / "depmap-26q1-full" / "progeny_dependency"
+    for name in (
+        "progeny_pathway_dependency_associations.csv",
+        "progeny_pathway_dependency_associations.csv.gz",
+    ):
+        path = directory / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _run_pathway_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    """Gene-keyed PROGENy activity versus CRISPR dependency. One pass, then a bounded page."""
+    target = str(query.get("target") or "").strip().upper()
+    pathway = str(query.get("pathway") or "").strip()
+    limit = min(int(query.get("limit") or 20), 20)
+    path = _pathway_association_path(settings)
+    if path is None or not target:
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="pathway_dependency",
+            reason="the completed pathway-activity association table is not installed",
+            target=target or None,
+            pathway=pathway or None,
+            provenance=[],
+        )
+    wanted_pathway = pathway.casefold()
+
+    def matches(row: dict[str, str]) -> bool:
+        gene = str(row.get("target_gene") or row.get("gene") or "").strip().upper()
+        if gene != target:
+            return False
+        if not wanted_pathway:
+            return True
+        return str(row.get("pathway") or "").strip().casefold() == wanted_pathway
+
+    matched = filter_before_limit(_iter_csv_records(path), matches)
+    page, matched_count = bound_after_rank(
+        matched,
+        key=lambda row: (
+            -abs(float(row.get("pearson_r") or row.get("correlation") or 0) or 0),
+            str(row.get("pathway") or ""),
+        ),
+        limit=limit,
+    )
+    if page:
+        status = "FOUND"
+        reason = "bounded pathway-activity associations for one dependency gene"
+    elif wanted_pathway:
+        gene_rows = filter_before_limit(
+            _iter_csv_records(path),
+            lambda row: str(row.get("target_gene") or row.get("gene") or "").strip().upper()
+            == target,
+        )
+        status = "NOT_RETAINED" if gene_rows else "NOT_TESTED"
+        reason = (
+            "dependency gene is in the association table; this pathway was not retained"
+            if gene_rows
+            else "dependency gene is absent from the pathway-activity association table"
+        )
+    else:
+        status = "NOT_TESTED"
+        reason = "dependency gene is absent from the pathway-activity association table"
+    return _evidence_response(
+        status,
+        mode="pathway_dependency",
+        reason=reason,
+        target=target,
+        pathway=pathway or None,
+        rows=page,
+        returned_count=len(page),
+        matched_row_count=matched_count,
+        rejection_reason=None if status == "FOUND" else status,
+        provenance=[str(path)],
+    )
+
+
 def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     """Read the installed TF-activity module in Python. Valid universe keys never 500."""
     source = str(query["source"]).strip().upper() if query.get("source") else None
@@ -3918,6 +4020,58 @@ def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[
             universe_size=len(universe),
             manifest=manifest,
             provenance=[str(root / "manifest.json"), str(order_path)],
+        )
+    if source is None and target is not None:
+        target_order = root / "target_gene_order.csv"
+        if target_order.is_file():
+            targets = {
+                str(row.get("symbol") or row.get("target_gene") or "").strip().upper()
+                for row in _iter_csv_records(target_order)
+            }
+            if target not in targets:
+                return _evidence_response(
+                    "NOT_TESTED",
+                    mode="tf_dependency",
+                    reason="target gene is absent from the Gene Effect target universe",
+                    target=target,
+                    entity_class="tf_activity",
+                    universe_size=len(universe),
+                    rows=[],
+                    returned_count=0,
+                    manifest=manifest,
+                    provenance=[str(order_path), str(target_order)],
+                )
+        matched = filter_before_limit(
+            _iter_csv_records(hits_path),
+            lambda row: str(row.get("target_gene") or "").upper() == target,
+        )
+        page, matched_count = bound_after_rank(
+            matched,
+            key=lambda row: (
+                str(row.get("direction") or ""),
+                int(row.get("rank") or 10**9),
+                str(row.get("TF") or ""),
+            ),
+            limit=limit,
+        )
+        status = "FOUND" if page else "NOT_RETAINED"
+        return _evidence_response(
+            status,
+            mode="tf_dependency",
+            reason=(
+                "bounded target-keyed TF-activity ranking from the completed table"
+                if page
+                else "target is in the tested universe; no TF-activity row was retained"
+            ),
+            target=target,
+            entity_class="tf_activity",
+            universe_size=len(universe),
+            rows=page,
+            returned_count=len(page),
+            matched_row_count=matched_count,
+            rejection_reason=None if status == "FOUND" else status,
+            manifest=manifest,
+            provenance=[str(root / "manifest.json"), str(hits_path)],
         )
     if source is None:
         matched = list(_iter_csv_records(hits_path))
@@ -4058,11 +4212,12 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
     if query["mode"] == "core":
         result = await asyncio.to_thread(_run_core_query, settings, query["gene"])
         if not result["summary"]:
+            reason = "gene is absent from the precomputed core index"
             return {
                 "mode": "core",
-                "status": "not_testable",
+                "status": _typed_coverage_status(reason),
                 "gene": query["gene"].strip().upper(),
-                "reason": "gene is absent from the precomputed core index",
+                "reason": reason,
             }
         if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
             raise HTTPException(status_code=413, detail="DepMap response exceeds 4 MiB")
@@ -4096,6 +4251,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_three_d_query, settings, query)
     if query["mode"] == "tf_dependency":
         return await asyncio.to_thread(_run_tf_dependency_query, settings, query)
+    if query["mode"] == "pathway_dependency":
+        return await asyncio.to_thread(_run_pathway_dependency_query, settings, query)
     return await run_r_query(settings, query)
 
 

@@ -943,7 +943,7 @@ class QueryIndexTests(unittest.TestCase):
 
             counts = build(root, output)
 
-            self.assertEqual(counts["capabilities"], 22)
+            self.assertEqual(counts["capabilities"], 23)
             self.assertEqual(counts["matrix_gene_blocks"], 1)
             self.assertEqual(counts["coverage_records"], 3)
             self.assertTrue(is_fresh(root, output))

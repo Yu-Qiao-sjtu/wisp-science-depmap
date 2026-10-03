@@ -9,9 +9,18 @@ numeric threshold from absence in a truncated ranking.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
+from pathlib import Path
 from typing import Any, TypeVar
 
 T = TypeVar("T")
+
+class CatalogArtifactError(Exception):
+    """A compressed or tabular artifact failed admission while a reader opened it."""
+
+    def __init__(self, path: Path, cause: BaseException) -> None:
+        self.path = path
+        super().__init__(f"{type(cause).__name__}: {cause}")
+
 
 EVIDENCE_STATUSES = {
     "FOUND",

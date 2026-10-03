@@ -20,7 +20,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from services.depmap_mcp.artifact_integrity import (
     QUARANTINED,
@@ -30,6 +30,9 @@ from services.depmap_mcp.artifact_integrity import (
 )
 
 MAX_MODEL_EVIDENCE_BYTES = 96 * 1024
+# Provenance previews stay inside this row window. A later cursor is not an
+# entity lookup, whether or not a scientific reader is registered.
+PROVENANCE_ROW_CAP = 500
 MAX_MODEL_STRING_CHARS = 4096
 QUERY_FAILURE_STATUSES = frozenset({"QUERY_ERROR", "MODULE_UNAVAILABLE"})
 LOGGER = logging.getLogger("depmap_mcp")
@@ -563,6 +566,16 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "cohort_policy": "1140_matched_expression_and_gene_effect_models",
             "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
         }
+    if mode == "pathway_dependency":
+        return {
+            "metric": "pearson_correlation",
+            "analysis_label": "pathway_activity_to_crispr_dependency",
+            "data_modality": "progeny_pathway_activity_vs_crispr_gene_effect",
+            "relation_type": "predictive_association",
+            "scope": "global",
+            "cohort_policy": "matched_pathway_activity_and_gene_effect_models",
+            "interpretation": "negative means higher pathway activity associates with more negative Gene Effect (stronger dependency); observational, not a causal pathway effect",
+        }
     if mode == "mutation_anchor":
         return {
             "metric": "mutation_event_prevalence_and_analyzable_group_support",
@@ -759,6 +772,41 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
     return {
         "metric": "provider_fields",
         "interpretation": "use the returned field names and provenance; no causal claim",
+    }
+
+
+def _registered_reader_mode(db: sqlite3.Connection, relative: str) -> str | None:
+    """Return the query mode whose catalog pattern owns this artifact path."""
+    import fnmatch
+
+    try:
+        rows = db.execute(
+            "SELECT query_mode, module_pattern FROM reader_registry"
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    for mode, pattern in rows:
+        for part in str(pattern or "").split("|"):
+            glob = part.strip().replace("%", "*")
+            if glob and fnmatch.fnmatch(relative, glob):
+                return str(mode)
+    return None
+
+
+def _schema_error_item(query: dict[str, Any], exc: ValidationError) -> dict[str, Any]:
+    messages: list[str] = []
+    for err in exc.errors():
+        msg = str(err.get("msg") or "invalid argument")
+        if msg.lower().startswith("value error, "):
+            msg = msg[13:]
+        messages.append(msg)
+    return {
+        "query": query,
+        "status": "INELIGIBLE",
+        "schema_error": True,
+        "reason": "; ".join(messages) or "invalid query",
+        "rows": [],
+        "returned_count": 0,
     }
 
 
@@ -1078,6 +1126,9 @@ class DepMapEvidenceService:
                     "WHERE artifact_path=?",
                     (relative,),
                 ).fetchone()
+                registered_reader = (
+                    _registered_reader_mode(db, relative) if hit else None
+                )
         except (OSError, sqlite3.Error):
             LOGGER.exception("artifact catalog lookup failed")
             return self._envelope(
@@ -1111,6 +1162,43 @@ class DepMapEvidenceService:
                 integrity.diagnostic,
             )
             return integrity_failure(integrity.reason_code or "ARTIFACT_INTEGRITY_FAILED")
+        if registered_reader:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "INELIGIBLE",
+                    "reason_code": "ARTIFACT_PAGING_IS_NOT_A_QUERY",
+                    "reason": (
+                        "this artifact belongs to a registered scientific reader; "
+                        "page that query instead of scanning the file"
+                    ),
+                    "query_mode": registered_reader,
+                    "uri": uri,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
+        if cursor >= PROVENANCE_ROW_CAP:
+            return self._envelope(
+                tool="depmap_read_resource",
+                request=request,
+                evidence={
+                    "status": "COVERAGE_GAP",
+                    "reason_code": "NO_ENTITY_KEYED_READER",
+                    "reason": (
+                        "a cursor past the provenance preview is not an entity lookup; "
+                        "report the coverage gap instead of scanning the artifact"
+                    ),
+                    "uri": uri,
+                    "rows": [],
+                    "returned_count": 0,
+                    "truncated": False,
+                    "next_cursor": None,
+                },
+            )
         if path.suffix.lower() in {".rds", ".parquet", ".db", ".sqlite"}:
             return self._envelope(tool="depmap_read_resource", request=request, evidence={"status":"FOUND","uri":uri,"artifact_kind":hit[0],"size_bytes":hit[1],"integrity_state":"VERIFIED","content":"binary artifact; use its registered scientific query adapter"})
         if path.name.endswith(".csv.gz") or path.suffix.lower() in {".csv", ".tsv"}:
@@ -1130,30 +1218,44 @@ class DepMapEvidenceService:
                     reader = csv.DictReader(handle, delimiter=delimiter)
                     rows = []
                     total_row_count = 0
+                    preview_only = False
                     for index, row in enumerate(reader):
+                        if index >= PROVENANCE_ROW_CAP:
+                            preview_only = True
+                            break
                         if cursor <= index < cursor + max_rows:
                             rows.append(row)
                         total_row_count += 1
                 returned_count = len(rows)
                 next_cursor = (
-                    cursor + returned_count
-                    if cursor + returned_count < total_row_count
-                    else None
+                    None
+                    if preview_only
+                    else (
+                        cursor + returned_count
+                        if cursor + returned_count < total_row_count
+                        else None
+                    )
                 )
+                evidence = {
+                    "status": "FOUND" if total_row_count else "NOT_RETAINED",
+                    "uri": uri,
+                    "integrity_state": "VERIFIED",
+                    "content": rows,
+                    "rows": rows,
+                    "returned_count": returned_count,
+                    "total_row_count": total_row_count,
+                    "truncated": next_cursor is not None or preview_only,
+                    "next_cursor": next_cursor,
+                }
+                if preview_only:
+                    evidence["reason_code"] = "PROVENANCE_PREVIEW_ONLY"
+                    evidence["reason"] = (
+                        "only a provenance preview is available; a later cursor is not an entity lookup"
+                    )
                 return self._envelope(
                     tool="depmap_read_resource",
                     request=request,
-                    evidence={
-                        "status": "FOUND" if total_row_count else "NOT_RETAINED",
-                        "uri": uri,
-                        "integrity_state": "VERIFIED",
-                        "content": rows,
-                        "rows": rows,
-                        "returned_count": returned_count,
-                        "total_row_count": total_row_count,
-                        "truncated": next_cursor is not None,
-                        "next_cursor": next_cursor,
-                    },
+                    evidence=evidence,
                 )
             except (OSError, EOFError, UnicodeError, csv.Error):
                 LOGGER.exception("verified indexed table failed during bounded read")
@@ -1261,7 +1363,10 @@ class DepMapEvidenceService:
         }
 
     async def _execute(self, query: dict[str, Any]) -> dict[str, Any]:
-        validated = QueryRequest.model_validate(query).bounded_dict()
+        try:
+            validated = QueryRequest.model_validate(query).bounded_dict()
+        except ValidationError as exc:
+            return _schema_error_item(query, exc)
         try:
             async with self.semaphore:
                 resolution, result = await self.catalog_readers.read(
@@ -1631,6 +1736,14 @@ class DepMapEvidenceService:
         queries: list[dict[str, Any]] = []
         if "core" in selected:
             queries.append({"mode": "core", "gene": symbol})
+        if "pathways" in selected:
+            queries.append(
+                {
+                    "mode": "pathway_dependency",
+                    "target": symbol,
+                    "limit": limit,
+                }
+            )
         if lineage:
             queries.append({"mode": "lineage_catalog", "lineage": lineage})
             if "networks" in selected:
@@ -1927,6 +2040,40 @@ class DepMapEvidenceService:
         return self._envelope(
             tool="depmap_tf_dependency_evidence",
             request=request,
+            evidence=item,
+        )
+
+    async def pathway_dependency_evidence(
+        self,
+        gene: str,
+        pathway: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        symbol = gene.strip().upper()
+        if not symbol:
+            raise ValueError("gene must be non-empty")
+        rejected = limit_violation("pathway_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_pathway_dependency_evidence",
+                request={"gene": symbol, "limit": limit},
+                evidence=rejected,
+            )
+        query: dict[str, Any] = {
+            "mode": "pathway_dependency",
+            "target": symbol,
+            "limit": limit,
+        }
+        if pathway and pathway.strip():
+            query["pathway"] = pathway.strip()
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_pathway_dependency_evidence",
+            request={
+                "gene": symbol,
+                "pathway": query.get("pathway"),
+                "limit": limit,
+            },
             evidence=item,
         )
 
@@ -2346,7 +2493,7 @@ def build_mcp_server(
     async def depmap_data_coverage(module: str | None = None, scope: str | None = None, lineage: str | None = None, modality: str | None = None, release: str | None = None, limit: int = 50) -> dict[str, Any]:
         return await service.data_coverage(module, scope, lineage, modality, release, limit)
 
-    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI through the artifact index and return a bounded text/table preview or binary metadata. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
+    @mcp.tool(title="Read an indexed depmap resource", description="Resolve one depmap://26Q1 URI for a bounded provenance preview. Artifacts owned by a registered reader are not scannable. A cursor past the preview window is a coverage gap, not an entity lookup. Arbitrary server paths are rejected.", annotations=READ_ONLY, structured_output=True)
     async def depmap_read_resource(
         uri: str, max_rows: int = 20, cursor: int = 0
     ) -> dict[str, Any]:
@@ -2623,10 +2770,12 @@ def build_mcp_server(
         title="DepMap TF activity to CRISPR dependency evidence",
         description=(
             "Query the completed TF-activity module. view=universe pages the frozen TF "
-            "list (tf_order) without reconstructing DoRothEA. Omit transcription_factor "
-            "for bulk ranking with matched_row_count. With a TF, return exact pair or "
-            "that TF's bounded ranking. FDR is BH-adjusted within each TF among pairs "
-            "with at least 800 observations."
+            "list (tf_order) without reconstructing DoRothEA. Omit both selectors for "
+            "bulk ranking. A transcription factor returns that TF's bounded ranking or "
+            "an exact pair. A target alone returns the bounded ranking of retained TF "
+            "activities for that dependency gene. NOT_RETAINED means the pair or target "
+            "was outside the sparse retained table, not that no association exists. "
+            "FDR is BH-adjusted within each TF among pairs with at least 800 observations."
         ),
         annotations=READ_ONLY,
         structured_output=True,
@@ -2640,6 +2789,24 @@ def build_mcp_server(
         return await service.tf_dependency_evidence(
             transcription_factor, target, limit, view
         )
+
+    @mcp.tool(
+        title="DepMap pathway activity to CRISPR dependency evidence",
+        description=(
+            "Query the completed pathway-activity versus CRISPR Gene Effect table for "
+            "one dependency gene. Returns the bounded pathway panel (correlation, n, "
+            "p, and FDR when present). An optional pathway name is an exact row. "
+            "A gene absent from the table is NOT_TESTED. This is not artifact paging."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_pathway_dependency_evidence(
+        gene: str,
+        pathway: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.pathway_dependency_evidence(gene, pathway, limit)
 
     @mcp.tool(
         title="DepMap expression biomarker model eligibility",
@@ -2825,7 +2992,38 @@ def build_mcp_server(
             family, gene, source, target, cohort, contrast, omic, limit
         )
 
+    _withhold_unregistered_catalog_tools(mcp, service.catalog_readers)
     return mcp
+
+
+# One MCP tool, one catalog query mode. A verified index that does not register
+# the mode must not advertise the tool.
+_SINGLE_MODE_TOOLS = {
+    "depmap_lineage_dependencies": "lineage_dependency",
+    "depmap_model_gene_effect": "model_gene_effect",
+    "depmap_cross_platform_validation": "cross_platform_validation",
+    "depmap_pan_cancer_dependencies": "pan_cancer_dependency",
+    "depmap_lineage_direction_discovery": "lineage_directions",
+    "depmap_3d_evidence": "three_d",
+    "depmap_subtype_evidence": "subtype",
+    "depmap_coamplification_evidence": "coamplification",
+    "depmap_codependency_evidence": "pair",
+    "depmap_tf_dependency_evidence": "tf_dependency",
+    "depmap_biomarker_model_evidence": "biomarker_target",
+    "depmap_true_love_evidence": "true_love",
+    "depmap_mutation_anchor_evidence": "mutation_anchor",
+    "depmap_lineage_mutation_dependency": "lineage_mutation_dependency",
+    "tcga_gene_expression_survival": "tcga_expression_survival",
+}
+
+
+def _withhold_unregistered_catalog_tools(mcp: FastMCP, registry: CatalogReaderRegistry) -> None:
+    registered = registry.registered_modes()
+    if registered is None:
+        return
+    for tool_name, mode in _SINGLE_MODE_TOOLS.items():
+        if mode not in registered and mcp._tool_manager.get_tool(tool_name) is not None:
+            mcp.remove_tool(tool_name)
 
 
 def _is_loopback(host: str) -> bool:

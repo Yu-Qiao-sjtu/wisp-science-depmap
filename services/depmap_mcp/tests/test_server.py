@@ -156,6 +156,42 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tail["evidence"]["truncated"])
         self.assertIsNone(tail["evidence"]["next_cursor"])
 
+    async def test_cursor_past_the_preview_is_a_coverage_gap(self):
+        relative = "depmap-26q1-full/results/pairs.csv.gz"
+        payload = "gene,value\n" + "".join(f"G{index},{index}\n" for index in range(8))
+        uri = self.index_bytes(relative, gzip.compress(payload.encode("utf-8")))
+        refused = await self.service.read_resource(uri, max_rows=1, cursor=500)
+        self.assertEqual(refused["evidence"]["status"], "COVERAGE_GAP")
+        self.assertEqual(refused["evidence"]["reason_code"], "NO_ENTITY_KEYED_READER")
+        self.assertEqual(refused["evidence"]["rows"], [])
+
+    async def test_registered_reader_artifact_is_not_scannable(self):
+        relative = "depmap-26q1-full/associations/pairs.csv"
+        uri = self.index_resource(relative, "gene,value\nESR1,1\n")
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS reader_registry "
+                "(query_mode TEXT, module_pattern TEXT, adapter TEXT, formats TEXT)"
+            )
+            db.execute(
+                "INSERT INTO reader_registry VALUES (?,?,?,?)",
+                ("association", "depmap-26q1-full/associations/%", "association_adapter", "csv"),
+            )
+            db.commit()
+        write_index_digest(index)
+        refused = await self.service.read_resource(uri, max_rows=20, cursor=0)
+        self.assertEqual(refused["evidence"]["status"], "INELIGIBLE")
+        self.assertEqual(refused["evidence"]["reason_code"], "ARTIFACT_PAGING_IS_NOT_A_QUERY")
+        self.assertEqual(refused["evidence"]["query_mode"], "association")
+        self.assertEqual(refused["evidence"]["rows"], [])
+
+    async def test_invalid_query_is_an_evidence_status(self):
+        result = await self.service.tf_dependency_evidence(view="universe", target="GPX4")
+        self.assertEqual(result["evidence"]["status"], "INELIGIBLE")
+        self.assertTrue(result["evidence"]["schema_error"])
+        self.assertIn("source", result["evidence"]["reason"])
+
     async def test_csv_resource_pages_honor_max_rows_greater_than_one(self):
         relative = "analysis-modules/tf/tf_order.csv"
         payload = "TF\n" + "".join(f"TF{index}\n" for index in range(8))
@@ -227,9 +263,14 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_gene_evidence_is_bounded_and_portable(self):
         result = await self.service.gene_evidence("esr1", "Breast Cancer", limit=3)
         self.assertEqual(result["request"]["gene"], "ESR1")
-        self.assertEqual(result["evidence"]["query_count"], 11)
+        self.assertEqual(result["evidence"]["query_count"], 12)
+        self.assertIn(
+            {"mode": "pathway_dependency", "target": "ESR1", "limit": 3},
+            self.queries,
+        )
         self.assertTrue(result["evidence_id"].startswith("depmap-26q1-"))
-        self.assertEqual(self.queries[1]["lineage"], "Breast")
+        lineage_query = next(query for query in self.queries if query.get("lineage") == "Breast")
+        self.assertEqual(lineage_query["mode"], "lineage_catalog")
         item = result["evidence"]["items"][0]["result"]
         self.assertNotIn("provenance", item)
         self.assertNotIn("manifest", item)
@@ -406,6 +447,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 r"\\server\share\manifest.json",
                 collision,
                 r"depmap://26Q1/C:\private\manifest.json",
+                "depmap://26Q1/depmap-26q1-full/analysis-modules/D:/private/table.parquet",
             ),
             matrix_blocks=(relative,),
         )
@@ -486,6 +528,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "cross_platform_dependency_validation",
                 "pan_cancer_dependency_summary",
                 "tf_activity_to_dependency",
+                "pathway_activity_to_dependency",
                 "expression_biomarker_model",
                 "true_love_gene_catalog",
                 "tcga_expression_survival",
@@ -852,6 +895,22 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["request"]["gene"], "PTK7")
         self.assertEqual(result["request"]["lineage"], "Liver")
+
+    async def test_pathway_dependency_evidence_is_gene_keyed(self):
+        result = await self.service.pathway_dependency_evidence("esr1", "Estrogen", 14)
+        self.assertEqual(
+            self.queries[-1],
+            {
+                "mode": "pathway_dependency",
+                "target": "ESR1",
+                "pathway": "Estrogen",
+                "limit": 14,
+            },
+        )
+        self.assertEqual(
+            result["evidence"]["metric_semantics"]["analysis_label"],
+            "pathway_activity_to_crispr_dependency",
+        )
 
     async def test_gene_without_lineage_queries_tcga_across_projects(self):
         result = await self.service.gene_evidence("tp53", limit=4)
@@ -1387,6 +1446,13 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(universe["request"]["view"], "universe")
         bulk = await self.service.tf_dependency_evidence(limit=5)
         self.assertEqual(self.queries[-1], {"mode": "tf_dependency", "limit": 5})
+        by_target = await self.service.tf_dependency_evidence(target="gpx4", limit=8)
+        self.assertEqual(
+            self.queries[-1],
+            {"mode": "tf_dependency", "target": "GPX4", "limit": 8},
+        )
+        self.assertEqual(by_target["request"]["target"], "GPX4")
+        self.assertNotIn("transcription_factor", by_target["request"])
 
     async def test_biomarker_model_intent_bridges_target_to_indexed_query(self):
         result = await self.service.biomarker_model_evidence("gpx4")
@@ -1636,6 +1702,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_pair_evidence",
                         "depmap_codependency_evidence",
                         "depmap_tf_dependency_evidence",
+                        "depmap_pathway_dependency_evidence",
                         "depmap_biomarker_model_evidence",
                         "depmap_drug_evidence",
                         "depmap_subtype_evidence",
