@@ -7,6 +7,11 @@ use std::path::Path;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+pub const EXTENSION_NAME: &str = "Wisp DepMap Browser Bridge";
+const DEPMAP_SHARED_ENDPOINT: &str = "ws://127.0.0.1:18765";
+const WISP_SCIENCE_APP_DIR: &str = "science.wisp-science";
+const WISP_SCIENCE_PORT: &str = "28765";
+
 const REQUIRED_FILES: &[&str] = &[
     "background.js",
     "capture.js",
@@ -40,6 +45,7 @@ pub fn sync(
     destination: &Path,
     expected_extension_id: &str,
 ) -> Result<ExtensionPackage, String> {
+    reject_foreign_product_dir(destination)?;
     let source_package = inspect(source, expected_extension_id)?;
     if same_path(source, destination) {
         return Ok(source_package);
@@ -128,7 +134,7 @@ pub fn inspect(dir: &Path, expected_extension_id: &str) -> Result<ExtensionPacka
         .map_err(|error| format!("read browser extension manifest: {error}"))?;
     let manifest: Value = serde_json::from_str(&manifest_text)
         .map_err(|error| format!("parse browser extension manifest: {error}"))?;
-    if manifest.get("name").and_then(Value::as_str) != Some("Wisp Real Browser Bridge") {
+    if manifest.get("name").and_then(Value::as_str) != Some(EXTENSION_NAME) {
         return Err("browser extension manifest has an unexpected name".into());
     }
     let version = manifest
@@ -142,10 +148,25 @@ pub fn inspect(dir: &Path, expected_extension_id: &str) -> Result<ExtensionPacka
         .and_then(Value::as_str)
         .ok_or_else(|| "browser extension manifest has no signing key".to_string())?;
     if extension_id_from_key(key)? != expected_extension_id {
-        return Err("browser extension signing key does not match Wisp's extension id".into());
+        return Err(
+            "browser extension signing key does not match Wisp DepMap's extension id".into(),
+        );
+    }
+    let session_config = fs::read_to_string(dir.join("session_config.js"))
+        .map_err(|error| format!("read browser extension session config: {error}"))?;
+    if session_config.contains(WISP_SCIENCE_PORT)
+        || !session_config.contains(DEPMAP_SHARED_ENDPOINT)
+    {
+        return Err(
+            "browser extension session_config must target the DepMap bridge port 18765, not the Wisp Science port"
+                .into(),
+        );
     }
     let protocol = fs::read_to_string(dir.join("protocol.js"))
         .map_err(|error| format!("read browser extension protocol: {error}"))?;
+    if !protocol.contains("product: \"wisp-depmap\"") {
+        return Err("browser extension handshake must identify product wisp-depmap".into());
+    }
     if !protocol.contains(&format!("extensionVersion: \"{version}\"")) {
         return Err(format!(
             "browser extension protocol version does not match manifest {version}"
@@ -250,6 +271,35 @@ fn path_key(path: &Path) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
+/// DepMap and Wisp Science used to share one Chrome extension id, so a sync
+/// could replace the Science package the browser had loaded. Refuse any
+/// destination that lives in Science's application-data directory.
+pub fn reject_foreign_product_dir(destination: &Path) -> Result<(), String> {
+    let mut candidates = vec![destination.to_path_buf()];
+    if let Ok(canonical) = dunce::canonicalize(destination) {
+        candidates.push(canonical);
+    }
+    if candidates
+        .iter()
+        .any(|path| path_contains_science_app_dir(path))
+    {
+        return Err(format!(
+            "refusing to install the Wisp DepMap browser extension into the Wisp Science data directory ({}); DepMap keeps its own extension id, port 18765, and app-data folder",
+            destination.display()
+        ));
+    }
+    Ok(())
+}
+
+fn path_contains_science_app_dir(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(WISP_SCIENCE_APP_DIR))
+    })
+}
+
 fn same_path(left: &Path, right: &Path) -> bool {
     left == right
         || dunce::canonicalize(left)
@@ -262,7 +312,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 mod tests {
     use super::*;
 
-    const EXTENSION_ID: &str = "gnkjgagleagkgdlkkcianolobfdoocnp";
+    const EXTENSION_ID: &str = "ldebonhjofgkeglioppkhaojngchcged";
 
     #[test]
     fn managed_copy_is_verified_and_repaired() {
@@ -272,7 +322,7 @@ mod tests {
         let destination = root.join("browser-extension");
 
         let package = sync(&source, &destination, EXTENSION_ID).unwrap();
-        assert_eq!(package.version, "0.3.1");
+        assert_eq!(package.version, "0.4.0");
         assert_eq!(
             verify(&source, &destination, EXTENSION_ID).unwrap(),
             package
@@ -299,13 +349,34 @@ mod tests {
         copy_tree(&bundled, &source).unwrap();
         let verified = sync(&bundled, &destination, EXTENSION_ID).unwrap();
 
-        fs::write(source.join("protocol.js"), "var WISP_PROTOCOL = {};").unwrap();
+        fs::write(
+            source.join("protocol.js"),
+            "var WISP_PROTOCOL = { product: \"wisp-depmap\", extensionVersion: \"9.9.9\" };",
+        )
+        .unwrap();
         let error = sync(&source, &destination, EXTENSION_ID).unwrap_err();
         assert!(error.contains("protocol version does not match"));
         assert_eq!(
             verify(&bundled, &destination, EXTENSION_ID).unwrap(),
             verified
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sync_refuses_to_overwrite_the_wisp_science_extension_directory() {
+        let source =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../browser-extension");
+        let root = std::env::temp_dir().join(format!("wisp-foreign-extension-{}", Uuid::new_v4()));
+        let destination = root
+            .join("science.wisp-science")
+            .join("wisp-science")
+            .join("browser-extension");
+
+        let error = sync(&source, &destination, EXTENSION_ID).unwrap_err();
+        assert!(error.contains("Wisp Science"), "{error}");
+        assert!(!destination.exists());
 
         let _ = fs::remove_dir_all(root);
     }

@@ -1,4 +1,4 @@
-> **Runtime note (0.3.1):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2. Shared Chrome stays on `ws://127.0.0.1:18765`; each project workspace uses its own persistent profile and an allocated loopback endpoint. Wisp prepares a verified stable extension directory and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
+> **Runtime note (0.4.0):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2 and is a different Chrome extension from Wisp Science. Shared Chrome stays on `ws://127.0.0.1:18765`; each project workspace uses its own persistent profile and an allocated loopback endpoint. Wisp Science keeps `ws://127.0.0.1:28765` and its own extension directory. DepMap prepares a verified stable extension directory under its own application data and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
 
 # Real-browser automation
 
