@@ -3341,7 +3341,7 @@ def _common_essential_response_fields(
 ) -> dict[str, Any]:
     metadata = sidecar[1] if sidecar else {}
     return {
-        "common_essential_source": source,
+        "common_essential_source": source if sidecar else None,
         "common_essential_version": metadata.get("version"),
         "common_essential_provenance": list(metadata.get("provenance") or []),
         "common_essential_annotation_status": (
@@ -3431,9 +3431,15 @@ def _annotate_dependency_confounders(
     for row in rows:
         symbol = str(row.get("symbol") or "").strip().upper()
         hit = sidecar[0].get((lineage.casefold(), symbol)) if sidecar else None
-        if hit is None:
+        if sidecar is None:
             annotation = {
                 "status": "ANNOTATION_UNAVAILABLE",
+                "flags": [],
+                "filter_applied": False,
+            }
+        elif hit is None:
+            annotation = {
+                "status": "NOT_OBSERVED",
                 "flags": [],
                 "filter_applied": False,
             }

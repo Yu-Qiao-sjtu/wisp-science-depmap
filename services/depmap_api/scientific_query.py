@@ -101,7 +101,7 @@ def annotate_common_essential(
             "before_count": len(annotated),
             "after_count": len(annotated),
             "removed_count": 0,
-            "source": source,
+            "source": None,
         }
     annotated = []
     for row in rows:

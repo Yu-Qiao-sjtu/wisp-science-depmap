@@ -2102,6 +2102,7 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertEqual(lineage["status"], "NOT_COMPUTED")
         self.assertEqual(lineage["rows"], [])
         self.assertFalse(lineage["common_essential_filter_applied"])
+        self.assertIsNone(lineage["common_essential_source"])
         self.assertEqual(
             lineage["common_essential_annotation_status"],
             "ANNOTATION_UNAVAILABLE",
@@ -2278,7 +2279,7 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         )
         self.assertEqual(
             unavailable["rows"][0]["dependency_confounder_qc"]["status"],
-            "ANNOTATION_UNAVAILABLE",
+            "NOT_OBSERVED",
         )
         self.assertEqual(
             unavailable["rows"][0]["dependency_confounder_qc"]["flags"], []
