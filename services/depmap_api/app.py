@@ -34,6 +34,7 @@ from services.depmap_api.provider_schema import (
     schema_violation,
 )
 from services.depmap_api.scientific_query import (
+    CatalogArtifactError,
     EVIDENCE_STATUSES,
     bound_after_rank,
     classify_coverage,
@@ -1009,9 +1010,12 @@ def _read_csv_records(path: Path) -> list[dict[str, Any]]:
 
 def _iter_csv_records(path: Path, *, strict: bool = False):
     opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle, strict=strict):
-            yield {key: _coerce_csv_value(value) for key, value in row.items()}
+    try:
+        with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle, strict=strict):
+                yield {key: _coerce_csv_value(value) for key, value in row.items()}
+    except (EOFError, gzip.BadGzipFile) as exc:
+        raise CatalogArtifactError(path, exc) from exc
 
 
 def _filter_csv_records(
