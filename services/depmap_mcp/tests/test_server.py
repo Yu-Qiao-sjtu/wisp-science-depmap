@@ -447,6 +447,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 r"\\server\share\manifest.json",
                 collision,
                 r"depmap://26Q1/C:\private\manifest.json",
+                "depmap://26Q1/depmap-26q1-full/analysis-modules/D:/private/table.parquet",
             ),
             matrix_blocks=(relative,),
         )
