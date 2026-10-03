@@ -62,6 +62,9 @@ class PortableReferences:
         path = PurePosixPath(normalized)
         if not normalized or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
             return None
+        # A drive or UNC tail is a filesystem location, not a catalog-relative identity.
+        if any(re.fullmatch(r"[A-Za-z]:", part) for part in path.parts):
+            return None
         return path.as_posix()
 
     def public_uri(self, relative: str) -> str | None:

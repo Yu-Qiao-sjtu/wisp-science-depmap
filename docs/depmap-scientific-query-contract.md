@@ -59,6 +59,10 @@ New computation is a gated Run behind a non-exfiltrating remote-compute
 gateway. Tests use fakes; missing knowledge context or MCP dropout is
 `MODULE_UNAVAILABLE` / `configuration_blocked`, not folder guessing or live SSH.
 
+An evidence `artifact_uri` is `depmap://{release}/{catalog-relative path}`.
+A filesystem tail inside that URI is an opaque location, not a redacted catalog id.
+Free-text previews still hide absolute paths.
+
 Scientific envelopes use progressive disclosure: default layer is status,
 bounded top rows, and filter/truncation flags; manifests and evidence IDs are
 expanded-only. Literature remains a separate evidence class from DepMap.
