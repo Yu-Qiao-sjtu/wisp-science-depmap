@@ -563,6 +563,16 @@ def _metric_semantics(query: dict[str, Any]) -> dict[str, str]:
             "cohort_policy": "1140_matched_expression_and_gene_effect_models",
             "interpretation": "negative means higher inferred TF activity associates with more negative Gene Effect (stronger dependency); this is observational and does not establish direct regulation or causality",
         }
+    if mode == "pathway_dependency":
+        return {
+            "metric": "pearson_correlation",
+            "analysis_label": "pathway_activity_to_crispr_dependency",
+            "data_modality": "progeny_pathway_activity_vs_crispr_gene_effect",
+            "relation_type": "predictive_association",
+            "scope": "global",
+            "cohort_policy": "matched_pathway_activity_and_gene_effect_models",
+            "interpretation": "negative means higher pathway activity associates with more negative Gene Effect (stronger dependency); observational, not a causal pathway effect",
+        }
     if mode == "mutation_anchor":
         return {
             "metric": "mutation_event_prevalence_and_analyzable_group_support",
@@ -1631,6 +1641,14 @@ class DepMapEvidenceService:
         queries: list[dict[str, Any]] = []
         if "core" in selected:
             queries.append({"mode": "core", "gene": symbol})
+        if "pathways" in selected:
+            queries.append(
+                {
+                    "mode": "pathway_dependency",
+                    "target": symbol,
+                    "limit": limit,
+                }
+            )
         if lineage:
             queries.append({"mode": "lineage_catalog", "lineage": lineage})
             if "networks" in selected:
@@ -1927,6 +1945,40 @@ class DepMapEvidenceService:
         return self._envelope(
             tool="depmap_tf_dependency_evidence",
             request=request,
+            evidence=item,
+        )
+
+    async def pathway_dependency_evidence(
+        self,
+        gene: str,
+        pathway: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        symbol = gene.strip().upper()
+        if not symbol:
+            raise ValueError("gene must be non-empty")
+        rejected = limit_violation("pathway_dependency", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_pathway_dependency_evidence",
+                request={"gene": symbol, "limit": limit},
+                evidence=rejected,
+            )
+        query: dict[str, Any] = {
+            "mode": "pathway_dependency",
+            "target": symbol,
+            "limit": limit,
+        }
+        if pathway and pathway.strip():
+            query["pathway"] = pathway.strip()
+        item = await self._execute(query)
+        return self._envelope(
+            tool="depmap_pathway_dependency_evidence",
+            request={
+                "gene": symbol,
+                "pathway": query.get("pathway"),
+                "limit": limit,
+            },
             evidence=item,
         )
 
@@ -2642,6 +2694,24 @@ def build_mcp_server(
         return await service.tf_dependency_evidence(
             transcription_factor, target, limit, view
         )
+
+    @mcp.tool(
+        title="DepMap pathway activity to CRISPR dependency evidence",
+        description=(
+            "Query the completed pathway-activity versus CRISPR Gene Effect table for "
+            "one dependency gene. Returns the bounded pathway panel (correlation, n, "
+            "p, and FDR when present). An optional pathway name is an exact row. "
+            "A gene absent from the table is NOT_TESTED. This is not artifact paging."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_pathway_dependency_evidence(
+        gene: str,
+        pathway: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.pathway_dependency_evidence(gene, pathway, limit)
 
     @mcp.tool(
         title="DepMap expression biomarker model eligibility",

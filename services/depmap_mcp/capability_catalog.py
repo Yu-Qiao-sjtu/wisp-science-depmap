@@ -152,6 +152,17 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "inventory_patterns": ["*转录因子活性*"],
     },
     {
+        "intent": "pathway_activity_to_dependency",
+        "description": "Query which pathway activities associate with CRISPR dependency on one gene.",
+        "required": ["target_gene"],
+        "optional": ["pathway", "limit"],
+        "examples_zh": ["哪个通路活性改变会影响这个基因的依赖"],
+        "precise_prompt_template_zh": "查询{target_gene}的通路活性与CRISPR Gene Effect关联；使用通路依赖证据，不要逐行扫描关联表。",
+        "confusable_with": ["gene_pair_evidence", "tf_activity_to_dependency"],
+        "mcp_tool": "depmap_pathway_dependency_evidence",
+        "inventory_patterns": ["depmap-26q1-full/progeny_dependency/*"],
+    },
+    {
         "intent": "expression_biomarker_model",
         "description": "Check whether a fixed CRISPR dependency target is eligible for expression-based LASSO/random-forest modeling and whether a validated cached model already exists.",
         "required": ["target_gene"],

@@ -113,6 +113,7 @@ MODE_REQUIRED_FIELDS = {
     "top": {"module", "source", "limit"},
     "lineage": {"event", "lineage", "source", "target"},
     "pathway": {"pathway", "target"},
+    "pathway_dependency": {"target"},
     "drug": {"drug", "target", "omic"},
     "lineage_network": {"family", "lineage", "source"},
     "lineage_cnv": {"lineage", "source"},
@@ -147,6 +148,7 @@ MODE_OPTIONAL_FIELDS = {
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"source", "target", "limit", "view"},
+    "pathway_dependency": {"pathway", "limit"},
     "biomarker_target": set(),
 }
 LINEAGE_NETWORK_FAMILIES = {
@@ -464,7 +466,7 @@ class QueryRequest(BaseModel):
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
-        "true_love", "synthetic_lethal", "three_d",
+        "true_love", "synthetic_lethal", "three_d", "pathway_dependency",
         "tcga_expression_survival",
         "tf_dependency",
         "biomarker_target",
@@ -3851,6 +3853,84 @@ def _tf_hits_path(root: Path) -> Path | None:
     return None
 
 
+def _pathway_association_path(settings: Settings) -> Path | None:
+    directory = settings.knowledge_root / "depmap-26q1-full" / "progeny_dependency"
+    for name in (
+        "progeny_pathway_dependency_associations.csv",
+        "progeny_pathway_dependency_associations.csv.gz",
+    ):
+        path = directory / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _run_pathway_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    """Gene-keyed PROGENy activity versus CRISPR dependency. One pass, then a bounded page."""
+    target = str(query.get("target") or "").strip().upper()
+    pathway = str(query.get("pathway") or "").strip()
+    limit = min(int(query.get("limit") or 20), 20)
+    path = _pathway_association_path(settings)
+    if path is None or not target:
+        return _evidence_response(
+            "COVERAGE_GAP",
+            mode="pathway_dependency",
+            reason="the completed pathway-activity association table is not installed",
+            target=target or None,
+            pathway=pathway or None,
+            provenance=[],
+        )
+    wanted_pathway = pathway.casefold()
+
+    def matches(row: dict[str, str]) -> bool:
+        gene = str(row.get("target_gene") or row.get("gene") or "").strip().upper()
+        if gene != target:
+            return False
+        if not wanted_pathway:
+            return True
+        return str(row.get("pathway") or "").strip().casefold() == wanted_pathway
+
+    matched = filter_before_limit(_iter_csv_records(path), matches)
+    page, matched_count = bound_after_rank(
+        matched,
+        key=lambda row: (
+            -abs(float(row.get("pearson_r") or row.get("correlation") or 0) or 0),
+            str(row.get("pathway") or ""),
+        ),
+        limit=limit,
+    )
+    if page:
+        status = "FOUND"
+        reason = "bounded pathway-activity associations for one dependency gene"
+    elif wanted_pathway:
+        gene_rows = filter_before_limit(
+            _iter_csv_records(path),
+            lambda row: str(row.get("target_gene") or row.get("gene") or "").strip().upper()
+            == target,
+        )
+        status = "NOT_RETAINED" if gene_rows else "NOT_TESTED"
+        reason = (
+            "dependency gene is in the association table; this pathway was not retained"
+            if gene_rows
+            else "dependency gene is absent from the pathway-activity association table"
+        )
+    else:
+        status = "NOT_TESTED"
+        reason = "dependency gene is absent from the pathway-activity association table"
+    return _evidence_response(
+        status,
+        mode="pathway_dependency",
+        reason=reason,
+        target=target,
+        pathway=pathway or None,
+        rows=page,
+        returned_count=len(page),
+        matched_row_count=matched_count,
+        rejection_reason=None if status == "FOUND" else status,
+        provenance=[str(path)],
+    )
+
+
 def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     """Read the installed TF-activity module in Python. Valid universe keys never 500."""
     source = str(query["source"]).strip().upper() if query.get("source") else None
@@ -4142,6 +4222,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_three_d_query, settings, query)
     if query["mode"] == "tf_dependency":
         return await asyncio.to_thread(_run_tf_dependency_query, settings, query)
+    if query["mode"] == "pathway_dependency":
+        return await asyncio.to_thread(_run_pathway_dependency_query, settings, query)
     return await run_r_query(settings, query)
 
 
