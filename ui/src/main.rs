@@ -17290,6 +17290,10 @@ fn App() -> impl IntoView {
                                                 </div>
                                             })}
                                             <button type="button" class="sidechat-send"
+                                                class:is-empty=move || side_chat_input.get().trim().is_empty()
+                                                    && side_chat_quotes.get().is_empty()
+                                                aria-label=move || t(locale.get(), "composer.send")
+                                                title=move || t(locale.get(), "composer.send")
                                                 disabled=move || side_chat_busy.get()
                                                     || (side_chat_input.get().trim().is_empty()
                                                         && side_chat_quotes.get().is_empty())
@@ -17298,7 +17302,7 @@ fn App() -> impl IntoView {
                                                     side_chat_quotes.get(),
                                                     true,
                                                 ))>
-                                                {move || t(locale.get(), "composer.send")}
+                                                {compose_icon("arrow-up")}
                                             </button>
                                         </div>
                                       </div>
