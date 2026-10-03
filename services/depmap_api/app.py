@@ -1014,7 +1014,7 @@ def _iter_csv_records(path: Path, *, strict: bool = False):
         with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle, strict=strict):
                 yield {key: _coerce_csv_value(value) for key, value in row.items()}
-    except (EOFError, gzip.BadGzipFile, OSError, UnicodeError, csv.Error) as exc:
+    except (EOFError, gzip.BadGzipFile) as exc:
         raise CatalogArtifactError(path, exc) from exc
 
 
