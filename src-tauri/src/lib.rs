@@ -7706,6 +7706,8 @@ pub fn run() {
             clipboard_files::read_clipboard_file_paths,
             viewer::open_structure_viewer,
             viewer::read_structure_bytes,
+            viewer::open_trajectory_viewer,
+            viewer::read_trajectory_bytes,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,

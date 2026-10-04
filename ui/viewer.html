@@ -30,37 +30,90 @@
       }
 
       var FORMAT_BY_EXT = { pdb: 'pdb', ent: 'pdb', cif: 'cif', mmcif: 'mmcif', gro: 'gro' };
-      function formatFor(path) {
+      // Coordinate formats parsed by Mol* mol-io; `.nc` is GROMACS' alternate
+      // extension for the same NetCDF container (#193).
+      var TRAJ_FORMAT_BY_EXT = { dcd: 'dcd', xtc: 'xtc', trr: 'trr', netcdf: 'netcdf', nc: 'netcdf' };
+      function extensionOf(path) {
         var match = /\.([A-Za-z0-9]+)$/.exec(path || '');
-        if (!match) throw new Error('structure path has no extension: ' + path);
-        var format = FORMAT_BY_EXT[match[1].toLowerCase()];
-        if (!format) throw new Error('unsupported structure extension: ' + match[1]);
+        return match ? match[1].toLowerCase() : null;
+      }
+      function formatFor(table, kind, path) {
+        var ext = extensionOf(path);
+        if (!ext) throw new Error(kind + ' path has no extension: ' + path);
+        var format = table[ext];
+        if (!format) throw new Error('unsupported ' + kind + ' extension: ' + ext);
         return format;
       }
-      function querySrc() {
-        var match = /[?&]src=([^&]*)/.exec(window.location.search);
+      function queryParam(name) {
+        var match = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
         return match ? decodeURIComponent(match[1]) : null;
       }
       function basename(path) { return path.replace(/^.*[\\/]/, ''); }
+      function bytesToU8(bytes) { return new Uint8Array(bytes); }
 
       var viewer = null;
       var loadSeq = 0;
+
       function showStructure(path) {
         var seq = ++loadSeq;
         var name = basename(path);
-        setStatus('loading ' + name + ' …', false);
+        setStatus('loading ' + name + '…', false);
         var format;
-        try { format = formatFor(path); }
+        try { format = formatFor(FORMAT_BY_EXT, 'structure', path); }
         catch (error) { setStatus(String(error.message || error), true); return; }
         window.__TAURI__.core.invoke('read_structure_bytes', { path: path })
           .then(function (bytes) {
             if (seq !== loadSeq) return; // a newer load superseded this one
             // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
             // the string to Mol*.
-            var data = new TextDecoder().decode(new Uint8Array(bytes));
+            var data = new TextDecoder().decode(bytesToU8(bytes));
             return viewer.loadStructureFromData(data, format);
           })
           .then(function () { if (seq === loadSeq) setStatus(name, false); })
+          .catch(function (error) {
+            if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
+          });
+      }
+
+      // Trajectory mode (#193): topology text + binary coordinates go through
+      // Mol*'s built-in pipeline (loadTrajectory), which wires the mol-io
+      // DCD/XTC/TRR/NetCDF readers, the coordinate transform and the animation
+      // preset - playback controls come from the vendored viewer itself.
+      function showTrajectory(structurePath, trajectoryPath) {
+        var seq = ++loadSeq;
+        var topoName = basename(structurePath);
+        var trajName = basename(trajectoryPath);
+        setStatus('loading ' + topoName + ' + ' + trajName + '…', false);
+        var topoFormat, trajFormat;
+        try {
+          topoFormat = formatFor(FORMAT_BY_EXT, 'structure', structurePath);
+          trajFormat = formatFor(TRAJ_FORMAT_BY_EXT, 'trajectory', trajectoryPath);
+        } catch (error) { setStatus(String(error.message || error), true); return; }
+        var invoke = window.__TAURI__.core.invoke;
+        Promise.all([
+          invoke('read_structure_bytes', { path: structurePath }).then(bytesToU8),
+          invoke('read_trajectory_bytes', { path: trajectoryPath }).then(bytesToU8),
+        ])
+          .then(function (parts) {
+            if (seq !== loadSeq) return;
+            return viewer.loadTrajectory({
+              model: {
+                kind: 'model-data',
+                data: new TextDecoder().decode(parts[0]),
+                format: topoFormat,
+              },
+              modelLabel: topoName,
+              coordinates: {
+                kind: 'coordinates-data',
+                data: parts[1], // binary; Mol* readers consume the raw buffer
+                format: trajFormat,
+              },
+              coordinatesLabel: trajName,
+            });
+          })
+          .then(function () {
+            if (seq === loadSeq) setStatus(topoName + ' + ' + trajName, false);
+          })
           .catch(function (error) {
             if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
           });
@@ -75,22 +128,33 @@
           viewportShowControls: true,
           viewportShowSettings: true,
           viewportShowSelectionMode: true,
-          viewportShowAnimation: false
+          // Animation controls only appear once a trajectory is loaded; safe
+          // to keep enabled for the static-structure case too (#193).
+          viewportShowAnimation: true
         });
       } catch (error) {
         setStatus('failed to initialize Mol* viewer: ' + String((error && error.message) || error), true);
         return;
       }
 
-      var initial = querySrc();
+      var initial = queryParam('src');
+      var initialTopo = queryParam('topo');
+      var initialTraj = queryParam('traj');
       if (initial) showStructure(initial);
+      else if (initialTopo && initialTraj) showTrajectory(initialTopo, initialTraj);
 
       try {
-        // Reuse path: a window kept open receives later structures via this
-        // event instead of a disruptive navigation (#192 / #195).
+        // Reuse path: a window kept open receives later content via these
+        // events instead of a disruptive navigation (#192 / #195).
         window.__TAURI__.event.listen('viewer://load-structure', function (event) {
           var path = event && event.payload && event.payload.path;
           if (path) showStructure(path);
+        });
+        window.__TAURI__.event.listen('viewer://load-trajectory', function (event) {
+          var payload = event && event.payload;
+          if (payload && payload.structure_path && payload.trajectory_path) {
+            showTrajectory(payload.structure_path, payload.trajectory_path);
+          }
         });
       } catch (error) {
         /* event bridge unavailable (plain browser preview) */
