@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "viewer",
+  "description": "Structure viewer window IPC (Mol*): core events only; bytes arrive via validated app commands",
+  "webviews": ["viewer-structure"],
+  "remote": {
+    "urls": ["http://localhost:1421", "http://127.0.0.1:1421"]
+  },
+  "permissions": [
+    "core:default"
+  ]
+}

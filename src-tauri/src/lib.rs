@@ -145,6 +145,7 @@ mod turn_memory;
 mod turn_undo;
 mod ui_health;
 mod video_generation_tool;
+mod viewer;
 mod windows_snap;
 mod workspace_manifest;
 mod workspace_scan;
@@ -7703,6 +7704,8 @@ pub fn run() {
             mcp_app_child_commands::mcp_app_child_action_reply,
             mcp_app_child_commands::close_mcp_app_child,
             clipboard_files::read_clipboard_file_paths,
+            viewer::open_structure_viewer,
+            viewer::read_structure_bytes,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,
