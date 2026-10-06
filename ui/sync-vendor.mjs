@@ -65,8 +65,8 @@ const pinned = new Map([
   // Mol* prebuilt viewer bundle (npm molstar@5.12.0, MIT). Pinned because it
   // is fetched from npm, not produced by a local build.
   ["molstar-viewer-5.12.0.js", {
-    bytes: 5_227_830,
-    sha256: "8b77dcb87d0920edf5e838a865a9b7f346b177875b1ff85f8689c2e6cfc7cfbd",
+    bytes: 5_227_859,
+    sha256: "856d6ff75da3261430291ee48a6e80fee11144a8e7505fda886ade54e1113fec",
   }],
   ["molstar-viewer-5.12.0.css", {
     bytes: 72_842,

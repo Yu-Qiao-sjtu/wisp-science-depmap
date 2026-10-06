@@ -1,0 +1,146 @@
+// Camera math and PyMOL highlight for the Mol* viewer window.
+// Kept free of the DOM so the transforms can be tested without a GPU.
+
+function cloneSnapshot(snapshot) {
+  return {
+    ...snapshot,
+    position: snapshot.position.slice(),
+    target: snapshot.target.slice(),
+    up: snapshot.up.slice(),
+  };
+}
+
+function sub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function add(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function scale(a, k) {
+  return [a[0] * k, a[1] * k, a[2] * k];
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function rodrigues(vector, axis, cos, sin) {
+  const along = scale(axis, dot(vector, axis));
+  return add(add(scale(vector, cos), scale(cross(axis, vector), sin)), scale(along, 1 - cos));
+}
+
+const AXES = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+// factor > 1 moves the camera closer to the target.
+function zoomSnapshot(snapshot, factor) {
+  if (!(factor > 0) || !Number.isFinite(factor)) {
+    throw new Error("zoom factor must be a positive finite number");
+  }
+  const next = cloneSnapshot(snapshot);
+  const offset = sub(next.position, next.target);
+  next.position = add(next.target, scale(offset, 1 / factor));
+  if (typeof next.radius === "number") next.radius = next.radius / factor;
+  return next;
+}
+
+function rotateSnapshot(snapshot, axis, degrees) {
+  const axisVector = AXES[axis];
+  if (!axisVector) throw new Error("rotate axis must be x, y, or z");
+  if (!Number.isFinite(degrees)) throw new Error("rotate degrees must be finite");
+  const radians = degrees * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const next = cloneSnapshot(snapshot);
+  const offset = sub(next.position, next.target);
+  next.position = add(next.target, rodrigues(offset, axisVector, cos, sin));
+  next.up = rodrigues(next.up, axisVector, cos, sin);
+  return next;
+}
+
+function structuresOf(plugin) {
+  const current = plugin.managers.structure.hierarchy.current.structures || [];
+  return current
+    .map((entry) => entry.cell && entry.cell.obj && entry.cell.obj.data)
+    .filter(Boolean);
+}
+
+// Compile a PyMOL expression with the vendored Mol* parser and select those
+// atoms. Returns how many structures contributed a non-empty loci.
+function highlightPymol(molstar, plugin, expression) {
+  if (typeof molstar.scriptToQuery !== "function") {
+    throw new Error("Mol* build is missing scriptToQuery");
+  }
+  const query = molstar.scriptToQuery({ language: "pymol", expression });
+  const StructureSelection = molstar.lib.structure.StructureSelection;
+  const QueryContext = molstar.lib.structure.QueryContext;
+  const selects = plugin.managers.interactivity.lociSelects;
+  const highlights = plugin.managers.interactivity.lociHighlights;
+  selects.deselectAll();
+  highlights.clearHighlights();
+  const lociList = [];
+  for (const structure of structuresOf(plugin)) {
+    const selection = query(new QueryContext(structure));
+    if (StructureSelection.isEmpty(selection)) continue;
+    const loci = StructureSelection.toLociWithSourceUnits(selection);
+    selects.select({ loci }, false);
+    highlights.highlight({ loci }, false);
+    lociList.push(loci);
+  }
+  if (lociList.length && plugin.managers.camera.focusLoci) {
+    plugin.managers.camera.focusLoci(lociList, { extraRadius: 2, durationMs: 300 });
+  }
+  return lociList.length;
+}
+
+function applyCameraPayload(molstar, plugin, payload) {
+  const canvas = plugin.canvas3d;
+  if (!canvas || !canvas.camera) throw new Error("viewer camera is not ready");
+  const camera = plugin.managers.camera;
+  if (payload.action === "reset") {
+    const sphere = canvas.boundingSphereVisible;
+    const snapshot = canvas.camera.getInvariantFocus(
+      sphere.center,
+      sphere.radius,
+      [0, 1, 0],
+      [0, 0, -1],
+    );
+    camera.setSnapshot(snapshot, 400);
+    return snapshot;
+  }
+  if (payload.action === "zoom") {
+    const next = zoomSnapshot(canvas.camera.getSnapshot(), payload.factor);
+    camera.setSnapshot(next, 400);
+    return next;
+  }
+  if (payload.action === "rotate") {
+    const next = rotateSnapshot(canvas.camera.getSnapshot(), payload.axis, payload.degrees);
+    camera.setSnapshot(next, 400);
+    return next;
+  }
+  if (payload.action === "center") {
+    const expression = payload.residue ? "resi " + payload.residue : "polymer.protein";
+    highlightPymol(molstar, plugin, expression);
+    return canvas.camera.getSnapshot();
+  }
+  throw new Error("unsupported camera action " + payload.action);
+}
+
+const ViewerControls = {
+  cloneSnapshot,
+  zoomSnapshot,
+  rotateSnapshot,
+  highlightPymol,
+  applyCameraPayload,
+};
+globalThis.ViewerControls = ViewerControls;
+if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
