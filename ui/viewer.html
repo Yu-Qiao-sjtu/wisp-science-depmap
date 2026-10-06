@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Structure viewer</title>
+  <link rel="stylesheet" href="vendor-runtime/molstar-viewer-5.12.0.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #f6f7f8; font: 12px system-ui, sans-serif; }
+    #viewer { position: absolute; inset: 0; }
+    #status {
+      position: absolute; left: 10px; bottom: 8px; z-index: 10;
+      color: #3c4043; background: rgba(255, 255, 255, .85);
+      padding: 3px 8px; border-radius: 4px; max-width: 70%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #status.error { color: #b3261e; }
+  </style>
+</head>
+<body>
+  <div id="viewer"></div>
+  <div id="status">initializing viewer…</div>
+  <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
+  <script>
+    (function () {
+      'use strict';
+      var statusEl = document.getElementById('status');
+      function setStatus(message, isError) {
+        statusEl.textContent = message;
+        statusEl.className = isError ? 'error' : '';
+      }
+
+      var FORMAT_BY_EXT = { pdb: 'pdb', ent: 'pdb', cif: 'cif', mmcif: 'mmcif', gro: 'gro' };
+      function formatFor(path) {
+        var match = /\.([A-Za-z0-9]+)$/.exec(path || '');
+        if (!match) throw new Error('structure path has no extension: ' + path);
+        var format = FORMAT_BY_EXT[match[1].toLowerCase()];
+        if (!format) throw new Error('unsupported structure extension: ' + match[1]);
+        return format;
+      }
+      function querySrc() {
+        var match = /[?&]src=([^&]*)/.exec(window.location.search);
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+      function basename(path) { return path.replace(/^.*[\\/]/, ''); }
+
+      var viewer = null;
+      var loadSeq = 0;
+      function showStructure(path) {
+        var seq = ++loadSeq;
+        var name = basename(path);
+        setStatus('loading ' + name + ' …', false);
+        var format;
+        try { format = formatFor(path); }
+        catch (error) { setStatus(String(error.message || error), true); return; }
+        window.__TAURI__.core.invoke('read_structure_bytes', { path: path })
+          .then(function (bytes) {
+            if (seq !== loadSeq) return; // a newer load superseded this one
+            // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
+            // the string to Mol*.
+            var data = new TextDecoder().decode(new Uint8Array(bytes));
+            return viewer.loadStructureFromData(data, format);
+          })
+          .then(function () { if (seq === loadSeq) setStatus(name, false); })
+          .catch(function (error) {
+            if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
+          });
+      }
+
+      try {
+        viewer = new molstar.Viewer(document.getElementById('viewer'), {
+          layoutIsExpanded: true,
+          layoutShowControls: true,
+          layoutShowLeftPanel: true,
+          viewportShowExpand: true,
+          viewportShowControls: true,
+          viewportShowSettings: true,
+          viewportShowSelectionMode: true,
+          viewportShowAnimation: false
+        });
+      } catch (error) {
+        setStatus('failed to initialize Mol* viewer: ' + String((error && error.message) || error), true);
+        return;
+      }
+
+      var initial = querySrc();
+      if (initial) showStructure(initial);
+
+      try {
+        // Reuse path: a window kept open receives later structures via this
+        // event instead of a disruptive navigation (#192 / #195).
+        window.__TAURI__.event.listen('viewer://load-structure', function (event) {
+          var path = event && event.payload && event.payload.path;
+          if (path) showStructure(path);
+        });
+      } catch (error) {
+        /* event bridge unavailable (plain browser preview) */
+      }
+    })();
+  </script>
+</body>
+</html>

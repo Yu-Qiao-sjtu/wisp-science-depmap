@@ -42,6 +42,9 @@ const exactAllowlist = new Set([
   "xterm.css",
   "xterm.mjs",
   "zrender.LICENSE",
+  "molstar-viewer-5.12.0.js",
+  "molstar-viewer-5.12.0.css",
+  "molstar.LICENSE",
 ]);
 const katexFont = /^KaTeX_[A-Za-z0-9_-]+\.(?:woff2?|ttf)$/;
 const required = [
@@ -58,6 +61,16 @@ const pinned = new Map([
   ["xlsx.mini.min.js", {
     bytes: 279_523,
     sha256: "0cb353f830d7288385492c83d277b058ddeac664ca51cf1393aa1fd3e2b70939",
+  }],
+  // Mol* prebuilt viewer bundle (npm molstar@5.12.0, MIT). Pinned because it
+  // is fetched from npm, not produced by a local build.
+  ["molstar-viewer-5.12.0.js", {
+    bytes: 5_227_830,
+    sha256: "8b77dcb87d0920edf5e838a865a9b7f346b177875b1ff85f8689c2e6cfc7cfbd",
+  }],
+  ["molstar-viewer-5.12.0.css", {
+    bytes: 72_842,
+    sha256: "5b68ceb6d3642549b4e9b2c071e58e41b98a5350ae269180587b39da86925d55",
   }],
 ]);
 const officeManifestSha256 = "b4413aa26eab991d4cdcb40a146b2cbd2f485f390a038ef799f6e31ef07a6968";
