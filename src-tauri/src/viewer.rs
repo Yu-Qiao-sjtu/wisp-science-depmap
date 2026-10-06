@@ -20,6 +20,12 @@ const LOAD_STRUCTURE_EVENT: &str = "viewer://load-structure";
 /// Event carrying a new topology + trajectory pair into an open viewer window.
 const LOAD_TRAJECTORY_EVENT: &str = "viewer://load-trajectory";
 
+/// Scripted camera move for an already-open viewer (#194).
+const CONTROL_CAMERA_EVENT: &str = "viewer://control-camera";
+
+/// PyMOL-style selection for an already-open viewer (#194).
+const SELECT_EVENT: &str = "viewer://select";
+
 /// Upper bound for a structure file handed to the viewer. Structures are tiny
 /// next to trajectories; a larger "structure" is almost certainly the wrong
 /// file (e.g. a multi-frame trajectory), which is routed through the
@@ -189,12 +195,13 @@ pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Resul
             app.emit_to(
                 VIEWER_WINDOW_LABEL,
                 LOAD_STRUCTURE_EVENT,
-                LoadStructurePayload { path },
+                LoadStructurePayload { path: path.clone() },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
         None => spawn_viewer_window(&app, viewer_url(&path), "Structure viewer")?,
     }
+    remember_viewer_path(&path);
     Ok(())
 }
 
@@ -219,8 +226,8 @@ pub(crate) async fn open_trajectory_viewer(
                 VIEWER_WINDOW_LABEL,
                 LOAD_TRAJECTORY_EVENT,
                 LoadTrajectoryPayload {
-                    structure_path,
-                    trajectory_path,
+                    structure_path: structure_path.clone(),
+                    trajectory_path: trajectory_path.clone(),
                 },
             )
             .map_err(|e| format!("failed to deliver trajectory to the viewer window: {e}"))?;
@@ -231,7 +238,279 @@ pub(crate) async fn open_trajectory_viewer(
             "Trajectory viewer",
         )?,
     }
+    remember_viewer_path(&structure_path);
+    remember_viewer_path(&trajectory_path);
     Ok(())
+}
+
+#[derive(Clone, Serialize)]
+struct CameraPayload {
+    action: String,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+}
+
+#[derive(Clone, Serialize)]
+struct SelectionPayload {
+    expression: String,
+}
+
+/// Normalize one scripted camera step. `rotate` needs an axis and degrees,
+/// `zoom` needs a positive factor, `center` may name a residue, `reset` takes
+/// no extras.
+pub(crate) fn normalize_camera_command(
+    action: &str,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+) -> Result<CameraPayload, String> {
+    let action = action.trim().to_ascii_lowercase();
+    match action.as_str() {
+        "reset" => Ok(CameraPayload {
+            action,
+            axis: None,
+            degrees: None,
+            factor: None,
+            residue: None,
+        }),
+        "rotate" => {
+            let axis = axis
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| matches!(*value, "x" | "y" | "z"))
+                .ok_or_else(|| "rotate requires axis x, y, or z".to_string())?;
+            let degrees = degrees.ok_or_else(|| "rotate requires degrees".to_string())?;
+            if !degrees.is_finite() {
+                return Err("rotate degrees must be finite".into());
+            }
+            Ok(CameraPayload {
+                action,
+                axis: Some(axis.to_string()),
+                degrees: Some(degrees),
+                factor: None,
+                residue: None,
+            })
+        }
+        "zoom" => {
+            let factor = factor.ok_or_else(|| "zoom requires factor".to_string())?;
+            if !factor.is_finite() || factor <= 0.0 {
+                return Err("zoom factor must be a positive finite number".into());
+            }
+            Ok(CameraPayload {
+                action,
+                axis: None,
+                degrees: None,
+                factor: Some(factor),
+                residue: None,
+            })
+        }
+        "center" => Ok(CameraPayload {
+            action,
+            axis: None,
+            degrees: None,
+            factor: None,
+            residue,
+        }),
+        _ => Err(format!(
+            "unsupported camera action {action:?}; expected rotate, zoom, center, or reset"
+        )),
+    }
+}
+
+/// Accept the PyMOL dialect subset the viewer highlights: `name CA`,
+/// `resi 1-10`, `polymer.protein`, joined by `and`.
+pub(crate) fn normalize_pymol_selection(expression: &str) -> Result<String, String> {
+    let clauses: Vec<&str> = expression
+        .split(" and ")
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .collect();
+    if clauses.is_empty() {
+        return Err("selection expression is empty".into());
+    }
+    for clause in &clauses {
+        validate_pymol_clause(clause)?;
+    }
+    Ok(clauses.join(" and "))
+}
+
+fn validate_pymol_clause(clause: &str) -> Result<(), String> {
+    let mut tokens = clause.split_whitespace();
+    let head = tokens
+        .next()
+        .ok_or_else(|| format!("empty selection clause in {clause:?}"))?;
+    match head {
+        "name" => {
+            let atom = tokens
+                .next()
+                .ok_or_else(|| "name selection requires an atom name".to_string())?;
+            if tokens.next().is_some() || !atom.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(format!("unsupported name selection {clause:?}"));
+            }
+            Ok(())
+        }
+        "resi" => {
+            let range = tokens
+                .next()
+                .ok_or_else(|| "resi selection requires a residue range".to_string())?;
+            if tokens.next().is_some() || !valid_residue_range(range) {
+                return Err(format!("unsupported resi selection {clause:?}"));
+            }
+            Ok(())
+        }
+        "polymer.protein" | "polymer.nucleic" => {
+            if tokens.next().is_some() {
+                return Err(format!("unsupported polymer selection {clause:?}"));
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "unsupported selection clause {clause:?}; expected name, resi, or polymer.protein"
+        )),
+    }
+}
+
+fn valid_residue_range(range: &str) -> bool {
+    let mut parts = range.split('-');
+    let start = parts.next().and_then(|value| value.parse::<u32>().ok());
+    let end = match parts.next() {
+        Some(value) => value.parse::<u32>().ok(),
+        None => start,
+    };
+    parts.next().is_none()
+        && matches!((start, end), (Some(start), Some(end)) if start > 0 && end >= start)
+}
+
+#[derive(Debug)]
+pub(crate) enum ArtifactHandoff {
+    Structure(PathBuf),
+    Trajectory {
+        structure: PathBuf,
+        trajectory: PathBuf,
+    },
+}
+
+/// Route one artifact path to the structure window or a trajectory whose
+/// topology sits beside it. Unsupported types stay hidden from the card.
+pub(crate) fn resolve_artifact_handoff(path: &str) -> Result<ArtifactHandoff, String> {
+    let raw = Path::new(path);
+    let ext = raw
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if is_allowed_structure_extension(&ext) {
+        return Ok(ArtifactHandoff::Structure(validate_structure_path(path)?));
+    }
+    if is_allowed_trajectory_extension(&ext) {
+        let trajectory = validate_trajectory_path(path)?;
+        let structure = sibling_topology(&trajectory).ok_or_else(|| {
+            format!(
+                "trajectory {} has no sibling topology (pdb, cif, mmcif, gro, or ent)",
+                trajectory.display()
+            )
+        })?;
+        return Ok(ArtifactHandoff::Trajectory {
+            structure,
+            trajectory,
+        });
+    }
+    Err(format!(
+        "unsupported viewer artifact extension {ext:?}; expected a structure or trajectory file"
+    ))
+}
+
+fn sibling_topology(trajectory: &Path) -> Option<PathBuf> {
+    let parent = trajectory.parent()?;
+    let stem = trajectory.file_stem()?.to_str()?;
+    for ext in ["pdb", "cif", "mmcif", "gro", "ent"] {
+        let candidate = parent.join(format!("{stem}.{ext}"));
+        if candidate.is_file() {
+            if let Ok(path) = validate_structure_path(&candidate.to_string_lossy()) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn remember_viewer_path(path: &str) {
+    let mut recent = RECENT_VIEWER_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    recent.retain(|existing| existing != path);
+    recent.insert(0, path.to_string());
+    recent.truncate(8);
+}
+
+static RECENT_VIEWER_PATHS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn require_viewer_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window(VIEWER_WINDOW_LABEL).is_none() {
+        return Err("viewer window is not open".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn control_camera(
+    app: AppHandle,
+    action: String,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+) -> Result<(), String> {
+    let payload = normalize_camera_command(&action, axis, degrees, factor, residue)?;
+    require_viewer_window(&app)?;
+    app.emit_to(VIEWER_WINDOW_LABEL, CONTROL_CAMERA_EVENT, payload)
+        .map_err(|e| format!("failed to deliver camera command: {e}"))
+}
+
+#[tauri::command]
+pub(crate) async fn select_in_viewer(app: AppHandle, expression: String) -> Result<String, String> {
+    let expression = normalize_pymol_selection(&expression)?;
+    require_viewer_window(&app)?;
+    app.emit_to(
+        VIEWER_WINDOW_LABEL,
+        SELECT_EVENT,
+        SelectionPayload {
+            expression: expression.clone(),
+        },
+    )
+    .map_err(|e| format!("failed to deliver selection: {e}"))?;
+    Ok(expression)
+}
+
+#[tauri::command]
+pub(crate) async fn open_artifact_in_viewer(app: AppHandle, path: String) -> Result<(), String> {
+    match resolve_artifact_handoff(&path)? {
+        ArtifactHandoff::Structure(structure) => {
+            open_structure_viewer(app, structure.to_string_lossy().into_owned()).await
+        }
+        ArtifactHandoff::Trajectory {
+            structure,
+            trajectory,
+        } => {
+            open_trajectory_viewer(
+                app,
+                structure.to_string_lossy().into_owned(),
+                trajectory.to_string_lossy().into_owned(),
+            )
+            .await
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn list_viewer_recent() -> Result<Vec<String>, String> {
+    Ok(RECENT_VIEWER_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone())
 }
 
 /// Read structure bytes for the viewer page after the same path validation as
@@ -405,6 +684,69 @@ mod tests {
         assert_eq!(
             viewer_trajectory_url("D:\\t\\x.pdb", "D:\\t\\y.nc"),
             "viewer.html?topo=D:\\t\\x.pdb&traj=D:\\t\\y.nc"
+        );
+    }
+
+    #[test]
+    fn camera_commands_keep_only_the_fields_their_action_needs() {
+        let rotate =
+            normalize_camera_command("Rotate", Some("y".into()), Some(15.0), None, None).unwrap();
+        assert_eq!(rotate.action, "rotate");
+        assert_eq!(rotate.axis.as_deref(), Some("y"));
+        assert!(
+            normalize_camera_command("rotate", Some("w".into()), Some(1.0), None, None).is_err()
+        );
+        let zoom = normalize_camera_command("zoom", None, None, Some(1.5), None).unwrap();
+        assert_eq!(zoom.factor, Some(1.5));
+        assert!(normalize_camera_command("zoom", None, None, Some(0.0), None).is_err());
+        let center = normalize_camera_command("center", None, None, None, Some(42)).unwrap();
+        assert_eq!(center.residue, Some(42));
+        let reset =
+            normalize_camera_command("reset", Some("x".into()), Some(9.0), Some(2.0), Some(1))
+                .unwrap();
+        assert!(reset.axis.is_none() && reset.degrees.is_none());
+    }
+
+    #[test]
+    fn pymol_selection_accepts_the_three_scripted_expressions() {
+        assert_eq!(normalize_pymol_selection("name CA").unwrap(), "name CA");
+        assert_eq!(normalize_pymol_selection("resi 1-10").unwrap(), "resi 1-10");
+        assert_eq!(
+            normalize_pymol_selection("  polymer.protein and name CA  ").unwrap(),
+            "polymer.protein and name CA"
+        );
+        assert!(normalize_pymol_selection("resi 0").is_err());
+        assert!(normalize_pymol_selection("chain A").is_err());
+        assert!(normalize_pymol_selection("").is_err());
+    }
+
+    #[test]
+    fn artifact_handoff_pairs_a_trajectory_with_its_sibling_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let topo = dir.path().join("sim.pdb");
+        let traj = dir.path().join("sim.xtc");
+        std::fs::write(&topo, b"ATOM\n").unwrap();
+        std::fs::write(&traj, b"coords").unwrap();
+        match resolve_artifact_handoff(traj.to_str().unwrap()).unwrap() {
+            ArtifactHandoff::Trajectory {
+                structure,
+                trajectory,
+            } => {
+                assert_eq!(structure, topo.canonicalize().unwrap());
+                assert_eq!(trajectory, traj.canonicalize().unwrap());
+            }
+            ArtifactHandoff::Structure(_) => panic!("expected a trajectory handoff"),
+        }
+        let orphan = dir.path().join("orphan.dcd");
+        std::fs::write(&orphan, b"coords").unwrap();
+        assert!(resolve_artifact_handoff(orphan.to_str().unwrap())
+            .unwrap_err()
+            .contains("sibling topology"));
+        std::fs::write(dir.path().join("note.txt"), b"no").unwrap();
+        assert!(
+            resolve_artifact_handoff(dir.path().join("note.txt").to_str().unwrap())
+                .unwrap_err()
+                .contains("unsupported")
         );
     }
 }
