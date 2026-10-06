@@ -7,8 +7,13 @@
 
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use serde::Serialize;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use wisp_llm::ToolSchema;
+use wisp_tools::tool::{arg_str, arg_str_opt};
+use wisp_tools::{Tool, ToolEnv, ToolResult};
 
 pub(crate) const VIEWER_WINDOW_LABEL: &str = "viewer-structure";
 
@@ -268,6 +273,56 @@ pub(crate) async fn present_structure_in_viewer(
     }
     remember_viewer_path(&path);
     Ok(())
+}
+
+/// Project-conversation tool for the same presentation as
+/// [`present_structure_in_viewer`]. The research assistant does not receive it.
+pub(crate) struct PresentStructureTool {
+    app: AppHandle,
+}
+
+impl PresentStructureTool {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[async_trait]
+impl Tool for PresentStructureTool {
+    fn name(&self) -> &str {
+        "present_structure"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "present_structure",
+            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Local pdb, ent, cif, mmcif, or gro file."},
+                    "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."}
+                },
+                "required": ["path"]
+            }),
+        )
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        arg_str_opt(args, "path").unwrap_or_default()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let path = match arg_str(args, "path") {
+            Ok(path) => path,
+            Err(error) => return ToolResult::fail(error),
+        };
+        let selection = arg_str_opt(args, "selection");
+        match present_structure_in_viewer(self.app.clone(), path, selection).await {
+            Ok(()) => ToolResult::ok("structure presented"),
+            Err(error) => ToolResult::fail(error),
+        }
+    }
 }
 
 /// Open (or focus) the viewer window on a validated topology + trajectory
