@@ -4347,11 +4347,21 @@ fn result_artifact_view(value: Value, locale: Locale) -> View {
         .or_else(|| path.clone())
         .unwrap_or_else(|| t(locale, "agents.result.output").into());
     let details = (!fields.is_empty()).then_some(Value::Object(fields));
+    let viewer_path = path.clone().filter(|path| molecular_viewer_artifact(path));
     view! {
         <article class="agent-result-artifact">
             <div class="agent-result-item-head">
                 <strong>{title}</strong>
                 {kind.map(|kind| view! { <span>{kind}</span> })}
+                {viewer_path.map(|path| view! {
+                    <button type="button" data-testid="open-in-molecular-viewer" on:click=move |_| {
+                        let path = path.clone();
+                        leptos::spawn_local(async move {
+                            let Ok(args) = to_value(&serde_json::json!({ "path": path })) else { return; };
+                            let _ = invoke_checked("open_artifact_in_viewer", args).await;
+                        });
+                    }>{t(locale, "artifact.open_viewer")}</button>
+                })}
             </div>
             {path.map(|path| view! { <code class="agent-result-reference">{path}</code> })}
             {content.map(result_value_view)}
@@ -4359,6 +4369,14 @@ fn result_artifact_view(value: Value, locale: Locale) -> View {
         </article>
     }
     .into_view()
+}
+
+fn molecular_viewer_artifact(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "pdb" | "ent" | "cif" | "mmcif" | "gro" | "dcd" | "xtc" | "trr" | "netcdf" | "nc"
+    )
 }
 
 fn result_evidence_view(value: Value) -> View {

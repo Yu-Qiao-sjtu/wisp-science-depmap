@@ -14,10 +14,24 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #status.error { color: #b3261e; }
+    #tools {
+      position: absolute; left: 10px; top: 8px; z-index: 10;
+      display: flex; gap: 6px; align-items: center;
+    }
+    #tools input, #tools button {
+      font: inherit; border: 1px solid #dadce0; border-radius: 4px; background: #fff; padding: 3px 6px;
+    }
+    #selection-echo { color: #3c4043; }
   </style>
 </head>
 <body>
   <div id="viewer"></div>
+  <div id="tools">
+    <input id="selection" type="text" placeholder="name CA and polymer.protein" />
+    <button id="apply-selection" type="button">Select</button>
+    <span id="selection-echo"></span>
+    <span id="recent"></span>
+  </div>
   <div id="status">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script>
@@ -156,8 +170,54 @@
             showTrajectory(payload.structure_path, payload.trajectory_path);
           }
         });
+        window.__TAURI__.event.listen('viewer://select', function (event) {
+          var expression = event && event.payload && event.payload.expression;
+          if (expression) applySelection(expression);
+        });
+        window.__TAURI__.event.listen('viewer://control-camera', function (event) {
+          applyCamera(event && event.payload);
+        });
       } catch (error) {
         /* event bridge unavailable (plain browser preview) */
+      }
+
+      function applySelection(expression) {
+        var echo = document.getElementById('selection-echo');
+        echo.textContent = expression;
+        var plugin = viewer && viewer.plugin;
+        if (plugin && plugin.managers && plugin.managers.structure && plugin.managers.structure.selection) {
+          try {
+            plugin.managers.structure.selection.fromSelectionQuery(expression);
+          } catch (error) {
+            setStatus(String((error && error.message) || error), true);
+          }
+        }
+      }
+
+      function applyCamera(payload) {
+        if (!payload || !payload.action) return;
+        var plugin = viewer && viewer.plugin;
+        var canvas = plugin && plugin.canvas3d;
+        if (!canvas || !canvas.camera) {
+          setStatus('camera ' + payload.action, false);
+          return;
+        }
+        if (payload.action === 'reset' && canvas.camera.reset) canvas.camera.reset();
+        else if (payload.action === 'zoom' && typeof canvas.camera.zoom === 'function') canvas.camera.zoom(payload.factor);
+        else if (payload.action === 'rotate') setStatus('rotate ' + payload.axis + ' ' + payload.degrees, false);
+        else if (payload.action === 'center') setStatus('center ' + (payload.residue || ''), false);
+        if (canvas.requestDraw) canvas.requestDraw();
+      }
+
+      document.getElementById('apply-selection').addEventListener('click', function () {
+        applySelection(document.getElementById('selection').value);
+      });
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke('list_viewer_recent').then(function (paths) {
+          document.getElementById('recent').textContent = (paths || []).slice(0, 3).map(function (path) {
+            return path.replace(/^.*[\\/]/, '');
+          }).join(' · ');
+        }).catch(function () {});
       }
     })();
   </script>
