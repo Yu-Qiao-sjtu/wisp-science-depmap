@@ -31,7 +31,7 @@ cases:
         schema: &route_schema
           type: object
           properties:
-            intent: {type: string, enum: [provider_status, analysis_inventory, lineage_resolution, cancer_inventory, cancer_dependency_ranking, cancer_direction_discovery, mutation_anchor_discovery, mutation_to_dependency, dependency_to_mutation, expression_biomarker_model, tf_activity_to_dependency, true_love_gene_catalog, tcga_expression_survival, subtype_evidence, coamplification_evidence, three_d_evidence, gene_evidence, gene_pair_evidence, drug_gene_evidence, evidence_comparison, study_support_mapping, result_interpretation, topic_exploration, literature_validation, new_analysis, report_generation]}
+            intent: {type: string, enum: [provider_status, analysis_inventory, lineage_resolution, cancer_inventory, cancer_dependency_ranking, cancer_direction_discovery, mutation_anchor_discovery, mutation_to_dependency, dependency_to_mutation, expression_biomarker_model, tf_activity_to_dependency, true_love_gene_catalog, tcga_expression_survival, subtype_evidence, coamplification_evidence, three_d_evidence, linked_context_evidence, gene_evidence, gene_pair_evidence, drug_gene_evidence, evidence_comparison, study_support_mapping, result_interpretation, topic_exploration, literature_validation, new_analysis, report_generation]}
             gene: {type: string}
             cancer: {type: string}
             source_gene: {type: string}

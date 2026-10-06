@@ -42,7 +42,7 @@ query helper, for example:
 Supported modes are `catalog`, `lineage_catalog`, `lineage_dependency`, `lineage_directions`, `core`, `pair`, `top`,
 `lineage`, `pathway`, `drug`, `lineage_network`, `lineage_cnv`,
 `lineage_drug`, `enrichment`, `subtype`, `coamplification`, `true_love`,
-`synthetic_lethal`, `lineage_mutation_dependency`, `three_d`,
+`synthetic_lethal`, `lineage_mutation_dependency`, `three_d`, `linked_context`,
 `mutation_anchor`, and
 `tcga_expression_survival`.
 `lineage_catalog` inventories cancer-level
@@ -77,7 +77,7 @@ with an `INELIGIBLE` `schema_error` envelope, not a validator traceback.
 Per-mode `limit` maxima are in `services/depmap_api/provider_schema.py`. `synthetic_lethal` requires `source`,
 `target`, or both, and optionally accepts one frozen event family. `three_d`
 requires a supported analysis `family` and uses only catalog-validated cohort,
-contrast, omic, gene, source, and target selectors.
+contrast, omic, gene, source, and target selectors. `linked_context` reads rows already stored in the query index `external_link` table. Optional filters are `gene`, `drug`, `lineage`, and `family`; with no filters the response is a family count. Provenance is the query-index filename. Large source matrices are not opened.
 
 Use a non-2xx status for configuration, authentication, or service failures.
 Use a successful JSON response with `status: "not_testable"` for a legitimate

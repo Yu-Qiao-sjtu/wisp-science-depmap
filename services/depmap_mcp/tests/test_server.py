@@ -329,8 +329,8 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         second = await self.service.status()
         evidence = first["evidence"]
 
-        self.assertEqual(evidence["query_contract_version"], 13)
-        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-13")
+        self.assertEqual(evidence["query_contract_version"], 14)
+        self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-14")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
         self.assertEqual(
@@ -536,6 +536,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                 "subtype_evidence",
                 "coamplification_evidence",
                 "three_d_evidence",
+                "linked_context_evidence",
             },
         )
         self.assertIn("mutation_to_dependency", intents)
@@ -1711,6 +1712,7 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
                         "depmap_synthetic_lethal_evidence",
                         "depmap_lineage_mutation_dependency",
                         "depmap_3d_evidence",
+                        "depmap_linked_context",
                     },
                 )
                 self.assertTrue(

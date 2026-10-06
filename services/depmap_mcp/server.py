@@ -477,6 +477,7 @@ from services.depmap_api.app import (
     EVIDENCE_STATUSES,
     LINEAGE_NETWORK_FAMILIES,
     QUERY_CONTRACT_VERSION,
+    coverage_manifest_version,
     QueryRequest,
     Settings,
     run_bounded_query,
@@ -1450,7 +1451,7 @@ class DepMapEvidenceService:
             "capability_catalog_digest": f"sha256:{capability_digest}",
             "catalog_build_identity": self._catalog_build_identity(),
             "lineage_resolution_contract_version": 1,
-            "coverage_manifest_version": 5,
+            "coverage_manifest_version": coverage_manifest_version(self.settings.knowledge_root),
             "evidence_statuses": sorted(EVIDENCE_STATUSES),
             "tool_boundary": [
                 "status_and_coverage",
@@ -2391,6 +2392,33 @@ class DepMapEvidenceService:
         request["limit"] = limit
         return self._envelope(tool="depmap_3d_evidence", request=request, evidence=item)
 
+    async def linked_context_evidence(
+        self,
+        gene: str | None = None,
+        drug: str | None = None,
+        lineage: str | None = None,
+        family: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        rejected = limit_violation("linked_context", limit)
+        if rejected is not None:
+            return self._envelope(
+                tool="depmap_linked_context",
+                request={"limit": limit},
+                evidence=rejected,
+            )
+        query: dict[str, Any] = {"mode": "linked_context", "limit": limit}
+        if gene:
+            query["gene"] = gene.strip().upper()
+        for key, value in (("drug", drug), ("lineage", lineage), ("family", family)):
+            if value:
+                query[key] = value.strip()
+        item = await self._execute(query)
+        validated = item.get("query", query)
+        request = {key: validated.get(key) for key in ("gene", "drug", "lineage", "family")}
+        request["limit"] = limit
+        return self._envelope(tool="depmap_linked_context", request=request, evidence=item)
+
     async def drug_evidence(
         self,
         drug: str,
@@ -2992,6 +3020,25 @@ def build_mcp_server(
             family, gene, source, target, cohort, contrast, omic, limit
         )
 
+    @mcp.tool(
+        title="DepMap linked-context evidence",
+        description=(
+            "Read indexed joins between this DepMap release and an external cohort. "
+            "Filter by gene, drug, lineage, or link family. With no filters, return family counts. "
+            "Rows come from the query index; large source matrices are not opened."
+        ),
+        annotations=READ_ONLY,
+        structured_output=True,
+    )
+    async def depmap_linked_context(
+        gene: str | None = None,
+        drug: str | None = None,
+        lineage: str | None = None,
+        family: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return await service.linked_context_evidence(gene, drug, lineage, family, limit)
+
     _withhold_unregistered_catalog_tools(mcp, service.catalog_readers)
     return mcp
 
@@ -3005,6 +3052,7 @@ _SINGLE_MODE_TOOLS = {
     "depmap_pan_cancer_dependencies": "pan_cancer_dependency",
     "depmap_lineage_direction_discovery": "lineage_directions",
     "depmap_3d_evidence": "three_d",
+    "depmap_linked_context": "linked_context",
     "depmap_subtype_evidence": "subtype",
     "depmap_coamplification_evidence": "coamplification",
     "depmap_codependency_evidence": "pair",

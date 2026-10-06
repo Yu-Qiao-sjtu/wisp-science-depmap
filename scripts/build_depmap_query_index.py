@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -430,6 +431,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
         ("coamplification", "coamplification_evidence", "depmap-26q1-full/coamplification_dependency/%", 0),
         ("synthetic_lethal", "synthetic_lethal_evidence", "*突变锚定基因选择*|depmap-26q1-full/observational_synthetic_lethal_candidates/%", 0),
         ("three_d", "three_d_evidence", "depmap-26q1-3d/%", 0),
+        ("linked_context", "linked_context_evidence", "tahoe_2d_links|differential_to_2d_links", 1),
         ("tcga_expression_survival", "tcga_survival_evidence", "depmap-26q1-tcga/%", 0),
     ]
     try:
@@ -464,6 +466,7 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
             "tcga_expression_survival":"tcga_expression_survival", "drug_gene_evidence":"drug",
             "subtype_evidence":"subtype", "coamplification_evidence":"coamplification",
             "three_d_evidence":"three_d",
+            "linked_context_evidence":"linked_context",
         }[intent]
         base = cap_by_mode.get(mode, (mode, intent, "analysis-modules", 0))
         capabilities.append((mode, intent, base[2], base[3], capability["mcp_tool"], json.dumps(capability, ensure_ascii=False, separators=(",", ":"))))
@@ -602,6 +605,53 @@ def build_directory_catalog(db: sqlite3.Connection, root: Path, output: Path) ->
     }
 
 
+def _link_key(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _ingest_external_links(db: sqlite3.Connection, root: Path, admitted) -> int:
+    """Index compact join tables that the catalog has already verified. Detail matrices stay files."""
+    specs: list[tuple[Path, str]] = [
+        (root / "tahoe_2d_links" / "model_drug_target_links.csv", "tahoe_model_drug"),
+        (
+            root / "tahoe_2d_links" / "drug_gene_annotation" / "lineage_drug_direction_summary.csv",
+            "tahoe_direction",
+        ),
+    ]
+    link_dir = root / "depmap-26q1-3d" / "differential_to_2d_links"
+    if link_dir.is_dir():
+        for path in sorted(link_dir.iterdir()):
+            if path.suffix in {".gz", ".csv"}:
+                specs.append((path, f"3d_link_{path.name.split('.')[0]}"))
+    inserted = 0
+    for path, family in specs:
+        if not admitted(path):
+            continue
+        batch = []
+        for row in records(path):
+            gene = str(
+                row.get("target_gene")
+                or row.get("gene")
+                or row.get("source_gene")
+                or row.get("feature_gene")
+                or ""
+            ).upper()
+            drug = str(row.get("tahoe_drug") or row.get("drug") or row.get("ConditionCompoundName") or "")
+            lineage = str(row.get("OncotreeLineage") or row.get("lineage") or "")
+            batch.append((
+                family, gene, _link_key(drug), _link_key(lineage),
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+            ))
+            if len(batch) >= 10_000:
+                db.executemany("INSERT INTO external_link VALUES (?,?,?,?,?)", batch)
+                inserted += len(batch)
+                batch.clear()
+        if batch:
+            db.executemany("INSERT INTO external_link VALUES (?,?,?,?,?)", batch)
+            inserted += len(batch)
+    return inserted
+
+
 def records(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8-sig", newline="") as handle:
@@ -631,9 +681,16 @@ def build(root: Path, output: Path) -> dict:
           target_gene TEXT PRIMARY KEY, eligible INTEGER NOT NULL,
           row_json TEXT NOT NULL
         );
+        CREATE TABLE external_link (
+          family TEXT NOT NULL,
+          gene TEXT NOT NULL,
+          drug_key TEXT NOT NULL,
+          lineage_key TEXT NOT NULL,
+          row_json TEXT NOT NULL
+        );
         """
     )
-    counts = {"true_love": 0, "tf_dependency": 0, "biomarker_target": 0}
+    counts = {"true_love": 0, "tf_dependency": 0, "biomarker_target": 0, "external_link": 0}
     counts.update(build_directory_catalog(db, root, output))
 
     def cataloged_and_verified(path: Path) -> bool:
@@ -693,6 +750,8 @@ def build(root: Path, output: Path) -> dict:
         db.executemany("INSERT INTO biomarker_target VALUES (?,?,?)", rows)
         counts["biomarker_target"] = len(rows)
 
+    counts["external_link"] = _ingest_external_links(db, root, cataloged_and_verified)
+
     db.executescript(
         """
         CREATE INDEX idx_tlg_a ON true_love(catalog, coverage, gene_a, sort_1, sort_2);
@@ -701,6 +760,8 @@ def build(root: Path, output: Path) -> dict:
         CREATE INDEX idx_tf_source_rank ON tf_dependency(tf, direction, rank);
         CREATE INDEX idx_tf_pair ON tf_dependency(tf, target_gene);
         CREATE INDEX idx_biomarker_eligible ON biomarker_target(eligible, target_gene);
+        CREATE INDEX idx_external_link_gene ON external_link(gene, family);
+        CREATE INDEX idx_external_link_drug ON external_link(drug_key, lineage_key, family);
         """
     )
     db.execute("INSERT INTO metadata VALUES (?,?)", ("schema_version", CATALOG_SCHEMA_VERSION))

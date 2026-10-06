@@ -579,7 +579,7 @@ fn depmap_route_schema() -> Value {
                     "expression_biomarker_model",
                     "tf_activity_to_dependency", "pathway_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
-                    "coamplification_evidence", "three_d_evidence",
+                    "coamplification_evidence", "three_d_evidence", "linked_context_evidence",
                     "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping", "result_interpretation",
                     "topic_exploration", "literature_validation",
@@ -625,7 +625,7 @@ fn depmap_route_schema() -> Value {
                     "expression_biomarker_model",
                     "tf_activity_to_dependency", "pathway_activity_to_dependency", "true_love_gene_catalog",
                     "tcga_expression_survival", "subtype_evidence",
-                    "coamplification_evidence", "three_d_evidence",
+                    "coamplification_evidence", "three_d_evidence", "linked_context_evidence",
                     "gene_evidence", "codependency_evidence", "gene_pair_evidence", "drug_gene_evidence",
                     "evidence_comparison", "study_support_mapping",
                     "result_interpretation", "topic_exploration",
@@ -810,6 +810,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         "provider_status"
         | "analysis_inventory"
         | "pan_cancer_dependency_summary"
+        | "linked_context_evidence"
         | "subtype_evidence"
         | "evidence_comparison"
         | "result_interpretation"
@@ -934,7 +935,8 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
             "tcga_expression_survival"
             | "subtype_evidence"
             | "coamplification_evidence"
-            | "three_d_evidence" => (
+            | "three_d_evidence"
+            | "linked_context_evidence" => (
                 "L1_DIRECT",
                 false,
                 "Use the matching bounded MCP evidence tool and preserve its cohort, contrast, metric, and coverage semantics.",
@@ -1386,6 +1388,11 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
         ("three_d_evidence", _) if !requires_user_input => json!({
             "tool": "depmap_3d_evidence",
             "arguments": {"family": family, "gene": gene, "source": source_gene, "target": target_gene, "cohort": cohort, "limit": 20},
+            "single_call": true
+        }),
+        ("linked_context_evidence", _) if !requires_user_input => json!({
+            "tool": "depmap_linked_context",
+            "arguments": {"gene": gene, "drug": drug, "lineage": canonical_lineage, "family": family, "limit": 20},
             "single_call": true
         }),
         _ => Value::Null,
@@ -4281,6 +4288,10 @@ mod tests {
             (
                 json!({"intent":"three_d_evidence","family":"dependency_profiles","gene":"KRAS"}),
                 "depmap_3d_evidence",
+            ),
+            (
+                json!({"intent":"linked_context_evidence","gene":"EGFR","drug":"afatinib","family":"tahoe_model_drug"}),
+                "depmap_linked_context",
             ),
             (
                 json!({"intent":"pathway_activity_to_dependency","target_gene":"ESR1"}),

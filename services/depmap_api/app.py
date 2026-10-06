@@ -70,7 +70,7 @@ THREE_D_FAMILIES = {
     "true_love_gene", "omics_dependency", "lineage_dependency_enrichment",
 }
 THREE_D_OMICS = {"expression", "cnv", "damaging", "hotspot"}
-QUERY_CONTRACT_VERSION = 13
+QUERY_CONTRACT_VERSION = 14
 
 
 class _QueryIndexIntegrityError(RuntimeError):
@@ -98,6 +98,23 @@ def _require_verified_query_index(path: Path) -> Path:
     raise _QueryIndexIntegrityError(
         integrity.reason_code or "INTEGRITY_CATALOG_UNAVAILABLE"
     )
+
+
+def coverage_manifest_version(knowledge_root: Path) -> int:
+    """Report the installed query-index schema, not a hardcoded catalog generation."""
+    index = knowledge_root / "depmap-26q1-query-index.sqlite"
+    if not index.is_file():
+        return 5
+    try:
+        with closing(sqlite3.connect(f"file:{index.as_posix()}?mode=ro", uri=True)) as db:
+            row = db.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'"
+            ).fetchone()
+    except sqlite3.Error:
+        return 5
+    if row is None or not str(row[0]).isdigit():
+        return 5
+    return int(row[0])
 MODE_REQUIRED_FIELDS = {
     "analysis_catalog": set(),
     "mutation_anchor": {"lineage"},
@@ -125,6 +142,7 @@ MODE_REQUIRED_FIELDS = {
     "true_love": set(),
     "synthetic_lethal": set(),
     "three_d": {"family"},
+    "linked_context": set(),
     "tcga_expression_survival": {"gene"},
     "tf_dependency": set(),
     "biomarker_target": {"target"},
@@ -147,6 +165,7 @@ MODE_OPTIONAL_FIELDS = {
     "true_love": {"gene", "partner", "catalog", "coverage", "limit", "scope", "lineage"},
     "synthetic_lethal": {"source", "target", "event", "lineage", "limit"},
     "three_d": {"gene", "source", "target", "cohort", "contrast", "omic", "limit"},
+    "linked_context": {"gene", "drug", "lineage", "family", "limit"},
     "tcga_expression_survival": {"project", "lineage", "endpoint", "limit"},
     "tf_dependency": {"source", "target", "limit", "view"},
     "pathway_dependency": {"pathway", "limit"},
@@ -467,7 +486,7 @@ class QueryRequest(BaseModel):
         "lineage_network", "lineage_cnv", "lineage_drug", "enrichment",
         "lineage_directions",
         "subtype", "coamplification",
-        "true_love", "synthetic_lethal", "three_d", "pathway_dependency",
+        "true_love", "synthetic_lethal", "three_d", "linked_context", "pathway_dependency",
         "tcga_expression_survival",
         "tf_dependency",
         "biomarker_target",
@@ -552,7 +571,7 @@ class QueryRequest(BaseModel):
             raise ValueError("unsupported drug omic")
         if self.mode == "three_d" and self.omic is not None and self.omic not in THREE_D_OMICS:
             raise ValueError("unsupported 3D omic")
-        if self.family is not None and self.mode != "three_d" and self.family not in LINEAGE_NETWORK_FAMILIES:
+        if self.family is not None and self.mode not in {"three_d", "linked_context"} and self.family not in LINEAGE_NETWORK_FAMILIES:
             raise ValueError("unsupported lineage network family")
         if self.mode == "three_d" and self.family not in THREE_D_FAMILIES:
             raise ValueError("unsupported 3D family")
@@ -4199,6 +4218,89 @@ def _run_tf_dependency_query(settings: Settings, query: dict[str, Any]) -> dict[
     )
 
 
+def _link_key(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _run_linked_context_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
+    """Read indexed external-link rows. Provenance cites the index filename, which the catalog binder verifies separately from artifact files."""
+    index = settings.knowledge_root / "depmap-26q1-query-index.sqlite"
+    try:
+        active_index = _require_verified_query_index(index)
+    except _QueryIndexIntegrityError as exc:
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="linked_context",
+            reason_code=str(exc),
+            reason="query index integrity validation failed",
+            provenance=[index.name],
+        )
+    limit = int(query.get("limit") or 20)
+    gene = str(query.get("gene") or "").upper()
+    drug_key = _link_key(query.get("drug"))
+    lineage_key = _link_key(query.get("lineage"))
+    family = str(query.get("family") or "")
+    try:
+        with closing(sqlite3.connect(
+            f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
+        )) as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "external_link" not in tables:
+                return _evidence_response(
+                    "NOT_COMPUTED", mode="linked_context",
+                    reason="query index has no external_link table; rebuild the index",
+                    provenance=[index.name],
+                )
+            if not any((gene, drug_key, lineage_key, family)):
+                rows = [
+                    {"family": row[0], "row_count": row[1]}
+                    for row in db.execute(
+                        "SELECT family, COUNT(*) FROM external_link GROUP BY family ORDER BY family"
+                    )
+                ]
+                return _evidence_response(
+                    "FOUND" if rows else "NOT_RETAINED", mode="linked_context",
+                    reason="indexed external-link family counts",
+                    rows=rows, returned_count=len(rows), provenance=[index.name],
+                )
+            clauses: list[str] = []
+            params: list[Any] = []
+            if gene:
+                clauses.append("gene=?")
+                params.append(gene)
+            if drug_key:
+                clauses.append("drug_key=?")
+                params.append(drug_key)
+            if lineage_key:
+                clauses.append("lineage_key=?")
+                params.append(lineage_key)
+            if family:
+                clauses.append("family=?")
+                params.append(family)
+            params.append(limit)
+            raw = db.execute(
+                f"SELECT family, row_json FROM external_link WHERE {' AND '.join(clauses)} LIMIT ?",
+                params,
+            ).fetchall()
+    except sqlite3.Error:
+        LOGGER.exception("linked context index query failed")
+        return _evidence_response(
+            "MODULE_UNAVAILABLE", mode="linked_context",
+            reason_code="INTEGRITY_CATALOG_UNAVAILABLE",
+            reason="the external-link index could not be read",
+            provenance=[index.name],
+        )
+    rows = []
+    for family_name, payload in raw:
+        item = json.loads(payload)
+        item["family"] = family_name
+        rows.append(item)
+    return _evidence_response(
+        "FOUND" if rows else "NOT_RETAINED", mode="linked_context",
+        reason="indexed external-link rows",
+        rows=rows, returned_count=len(rows), provenance=[index.name],
+    )
+
+
 async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[str, Any]:
     if query["mode"] == "analysis_catalog":
         return await asyncio.to_thread(_run_analysis_catalog_query, settings, query)
@@ -4258,6 +4360,8 @@ async def run_bounded_query(settings: Settings, query: dict[str, Any]) -> dict[s
         return await asyncio.to_thread(_run_synthetic_lethal_query, settings, query)
     if query["mode"] == "three_d":
         return await asyncio.to_thread(_run_three_d_query, settings, query)
+    if query["mode"] == "linked_context":
+        return await asyncio.to_thread(_run_linked_context_query, settings, query)
     if query["mode"] == "tf_dependency":
         return await asyncio.to_thread(_run_tf_dependency_query, settings, query)
     if query["mode"] == "pathway_dependency":
@@ -4346,7 +4450,7 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
             "status": "ready",
             "release": qa["release"],
             "query_contract_version": QUERY_CONTRACT_VERSION,
-            "coverage_manifest_version": 5,
+            "coverage_manifest_version": coverage_manifest_version(api.state.settings.knowledge_root),
             "qa_status": qa["qa_status"],
             "module_count": qa.get("module_count"),
             "query_modes": sorted(MODE_REQUIRED_FIELDS),
