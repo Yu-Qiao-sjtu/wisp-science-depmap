@@ -7479,6 +7479,20 @@ pub fn run() {
                 .expect("open global library")
             });
             let run_manager = run_context::RunManager::new();
+            let frame_app = app.handle().clone();
+            tauri::async_runtime::block_on(run_manager.set_structure_frame_presenter(
+                move |path: &std::path::Path| {
+                    let app = frame_app.clone();
+                    let path = path.to_string_lossy().into_owned();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) =
+                            viewer::present_structure_in_viewer(app, path, None).await
+                        {
+                            tracing::warn!("structure frame was not presented: {error}");
+                        }
+                    });
+                },
+            ));
             let runtime_manager = wisp_runtime::RuntimeManager::new(Arc::new(
                 runtime_launcher::TauriRuntimeLauncher::new(
                     store.clone(),
