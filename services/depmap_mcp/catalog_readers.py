@@ -55,6 +55,7 @@ MODE_ALIASES = {
     "pathway_dependency": "pathway_dependency",
     "biomarker_target": "biomarker_target",
     "true_love": "true_love",
+    "linked_context": "linked_context",
     "analysis_catalog": "analysis_catalog",
 }
 
@@ -242,7 +243,9 @@ class CatalogReaderRegistry:
                     ) if analysis_ids else ()
                 # Indexed-content readers legitimately query SQLite content tables
                 # and do not need a file candidate for each returned row.
-                indexed = reader_mode in {"true_love", "tf_dependency", "biomarker_target"}
+                indexed = reader_mode in {
+                    "true_love", "tf_dependency", "biomarker_target", "linked_context",
+                }
                 if not analysis_ids and not indexed:
                     return CatalogResolution("NOT_INDEXED", mode, reader_mode, reader["adapter"], reason="no COMPLETE matching analysis")
                 return CatalogResolution("RESOLVED", mode, reader_mode, reader["adapter"], analysis_ids, artifacts, blocks)

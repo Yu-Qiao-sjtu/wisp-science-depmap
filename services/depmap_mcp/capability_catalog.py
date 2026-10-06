@@ -246,4 +246,14 @@ INTENT_CAPABILITIES: tuple[dict[str, Any], ...] = (
         "confusable_with": ["gene_pair_evidence"], "mcp_tool": "depmap_3d_evidence",
         "inventory_patterns": ["depmap-26q1-3d"],
     },
+    {
+        "intent": "linked_context_evidence",
+        "description": "Query indexed joins between a completed DepMap release and an external cohort, keyed by gene, drug, lineage, or link family.",
+        "required": [], "optional": ["gene", "drug", "lineage", "family", "limit"],
+        "examples_zh": ["这个基因在外部扰动对接里有哪些药", "列出已索引的外部对接家族"],
+        "precise_prompt_template_zh": "查询{family}对接中{gene}与{drug}在{lineage}的已索引行。",
+        "confusable_with": ["drug_gene_evidence", "three_d_evidence"],
+        "mcp_tool": "depmap_linked_context",
+        "inventory_patterns": ["tahoe_2d_links", "differential_to_2d_links"],
+    },
 )

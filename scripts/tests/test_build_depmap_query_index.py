@@ -943,7 +943,7 @@ class QueryIndexTests(unittest.TestCase):
 
             counts = build(root, output)
 
-            self.assertEqual(counts["capabilities"], 23)
+            self.assertEqual(counts["capabilities"], 24)
             self.assertEqual(counts["matrix_gene_blocks"], 1)
             self.assertEqual(counts["coverage_records"], 3)
             self.assertTrue(is_fresh(root, output))
@@ -1197,6 +1197,45 @@ class QueryIndexTests(unittest.TestCase):
             )
             self.assertEqual(missing.state, "NOT_INDEXED")
             self.assertEqual(missing.reader_id, "enrichment_adapter")
+
+
+    def test_external_link_indexes_verified_join_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            link = root / "tahoe_2d_links"
+            link.mkdir()
+            (link / "manifest.json").write_text(
+                json.dumps({"status": "complete", "release": "26Q1"}),
+                encoding="utf-8",
+            )
+            (link / "model_drug_target_links.csv").write_text(
+                "target_gene,tahoe_drug,OncotreeLineage\nEGFR,Afatinib,Lung\n",
+                encoding="utf-8",
+            )
+            output = root / "depmap-26q1-query-index.sqlite"
+            counts = build(root, output)
+            self.assertEqual(counts["external_link"], 1)
+            with closing(sqlite3.connect(output)) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT gene, drug_key, lineage_key, family FROM external_link"
+                    ).fetchone(),
+                    ("EGFR", "afatinib", "lung", "tahoe_model_drug"),
+                )
+            from services.depmap_api.app import Settings, _run_linked_context_query
+
+            settings = Settings(
+                knowledge_root=root,
+                query_script=root / "missing.R",
+                api_token="token",
+            )
+            result = _run_linked_context_query(
+                settings, {"mode": "linked_context", "gene": "EGFR", "limit": 5}
+            )
+            self.assertEqual(result["status"], "FOUND")
+            self.assertEqual(result["returned_count"], 1)
+            self.assertEqual(result["provenance"], ["depmap-26q1-query-index.sqlite"])
+            self.assertEqual(result["rows"][0]["tahoe_drug"], "Afatinib")
 
 
 if __name__ == "__main__":
