@@ -49,6 +49,7 @@ function zoomSnapshot(snapshot, factor) {
   const next = cloneSnapshot(snapshot);
   const offset = sub(next.position, next.target);
   next.position = add(next.target, scale(offset, 1 / factor));
+  if (typeof next.radius === "number") next.radius = next.radius / factor;
   return next;
 }
 

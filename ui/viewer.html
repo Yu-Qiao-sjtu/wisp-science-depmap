@@ -36,7 +36,7 @@
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script src="viewer_controls.js"></script>
   <script>
-    (function () {
+    (async function () {
       'use strict';
       var statusEl = document.getElementById('status');
       function setStatus(message, isError) {
@@ -135,7 +135,7 @@
       }
 
       try {
-        viewer = new molstar.Viewer(document.getElementById('viewer'), {
+        viewer = await molstar.Viewer.create(document.getElementById('viewer'), {
           layoutIsExpanded: true,
           layoutShowControls: true,
           layoutShowLeftPanel: true,
