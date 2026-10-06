@@ -70,6 +70,7 @@ class ScientificQueryContractTests(unittest.TestCase):
         self.assertEqual(len(missing), 2)
         self.assertEqual(gap["annotation_status"], "ANNOTATION_UNAVAILABLE")
         self.assertIsNone(gap["source"])
+        self.assertNotIn("common_essential_source", missing[0])
 
     def test_filter_applies_before_limit_on_decoy_prefix(self):
         rows = [{"id": f"d{i}"} for i in range(30)] + [{"id": "key"}]
