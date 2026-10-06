@@ -1,10 +1,9 @@
-//! Dedicated molecular structure viewer window (slice 1/4 of #191, see #192).
+//! Dedicated molecular viewer window (slices 1-2/4 of #191, see #192/#193).
 //!
 //! Renders the vendored open-source Mol\* bundle (`ui/viewer.html`) in its own
-//! webview. Structure bytes travel only through the path-validated
-//! `read_structure_bytes` command; the webview itself holds no filesystem
-//! scope. Trajectory playback (DCD/XTC/TRR/NetCDF) arrives with slice 2 (#193)
-//! via the same window.
+//! webview. Structure and trajectory bytes travel only through the
+//! path-validated `read_*_bytes` commands; the webview itself holds no
+//! filesystem scope.
 
 use std::path::{Path, PathBuf};
 
@@ -18,11 +17,26 @@ pub(crate) const VIEWER_WINDOW_LABEL: &str = "viewer-structure";
 /// it never races the page's event listener).
 const LOAD_STRUCTURE_EVENT: &str = "viewer://load-structure";
 
+/// Event carrying a new topology + trajectory pair into an open viewer window.
+const LOAD_TRAJECTORY_EVENT: &str = "viewer://load-trajectory";
+
+/// Scripted camera move for an already-open viewer (#194).
+const CONTROL_CAMERA_EVENT: &str = "viewer://control-camera";
+
+/// PyMOL-style selection for an already-open viewer (#194).
+const SELECT_EVENT: &str = "viewer://select";
+
 /// Upper bound for a structure file handed to the viewer. Structures are tiny
 /// next to trajectories; a larger "structure" is almost certainly the wrong
-/// file (e.g. a multi-frame trajectory), which slice 2 (#193) will route
-/// through a separate trajectory-specific command.
+/// file (e.g. a multi-frame trajectory), which is routed through the
+/// trajectory-specific commands instead.
 pub(crate) const MAX_STRUCTURE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Upper bound for a trajectory file. Real MD trajectories (DCD/XTC from
+/// OpenMM or GROMACS runs) routinely reach hundreds of MiB; the cap exists
+/// only to refuse accidentally selected multi-GB payloads, not to constrain
+/// legitimate runs.
+pub(crate) const MAX_TRAJECTORY_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn is_allowed_structure_extension(ext: &str) -> bool {
     matches!(
@@ -31,42 +45,77 @@ pub(crate) fn is_allowed_structure_extension(ext: &str) -> bool {
     )
 }
 
-/// Resolve and vet a structure path: non-empty, allow-listed extension, an
+/// Coordinate formats parsed by Mol\* mol-io (the NetCDF reader also covers
+/// `.nc`, GROMACS' alternative extension for the same container).
+pub(crate) fn is_allowed_trajectory_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "dcd" | "xtc" | "trr" | "netcdf" | "nc"
+    )
+}
+
+/// Resolve and vet a viewer file: non-empty, allow-listed extension, an
 /// existing regular file, and within the size cap. Returns the canonical path
 /// on success; the error strings are user-facing.
-pub(crate) fn validate_structure_path(path: &str) -> Result<PathBuf, String> {
+fn validate_viewer_file(
+    kind: &str,
+    path: &str,
+    allowed: fn(&str) -> bool,
+    expected: &str,
+    cap: u64,
+) -> Result<PathBuf, String> {
     if path.is_empty() {
-        return Err("structure path is empty".to_string());
+        return Err(format!("{kind} path is empty"));
     }
     let raw = Path::new(path);
     let ext = raw
         .extension()
         .and_then(|e| e.to_str())
-        .ok_or_else(|| format!("structure path has no extension: {path:?}"))?;
-    if !is_allowed_structure_extension(ext) {
+        .ok_or_else(|| format!("{kind} path has no extension: {path:?}"))?;
+    if !allowed(ext) {
         return Err(format!(
-            "unsupported structure extension {ext:?}; expected pdb, ent, cif, mmcif or gro"
+            "unsupported {kind} extension {ext:?}; expected {expected}"
         ));
     }
     let canonical = std::fs::canonicalize(raw)
-        .map_err(|e| format!("cannot resolve structure path {path:?}: {e}"))?;
+        .map_err(|e| format!("cannot resolve {kind} path {path:?}: {e}"))?;
     let meta = std::fs::metadata(&canonical)
-        .map_err(|e| format!("cannot read structure file {path:?}: {e}"))?;
+        .map_err(|e| format!("cannot read {kind} file {path:?}: {e}"))?;
     if !meta.is_file() {
-        return Err(format!("structure path is not a regular file: {path:?}"));
+        return Err(format!("{kind} path is not a regular file: {path:?}"));
     }
-    if meta.len() > MAX_STRUCTURE_BYTES {
+    if meta.len() > cap {
         return Err(format!(
-            "structure file is {} bytes; the viewer caps structures at {MAX_STRUCTURE_BYTES} bytes",
+            "{kind} file is {} bytes; the viewer caps {kind} files at {cap} bytes",
             meta.len()
         ));
     }
     Ok(canonical)
 }
 
-/// Percent-encode the `src` query value dependency-free, keeping characters
-/// that are harmless in a query (`:/\` for Windows and POSIX paths).
-pub(crate) fn viewer_url(path: &str) -> String {
+pub(crate) fn validate_structure_path(path: &str) -> Result<PathBuf, String> {
+    validate_viewer_file(
+        "structure",
+        path,
+        is_allowed_structure_extension,
+        "pdb, ent, cif, mmcif or gro",
+        MAX_STRUCTURE_BYTES,
+    )
+}
+
+pub(crate) fn validate_trajectory_path(path: &str) -> Result<PathBuf, String> {
+    validate_viewer_file(
+        "trajectory",
+        path,
+        is_allowed_trajectory_extension,
+        "dcd, xtc, trr, netcdf or nc",
+        MAX_TRAJECTORY_BYTES,
+    )
+}
+
+/// Percent-encode a query value dependency-free, keeping characters that are
+/// harmless in a query (`:/\` for Windows and POSIX paths).
+fn percent_encode_path(path: &str) -> String {
     let mut encoded = String::with_capacity(path.len() * 3);
     for byte in path.bytes() {
         match byte {
@@ -85,12 +134,50 @@ pub(crate) fn viewer_url(path: &str) -> String {
             _ => encoded.push_str(&format!("%{byte:02X}")),
         }
     }
-    format!("viewer.html?src={encoded}")
+    encoded
+}
+
+pub(crate) fn viewer_url(path: &str) -> String {
+    format!("viewer.html?src={}", percent_encode_path(path))
+}
+
+pub(crate) fn viewer_trajectory_url(structure: &str, trajectory: &str) -> String {
+    format!(
+        "viewer.html?topo={}&traj={}",
+        percent_encode_path(structure),
+        percent_encode_path(trajectory)
+    )
 }
 
 #[derive(Clone, Serialize)]
 struct LoadStructurePayload {
     path: String,
+}
+
+#[derive(Clone, Serialize)]
+struct LoadTrajectoryPayload {
+    structure_path: String,
+    trajectory_path: String,
+}
+
+/// Spawn the shared viewer window on the given app-relative URL. Both the
+/// structure and trajectory entry points reuse this so the two modes share
+/// one window (and therefore one Mol\* instance) at a time.
+fn spawn_viewer_window(app: &AppHandle, url: String, title: &str) -> Result<(), String> {
+    let mut builder =
+        WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
+            .title(title)
+            .inner_size(1200.0, 840.0)
+            .min_inner_size(640.0, 480.0)
+            .resizable(true)
+            .general_autofill_enabled(false)
+            .on_navigation(crate::guard_webview_navigation);
+    #[cfg(target_os = "windows")]
+    let builder = builder.decorations(false).shadow(true);
+    builder
+        .build()
+        .map_err(|e| format!("failed to open the viewer window: {e}"))
+        .map(|_| ())
 }
 
 /// Open (or focus) the structure viewer window on a validated structure file.
@@ -102,35 +189,328 @@ struct LoadStructurePayload {
 pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Result<(), String> {
     let canonical = validate_structure_path(&path)?;
     let path = canonical.to_string_lossy().into_owned();
-    let existing = app.get_webview_window(VIEWER_WINDOW_LABEL);
-    match existing {
+    match app.get_webview_window(VIEWER_WINDOW_LABEL) {
         Some(window) => {
             let _ = window.set_focus();
             app.emit_to(
                 VIEWER_WINDOW_LABEL,
                 LOAD_STRUCTURE_EVENT,
-                LoadStructurePayload { path },
+                LoadStructurePayload { path: path.clone() },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
-        None => {
-            let url = viewer_url(&path);
-            let mut builder =
-                WebviewWindowBuilder::new(&app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
-                    .title("Structure viewer")
-                    .inner_size(1200.0, 840.0)
-                    .min_inner_size(640.0, 480.0)
-                    .resizable(true)
-                    .general_autofill_enabled(false)
-                    .on_navigation(crate::guard_webview_navigation);
-            #[cfg(target_os = "windows")]
-            let builder = builder.decorations(false).shadow(true);
-            builder
-                .build()
-                .map_err(|e| format!("failed to open the structure viewer window: {e}"))?;
+        None => spawn_viewer_window(&app, viewer_url(&path), "Structure viewer")?,
+    }
+    remember_viewer_path(&path);
+    Ok(())
+}
+
+/// Open (or focus) the viewer window on a validated topology + trajectory
+/// pair (slice 2/4, #193). The page drives Mol\*'s built-in trajectory
+/// pipeline (mol-io DCD/XTC/TRR/NetCDF readers plus the animation preset), so
+/// playback controls come from the vendored bundle itself.
+#[tauri::command]
+pub(crate) async fn open_trajectory_viewer(
+    app: AppHandle,
+    structure_path: String,
+    trajectory_path: String,
+) -> Result<(), String> {
+    let canonical_structure = validate_structure_path(&structure_path)?;
+    let canonical_trajectory = validate_trajectory_path(&trajectory_path)?;
+    let structure_path = canonical_structure.to_string_lossy().into_owned();
+    let trajectory_path = canonical_trajectory.to_string_lossy().into_owned();
+    match app.get_webview_window(VIEWER_WINDOW_LABEL) {
+        Some(window) => {
+            let _ = window.set_focus();
+            app.emit_to(
+                VIEWER_WINDOW_LABEL,
+                LOAD_TRAJECTORY_EVENT,
+                LoadTrajectoryPayload {
+                    structure_path: structure_path.clone(),
+                    trajectory_path: trajectory_path.clone(),
+                },
+            )
+            .map_err(|e| format!("failed to deliver trajectory to the viewer window: {e}"))?;
+        }
+        None => spawn_viewer_window(
+            &app,
+            viewer_trajectory_url(&structure_path, &trajectory_path),
+            "Trajectory viewer",
+        )?,
+    }
+    remember_viewer_path(&structure_path);
+    remember_viewer_path(&trajectory_path);
+    Ok(())
+}
+
+#[derive(Clone, Serialize)]
+struct CameraPayload {
+    action: String,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+}
+
+#[derive(Clone, Serialize)]
+struct SelectionPayload {
+    expression: String,
+}
+
+/// Normalize one scripted camera step. `rotate` needs an axis and degrees,
+/// `zoom` needs a positive factor, `center` may name a residue, `reset` takes
+/// no extras.
+pub(crate) fn normalize_camera_command(
+    action: &str,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+) -> Result<CameraPayload, String> {
+    let action = action.trim().to_ascii_lowercase();
+    match action.as_str() {
+        "reset" => Ok(CameraPayload {
+            action,
+            axis: None,
+            degrees: None,
+            factor: None,
+            residue: None,
+        }),
+        "rotate" => {
+            let axis = axis
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| matches!(*value, "x" | "y" | "z"))
+                .ok_or_else(|| "rotate requires axis x, y, or z".to_string())?;
+            let degrees = degrees.ok_or_else(|| "rotate requires degrees".to_string())?;
+            if !degrees.is_finite() {
+                return Err("rotate degrees must be finite".into());
+            }
+            Ok(CameraPayload {
+                action,
+                axis: Some(axis.to_string()),
+                degrees: Some(degrees),
+                factor: None,
+                residue: None,
+            })
+        }
+        "zoom" => {
+            let factor = factor.ok_or_else(|| "zoom requires factor".to_string())?;
+            if !factor.is_finite() || factor <= 0.0 {
+                return Err("zoom factor must be a positive finite number".into());
+            }
+            Ok(CameraPayload {
+                action,
+                axis: None,
+                degrees: None,
+                factor: Some(factor),
+                residue: None,
+            })
+        }
+        "center" => Ok(CameraPayload {
+            action,
+            axis: None,
+            degrees: None,
+            factor: None,
+            residue,
+        }),
+        _ => Err(format!(
+            "unsupported camera action {action:?}; expected rotate, zoom, center, or reset"
+        )),
+    }
+}
+
+/// Accept the PyMOL dialect subset the viewer highlights: `name CA`,
+/// `resi 1-10`, `polymer.protein`, joined by `and`.
+pub(crate) fn normalize_pymol_selection(expression: &str) -> Result<String, String> {
+    let clauses: Vec<&str> = expression
+        .split(" and ")
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .collect();
+    if clauses.is_empty() {
+        return Err("selection expression is empty".into());
+    }
+    for clause in &clauses {
+        validate_pymol_clause(clause)?;
+    }
+    Ok(clauses.join(" and "))
+}
+
+fn validate_pymol_clause(clause: &str) -> Result<(), String> {
+    let mut tokens = clause.split_whitespace();
+    let head = tokens
+        .next()
+        .ok_or_else(|| format!("empty selection clause in {clause:?}"))?;
+    match head {
+        "name" => {
+            let atom = tokens
+                .next()
+                .ok_or_else(|| "name selection requires an atom name".to_string())?;
+            if tokens.next().is_some() || !atom.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(format!("unsupported name selection {clause:?}"));
+            }
+            Ok(())
+        }
+        "resi" => {
+            let range = tokens
+                .next()
+                .ok_or_else(|| "resi selection requires a residue range".to_string())?;
+            if tokens.next().is_some() || !valid_residue_range(range) {
+                return Err(format!("unsupported resi selection {clause:?}"));
+            }
+            Ok(())
+        }
+        "polymer.protein" | "polymer.nucleic" => {
+            if tokens.next().is_some() {
+                return Err(format!("unsupported polymer selection {clause:?}"));
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "unsupported selection clause {clause:?}; expected name, resi, or polymer.protein"
+        )),
+    }
+}
+
+fn valid_residue_range(range: &str) -> bool {
+    let mut parts = range.split('-');
+    let start = parts.next().and_then(|value| value.parse::<u32>().ok());
+    let end = match parts.next() {
+        Some(value) => value.parse::<u32>().ok(),
+        None => start,
+    };
+    parts.next().is_none()
+        && matches!((start, end), (Some(start), Some(end)) if start > 0 && end >= start)
+}
+
+#[derive(Debug)]
+pub(crate) enum ArtifactHandoff {
+    Structure(PathBuf),
+    Trajectory {
+        structure: PathBuf,
+        trajectory: PathBuf,
+    },
+}
+
+/// Route one artifact path to the structure window or a trajectory whose
+/// topology sits beside it. Unsupported types stay hidden from the card.
+pub(crate) fn resolve_artifact_handoff(path: &str) -> Result<ArtifactHandoff, String> {
+    let raw = Path::new(path);
+    let ext = raw
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if is_allowed_structure_extension(&ext) {
+        return Ok(ArtifactHandoff::Structure(validate_structure_path(path)?));
+    }
+    if is_allowed_trajectory_extension(&ext) {
+        let trajectory = validate_trajectory_path(path)?;
+        let structure = sibling_topology(&trajectory).ok_or_else(|| {
+            format!(
+                "trajectory {} has no sibling topology (pdb, cif, mmcif, gro, or ent)",
+                trajectory.display()
+            )
+        })?;
+        return Ok(ArtifactHandoff::Trajectory {
+            structure,
+            trajectory,
+        });
+    }
+    Err(format!(
+        "unsupported viewer artifact extension {ext:?}; expected a structure or trajectory file"
+    ))
+}
+
+fn sibling_topology(trajectory: &Path) -> Option<PathBuf> {
+    let parent = trajectory.parent()?;
+    let stem = trajectory.file_stem()?.to_str()?;
+    for ext in ["pdb", "cif", "mmcif", "gro", "ent"] {
+        let candidate = parent.join(format!("{stem}.{ext}"));
+        if candidate.is_file() {
+            if let Ok(path) = validate_structure_path(&candidate.to_string_lossy()) {
+                return Some(path);
+            }
         }
     }
+    None
+}
+
+fn remember_viewer_path(path: &str) {
+    let mut recent = RECENT_VIEWER_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    recent.retain(|existing| existing != path);
+    recent.insert(0, path.to_string());
+    recent.truncate(8);
+}
+
+static RECENT_VIEWER_PATHS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn require_viewer_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window(VIEWER_WINDOW_LABEL).is_none() {
+        return Err("viewer window is not open".into());
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn control_camera(
+    app: AppHandle,
+    action: String,
+    axis: Option<String>,
+    degrees: Option<f64>,
+    factor: Option<f64>,
+    residue: Option<i64>,
+) -> Result<(), String> {
+    let payload = normalize_camera_command(&action, axis, degrees, factor, residue)?;
+    require_viewer_window(&app)?;
+    app.emit_to(VIEWER_WINDOW_LABEL, CONTROL_CAMERA_EVENT, payload)
+        .map_err(|e| format!("failed to deliver camera command: {e}"))
+}
+
+#[tauri::command]
+pub(crate) async fn select_in_viewer(app: AppHandle, expression: String) -> Result<String, String> {
+    let expression = normalize_pymol_selection(&expression)?;
+    require_viewer_window(&app)?;
+    app.emit_to(
+        VIEWER_WINDOW_LABEL,
+        SELECT_EVENT,
+        SelectionPayload {
+            expression: expression.clone(),
+        },
+    )
+    .map_err(|e| format!("failed to deliver selection: {e}"))?;
+    Ok(expression)
+}
+
+#[tauri::command]
+pub(crate) async fn open_artifact_in_viewer(app: AppHandle, path: String) -> Result<(), String> {
+    match resolve_artifact_handoff(&path)? {
+        ArtifactHandoff::Structure(structure) => {
+            open_structure_viewer(app, structure.to_string_lossy().into_owned()).await
+        }
+        ArtifactHandoff::Trajectory {
+            structure,
+            trajectory,
+        } => {
+            open_trajectory_viewer(
+                app,
+                structure.to_string_lossy().into_owned(),
+                trajectory.to_string_lossy().into_owned(),
+            )
+            .await
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn list_viewer_recent() -> Result<Vec<String>, String> {
+    Ok(RECENT_VIEWER_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone())
 }
 
 /// Read structure bytes for the viewer page after the same path validation as
@@ -142,6 +522,21 @@ pub(crate) async fn read_structure_bytes(path: String) -> Result<Vec<u8>, String
     let canonical = validate_structure_path(&path)?;
     std::fs::read(&canonical)
         .map_err(|e| format!("failed to read structure file {}: {e}", canonical.display()))
+}
+
+/// Read trajectory bytes after the same path validation as
+/// [`open_trajectory_viewer`]. Trajectories stream through memory as one
+/// buffer; Mol\*'s readers are synchronous over in-memory data, so no temp
+/// copy is written.
+#[tauri::command]
+pub(crate) async fn read_trajectory_bytes(path: String) -> Result<Vec<u8>, String> {
+    let canonical = validate_trajectory_path(&path)?;
+    std::fs::read(&canonical).map_err(|e| {
+        format!(
+            "failed to read trajectory file {}: {e}",
+            canonical.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -160,10 +555,32 @@ mod tests {
 
     #[test]
     fn trajectory_and_document_extensions_are_rejected() {
-        // Trajectories belong to slice 2 (#193) and must not ride slice 1.
+        // Trajectories must ride the dedicated trajectory commands.
         for ext in ["dcd", "xtc", "trr", "netcdf", "npz", "exe", ""] {
             assert!(
                 !is_allowed_structure_extension(ext),
+                "{ext:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn trajectory_extensions_are_case_insensitive() {
+        for ext in [
+            "dcd", "DCD", "xtc", "XTC", "trr", "netcdf", "NetCDF", "nc", "NC",
+        ] {
+            assert!(
+                is_allowed_trajectory_extension(ext),
+                "{ext} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn structure_extensions_are_rejected_for_trajectories() {
+        for ext in ["pdb", "ent", "cif", "mmcif", "gro", "npz", "exe", ""] {
+            assert!(
+                !is_allowed_trajectory_extension(ext),
                 "{ext:?} must be rejected"
             );
         }
@@ -177,20 +594,32 @@ mod tests {
         );
         let err = validate_structure_path("no-extension").unwrap_err();
         assert!(err.contains("no extension"), "{err}");
+        assert_eq!(
+            validate_trajectory_path("").unwrap_err(),
+            "trajectory path is empty"
+        );
+        let err = validate_trajectory_path("no-extension").unwrap_err();
+        assert!(err.contains("no extension"), "{err}");
     }
 
     #[test]
     fn missing_files_are_rejected() {
         let err = validate_structure_path("definitely-not-on-disk-9f3a.pdb").unwrap_err();
         assert!(err.contains("cannot resolve"), "{err}");
+        let err = validate_trajectory_path("definitely-not-on-disk-9f3a.dcd").unwrap_err();
+        assert!(err.contains("cannot resolve"), "{err}");
     }
 
     #[test]
-    fn directories_with_structure_extensions_are_rejected() {
+    fn directories_with_viewer_extensions_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let fake = dir.path().join("dir.pdb");
         std::fs::create_dir(&fake).unwrap();
         let err = validate_structure_path(fake.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("not a regular file"), "{err}");
+        let fake_traj = dir.path().join("dir.xtc");
+        std::fs::create_dir(&fake_traj).unwrap();
+        let err = validate_trajectory_path(fake_traj.to_str().unwrap()).unwrap_err();
         assert!(err.contains("not a regular file"), "{err}");
     }
 
@@ -205,15 +634,33 @@ mod tests {
     }
 
     #[test]
+    fn valid_trajectory_files_pass_and_are_canonicalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("traj.dcd");
+        std::fs::write(&file, b"slice-two smoke bytes\n").unwrap();
+        let canonical = validate_trajectory_path(file.to_str().unwrap()).unwrap();
+        assert!(canonical.is_absolute());
+        assert_eq!(canonical, file.canonicalize().unwrap());
+    }
+
+    #[test]
     fn oversized_structures_are_rejected() {
         // Cannot cheaply write a >128 MiB file, so assert the cap arithmetic
         // and the error formatting contract instead.
         assert_eq!(MAX_STRUCTURE_BYTES, 128 * 1024 * 1024);
         let meta_len = MAX_STRUCTURE_BYTES + 1;
         let msg = format!(
-            "structure file is {meta_len} bytes; the viewer caps structures at {MAX_STRUCTURE_BYTES} bytes"
+            "structure file is {meta_len} bytes; the viewer caps structure files at {MAX_STRUCTURE_BYTES} bytes"
         );
-        assert!(msg.contains("caps structures"));
+        assert!(msg.contains("caps structure"));
+    }
+
+    #[test]
+    fn trajectory_cap_leaves_room_for_real_md_runs() {
+        assert_eq!(MAX_TRAJECTORY_BYTES, 512 * 1024 * 1024);
+        // The trajectory cap must dwarf the structure cap: a single 25 ns
+        // OpenMM run already emits DCDs far beyond any topology file.
+        assert!(MAX_TRAJECTORY_BYTES >= 4 * MAX_STRUCTURE_BYTES);
     }
 
     #[test]
@@ -225,6 +672,81 @@ mod tests {
         assert_eq!(
             viewer_url("D:\\pdb library\\x (1).cif"),
             "viewer.html?src=D:\\pdb%20library\\x%20%281%29.cif"
+        );
+    }
+
+    #[test]
+    fn viewer_trajectory_url_encodes_both_params() {
+        assert_eq!(
+            viewer_trajectory_url("C:/md run/topo.pdb", "C:/md run/sim 01.xtc"),
+            "viewer.html?topo=C:/md%20run/topo.pdb&traj=C:/md%20run/sim%2001.xtc"
+        );
+        assert_eq!(
+            viewer_trajectory_url("D:\\t\\x.pdb", "D:\\t\\y.nc"),
+            "viewer.html?topo=D:\\t\\x.pdb&traj=D:\\t\\y.nc"
+        );
+    }
+
+    #[test]
+    fn camera_commands_keep_only_the_fields_their_action_needs() {
+        let rotate =
+            normalize_camera_command("Rotate", Some("y".into()), Some(15.0), None, None).unwrap();
+        assert_eq!(rotate.action, "rotate");
+        assert_eq!(rotate.axis.as_deref(), Some("y"));
+        assert!(
+            normalize_camera_command("rotate", Some("w".into()), Some(1.0), None, None).is_err()
+        );
+        let zoom = normalize_camera_command("zoom", None, None, Some(1.5), None).unwrap();
+        assert_eq!(zoom.factor, Some(1.5));
+        assert!(normalize_camera_command("zoom", None, None, Some(0.0), None).is_err());
+        let center = normalize_camera_command("center", None, None, None, Some(42)).unwrap();
+        assert_eq!(center.residue, Some(42));
+        let reset =
+            normalize_camera_command("reset", Some("x".into()), Some(9.0), Some(2.0), Some(1))
+                .unwrap();
+        assert!(reset.axis.is_none() && reset.degrees.is_none());
+    }
+
+    #[test]
+    fn pymol_selection_accepts_the_three_scripted_expressions() {
+        assert_eq!(normalize_pymol_selection("name CA").unwrap(), "name CA");
+        assert_eq!(normalize_pymol_selection("resi 1-10").unwrap(), "resi 1-10");
+        assert_eq!(
+            normalize_pymol_selection("  polymer.protein and name CA  ").unwrap(),
+            "polymer.protein and name CA"
+        );
+        assert!(normalize_pymol_selection("resi 0").is_err());
+        assert!(normalize_pymol_selection("chain A").is_err());
+        assert!(normalize_pymol_selection("").is_err());
+    }
+
+    #[test]
+    fn artifact_handoff_pairs_a_trajectory_with_its_sibling_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let topo = dir.path().join("sim.pdb");
+        let traj = dir.path().join("sim.xtc");
+        std::fs::write(&topo, b"ATOM\n").unwrap();
+        std::fs::write(&traj, b"coords").unwrap();
+        match resolve_artifact_handoff(traj.to_str().unwrap()).unwrap() {
+            ArtifactHandoff::Trajectory {
+                structure,
+                trajectory,
+            } => {
+                assert_eq!(structure, topo.canonicalize().unwrap());
+                assert_eq!(trajectory, traj.canonicalize().unwrap());
+            }
+            ArtifactHandoff::Structure(_) => panic!("expected a trajectory handoff"),
+        }
+        let orphan = dir.path().join("orphan.dcd");
+        std::fs::write(&orphan, b"coords").unwrap();
+        assert!(resolve_artifact_handoff(orphan.to_str().unwrap())
+            .unwrap_err()
+            .contains("sibling topology"));
+        std::fs::write(dir.path().join("note.txt"), b"no").unwrap();
+        assert!(
+            resolve_artifact_handoff(dir.path().join("note.txt").to_str().unwrap())
+                .unwrap_err()
+                .contains("unsupported")
         );
     }
 }
