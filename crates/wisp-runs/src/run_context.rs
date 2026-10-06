@@ -598,6 +598,8 @@ pub struct RunManager {
     owner_id: String,
     reconciler_started: Arc<AtomicBool>,
     last_retention_sweep: Arc<Mutex<Option<Instant>>>,
+    /// Pushes a structure file into the viewer while a local run is writing it.
+    structure_frames: Arc<Mutex<Option<Arc<dyn Fn(&Path) + Send + Sync>>>>,
 }
 
 const REMOTE_START_LEASE_SECS: i64 = 360;
@@ -642,7 +644,16 @@ impl RunManager {
             owner_id: uuid::Uuid::new_v4().to_string(),
             reconciler_started: Arc::new(AtomicBool::new(false)),
             last_retention_sweep: Arc::new(Mutex::new(None)),
+            structure_frames: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Desktop hook. The headless CLI leaves this unset, so a run never opens a window.
+    pub async fn set_structure_frame_presenter<F>(&self, presenter: F)
+    where
+        F: Fn(&Path) + Send + Sync + 'static,
+    {
+        *self.structure_frames.lock().await = Some(Arc::new(presenter));
     }
 
     pub async fn preflight(
@@ -1211,6 +1222,7 @@ impl RunManager {
         }
 
         let run_id = prepared.run_id.clone();
+        let frame_cwd = prepared.command.cwd.clone();
         let task_store = store.clone();
         let runner = self.runner.clone();
         let active = self.active.clone();
@@ -1251,6 +1263,22 @@ impl RunManager {
             let _ = task.await;
             active.lock().await.remove(&cleanup_id);
         });
+        if let Some(cwd) = frame_cwd {
+            let presenter = self.structure_frames.lock().await.clone();
+            if let Some(presenter) = presenter {
+                let watch_store = store.clone();
+                let watch_id = run_id.clone();
+                tokio::spawn(async move {
+                    crate::structure_frames::watch_local_structure_frames(
+                        &watch_store,
+                        &watch_id,
+                        &cwd,
+                        presenter,
+                    )
+                    .await;
+                });
+            }
+        }
         Ok(SubmitRunResponse {
             run_id,
             status: wisp_store::RunStatus::Submitted,

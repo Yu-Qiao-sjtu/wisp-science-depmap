@@ -13,6 +13,7 @@ pub mod ssh_guard;
 pub mod ssh_hosts;
 pub mod ssh_master;
 pub mod storage_prefs;
+pub mod structure_frames;
 
 mod run_context;
 
