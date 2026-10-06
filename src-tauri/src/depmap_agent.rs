@@ -296,7 +296,7 @@ impl DepMapAgentRouteTool {
 }
 
 pub(crate) const DEPMAP_QUERY_CONTRACT_MIN: u64 = 13;
-pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 13;
+pub(crate) const DEPMAP_QUERY_CONTRACT_MAX: u64 = 14;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DepMapContractAssessment {
@@ -4611,6 +4611,17 @@ mod tests {
             Some("build-abc")
         );
 
+        let next = evaluate_depmap_contract(&json!({
+            "evidence": {
+                "query_contract_version": 14,
+                "server_build_identity": "build-abc",
+                "capability_catalog_digest": "sha256:capabilities",
+                "catalog_build_identity": "sha256:catalog"
+            }
+        }));
+        assert!(next.compatible);
+        assert_eq!(next.code, "COMPATIBLE");
+
         let stale = evaluate_depmap_contract(&json!({
             "evidence": {"query_contract_version": 12}
         }));
@@ -4618,7 +4629,7 @@ mod tests {
         assert_eq!(stale.code, "STALE_CONTRACT");
 
         let future = evaluate_depmap_contract(&json!({
-            "evidence": {"query_contract_version": 14}
+            "evidence": {"query_contract_version": 15}
         }));
         assert!(!future.compatible);
         assert_eq!(future.code, "INCOMPATIBLE_PROVIDER");
