@@ -862,6 +862,9 @@ pub(crate) async fn send_message_inner(
             llm_proxy(),
             &frame_id,
         );
+        if !assistant {
+            agent.add_tool(Box::new(viewer::PresentStructureTool::new(app.clone())));
+        }
         agent.add_tool(Box::new(browser_bridge::BrowserSetupTool::new(
             state.browser_bridge.clone(),
             state.store.clone(),
