@@ -138,7 +138,18 @@ fn percent_encode_path(path: &str) -> String {
 }
 
 pub(crate) fn viewer_url(path: &str) -> String {
-    format!("viewer.html?src={}", percent_encode_path(path))
+    viewer_url_with_selection(path, None)
+}
+
+/// First open cannot listen for events yet, so the optional selection rides
+/// the same URL as the structure path and is applied after that load settles.
+pub(crate) fn viewer_url_with_selection(path: &str, selection: Option<&str>) -> String {
+    let mut url = format!("viewer.html?src={}", percent_encode_path(path));
+    if let Some(selection) = selection {
+        url.push_str("&sel=");
+        url.push_str(&percent_encode_path(selection));
+    }
+    url
 }
 
 pub(crate) fn viewer_trajectory_url(structure: &str, trajectory: &str) -> String {
@@ -152,6 +163,10 @@ pub(crate) fn viewer_trajectory_url(structure: &str, trajectory: &str) -> String
 #[derive(Clone, Serialize)]
 struct LoadStructurePayload {
     path: String,
+    /// Applied only after this structure finishes loading. Absent when the
+    /// caller only wants the file swapped in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -195,11 +210,61 @@ pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Resul
             app.emit_to(
                 VIEWER_WINDOW_LABEL,
                 LOAD_STRUCTURE_EVENT,
-                LoadStructurePayload { path: path.clone() },
+                LoadStructurePayload {
+                    path: path.clone(),
+                    selection: None,
+                },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
         None => spawn_viewer_window(&app, viewer_url(&path), "Structure viewer")?,
+    }
+    remember_viewer_path(&path);
+    Ok(())
+}
+
+/// Empty selections mean "load only". A non-empty one must be the same PyMOL
+/// subset the window can highlight, including a ligand (`organic` / `hetatm`).
+pub(crate) fn normalize_presentation_selection(
+    selection: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(selection) = selection.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(normalize_pymol_selection(selection)?))
+}
+
+/// Open or reuse the structure window and, once that file has loaded, highlight
+/// `selection`. One payload so a later pose cannot highlight the previous
+/// structure. This is the presentation a running task pushes; it is not a
+/// docking-specific command.
+#[tauri::command]
+pub(crate) async fn present_structure_in_viewer(
+    app: AppHandle,
+    path: String,
+    selection: Option<String>,
+) -> Result<(), String> {
+    let selection = normalize_presentation_selection(selection.as_deref())?;
+    let canonical = validate_structure_path(&path)?;
+    let path = canonical.to_string_lossy().into_owned();
+    match app.get_webview_window(VIEWER_WINDOW_LABEL) {
+        Some(window) => {
+            let _ = window.set_focus();
+            app.emit_to(
+                VIEWER_WINDOW_LABEL,
+                LOAD_STRUCTURE_EVENT,
+                LoadStructurePayload {
+                    path: path.clone(),
+                    selection,
+                },
+            )
+            .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
+        }
+        None => spawn_viewer_window(
+            &app,
+            viewer_url_with_selection(&path, selection.as_deref()),
+            "Structure viewer",
+        )?,
     }
     remember_viewer_path(&path);
     Ok(())
@@ -361,14 +426,14 @@ fn validate_pymol_clause(clause: &str) -> Result<(), String> {
             }
             Ok(())
         }
-        "polymer.protein" | "polymer.nucleic" => {
+        "organic" | "hetatm" | "polymer.protein" | "polymer.nucleic" => {
             if tokens.next().is_some() {
                 return Err(format!("unsupported polymer selection {clause:?}"));
             }
             Ok(())
         }
         _ => Err(format!(
-            "unsupported selection clause {clause:?}; expected name, resi, or polymer.protein"
+            "unsupported selection clause {clause:?}; expected name, resi, organic, hetatm, or polymer.protein"
         )),
     }
 }
@@ -684,6 +749,33 @@ mod tests {
         assert_eq!(
             viewer_trajectory_url("D:\\t\\x.pdb", "D:\\t\\y.nc"),
             "viewer.html?topo=D:\\t\\x.pdb&traj=D:\\t\\y.nc"
+        );
+    }
+
+    #[test]
+    fn presentation_selection_accepts_a_ligand_and_drops_blank() {
+        assert_eq!(normalize_presentation_selection(None).unwrap(), None);
+        assert_eq!(normalize_presentation_selection(Some("  ")).unwrap(), None);
+        assert_eq!(
+            normalize_presentation_selection(Some("organic"))
+                .unwrap()
+                .as_deref(),
+            Some("organic")
+        );
+        assert_eq!(
+            normalize_presentation_selection(Some("name CA and polymer.protein"))
+                .unwrap()
+                .as_deref(),
+            Some("name CA and polymer.protein")
+        );
+        assert!(normalize_presentation_selection(Some("ligand")).is_err());
+    }
+
+    #[test]
+    fn first_open_carries_the_selection_on_the_url() {
+        assert_eq!(
+            viewer_url_with_selection("C:/a b/model.pdb", Some("organic")),
+            "viewer.html?src=C:/a%20b/model.pdb&sel=organic"
         );
     }
 

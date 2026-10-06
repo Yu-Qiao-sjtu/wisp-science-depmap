@@ -47,5 +47,6 @@ test("vendored Mol* compiles a PyMOL selection", () => {
     expression: "name CA and polymer.protein",
   });
   assert.equal(typeof query, "function");
+  assert.equal(typeof context.molstar.scriptToQuery({ language: "pymol", expression: "organic" }), "function");
   assert.throws(() => context.molstar.scriptToQuery({ language: "pymol", expression: "not a selection !!!" }));
 });
