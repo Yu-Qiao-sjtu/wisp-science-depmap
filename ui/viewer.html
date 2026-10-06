@@ -69,7 +69,7 @@
       var viewer = null;
       var loadSeq = 0;
 
-      function showStructure(path) {
+      function showStructure(path, selection) {
         var seq = ++loadSeq;
         var name = basename(path);
         setStatus('loading ' + name + '…', false);
@@ -84,7 +84,16 @@
             var data = new TextDecoder().decode(bytesToU8(bytes));
             return viewer.loadStructureFromData(data, format);
           })
-          .then(function () { if (seq === loadSeq) setStatus(name, false); })
+          .then(function () {
+            if (seq !== loadSeq) return;
+            setStatus(name, false);
+            // Highlight only this load. A newer pose increments loadSeq and
+            // this callback becomes a no-op, so it cannot mark the old scene.
+            if (selection) {
+              document.getElementById('selection').value = selection;
+              applySelection(selection);
+            }
+          })
           .catch(function (error) {
             if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
           });
@@ -155,7 +164,7 @@
       var initial = queryParam('src');
       var initialTopo = queryParam('topo');
       var initialTraj = queryParam('traj');
-      if (initial) showStructure(initial);
+      if (initial) showStructure(initial, queryParam('sel'));
       else if (initialTopo && initialTraj) showTrajectory(initialTopo, initialTraj);
 
       try {
@@ -163,7 +172,8 @@
         // events instead of a disruptive navigation (#192 / #195).
         window.__TAURI__.event.listen('viewer://load-structure', function (event) {
           var path = event && event.payload && event.payload.path;
-          if (path) showStructure(path);
+          var selection = event && event.payload && event.payload.selection;
+          if (path) showStructure(path, selection || null);
         });
         window.__TAURI__.event.listen('viewer://load-trajectory', function (event) {
           var payload = event && event.payload;
