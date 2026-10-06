@@ -2128,11 +2128,15 @@ class LineageSelectivityQueryTests(DepMapApiTests):
         self.assertEqual(lineage["status"], "NOT_COMPUTED")
         self.assertEqual(lineage["rows"], [])
         self.assertFalse(lineage["common_essential_filter_applied"])
-        self.assertIsNone(lineage["common_essential_source"])
+        self.assertNotIn("common_essential_source", lineage)
         self.assertEqual(
             lineage["common_essential_annotation_status"],
             "ANNOTATION_UNAVAILABLE",
         )
+        with TestClient(create_app(self.settings)) as client:
+            health = client.get("/api/v1/health", headers=self.headers)
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["qa_status"], "FAIL")
 
         pan_cancer = self._query(
             {
@@ -2168,6 +2172,7 @@ class LineageSelectivityQueryTests(DepMapApiTests):
             lineage["common_essential_annotation_status"],
             "ANNOTATION_UNAVAILABLE",
         )
+        self.assertNotIn("common_essential_source", lineage)
 
         pan_cancer = self._query(
             {

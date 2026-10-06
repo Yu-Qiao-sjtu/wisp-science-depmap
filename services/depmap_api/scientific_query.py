@@ -100,10 +100,7 @@ def annotate_common_essential(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Join one common-essential sidecar in a single pass. Housekeeping is out of scope."""
     if labels is None:
-        annotated = [
-            {**row, "is_common_essential": None, "common_essential_source": None}
-            for row in rows
-        ]
+        annotated = [{**row, "is_common_essential": None} for row in rows]
         return annotated, {
             "annotation_status": "ANNOTATION_UNAVAILABLE",
             "filter_applied": False,

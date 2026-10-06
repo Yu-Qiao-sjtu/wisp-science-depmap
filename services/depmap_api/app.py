@@ -649,6 +649,13 @@ def verify_installation(settings: Settings) -> dict[str, Any]:
         raise RuntimeError(
             f"knowledge release {qa.get('release')!r} does not match {settings.release!r}"
         )
+    label_file = settings.knowledge_root / "depmap-26q1-core" / "common_essential_genes.csv"
+    if not label_file.is_file():
+        qa = {
+            **qa,
+            "qa_status": "FAIL",
+            "qa_failure": "common_essential_genes.csv is absent",
+        }
     return qa
 
 
@@ -3364,8 +3371,7 @@ def _common_essential_response_fields(
     filter_applied: bool,
 ) -> dict[str, Any]:
     metadata = sidecar[1] if sidecar else {}
-    return {
-        "common_essential_source": source if sidecar else None,
+    fields = {
         "common_essential_version": metadata.get("version"),
         "common_essential_provenance": list(metadata.get("provenance") or []),
         "common_essential_annotation_status": (
@@ -3373,6 +3379,9 @@ def _common_essential_response_fields(
         ),
         "common_essential_filter_applied": filter_applied,
     }
+    if sidecar is not None:
+        fields["common_essential_source"] = source
+    return fields
 
 
 def _dependency_confounder_sidecar(

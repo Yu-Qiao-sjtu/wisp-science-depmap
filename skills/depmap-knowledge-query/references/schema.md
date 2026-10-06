@@ -56,11 +56,13 @@ For `lineage_dependency`, `effect_mean_difference` is the lineage mean Gene
 Effect minus the rest mean. It is not log fold-change and must not be labelled
 `logFC`.
 The query may join the versioned `depmap_26q1` common-essential sidecar and
-return `is_common_essential` plus `common_essential_source` per row. Set
+return `is_common_essential` plus `common_essential_source` per row. A named
+source means the label set loaded and every row boolean is present. Set
 `exclude_common_essential=true` to exclude only those labelled genes. When the
-sidecar is absent, `common_essential_annotation_status` is
-`ANNOTATION_UNAVAILABLE`; a requested exclusion returns `NOT_COMPUTED` and no
-ranking rows. The full retained set is filtered before `cursor`/`limit`, with
+sidecar is absent, omit `common_essential_source` and set
+`common_essential_annotation_status` to `ANNOTATION_UNAVAILABLE`; a requested
+exclusion returns `NOT_COMPUTED` and no ranking rows. Installation QA is not
+PASS without that label file. The full retained set is filtered before `cursor`/`limit`, with
 pre/post-filter totals, `matched_row_count`, `next_cursor`, and sidecar
 source/version/provenance in the envelope. `selective` still must
 not be paraphrased as `non-housekeeping`: housekeeping and common-essential
