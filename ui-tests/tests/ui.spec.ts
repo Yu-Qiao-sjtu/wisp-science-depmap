@@ -7591,7 +7591,6 @@ test("unmeasured relay shows elapsed activity and collapses without cancelling",
   await expect(card.locator("progress")).not.toHaveAttribute("value");
   const elapsed = await card.locator(".transfer-elapsed").innerText();
   await expect.poll(() => card.locator(".transfer-elapsed").innerText()).not.toBe(elapsed);
-  await card.screenshot({ path: test.info().outputPath("relay-expanded.png") });
   // A higher surface consumes Escape first; the transfer tray stays expanded.
   await composer(page).press("@");
   await expect(page.locator(".mention-menu")).toBeVisible();
