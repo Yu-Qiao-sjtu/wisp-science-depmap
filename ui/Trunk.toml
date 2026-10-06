@@ -15,6 +15,7 @@ watch = [
   "index.html",
   "native-host.html",
   "viewer.html",
+  "viewer_controls.js",
   "fonts.css",
   "fonts",
   "vendor-runtime",

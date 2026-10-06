@@ -4622,6 +4622,17 @@ mod tests {
             Some("build-abc")
         );
 
+        let next = evaluate_depmap_contract(&json!({
+            "evidence": {
+                "query_contract_version": 14,
+                "server_build_identity": "build-abc",
+                "capability_catalog_digest": "sha256:capabilities",
+                "catalog_build_identity": "sha256:catalog"
+            }
+        }));
+        assert!(next.compatible);
+        assert_eq!(next.code, "COMPATIBLE");
+
         let stale = evaluate_depmap_contract(&json!({
             "evidence": {"query_contract_version": 12}
         }));
