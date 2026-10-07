@@ -864,6 +864,7 @@ pub(crate) async fn send_message_inner(
         );
         if !assistant {
             agent.add_tool(Box::new(viewer::PresentStructureTool::new(app.clone())));
+            agent.add_tool(Box::new(viewer::DockLigandTool::new(app.clone())));
         }
         agent.add_tool(Box::new(browser_bridge::BrowserSetupTool::new(
             state.browser_bridge.clone(),

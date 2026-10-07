@@ -325,6 +325,86 @@ impl Tool for PresentStructureTool {
     }
 }
 
+/// Project-conversation tool that docks a ligand onto a receptor and presents
+/// each written pose. The research assistant does not receive it.
+pub(crate) struct DockLigandTool {
+    app: AppHandle,
+}
+
+impl DockLigandTool {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[async_trait]
+impl Tool for DockLigandTool {
+    fn name(&self) -> &str {
+        "dock_ligand"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "dock_ligand",
+            "Rigid-dock a ligand PDB onto a receptor PDB. Each sample is written as pose-NNN.pdb and shown in the molecular viewer before the next sample, so the open window advances through the search. This is geometric placement, not an affinity prediction.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "receptor": {"type": "string", "description": "Receptor PDB path."},
+                    "ligand": {"type": "string", "description": "Ligand PDB path."},
+                    "output_dir": {"type": "string", "description": "Directory that receives pose-001.pdb and the following frames."},
+                    "samples": {"type": "integer", "description": "How many poses to write, from 1 to 24. Default 8."}
+                },
+                "required": ["receptor", "ligand", "output_dir"]
+            }),
+        )
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        arg_str_opt(args, "output_dir").unwrap_or_default()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let receptor = match arg_str(args, "receptor") {
+            Ok(path) => path,
+            Err(error) => return ToolResult::fail(error),
+        };
+        let ligand = match arg_str(args, "ligand") {
+            Ok(path) => path,
+            Err(error) => return ToolResult::fail(error),
+        };
+        let output_dir = match arg_str(args, "output_dir") {
+            Ok(path) => path,
+            Err(error) => return ToolResult::fail(error),
+        };
+        let samples = args
+            .get("samples")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(8) as usize;
+        let frames = match wisp_bio::dock::write_docking_frames(
+            std::path::Path::new(&receptor),
+            std::path::Path::new(&ligand),
+            std::path::Path::new(&output_dir),
+            samples,
+        ) {
+            Ok(frames) => frames,
+            Err(error) => return ToolResult::fail(error),
+        };
+        for frame in &frames {
+            if let Err(error) = present_structure_in_viewer(
+                self.app.clone(),
+                frame.to_string_lossy().into_owned(),
+                Some("hetatm".to_string()),
+            )
+            .await
+            {
+                return ToolResult::fail(error);
+            }
+        }
+        ToolResult::ok(format!("presented {} docking poses", frames.len()))
+    }
+}
+
 /// Open (or focus) the viewer window on a validated topology + trajectory
 /// pair (slice 2/4, #193). The page drives Mol\*'s built-in trajectory
 /// pipeline (mol-io DCD/XTC/TRR/NetCDF readers plus the animation preset), so
