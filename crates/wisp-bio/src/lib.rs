@@ -11,6 +11,7 @@ mod chembl;
 mod chemistry;
 mod clinical_genomics;
 mod clinical_trials;
+pub mod dock;
 mod drug_regulatory;
 mod expression;
 mod genes_ontologies;
