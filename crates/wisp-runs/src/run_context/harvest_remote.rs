@@ -1206,6 +1206,55 @@ pub(super) async fn list_run_workspace_files(
     parse_workspace_listing(&output.stdout, subpath, limit)
 }
 
+/// Copy one workspace file into `destination_dir` while the run is still going.
+/// The relative path is the same form workspace listing returns.
+pub(super) async fn fetch_run_workspace_file(
+    runner: &dyn RunCommandRunner,
+    remote: &RemoteRun,
+    relative: &str,
+    destination_dir: &Path,
+) -> Result<PathBuf, String> {
+    validate_workspace_subpath(relative)?;
+    if relative.is_empty() || relative.ends_with('/') {
+        return Err("workspace file path is empty".into());
+    }
+    let RemoteRunHandle::SshDirect {
+        connection,
+        workdir,
+        ..
+    } = &remote.handle
+    else {
+        return Err("workspace fetch requires an SSH-direct Run".into());
+    };
+    std::fs::create_dir_all(destination_dir).map_err(|error| error.to_string())?;
+    let file_name = Path::new(relative)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "workspace file name is missing".to_string())?;
+    let destination = destination_dir.join(file_name);
+    let mut args = connection.scp_option_args()?;
+    args.push(format!(
+        "{}:{workdir}/inputs/{relative}",
+        connection.target()?
+    ));
+    args.push(destination.to_string_lossy().into_owned());
+    let command = super::RunCommand {
+        context_id: format!("ssh:{}", connection.alias),
+        program: "scp".into(),
+        args,
+        script: format!("live frame {}", remote.run_id),
+        cwd: None,
+        stdin: None,
+        envs: crate::ssh_hosts::auth_envs_for_connection(connection)?,
+    };
+    checked_output(
+        "fetch run structure frame",
+        runner.run(command, REMOTE_RPC_TIMEOUT).await,
+    )?;
+    Ok(destination)
+}
+
 fn delete_payload(workdir: &str, token: &str, paths: &[String]) -> String {
     let mut script = format!(
         r#"set -eu

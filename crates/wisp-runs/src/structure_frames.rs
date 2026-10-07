@@ -44,6 +44,30 @@ pub fn is_structure_frame(path: &Path) -> bool {
     )
 }
 
+/// Next structure in a remote workspace listing.
+///
+/// Identity is the workspace path plus byte size. The first observation is
+/// held; the same size on the next observation is ready to download. A size
+/// change means the file is still being written.
+pub fn next_remote_structure_frame(
+    entries: &[(String, u64)],
+    watch: &mut FrameWatch,
+) -> Option<String> {
+    let frames: Vec<StructureFrame> = entries
+        .iter()
+        .filter(|(_, size)| *size > 0)
+        .filter(|(path, _)| is_structure_frame(Path::new(path)))
+        .map(|(path, size)| StructureFrame {
+            id: FrameId {
+                path: PathBuf::from(path),
+                modified_ms: 0,
+                len: *size,
+            },
+        })
+        .collect();
+    next_stable_frame(&frames, watch, 0).map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Next stable structure written at or after `not_before_ms`.
 ///
 /// The first observation of a new identity is held. The same identity on the
@@ -216,6 +240,20 @@ mod tests {
             next_stable_frame(&frames, &mut watch, 1_000),
             Some(PathBuf::from("b.cif"))
         );
+    }
+
+    #[test]
+    fn a_remote_pose_is_ready_only_after_its_size_stays_put() {
+        let mut watch = FrameWatch::default();
+        let growing = vec![("poses/pose-001.pdb".into(), 20)];
+        assert!(next_remote_structure_frame(&growing, &mut watch).is_none());
+        let still_growing = vec![("poses/pose-001.pdb".into(), 40)];
+        assert!(next_remote_structure_frame(&still_growing, &mut watch).is_none());
+        assert_eq!(
+            next_remote_structure_frame(&still_growing, &mut watch).as_deref(),
+            Some("poses/pose-001.pdb")
+        );
+        assert!(next_remote_structure_frame(&still_growing, &mut watch).is_none());
     }
 
     #[test]
