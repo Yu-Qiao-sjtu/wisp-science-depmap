@@ -1320,9 +1320,18 @@ impl RunManager {
         let owner_id = self.owner_id.clone();
         let cleanup_id = run_id.clone();
         let task_run_id = run_id.clone();
+        let presenter = self.structure_frames.lock().await.clone();
         let task = tokio::spawn(async move {
             loop {
-                match remote_lifecycle(&store, runner.as_ref(), &owner_id, remote.clone()).await {
+                match remote_lifecycle(
+                    &store,
+                    runner.as_ref(),
+                    &owner_id,
+                    remote.clone(),
+                    presenter.clone(),
+                )
+                .await
+                {
                     Ok(()) => break,
                     Err(error) => {
                         tracing::warn!(run_id = %task_run_id, "SSH run lifecycle failed: {error}");
@@ -2892,13 +2901,51 @@ async fn fail_remote_start(
     .await
 }
 
+async fn pull_remote_structure_frame(
+    runner: &dyn RunCommandRunner,
+    remote: &RemoteRun,
+    watch: &mut crate::structure_frames::FrameWatch,
+) -> Option<PathBuf> {
+    let root = remote.harvest_root.as_ref()?;
+    let listing = harvest_remote::list_run_workspace_files(runner, remote, "", "", 0, 64)
+        .await
+        .ok()?;
+    let mut entries = Vec::new();
+    let mut dirs = Vec::new();
+    for entry in listing.entries {
+        if entry.kind == "file" {
+            entries.push((entry.path, entry.size_bytes));
+        } else if entry.kind == "dir" && dirs.len() < 4 {
+            dirs.push(entry.path);
+        }
+    }
+    for dir in dirs {
+        if let Ok(nested) =
+            harvest_remote::list_run_workspace_files(runner, remote, &dir, "", 0, 64).await
+        {
+            for entry in nested.entries {
+                if entry.kind == "file" {
+                    entries.push((entry.path, entry.size_bytes));
+                }
+            }
+        }
+    }
+    let relative = crate::structure_frames::next_remote_structure_frame(&entries, watch)?;
+    let destination = root.join(".wisp").join("live-frames").join(&remote.run_id);
+    harvest_remote::fetch_run_workspace_file(runner, remote, &relative, &destination)
+        .await
+        .ok()
+}
+
 async fn remote_lifecycle(
     store: &wisp_store::Store,
     runner: &dyn RunCommandRunner,
     owner_id: &str,
     mut remote: RemoteRun,
+    presenter: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
 ) -> Result<(), String> {
     let mut consecutive_transport_errors = 0_u32;
+    let mut remote_frames = crate::structure_frames::FrameWatch::default();
     loop {
         let lease_secs = remote_lifecycle_lease_secs(&remote);
         if !store
@@ -3112,7 +3159,16 @@ async fn remote_lifecycle(
                         .await
                         .map_err(|e| e.to_string())?;
                     match poll.state {
-                        RemotePollState::Running => {}
+                        RemotePollState::Running => {
+                            if let Some(presenter) = presenter.as_ref() {
+                                if let Some(local) =
+                                    pull_remote_structure_frame(runner, &remote, &mut remote_frames)
+                                        .await
+                                {
+                                    presenter(&local);
+                                }
+                            }
+                        }
                         RemotePollState::Finished(code) => {
                             finish_remote_run(
                                 store,
