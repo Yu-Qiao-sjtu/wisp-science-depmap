@@ -71,7 +71,7 @@ from the StickS3 Wi-Fi network.
 Device Bridge is disabled by default, including after upgrading an existing
 installation. It never binds `0.0.0.0`; a specific IPv4 address is mandatory.
 Its default port is `18766`. The separate Browser Bridge remains loopback-only
-on `127.0.0.1:18765`.
+on `127.0.0.1:28765`.
 
 If binding fails, Settings reports an error while the rest of wisp-depmap
 continues to work. Common causes are an address that is no longer assigned to
@@ -82,7 +82,7 @@ the computer or a port already used by another process.
 The operating-system firewall may ask whether wisp-depmap may accept incoming
 connections. Permit TCP traffic only for the selected Device Bridge port and
 the intended private network profile or source subnet. Do not create a broad
-all-networks rule, and do not open Browser Bridge port `18765` to the LAN.
+all-networks rule, and do not open Browser Bridge port `28765` to the LAN.
 
 Network equipment can also block traffic. Check wireless client isolation,
 guest VLAN rules, inter-VLAN access control lists, and routing between the

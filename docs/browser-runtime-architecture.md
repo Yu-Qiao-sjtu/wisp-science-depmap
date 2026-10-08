@@ -1,22 +1,22 @@
 # Browser Runtime architecture
 
-Wisp DepMap extension 0.4.0 treats the Chrome extension as a **controlled access adapter**.
+Wisp DepMap extension 0.4.1 treats the Chrome extension as a **controlled access adapter**.
 The desktop process owns sessions, waits, staging, and approval. This bridge is a
 separate Chrome extension from Wisp Science.
 
 ```
 Agent tools
     -> Browser Runtime (src-tauri/src/browser_bridge)
-        -> ws://127.0.0.1:18765  shared / daily Chrome
+        -> ws://127.0.0.1:28765  shared / daily Chrome
         -> ws://127.0.0.1:<allocated-port>/<instance-token>  project workspace
             -> Manifest V3 extension (browser-extension/)
 ```
 
 ## Coexistence with Wisp Science
 
-Wisp Science listens on `ws://127.0.0.1:28765` and is loaded from
+Wisp Science v1.18 listens on `ws://127.0.0.1:18765` and is loaded from
 `%APPDATA%/science.wisp-science/wisp-science/browser-extension`. DepMap listens
-on `18765` for the shared session, uses extension id `ldebonhjofgkeglioppkhaojngchcged`,
+on `28765` for the shared session, uses extension id `ldebonhjofgkeglioppkhaojngchcged`,
 and stages its package only under `%APPDATA%/science.wisp-depmap/`. The handshake
 `product` is `wisp-depmap`. A connection from the Science extension id is
 refused, and the installer refuses to write into `science.wisp-science`.
@@ -29,7 +29,7 @@ Edge profile because their ids differ.
 
 | Session | Browser | Login state | Port |
 |---|---|---|---|
-| `shared` | User's existing Chrome/Edge profile | Daily cookies and extensions | 18765 |
+| `shared` | User's existing Chrome/Edge profile | Daily cookies and extensions | 28765 |
 | `workspace` | Per-project Chrome-family profile under the app data directory, `browser-workspaces/<SHA-256(project_id)>/profile` | Persistent for that project | OS-allocated loopback port |
 
 Both can be connected at once. Omitting `session` always selects `shared`;

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wisp DepMap Browser Bridge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtCAIJoMvQYZCZpIvhUq6krn7r1J3N4D6RjnnCorEYUZWCEkgCrUq7T+dMdQBh44KEyD2GyE3xLQ92H+hEhzMAmhJwJsPX+p20EtOyVifHrp7w7S77H3ZEfnqbFxeWlYrysvWouOA0hE6uyFDSWysr+T0ZzXYMWZMIyHdcO5aDnnuvGi6UoVwOoYEIjjmsA5RY2+B/An6APF8biHhhrgJCoDPCV9R23Yd58sgA3m4vBjKJQZmfpArf3TLQztubMgTtw30EdedChdbeEYtnDjvSTwBzklmkjHbA6nuLTmHswrVG2bP8CN7jZRx4qSLw6Cv/VtiRK3rwqJrLiRInrDuKwIDAQAB",
   "minimum_chrome_version": "116",
   "description": "Connects Wisp DepMap to tabs in this persistent Chrome/Chromium profile. This is a separate extension from Wisp Science.",
