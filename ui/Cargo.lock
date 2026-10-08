@@ -1688,15 +1688,17 @@ dependencies = [
 
 [[package]]
 name = "wisp-dto"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
+
+
 [[package]]
 name = "wisp-ui"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "console_error_panic_hook",
  "futures-channel",
@@ -1711,6 +1713,8 @@ dependencies = [
  "web-sys",
  "wisp-dto",
 ]
+
+
 
 [[package]]
 name = "writeable"
