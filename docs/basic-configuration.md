@@ -148,7 +148,7 @@ Wisp 的真实浏览器控制使用当前 Chrome/Chromium 用户资料，不启�
 
 ![Chrome 加载未打包扩展](assets/basic-configuration/18-browser-extension.png)
 
-扩展会在 Wisp DepMap 运行时连接 `ws://127.0.0.1:18765`。这是独立于 Wisp Science 的扩展：Science 使用 `ws://127.0.0.1:28765` 和 `%APPDATA%\science.wisp-science\wisp-science\browser-extension`。两边可以同时安装。加载 DepMap 时选择 `browser_setup` 给出的 DepMap 目录，保留已安装的 Wisp Science 扩展。
+扩展会在 Wisp DepMap 运行时连接 `ws://127.0.0.1:28765`。这是独立于 Wisp Science 的扩展：Science v1.18 使用 `ws://127.0.0.1:18765` 和 `%APPDATA%\science.wisp-science\wisp-science\browser-extension`。两边可以同时安装。加载 DepMap 时选择 `browser_setup` 给出的 DepMap 目录，保留已安装的 Wisp Science 扩展。
 
 ### 验证
 

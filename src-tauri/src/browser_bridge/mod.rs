@@ -46,7 +46,9 @@ mod extension_manager;
 mod project_workspace;
 mod workspace;
 
-const BRIDGE_ADDR: &str = "127.0.0.1:18765";
+/// Shared-session port. Wisp Science v1.18 keeps `127.0.0.1:18765`, so DepMap
+/// must not bind that address while both apps are open.
+const BRIDGE_ADDR: &str = "127.0.0.1:28765";
 const REQUIRED_PROTOCOL: i64 = 2;
 const BRIDGE_PRODUCT: &str = "wisp-depmap";
 /// Chrome extension id derived from this package's own public key. It must
@@ -54,7 +56,7 @@ const BRIDGE_PRODUCT: &str = "wisp-depmap";
 const EXTENSION_ID: &str = "ldebonhjofgkeglioppkhaojngchcged";
 const EXTENSION_ORIGIN: &str = "chrome-extension://ldebonhjofgkeglioppkhaojngchcged";
 const WISP_SCIENCE_EXTENSION_ORIGIN: &str = "chrome-extension://gnkjgagleagkgdlkkcianolobfdoocnp";
-const WISP_SCIENCE_BRIDGE: &str = "ws://127.0.0.1:28765";
+const WISP_SCIENCE_BRIDGE: &str = "ws://127.0.0.1:18765";
 const BROWSER_DISCONNECTED_CODE: &str = "browser_extension_disconnected";
 const BROWSER_DISCONNECTED_MARKER: &str = "WISP_BROWSER_DISCONNECTED";
 const DISCONNECTED_ASSISTANT_INSTRUCTION: &str = "Live web retrieval is unavailable. Do not answer live, latest, current, or URL-specific questions from prior knowledge. Tell the user this turn contains no live web retrieval, relay the install steps, and wait until status is connected. Only continue from memory if they explicitly ask for a knowledge-only answer.";
@@ -4255,8 +4257,8 @@ mod tests {
         assert_eq!(info["live_retrieval"], false);
         assert_eq!(info["code"], BROWSER_DISCONNECTED_CODE);
         assert_eq!(info["required_protocol"], 2);
-        assert_eq!(info["bundled_extension_version"], "0.4.0");
-        assert_eq!(info["extension_version"], "0.4.0");
+        assert_eq!(info["bundled_extension_version"], "0.4.1");
+        assert_eq!(info["extension_version"], "0.4.1");
         assert!(info["assistant_instruction"]
             .as_str()
             .unwrap()
@@ -5006,7 +5008,7 @@ mod tests {
         }));
         let science_explanation = science["explanation"].as_str().unwrap();
         assert!(science_explanation.contains("Wisp Science"));
-        assert!(science_explanation.contains("28765"));
+        assert!(science_explanation.contains("18765"));
         assert!(science_explanation.contains("extension_path"));
         assert!(science_explanation.contains("Leave it installed"));
 
@@ -5037,7 +5039,7 @@ mod tests {
         assert_eq!(info["sessions"]["shared"]["tabs"].as_u64(), Some(0));
         let explanation = info["refused_connection"]["explanation"].as_str().unwrap();
         assert!(explanation.contains(BRIDGE_PRODUCT));
-        assert!(explanation.contains("28765"));
+        assert!(explanation.contains("18765"));
     }
 
     #[tokio::test]
@@ -5078,7 +5080,7 @@ mod tests {
         let status = bridge.extension_status().await;
         assert!(status.connected);
         assert_eq!(status.current_version.as_deref(), Some("0.2.1"));
-        assert_eq!(status.bundled_version.as_deref(), Some("0.4.0"));
+        assert_eq!(status.bundled_version.as_deref(), Some("0.4.1"));
         assert!(status.update_required);
         assert!(!status.automatic_reload_available);
         assert!(status.integrity_verified);
@@ -5141,7 +5143,7 @@ mod tests {
                     "type": "ext_ready",
                     "product": "wisp-depmap",
                     "protocol_version": 2,
-                    "extension_version": "0.4.0",
+                    "extension_version": "0.4.1",
                     "capabilities": ["runtime_reload", "article_scan"],
                     "tabs": []
                 })
@@ -5153,7 +5155,7 @@ mod tests {
         assert_eq!(update.outcome, "updated");
         assert!(update.status.connected);
         assert!(!update.status.update_required);
-        assert_eq!(update.status.current_version.as_deref(), Some("0.4.0"));
+        assert_eq!(update.status.current_version.as_deref(), Some("0.4.1"));
     }
 
     #[test]

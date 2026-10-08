@@ -8,9 +8,9 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub const EXTENSION_NAME: &str = "Wisp DepMap Browser Bridge";
-const DEPMAP_SHARED_ENDPOINT: &str = "ws://127.0.0.1:18765";
+const DEPMAP_SHARED_ENDPOINT: &str = "ws://127.0.0.1:28765";
 const WISP_SCIENCE_APP_DIR: &str = "science.wisp-science";
-const WISP_SCIENCE_PORT: &str = "28765";
+const WISP_SCIENCE_PORT: &str = "18765";
 
 const REQUIRED_FILES: &[&str] = &[
     "background.js",
@@ -158,7 +158,7 @@ pub fn inspect(dir: &Path, expected_extension_id: &str) -> Result<ExtensionPacka
         || !session_config.contains(DEPMAP_SHARED_ENDPOINT)
     {
         return Err(
-            "browser extension session_config must target the DepMap bridge port 18765, not the Wisp Science port"
+            "browser extension session_config must target the DepMap bridge port 28765, not the Wisp Science port"
                 .into(),
         );
     }
@@ -284,7 +284,7 @@ pub fn reject_foreign_product_dir(destination: &Path) -> Result<(), String> {
         .any(|path| path_contains_science_app_dir(path))
     {
         return Err(format!(
-            "refusing to install the Wisp DepMap browser extension into the Wisp Science data directory ({}); DepMap keeps its own extension id, port 18765, and app-data folder",
+            "refusing to install the Wisp DepMap browser extension into the Wisp Science data directory ({}); DepMap keeps its own extension id, port 28765, and app-data folder",
             destination.display()
         ));
     }
@@ -322,7 +322,7 @@ mod tests {
         let destination = root.join("browser-extension");
 
         let package = sync(&source, &destination, EXTENSION_ID).unwrap();
-        assert_eq!(package.version, "0.4.0");
+        assert_eq!(package.version, "0.4.1");
         assert_eq!(
             verify(&source, &destination, EXTENSION_ID).unwrap(),
             package

@@ -3,5 +3,5 @@
 // Wisp Science application-data directory.
 var WISP_BRIDGE_CONFIG = {
   session: "shared",
-  endpoint: "ws://127.0.0.1:18765"
+  endpoint: "ws://127.0.0.1:28765"
 };

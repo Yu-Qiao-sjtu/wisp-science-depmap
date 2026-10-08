@@ -1,7 +1,7 @@
 // Wisp DepMap Browser Bridge protocol constants (Protocol v2).
 var WISP_PROTOCOL = {
   version: 2,
-  extensionVersion: "0.4.0",
+  extensionVersion: "0.4.1",
   product: "wisp-depmap",
   capabilities: [
     "article_scan",
@@ -20,7 +20,7 @@ var WISP_PROTOCOL = {
 
 function readBridgeConfig() {
   var session = "shared";
-  var endpoint = "ws://127.0.0.1:18765";
+  var endpoint = "ws://127.0.0.1:28765";
   var product = WISP_PROTOCOL.product || "wisp-depmap";
   try {
     if (typeof WISP_BRIDGE_CONFIG === "object" && WISP_BRIDGE_CONFIG) {
