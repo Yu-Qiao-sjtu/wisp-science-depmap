@@ -1,4 +1,4 @@
-> **Runtime note (0.4.0):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2 and is a different Chrome extension from Wisp Science. Shared Chrome stays on `ws://127.0.0.1:18765`; each project workspace uses its own persistent profile and an allocated loopback endpoint. Wisp Science keeps `ws://127.0.0.1:28765` and its own extension directory. DepMap prepares a verified stable extension directory under its own application data and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
+> **Runtime note (0.4.1):** see [browser-runtime-architecture.md](browser-runtime-architecture.md) and [browser-runtime-acceptance.md](browser-runtime-acceptance.md). The extension is Protocol v2 and is a different Chrome extension from Wisp Science. Shared Chrome stays on `ws://127.0.0.1:28765`; each project workspace uses its own persistent profile and an allocated loopback endpoint. Wisp Science v1.18 keeps `ws://127.0.0.1:18765` and its own extension directory. DepMap prepares a verified stable extension directory under its own application data and automatically reloads compatible versions; older versions receive a guided one-time Reload fallback.
 
 # Real-browser automation
 
@@ -91,7 +91,7 @@ Wisp first verifies and refreshes the managed files. Extension 0.3.1 and later
 can reload automatically; older versions require one click on **Reload** in
 `chrome://extensions` (or loading the managed directory if the previous install
 points elsewhere). Wisp automatically rechecks the new handshake. The extension
-reconnects to `ws://127.0.0.1:18765` when Wisp is running. Only loopback
+reconnects to `ws://127.0.0.1:28765` when Wisp DepMap is running. Only loopback
 connections whose WebSocket origin is a Chrome extension with Wisp's bundled,
 stable extension ID are accepted.
 
@@ -199,8 +199,8 @@ HTTP(S) tab in that Chrome profile.
   HTTP(S) tabs are advertised.
 - JavaScript-created DOM events are not trusted events. Use an explicitly
   approved CDP `Input.*` command when a site requires trusted input.
-- Wisp and GenericAgent's TMWebDriver use the same default port. Run only one
-  bridge server on port `18765` at a time.
+- Wisp Science and GenericAgent's TMWebDriver use port `18765`. DepMap's shared
+  bridge uses `28765`, so both desktop apps can listen at once.
 - **Settings → Browser** stores global host block and prefer lists. A blocked
   host (and its subdomains) cannot be opened or navigated to through
   `web_open_tab` or an explicit navigational `web_execute_js` script. Prefer

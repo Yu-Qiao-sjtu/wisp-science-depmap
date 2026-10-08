@@ -15,7 +15,7 @@ importScripts(
 );
 
 var cfg = readBridgeConfig();
-var BRIDGE_URL = cfg.endpoint || "ws://127.0.0.1:18765";
+var BRIDGE_URL = cfg.endpoint || "ws://127.0.0.1:28765";
 var SESSION = cfg.session || "shared";
 var RECONNECT_ALARM = "wisp-browser-reconnect";
 var DEFAULT_TIMEOUT_MS = 15000;
