@@ -6,7 +6,8 @@
   <link rel="stylesheet" href="vendor-runtime/molstar-viewer-5.12.0.css" />
   <style>
     html, body { margin: 0; height: 100%; background: #f6f7f8; font: 12px system-ui, sans-serif; }
-    #viewer { position: absolute; inset: 0; }
+    body { display: flex; flex-direction: column; min-height: 0; position: relative; }
+    #viewer { position: relative; flex: 1 1 auto; min-height: 0; }
     #status {
       position: absolute; left: 10px; bottom: 8px; z-index: 10;
       color: #3c4043; background: rgba(255, 255, 255, .85);
@@ -15,22 +16,46 @@
     }
     #status.error { color: #b3261e; }
     #tools {
-      position: absolute; left: 10px; top: 8px; z-index: 10;
+      position: relative; flex: 0 0 auto; z-index: 10;
       display: flex; gap: 6px; align-items: center;
+      padding: 6px 8px; background: #fff; border-bottom: 1px solid #dadce0;
+      overflow: hidden;
+    }
+    #selection-echo, #recent {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #tools input, #tools button {
       font: inherit; border: 1px solid #dadce0; border-radius: 4px; background: #fff; padding: 3px 6px;
     }
     #selection-echo { color: #3c4043; }
+    #viewer { --side-left: 330px; --side-right: 300px; }
+    #viewer .msp-plugin .msp-layout-expanded { position: absolute; }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-left { width: var(--side-left); }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-right { width: var(--side-right); }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-main,
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-top,
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-bottom {
+      left: var(--side-left); right: var(--side-right);
+    }
+    .splitter {
+      position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px;
+      cursor: col-resize; z-index: 8;
+    }
+    #splitter-left { left: var(--side-left); }
+    #splitter-right { right: var(--side-right); margin-left: 0; margin-right: -3px; }
   </style>
 </head>
 <body>
-  <div id="viewer"></div>
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
     <button id="apply-selection" type="button">Select</button>
+    <button id="explain-selection" type="button">Explain in chat</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
+  </div>
+  <div id="viewer">
+    <div id="splitter-left" class="splitter" title="Drag to resize the left panel"></div>
+    <div id="splitter-right" class="splitter" title="Drag to resize the right panel"></div>
   </div>
   <div id="status">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
@@ -68,9 +93,11 @@
 
       var viewer = null;
       var loadSeq = 0;
+      var currentPath = queryParam('src') || queryParam('topo') || '';
 
       function showStructure(path, selection) {
         var seq = ++loadSeq;
+        currentPath = path;
         var name = basename(path);
         setStatus('loading ' + name + '…', false);
         var format;
@@ -86,6 +113,9 @@
           })
           .then(function () {
             if (seq !== loadSeq) return;
+            try {
+              ViewerControls.applyCameraPayload(molstar, viewer.plugin, { action: 'reset' });
+            } catch (error) { /* camera follows once the new structure is drawable */ }
             setStatus(name, false);
             // Highlight only this load. A newer pose increments loadSeq and
             // this callback becomes a no-op, so it cannot mark the old scene.
@@ -216,6 +246,55 @@
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
       });
+      document.getElementById('explain-selection').addEventListener('click', function () {
+        if (!currentPath) {
+          setStatus('load a structure before asking for an explanation', true);
+          return;
+        }
+        setStatus('asking chat…', false);
+        window.__TAURI__.core.invoke('explain_structure_selection', {
+          path: currentPath,
+          selection: document.getElementById('selection').value || null
+        }).then(function () {
+          setStatus('explanation requested in chat', false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.setInterval(function () {
+          window.__TAURI__.core.invoke('ui_heartbeat', { snapshot: null }).catch(function () {});
+        }, 15000);
+      }
+      (function bindSplitters() {
+        var host = document.getElementById('viewer');
+        var widths = { left: 330, right: 300 };
+        function clamp(value) { return Math.max(160, Math.min(560, value)); }
+        function apply() {
+          host.style.setProperty('--side-left', widths.left + 'px');
+          host.style.setProperty('--side-right', widths.right + 'px');
+        }
+        function bind(id, side) {
+          document.getElementById(id).addEventListener('pointerdown', function (event) {
+            event.preventDefault();
+            var startX = event.clientX;
+            var start = widths[side];
+            function move(next) {
+              var delta = next.clientX - startX;
+              widths[side] = clamp(side === 'left' ? start + delta : start - delta);
+              apply();
+            }
+            function up() {
+              window.removeEventListener('pointermove', move);
+              window.removeEventListener('pointerup', up);
+            }
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+          });
+        }
+        bind('splitter-left', 'left');
+        bind('splitter-right', 'right');
+      })();
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke('list_viewer_recent').then(function (paths) {
           document.getElementById('recent').textContent = (paths || []).slice(0, 3).map(function (path) {

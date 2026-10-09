@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -2901,6 +2901,24 @@ async fn fail_remote_start(
     .await
 }
 
+fn present_local_structure_frame(
+    remote: &RemoteRun,
+    watch: &mut crate::structure_frames::FrameWatch,
+    not_before_ms: u128,
+    presenter: &Arc<dyn Fn(&Path) + Send + Sync>,
+) {
+    let Some(root) = remote.harvest_root.as_deref() else {
+        return;
+    };
+    if let Some(path) = crate::structure_frames::next_stable_frame(
+        &crate::structure_frames::scan_structure_frames(root),
+        watch,
+        not_before_ms,
+    ) {
+        presenter(&path);
+    }
+}
+
 async fn pull_remote_structure_frame(
     runner: &dyn RunCommandRunner,
     remote: &RemoteRun,
@@ -2946,6 +2964,11 @@ async fn remote_lifecycle(
 ) -> Result<(), String> {
     let mut consecutive_transport_errors = 0_u32;
     let mut remote_frames = crate::structure_frames::FrameWatch::default();
+    let mut local_frames = crate::structure_frames::FrameWatch::default();
+    let local_not_before_ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
     loop {
         let lease_secs = remote_lifecycle_lease_secs(&remote);
         if !store
@@ -3161,15 +3184,37 @@ async fn remote_lifecycle(
                     match poll.state {
                         RemotePollState::Running => {
                             if let Some(presenter) = presenter.as_ref() {
-                                if let Some(local) =
-                                    pull_remote_structure_frame(runner, &remote, &mut remote_frames)
-                                        .await
+                                if remote.handle.is_local_detached() {
+                                    present_local_structure_frame(
+                                        &remote,
+                                        &mut local_frames,
+                                        local_not_before_ms,
+                                        presenter,
+                                    );
+                                } else if let Some(local) = pull_remote_structure_frame(
+                                    runner,
+                                    &remote,
+                                    &mut remote_frames,
+                                )
+                                .await
                                 {
                                     presenter(&local);
                                 }
                             }
                         }
                         RemotePollState::Finished(code) => {
+                            if let Some(presenter) = presenter.as_ref() {
+                                if remote.handle.is_local_detached() {
+                                    for _ in 0..2 {
+                                        present_local_structure_frame(
+                                            &remote,
+                                            &mut local_frames,
+                                            local_not_before_ms,
+                                            presenter,
+                                        );
+                                    }
+                                }
+                            }
                             finish_remote_run(
                                 store,
                                 runner,

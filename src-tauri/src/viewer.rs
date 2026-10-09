@@ -252,9 +252,9 @@ pub(crate) async fn present_structure_in_viewer(
     let selection = normalize_presentation_selection(selection.as_deref())?;
     let canonical = validate_structure_path(&path)?;
     let path = canonical.to_string_lossy().into_owned();
+    wait_for_frame_gap().await;
     match app.get_webview_window(VIEWER_WINDOW_LABEL) {
-        Some(window) => {
-            let _ = window.set_focus();
+        Some(_window) => {
             app.emit_to(
                 VIEWER_WINDOW_LABEL,
                 LOAD_STRUCTURE_EVENT,
@@ -273,6 +273,55 @@ pub(crate) async fn present_structure_in_viewer(
     }
     remember_viewer_path(&path);
     Ok(())
+}
+
+/// Ask the main window's open chat to explain the structure on screen.
+#[tauri::command]
+pub(crate) async fn explain_structure_selection(
+    state: tauri::State<'_, crate::AppState>,
+    app: AppHandle,
+    path: String,
+    selection: Option<String>,
+) -> Result<(), String> {
+    let session_id = state
+        .active_frame("main")
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            "Open a chat in the main window before asking for an explanation.".to_string()
+        })?;
+    let name = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path.as_str());
+    let focus = selection
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" The selected region is `{value}`."))
+        .unwrap_or_else(|| {
+            " No residue selection was set, so explain the structure as a whole.".to_string()
+        });
+    let message = format!(
+        "Explain the structure now shown in the molecular viewer.\n\nFile: {path}\nName: {name}.{focus}\n\nSay what this molecule or region is, in plain language, using only what the file and selection identify. Do not start a new docking run."
+    );
+    crate::agent_turn::send_message_inner(
+        state.inner(),
+        app,
+        "main",
+        Some(session_id),
+        message,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(false),
+        Some(false),
+        None,
+        crate::agent_turn::TurnOrigin::Desktop,
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Project-conversation tool for the same presentation as
@@ -635,6 +684,24 @@ fn sibling_topology(trajectory: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+const FRAME_GAP: std::time::Duration = std::time::Duration::from_millis(1800);
+
+static LAST_FRAME_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+async fn wait_for_frame_gap() {
+    let wait = {
+        let mut slot = LAST_FRAME_AT.lock().unwrap_or_else(|err| err.into_inner());
+        let wait = slot
+            .map(|last| FRAME_GAP.saturating_sub(last.elapsed()))
+            .unwrap_or(std::time::Duration::ZERO);
+        *slot = Some(std::time::Instant::now() + wait);
+        wait
+    };
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
 }
 
 fn remember_viewer_path(path: &str) {
