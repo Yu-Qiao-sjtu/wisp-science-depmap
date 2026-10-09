@@ -6,7 +6,8 @@
   <link rel="stylesheet" href="vendor-runtime/molstar-viewer-5.12.0.css" />
   <style>
     html, body { margin: 0; height: 100%; background: #f6f7f8; font: 12px system-ui, sans-serif; }
-    #viewer { position: absolute; inset: 0; }
+    body { display: flex; flex-direction: column; min-height: 0; position: relative; }
+    #viewer { position: relative; flex: 1 1 auto; min-height: 0; }
     #status {
       position: absolute; left: 10px; bottom: 8px; z-index: 10;
       color: #3c4043; background: rgba(255, 255, 255, .85);
@@ -15,8 +16,13 @@
     }
     #status.error { color: #b3261e; }
     #tools {
-      position: absolute; left: 10px; top: 8px; z-index: 10;
+      position: relative; flex: 0 0 auto; z-index: 10;
       display: flex; gap: 6px; align-items: center;
+      padding: 6px 8px; background: #fff; border-bottom: 1px solid #dadce0;
+      overflow: hidden;
+    }
+    #selection-echo, #recent {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #tools input, #tools button {
       font: inherit; border: 1px solid #dadce0; border-radius: 4px; background: #fff; padding: 3px 6px;
@@ -25,13 +31,13 @@
   </style>
 </head>
 <body>
-  <div id="viewer"></div>
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
     <button id="apply-selection" type="button">Select</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
+  <div id="viewer"></div>
   <div id="status">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script src="viewer_controls.js"></script>
