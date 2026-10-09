@@ -184,16 +184,16 @@ struct LoadTrajectoryPayload {
 /// structure and trajectory entry points reuse this so the two modes share
 /// one window (and therefore one Mol\* instance) at a time.
 fn spawn_viewer_window(app: &AppHandle, url: String, title: &str) -> Result<(), String> {
-    let mut builder =
+    let builder =
         WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
             .title(title)
             .inner_size(1200.0, 840.0)
             .min_inner_size(640.0, 480.0)
             .resizable(true)
+            .minimizable(true)
+            .maximizable(true)
             .general_autofill_enabled(false)
             .on_navigation(crate::guard_webview_navigation);
-    #[cfg(target_os = "windows")]
-    let builder = builder.decorations(false).shadow(true);
     builder
         .build()
         .map_err(|e| format!("failed to open the viewer window: {e}"))
