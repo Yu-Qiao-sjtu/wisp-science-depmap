@@ -254,8 +254,7 @@ pub(crate) async fn present_structure_in_viewer(
     let path = canonical.to_string_lossy().into_owned();
     wait_for_frame_gap().await;
     match app.get_webview_window(VIEWER_WINDOW_LABEL) {
-        Some(window) => {
-            let _ = window.set_focus();
+        Some(_window) => {
             app.emit_to(
                 VIEWER_WINDOW_LABEL,
                 LOAD_STRUCTURE_EVENT,

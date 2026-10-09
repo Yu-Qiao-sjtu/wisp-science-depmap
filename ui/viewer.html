@@ -95,6 +95,9 @@
           })
           .then(function () {
             if (seq !== loadSeq) return;
+            try {
+              ViewerControls.applyCameraPayload(molstar, viewer.plugin, { action: 'reset' });
+            } catch (error) { /* camera follows once the new structure is drawable */ }
             setStatus(name, false);
             // Highlight only this load. A newer pose increments loadSeq and
             // this callback becomes a no-op, so it cannot mark the old scene.
