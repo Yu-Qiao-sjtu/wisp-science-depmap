@@ -252,6 +252,7 @@ pub(crate) async fn present_structure_in_viewer(
     let selection = normalize_presentation_selection(selection.as_deref())?;
     let canonical = validate_structure_path(&path)?;
     let path = canonical.to_string_lossy().into_owned();
+    wait_for_frame_gap().await;
     match app.get_webview_window(VIEWER_WINDOW_LABEL) {
         Some(window) => {
             let _ = window.set_focus();
@@ -635,6 +636,24 @@ fn sibling_topology(trajectory: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+const FRAME_GAP: std::time::Duration = std::time::Duration::from_millis(1800);
+
+static LAST_FRAME_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+async fn wait_for_frame_gap() {
+    let wait = {
+        let mut slot = LAST_FRAME_AT.lock().unwrap_or_else(|err| err.into_inner());
+        let wait = slot
+            .map(|last| FRAME_GAP.saturating_sub(last.elapsed()))
+            .unwrap_or(std::time::Duration::ZERO);
+        *slot = Some(std::time::Instant::now() + wait);
+        wait
+    };
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
 }
 
 fn remember_viewer_path(path: &str) {

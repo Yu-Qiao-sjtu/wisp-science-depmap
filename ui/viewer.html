@@ -223,6 +223,11 @@
         applySelection(document.getElementById('selection').value);
       });
       if (window.__TAURI__ && window.__TAURI__.core) {
+        window.setInterval(function () {
+          window.__TAURI__.core.invoke('ui_heartbeat', { snapshot: null }).catch(function () {});
+        }, 15000);
+      }
+      if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke('list_viewer_recent').then(function (paths) {
           document.getElementById('recent').textContent = (paths || []).slice(0, 3).map(function (path) {
             return path.replace(/^.*[\\/]/, '');
