@@ -34,6 +34,7 @@
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
     <button id="apply-selection" type="button">Select</button>
+    <button id="explain-selection" type="button">Explain in chat</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
@@ -74,9 +75,11 @@
 
       var viewer = null;
       var loadSeq = 0;
+      var currentPath = queryParam('src') || queryParam('topo') || '';
 
       function showStructure(path, selection) {
         var seq = ++loadSeq;
+        currentPath = path;
         var name = basename(path);
         setStatus('loading ' + name + '…', false);
         var format;
@@ -221,6 +224,21 @@
 
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
+      });
+      document.getElementById('explain-selection').addEventListener('click', function () {
+        if (!currentPath) {
+          setStatus('load a structure before asking for an explanation', true);
+          return;
+        }
+        setStatus('asking chat…', false);
+        window.__TAURI__.core.invoke('explain_structure_selection', {
+          path: currentPath,
+          selection: document.getElementById('selection').value || null
+        }).then(function () {
+          setStatus('explanation requested in chat', false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
       });
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.setInterval(function () {

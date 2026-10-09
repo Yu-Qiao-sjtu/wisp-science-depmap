@@ -276,6 +276,55 @@ pub(crate) async fn present_structure_in_viewer(
     Ok(())
 }
 
+/// Ask the main window's open chat to explain the structure on screen.
+#[tauri::command]
+pub(crate) async fn explain_structure_selection(
+    state: tauri::State<'_, crate::AppState>,
+    app: AppHandle,
+    path: String,
+    selection: Option<String>,
+) -> Result<(), String> {
+    let session_id = state
+        .active_frame("main")
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            "Open a chat in the main window before asking for an explanation.".to_string()
+        })?;
+    let name = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path.as_str());
+    let focus = selection
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" The selected region is `{value}`."))
+        .unwrap_or_else(|| {
+            " No residue selection was set, so explain the structure as a whole.".to_string()
+        });
+    let message = format!(
+        "Explain the structure now shown in the molecular viewer.\n\nFile: {path}\nName: {name}.{focus}\n\nSay what this molecule or region is, in plain language, using only what the file and selection identify. Do not start a new docking run."
+    );
+    crate::agent_turn::send_message_inner(
+        state.inner(),
+        app,
+        "main",
+        Some(session_id),
+        message,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(false),
+        Some(false),
+        None,
+        crate::agent_turn::TurnOrigin::Desktop,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Project-conversation tool for the same presentation as
 /// [`present_structure_in_viewer`]. The research assistant does not receive it.
 pub(crate) struct PresentStructureTool {
