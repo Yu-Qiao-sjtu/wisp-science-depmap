@@ -28,6 +28,21 @@
       font: inherit; border: 1px solid #dadce0; border-radius: 4px; background: #fff; padding: 3px 6px;
     }
     #selection-echo { color: #3c4043; }
+    #viewer { --side-left: 330px; --side-right: 300px; }
+    #viewer .msp-plugin .msp-layout-expanded { position: absolute; }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-left { width: var(--side-left); }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-right { width: var(--side-right); }
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-main,
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-top,
+    #viewer .msp-plugin .msp-layout-expanded .msp-layout-bottom {
+      left: var(--side-left); right: var(--side-right);
+    }
+    .splitter {
+      position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px;
+      cursor: col-resize; z-index: 8;
+    }
+    #splitter-left { left: var(--side-left); }
+    #splitter-right { right: var(--side-right); margin-left: 0; margin-right: -3px; }
   </style>
 </head>
 <body>
@@ -38,7 +53,10 @@
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
-  <div id="viewer"></div>
+  <div id="viewer">
+    <div id="splitter-left" class="splitter" title="Drag to resize the left panel"></div>
+    <div id="splitter-right" class="splitter" title="Drag to resize the right panel"></div>
+  </div>
   <div id="status">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script src="viewer_controls.js"></script>
@@ -248,6 +266,35 @@
           window.__TAURI__.core.invoke('ui_heartbeat', { snapshot: null }).catch(function () {});
         }, 15000);
       }
+      (function bindSplitters() {
+        var host = document.getElementById('viewer');
+        var widths = { left: 330, right: 300 };
+        function clamp(value) { return Math.max(160, Math.min(560, value)); }
+        function apply() {
+          host.style.setProperty('--side-left', widths.left + 'px');
+          host.style.setProperty('--side-right', widths.right + 'px');
+        }
+        function bind(id, side) {
+          document.getElementById(id).addEventListener('pointerdown', function (event) {
+            event.preventDefault();
+            var startX = event.clientX;
+            var start = widths[side];
+            function move(next) {
+              var delta = next.clientX - startX;
+              widths[side] = clamp(side === 'left' ? start + delta : start - delta);
+              apply();
+            }
+            function up() {
+              window.removeEventListener('pointermove', move);
+              window.removeEventListener('pointerup', up);
+            }
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+          });
+        }
+        bind('splitter-left', 'left');
+        bind('splitter-right', 'right');
+      })();
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke('list_viewer_recent').then(function (paths) {
           document.getElementById('recent').textContent = (paths || []).slice(0, 3).map(function (path) {
