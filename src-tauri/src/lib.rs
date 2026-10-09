@@ -7720,6 +7720,7 @@ pub fn run() {
             clipboard_files::read_clipboard_file_paths,
             viewer::open_structure_viewer,
             viewer::present_structure_in_viewer,
+            viewer::explain_structure_selection,
             viewer::read_structure_bytes,
             viewer::open_trajectory_viewer,
             viewer::read_trajectory_bytes,
