@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -20,6 +20,30 @@ test("rotate turns the view around the target", () => {
   assert.ok(Math.abs(next.position[0] - 10) < 1e-6);
   assert.ok(Math.abs(next.position[2]) < 1e-6);
   assert.deepEqual(next.target, [0, 0, 0]);
+});
+
+test("stick can be turned on and cartoon turned off", async () => {
+  const added = [];
+  const removed = [];
+  const cartoon = { cell: { params: { values: { type: { name: "cartoon" } } } } };
+  const component = { representations: [cartoon] };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: {
+          current: { structures: [{ components: [component] }] },
+          remove(entries) { removed.push(entries); },
+        },
+        component: {
+          addRepresentation(components, type) { added.push([components.length, type]); },
+        },
+      },
+    },
+  };
+  assert.equal(await setStructureRepresentation(plugin, "stick", true), 1);
+  assert.deepEqual(added, [[1, "ball-and-stick"]]);
+  assert.equal(await setStructureRepresentation(plugin, "cartoon", false), 1);
+  assert.deepEqual(removed, [[cartoon]]);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

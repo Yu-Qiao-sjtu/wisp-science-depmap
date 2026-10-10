@@ -67,6 +67,65 @@ function rotateSnapshot(snapshot, axis, degrees) {
   return next;
 }
 
+const REPRESENTATIONS = {
+  cartoon: "cartoon",
+  stick: "ball-and-stick",
+  sphere: "spacefill",
+  surface: "molecular-surface",
+};
+
+function representationTypeName(repr) {
+  const cell = repr && repr.cell;
+  const params = cell && ((cell.params && cell.params.values) || (cell.transform && cell.transform.params));
+  const type = params && params.type;
+  if (!type) return "";
+  return typeof type === "string" ? type : type.name || "";
+}
+
+function structureComponents(plugin) {
+  const structures = plugin
+    && plugin.managers
+    && plugin.managers.structure
+    && plugin.managers.structure.hierarchy
+    && plugin.managers.structure.hierarchy.current
+    && plugin.managers.structure.hierarchy.current.structures
+    || [];
+  const components = [];
+  for (const structure of structures) {
+    for (const component of structure.components || []) components.push(component);
+  }
+  return components;
+}
+
+// Turn one Mol* representation on or off for every component currently loaded.
+// `kind` is cartoon, stick, sphere, or surface.
+async function setStructureRepresentation(plugin, kind, visible) {
+  const type = REPRESENTATIONS[kind];
+  if (!type) throw new Error("unsupported representation " + kind);
+  const components = structureComponents(plugin);
+  const matching = [];
+  const missing = [];
+  for (const component of components) {
+    const found = (component.representations || []).some((repr) => representationTypeName(repr) === type);
+    if (found) {
+      for (const repr of component.representations || []) {
+        if (representationTypeName(repr) === type) matching.push(repr);
+      }
+    } else {
+      missing.push(component);
+    }
+  }
+  if (visible) {
+    const add = plugin.managers.structure.component
+      && plugin.managers.structure.component.addRepresentation;
+    if (missing.length && typeof add === "function") await add.call(plugin.managers.structure.component, missing, type);
+    return missing.length;
+  }
+  const remove = plugin.managers.structure.hierarchy.remove;
+  if (matching.length && typeof remove === "function") await remove.call(plugin.managers.structure.hierarchy, matching, true);
+  return matching.length;
+}
+
 function structuresOf(plugin) {
   const current = plugin.managers.structure.hierarchy.current.structures || [];
   return current
@@ -141,6 +200,8 @@ const ViewerControls = {
   rotateSnapshot,
   highlightPymol,
   applyCameraPayload,
+  setStructureRepresentation,
+  REPRESENTATIONS,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
