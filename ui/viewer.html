@@ -49,6 +49,7 @@
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
     <button id="apply-selection" type="button">Select</button>
+    <button id="zoom-selection" type="button">Zoom</button>
     <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
@@ -265,6 +266,14 @@
       });
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
+      });
+      document.getElementById('zoom-selection').addEventListener('click', function () {
+        try {
+          var framed = ViewerControls.focusCurrentSelection(molstar, viewer.plugin);
+          setStatus(framed === 'selection' ? 'zoomed to selection' : 'zoomed to whole structure', false);
+        } catch (error) {
+          setStatus(String((error && error.message) || error), true);
+        }
       });
       document.getElementById('clear-selection').addEventListener('click', function () {
         document.getElementById('selection').value = '';

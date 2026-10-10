@@ -157,6 +157,33 @@ function clearStructureSelection(plugin) {
   return true;
 }
 
+// Loci the user currently has selected, one per loaded structure. Residue
+// picks, the Select action, and selections delivered with a load all land in
+// the same Mol* selection manager.
+function currentSelectionLoci(molstar, plugin) {
+  const Loci = molstar.lib.loci.Loci;
+  const selection = plugin.managers.structure && plugin.managers.structure.selection;
+  if (!selection || typeof selection.getLoci !== "function") return [];
+  const lociList = [];
+  for (const structure of structuresOf(plugin)) {
+    const loci = selection.getLoci(structure);
+    if (loci && typeof Loci.isEmpty === "function" && !Loci.isEmpty(loci)) lociList.push(loci);
+  }
+  return lociList;
+}
+
+// PyMOL `zoom`/`center` on the current selection: frame the selected loci,
+// or the whole structure when nothing is selected. Returns what was framed.
+function focusCurrentSelection(molstar, plugin) {
+  const lociList = currentSelectionLoci(molstar, plugin);
+  if (lociList.length && plugin.managers.camera && typeof plugin.managers.camera.focusLoci === "function") {
+    plugin.managers.camera.focusLoci(lociList, { extraRadius: 2, durationMs: 300 });
+    return "selection";
+  }
+  applyCameraPayload(molstar, plugin, { action: "reset" });
+  return "structure";
+}
+
 function structuresOf(plugin) {
   const current = plugin.managers.structure.hierarchy.current.structures || [];
   return current
@@ -236,6 +263,8 @@ const ViewerControls = {
   replaceLoadedStructure,
   clearLoadedStructures,
   clearStructureSelection,
+  currentSelectionLoci,
+  focusCurrentSelection,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

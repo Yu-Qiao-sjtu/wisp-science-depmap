@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -86,6 +86,37 @@ test("clearing a structure removes the selection and the highlight", () => {
   assert.equal(clearStructureSelection(plugin), true);
   assert.deepEqual(calls, ["deselect", "clear"]);
   assert.equal(clearStructureSelection({}), false);
+});
+
+test("focus frames the current selection, or the whole structure when empty", () => {
+  const focused = [];
+  const snapshots = [];
+  const structure = {};
+  const loci = { kind: "loci" };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getLoci(s) { return s === structure ? loci : null; } },
+      },
+      interactivity: {},
+      camera: { focusLoci(list, options) { focused.push([list, options]); } },
+    },
+    canvas3d: {
+      camera: { getInvariantFocus: () => ({ radius: 5 }), getSnapshot: () => start },
+      boundingSphereVisible: { center: [0, 0, 0], radius: 5 },
+    },
+  };
+  const camera = plugin.managers.camera;
+  camera.setSnapshot = (snapshot) => snapshots.push(snapshot);
+  const molstar = { lib: { loci: { Loci: { isEmpty(l) { return !l; } } } } };
+  assert.equal(focusCurrentSelection(molstar, plugin), "selection");
+  assert.deepEqual(focused, [[[loci], { extraRadius: 2, durationMs: 300 }]]);
+  // Empty selection falls back to framing the whole structure.
+  plugin.managers.structure.selection.getLoci = () => null;
+  assert.equal(focusCurrentSelection(molstar, plugin), "structure");
+  assert.equal(focused.length, 1);
+  assert.deepEqual(snapshots, [{ radius: 5 }]);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
