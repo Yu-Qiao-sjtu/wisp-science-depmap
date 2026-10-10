@@ -296,6 +296,18 @@
       function applySelection(input) {
         var echo = document.getElementById('selection-echo');
         echo.textContent = input;
+        var trimmed = String(input || '').trim();
+        // One bare four-character word opens that RCSB entry instead of
+        // compiling as a selection (#249); longer input stays a command or
+        // expression.
+        if (window.__TAURI__ && window.__TAURI__.core && /^[A-Za-z0-9]{4}$/.test(trimmed)) {
+          setStatus(t('status.downloading', { id: trimmed.toUpperCase() }), false);
+          window.__TAURI__.core.invoke('open_pdb_entry', { pdbId: trimmed })
+            .catch(function (error) {
+              setStatus(String((error && error.message) || error), true);
+            });
+          return;
+        }
         ViewerControls.runPymolCommand(molstar, viewer.plugin, input).then(function (message) {
           setStatus(message, false);
         }).catch(function (error) {

@@ -939,6 +939,97 @@ pub(crate) async fn set_viewer_window_title(app: AppHandle, title: String) -> Re
         .map_err(|e| format!("failed to set the viewer window title: {e}"))
 }
 
+/// A PDB identifier: exactly four ASCII alphanumerics, normalized to upper
+/// case (classic RCSB entry ids such as `4KC3`).
+pub(crate) fn normalize_pdb_id(raw: &str) -> Result<String, String> {
+    let id = raw.trim();
+    if id.len() == 4 && id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        Ok(id.to_ascii_uppercase())
+    } else {
+        Err(format!(
+            "'{raw}' is not a PDB identifier; expected four characters like 4KC3"
+        ))
+    }
+}
+
+/// Download the RCSB mmCIF for one entry into the app cache and present it
+/// through the same load-structure path a local file uses (#249). The
+/// structure window's command box and the chat tools that steer the window
+/// both land here; the download itself never starts a chat turn. Local
+/// files keep their extension whitelist — this path only accepts ids.
+#[tauri::command]
+pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(), String> {
+    let id = normalize_pdb_id(&pdb_id)?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("viewer cache directory is unavailable: {e}"))?
+        .join("pdb");
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| format!("failed to create the PDB cache directory: {e}"))?;
+    let dest = cache_dir.join(format!("{id}.cif"));
+    if !tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        let client = reqwest::Client::builder()
+            .user_agent("wisp-depmap-viewer")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("failed to build the PDB download client: {e}"))?;
+        let response = client
+            .get(format!("https://files.rcsb.org/download/{id}.cif"))
+            .send()
+            .await
+            .map_err(|e| format!("failed to reach files.rcsb.org for {id}: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "RCSB returned {} for {id}",
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("failed to download {id}: {e}"))?;
+        if bytes.len() as u64 > MAX_STRUCTURE_BYTES {
+            return Err(format!(
+                "entry {id} is {} bytes, above the {} byte structure cap",
+                bytes.len(),
+                MAX_STRUCTURE_BYTES
+            ));
+        }
+        tokio::fs::write(&dest, &bytes)
+            .await
+            .map_err(|e| format!("failed to cache {id}: {e}"))?;
+    }
+    let canonical = validate_structure_path(&dest.to_string_lossy())?;
+    let path = canonical.to_string_lossy().into_owned();
+    match app.get_webview_window(VIEWER_WINDOW_LABEL) {
+        Some(window) => {
+            let _ = window.set_focus();
+            app.emit_to(
+                VIEWER_WINDOW_LABEL,
+                LOAD_STRUCTURE_EVENT,
+                LoadStructurePayload {
+                    path: path.clone(),
+                    selection: None,
+                },
+            )
+            .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
+        }
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, None, &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
+    }
+    remember_viewer_path(&path);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,6 +1184,20 @@ mod tests {
         assert_eq!(viewer_window_title("structure", "en"), "Structure viewer");
         assert_eq!(viewer_window_title("trajectory", "zh"), "轨迹查看器");
         assert_eq!(viewer_window_title("trajectory", "en"), "Trajectory viewer");
+    }
+
+    #[test]
+    fn pdb_ids_normalize_and_reject_other_input() {
+        assert_eq!(normalize_pdb_id("4kc3").unwrap(), "4KC3");
+        assert_eq!(normalize_pdb_id(" 4KC3 ").unwrap(), "4KC3");
+        assert_eq!(normalize_pdb_id("1crn").unwrap(), "1CRN");
+        assert!(normalize_pdb_id("4KC").is_err());
+        assert!(normalize_pdb_id("4KC33").is_err());
+        assert!(normalize_pdb_id("").is_err());
+        assert!(normalize_pdb_id("C:/a.pdb").is_err());
+        // Four plain letters still parse as an id; the frontend only routes
+        // here when the whole command box is one bare word, and RCSB decides.
+        assert!(normalize_pdb_id("7ABC").is_ok());
     }
 
     #[test]

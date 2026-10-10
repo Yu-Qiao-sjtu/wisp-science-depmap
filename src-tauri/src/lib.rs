@@ -7730,6 +7730,7 @@ pub fn run() {
             viewer::list_viewer_recent,
             viewer::export_viewer_image,
             viewer::set_viewer_window_title,
+            viewer::open_pdb_entry,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,
