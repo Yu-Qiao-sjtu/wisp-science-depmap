@@ -476,6 +476,144 @@ async function setSelectionVisibility(molstar, plugin, mode) {
   throw new Error("unsupported visibility mode " + mode);
 }
 
+// The PyMOL verbs the command box understands, mapped to the toolbar actions.
+const PYMOL_COMMANDS = ["select", "show", "hide", "color", "zoom", "center"];
+
+// Grammar for one command-box line: `<verb> [argument][, selection]`.
+// The comma matches PyMOL's split between the command argument (a
+// representation or color word here) and the selection it applies to, e.g.
+// `show cartoon, chain A` or `color red, resi 100`. `select`, `zoom`, and
+// `center` take the whole remainder as their selection expression.
+function parsePymolCommand(input) {
+  const text = String(input || "").trim();
+  if (!text) throw new Error("type a command first");
+  const cut = text.search(/\s/);
+  const command = cut === -1 ? text : text.slice(0, cut);
+  if (PYMOL_COMMANDS.indexOf(command) === -1) {
+    throw new Error(`'${command}' is outside the PyMOL subset (select, show, hide, color, zoom, center)`);
+  }
+  const rest = cut === -1 ? "" : text.slice(cut + 1).trim();
+  if (command === "select" || command === "zoom" || command === "center") {
+    return { command, argument: "", selection: rest };
+  }
+  const comma = rest.indexOf(",");
+  const argument = (comma === -1 ? rest : rest.slice(0, comma)).trim();
+  const selection = comma === -1 ? "" : rest.slice(comma + 1).trim();
+  return { command, argument, selection };
+}
+
+// PyMOL spelling (plural or singular) for the representation kinds the
+// show/hide buttons switch between.
+const COMMAND_REPRESENTATIONS = {
+  cartoon: "cartoon",
+  stick: "stick",
+  sticks: "stick",
+  sphere: "sphere",
+  spheres: "sphere",
+  surface: "surface",
+};
+
+// PyMOL `center`: slide the camera target onto the current selection (or the
+// whole structure when nothing is selected) without changing the distance.
+function centerCurrentSelection(molstar, plugin) {
+  const canvas = plugin.canvas3d;
+  const camera = plugin.managers.camera;
+  if (!canvas || !canvas.camera || !camera || typeof camera.setSnapshot !== "function") {
+    throw new Error("viewer camera is not ready");
+  }
+  const lociList = currentSelectionLoci(molstar, plugin);
+  let center;
+  if (lociList.length) {
+    const Stats = molstar.lib.structure.StructureElement.Stats;
+    const sum = [0, 0, 0];
+    for (const loci of lociList) {
+      const each = Stats.ofLoci(loci).center;
+      sum[0] += each[0];
+      sum[1] += each[1];
+      sum[2] += each[2];
+    }
+    center = scale(sum, 1 / lociList.length);
+  } else {
+    const sphere = canvas.boundingSphereVisible;
+    if (!sphere) throw new Error("load a structure before centering it");
+    center = sphere.center;
+  }
+  const snapshot = cloneSnapshot(canvas.camera.getSnapshot());
+  const delta = sub(center, snapshot.target);
+  snapshot.target = center;
+  snapshot.position = add(snapshot.position, delta);
+  camera.setSnapshot(snapshot, 300);
+  return lociList.length ? "selection" : "structure";
+}
+
+// Run one command-box line. A leading subset verb dispatches to the same
+// actions the toolbar buttons drive. Anything else keeps the historical
+// shortcut of treating the whole line as a selection expression; input that
+// is neither a subset verb nor a compilable expression reports that it falls
+// outside the subset.
+async function runPymolCommand(molstar, plugin, input) {
+  const text = String(input || "").trim();
+  let parsed;
+  try {
+    parsed = parsePymolCommand(text);
+  } catch (error) {
+    try {
+      const matched = highlightPymol(molstar, plugin, text);
+      if (!matched) throw new Error("no atoms matched " + text);
+      return "selected " + text;
+    } catch (compileError) {
+      const verb = text.split(/\s+/)[0];
+      throw new Error(`'${verb}' is outside the PyMOL subset (select, show, hide, color, zoom, center)`);
+    }
+  }
+  const { command, argument, selection } = parsed;
+  if (selection && command !== "select" && command !== "zoom" && command !== "center") {
+    // `,<selection>` becomes the current selection first so the action that
+    // follows paints exactly the atoms the user named.
+    const matched = highlightPymol(molstar, plugin, selection);
+    if (!matched) throw new Error("no atoms matched " + selection);
+  }
+  if (command === "select") {
+    if (!selection) throw new Error("select needs a selection expression");
+    const matched = highlightPymol(molstar, plugin, selection);
+    if (!matched) throw new Error("no atoms matched " + selection);
+    return "selected " + selection;
+  }
+  if (command === "show" || command === "hide") {
+    if (!argument) throw new Error(command + " needs a representation: cartoon, sticks, spheres, or surface");
+    const kind = COMMAND_REPRESENTATIONS[argument.toLowerCase()];
+    if (!kind) throw new Error("unsupported representation " + argument + "; expected cartoon, sticks, spheres, or surface");
+    await setStructureRepresentation(plugin, kind, command === "show");
+    return argument + " " + (command === "show" ? "shown" : "hidden");
+  }
+  if (command === "color") {
+    if (!argument) throw new Error("color needs a theme or color name");
+    if (COLOR_THEMES[argument]) {
+      await setColorTheme(plugin, argument);
+      return "colored by " + argument;
+    }
+    pymolColor(argument);
+    await paintViewerSelection(molstar, plugin, argument);
+    return "colored " + argument;
+  }
+  if (command === "zoom") {
+    if (selection) {
+      const matched = highlightPymol(molstar, plugin, selection);
+      if (!matched) throw new Error("no atoms matched " + selection);
+      return "zoomed to " + selection;
+    }
+    return "zoomed to " + (focusCurrentSelection(molstar, plugin) === "selection" ? "selection" : "whole structure");
+  }
+  if (command === "center") {
+    if (selection) {
+      const matched = highlightPymol(molstar, plugin, selection);
+      if (!matched) throw new Error("no atoms matched " + selection);
+    }
+    return "centered on " + (centerCurrentSelection(molstar, plugin) === "selection" ? "selection" : "structure");
+  }
+  throw new Error("unsupported command " + command);
+}
+
 const ViewerControls = {
   cloneSnapshot,
   zoomSnapshot,
@@ -499,6 +637,11 @@ const ViewerControls = {
   paintViewerSelection,
   clearViewerPaint,
   setSelectionVisibility,
+  parsePymolCommand,
+  runPymolCommand,
+  centerCurrentSelection,
+  setStructureRepresentation,
+  REPRESENTATIONS,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

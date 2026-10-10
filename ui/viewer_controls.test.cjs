@@ -1,12 +1,35 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
   target: [0, 0, 0],
   up: [0, 1, 0],
 };
+
+test("the command grammar splits verb, argument, and selection", () => {
+  assert.deepEqual(parsePymolCommand("show cartoon, chain A"), {
+    command: "show", argument: "cartoon", selection: "chain A",
+  });
+  assert.deepEqual(parsePymolCommand("color red"), {
+    command: "color", argument: "red", selection: "",
+  });
+  assert.deepEqual(parsePymolCommand("select resi 100"), {
+    command: "select", argument: "", selection: "resi 100",
+  });
+  assert.deepEqual(parsePymolCommand("zoom"), {
+    command: "zoom", argument: "", selection: "",
+  });
+  assert.deepEqual(parsePymolCommand("center chain A"), {
+    command: "center", argument: "", selection: "chain A",
+  });
+  assert.throws(() => parsePymolCommand(""), /type a command first/);
+  assert.throws(
+    () => parsePymolCommand("orient"),
+    /'orient' is outside the PyMOL subset \(select, show, hide, color, zoom, center\)/,
+  );
+});
 
 test("zoom moves the camera closer without moving the target", () => {
   const next = zoomSnapshot(start, 2);
@@ -321,6 +344,128 @@ test("visibility modes hide the selection, the rest, or nothing", async () => {
   const showSelection = await actions[3][2].getSelection(null, null, structure);
   assert.equal(showSelection.target, structure);
   await assert.rejects(() => setSelectionVisibility(molstar, plugin, "nonsense"), /unsupported visibility mode/);
+});
+
+// Fake Mol* surface: scriptToQuery compiles "ok ..." expressions and rejects
+// anything else, mirroring how the vendored parser reports bad selections.
+function commandMolstar() {
+  const structure = {};
+  const queried = [];
+  const molstar = {
+    scriptToQuery({ expression }) {
+      if (!/^ok/.test(expression)) throw new Error("could not compile " + expression);
+      queried.push(expression);
+      return () => ({ empty: false });
+    },
+    queried,
+    structure,
+    lib: {
+      loci: { Loci: { isEmpty: (l) => !l } },
+      structure: {
+        QueryContext: function QueryContext(s) { this.structure = s; },
+        StructureSelection: {
+          isEmpty: (s) => s && s.empty,
+          toLociWithSourceUnits: () => ({ loci: true }),
+          Singletons: (source, target) => ({ source, target }),
+        },
+        StructureElement: { Stats: { ofLoci: () => ({ center: [1, 2, 3] }) } },
+      },
+    },
+  };
+  return molstar;
+}
+
+function commandPlugin(molstar) {
+  const added = [];
+  const themed = [];
+  const focused = [];
+  const snapshots = [];
+  const plugin = {
+    managers: {
+      interactivity: {
+        lociSelects: { deselectAll() {}, select() {} },
+        lociHighlights: { clearHighlights() {}, highlight() {} },
+      },
+      structure: {
+        hierarchy: {
+          current: { structures: [{ cell: { obj: { data: molstar.structure } }, components: [{ representations: [] }] }] },
+          remove() {},
+        },
+        selection: {
+          getLoci: () => null,
+          getStructure: () => null,
+        },
+        component: {
+          addRepresentation(components, type) { added.push([components.length, type]); },
+          updateRepresentationsTheme(components, theme) { themed.push(theme); },
+          applyTheme(action, structures) { themed.push([action.action.name, action.action.params.color]); },
+        },
+      },
+      camera: {
+        focusLoci(list, options) { focused.push([list, options]); },
+        setSnapshot(snapshot, durationMs) { snapshots.push([snapshot, durationMs]); },
+      },
+    },
+    canvas3d: {
+      boundingSphereVisible: { center: [0, 0, 0], radius: 8 },
+      camera: {
+        getSnapshot: () => ({ position: [0, 0, 10], target: [0, 0, 0], up: [0, 1, 0], radius: 8 }),
+        getInvariantFocus: () => ({ radius: 8 }),
+      },
+    },
+  };
+  plugin.trackers = { added, themed, focused, snapshots };
+  return plugin;
+}
+
+test("command lines dispatch to the toolbar actions", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  const { added, themed } = plugin.trackers;
+
+  assert.equal(await runPymolCommand(molstar, plugin, "show sticks"), "sticks shown");
+  assert.deepEqual(added, [[1, "ball-and-stick"]]);
+  assert.equal(await runPymolCommand(molstar, plugin, "hide cartoon"), "cartoon hidden");
+
+  assert.equal(await runPymolCommand(molstar, plugin, "color element"), "colored by element");
+  assert.deepEqual(themed[0], { color: "element-symbol" });
+  assert.equal(await runPymolCommand(molstar, plugin, "color red, ok chain A"), "colored red");
+  assert.deepEqual(themed[1], ["color", 0xff0000]);
+  assert.deepEqual(molstar.queried, ["ok chain A"]);
+
+  assert.equal(await runPymolCommand(molstar, plugin, "select ok resi 5"), "selected ok resi 5");
+  assert.equal(await runPymolCommand(molstar, plugin, "zoom"), "zoomed to whole structure");
+  assert.equal(await runPymolCommand(molstar, plugin, "center"), "centered on structure");
+
+  await assert.rejects(() => runPymolCommand(molstar, plugin, "show metal"), /unsupported representation metal/);
+  await assert.rejects(() => runPymolCommand(molstar, plugin, "color violet"), /unsupported color violet/);
+  await assert.rejects(
+    () => runPymolCommand(molstar, plugin, "orient"),
+    /'orient' is outside the PyMOL subset/,
+  );
+});
+
+test("a bare expression still selects, keeping the event bridge compatible", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  assert.equal(await runPymolCommand(molstar, plugin, "ok chain A"), "selected ok chain A");
+  await assert.rejects(
+    () => runPymolCommand(molstar, plugin, "bogus input"),
+    /'bogus' is outside the PyMOL subset/,
+  );
+});
+
+test("center keeps the viewing distance while sliding the target", () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  plugin.managers.structure.selection.getLoci = () => ({ loci: true });
+  assert.equal(centerCurrentSelection(molstar, plugin), "selection");
+  const [[snapshot, durationMs]] = plugin.trackers.snapshots;
+  assert.equal(durationMs, 300);
+  assert.deepEqual(snapshot.target, [1, 2, 3]);
+  // position moves by the same vector, so the camera keeps its distance.
+  assert.deepEqual(snapshot.position, [1, 2, 13]);
+  assert.deepEqual(snapshot.up, [0, 1, 0]);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

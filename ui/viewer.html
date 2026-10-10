@@ -256,15 +256,14 @@
         /* event bridge unavailable (plain browser preview) */
       }
 
-      function applySelection(expression) {
+      function applySelection(input) {
         var echo = document.getElementById('selection-echo');
-        echo.textContent = expression;
-        try {
-          var matched = ViewerControls.highlightPymol(molstar, viewer.plugin, expression);
-          setStatus(matched ? expression : 'no atoms matched ' + expression, matched === 0);
-        } catch (error) {
+        echo.textContent = input;
+        ViewerControls.runPymolCommand(molstar, viewer.plugin, input).then(function (message) {
+          setStatus(message, false);
+        }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
-        }
+        });
       }
 
       function applyCamera(payload) {
