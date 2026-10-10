@@ -52,6 +52,22 @@
     <button id="zoom-selection" type="button">Zoom</button>
     <button id="label-selection" type="button" aria-pressed="false">Label</button>
     <button id="measure-distance" type="button" aria-pressed="false">Distance</button>
+    <select id="color-mode" title="Color by element, chain, spectrum, or a solid color">
+      <option value="element">Element</option>
+      <option value="chain">Chain</option>
+      <option value="spectrum">Spectrum</option>
+      <option value="red">Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+      <option value="yellow">Yellow</option>
+      <option value="cyan">Cyan</option>
+      <option value="magenta">Magenta</option>
+      <option value="orange">Orange</option>
+      <option value="white">White</option>
+      <option value="gray">Gray</option>
+      <option value="clear-paint">Clear paint</option>
+    </select>
+    <button id="apply-color" type="button">Color</button>
     <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
@@ -302,6 +318,19 @@
         ViewerControls.measurePickedDistance(molstar, viewer.plugin).then(function (distance) {
           button.setAttribute('aria-pressed', 'true');
           setStatus('distance ' + distance.toFixed(2) + ' A', false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('apply-color').addEventListener('click', function () {
+        var mode = document.getElementById('color-mode').value;
+        var applied = mode === 'clear-paint'
+          ? ViewerControls.clearViewerPaint(molstar, viewer.plugin)
+          : (mode === 'element' || mode === 'chain' || mode === 'spectrum')
+            ? ViewerControls.setColorTheme(viewer.plugin, mode).then(function () { return mode; })
+            : ViewerControls.paintViewerSelection(molstar, viewer.plugin, mode).then(function () { return mode; });
+        applied.then(function (what) {
+          setStatus('colored by ' + what, false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });

@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -225,6 +225,67 @@ test("measuring without two picks reports an error", async () => {
     managers: { structure: { selection: { additionsHistory: [{ loci: {} }] } } },
   };
   await assert.rejects(() => measurePickedDistance({ lib: {} }, plugin), /pick two atoms/);
+});
+
+test("color themes switch every component to the Mol* theme", async () => {
+  const updates = [];
+  const component = { representations: [] };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ components: [component] }] } },
+        component: {
+          updateRepresentationsTheme(components, theme) { updates.push([components.length, theme]); },
+        },
+      },
+    },
+  };
+  assert.equal(await setColorTheme(plugin, "element"), "element-symbol");
+  assert.equal(await setColorTheme(plugin, "chain"), "chain-id");
+  assert.equal(await setColorTheme(plugin, "spectrum"), "sequence");
+  assert.deepEqual(updates, [
+    [1, { color: "element-symbol" }],
+    [1, { color: "chain-id" }],
+    [1, { color: "sequence" }],
+  ]);
+  await assert.rejects(() => setColorTheme(plugin, "nonsense"), /unsupported color theme/);
+});
+
+test("solid colors paint the selection and clear again", async () => {
+  const actions = [];
+  const structure = { elementCount: 4 };
+  const picked = { elementCount: 2 };
+  const entry = { cell: { obj: { data: structure } } };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [entry] } },
+        selection: { getStructure: (s) => (s === structure ? picked : null) },
+        component: {
+          applyTheme(action, structures) { actions.push([action, structures]); },
+        },
+      },
+    },
+  };
+  const molstar = {
+    lib: { structure: { StructureSelection: { Singletons: (source, target) => ({ source, target }) } } },
+  };
+  assert.equal(pymolColor("red"), 0xff0000);
+  assert.equal(pymolColor("gray"), 0x808080);
+  assert.throws(() => pymolColor("chartreuse"), /unsupported color/);
+  assert.equal(await paintViewerSelection(molstar, plugin, "red"), 0xff0000);
+  assert.equal(await clearViewerPaint(molstar, plugin), 1);
+  assert.equal(actions.length, 2);
+  const [paint, reset] = actions;
+  assert.deepEqual(paint[0], { action: { name: "color", params: { color: 0xff0000 } }, selection: paint[0].selection });
+  assert.equal(reset[0].action.name, "resetColor");
+  assert.equal(paint[1].length, 1);
+  // The painted selection is the picked sub-structure...
+  const paintedSelection = await paint[0].selection.getSelection(null, null, structure);
+  assert.equal(paintedSelection.target, picked);
+  // ...while resetting covers the whole structure.
+  const resetSelection = await reset[0].selection.getSelection(null, null, structure);
+  assert.equal(resetSelection.target, structure);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

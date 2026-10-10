@@ -330,6 +330,101 @@ async function clearMeasuredDistances(plugin) {
   return removeTaggedCells(plugin, VIEWER_DISTANCE_TAG);
 }
 
+// Mol* color-theme names behind the PyMOL coloring words. Element, chain, and
+// spectrum recolor every loaded representation; named colors paint only the
+// current selection (or the whole structure when nothing is selected).
+const COLOR_THEMES = {
+  element: "element-symbol",
+  chain: "chain-id",
+  spectrum: "sequence",
+};
+
+// PyMOL color words mapped to their RGB values (Mol* Color ints).
+const PYMOL_COLORS = {
+  red: 0xff0000,
+  green: 0x00ff00,
+  blue: 0x0000ff,
+  yellow: 0xffff00,
+  cyan: 0x00ffff,
+  magenta: 0xff00ff,
+  orange: 0xffa500,
+  white: 0xffffff,
+  gray: 0x808080,
+  grey: 0x808080,
+};
+
+function pymolColor(name) {
+  const color = PYMOL_COLORS[name];
+  if (color === undefined) {
+    throw new Error("unsupported color " + name + "; expected element, chain, spectrum, or a PyMOL color name");
+  }
+  return color;
+}
+
+// Switch every representation of every loaded component to a color theme.
+async function setColorTheme(plugin, kind) {
+  const theme = COLOR_THEMES[kind];
+  if (!theme) throw new Error("unsupported color theme " + kind);
+  const components = [];
+  for (const entry of (plugin.managers.structure.hierarchy.current.structures) || []) {
+    for (const component of entry.components || []) components.push(component);
+  }
+  if (!components.length) throw new Error("load a structure before coloring it");
+  const componentManager = plugin.managers.structure.component;
+  if (!componentManager || typeof componentManager.updateRepresentationsTheme !== "function") {
+    throw new Error("Mol* build is missing theme updates");
+  }
+  await componentManager.updateRepresentationsTheme(components, { color: theme });
+  return theme;
+}
+
+// Paint the current selection (or the whole structure) one solid color.
+async function paintViewerSelection(molstar, plugin, name) {
+  const color = pymolColor(name);
+  const componentManager = plugin.managers.structure.component;
+  if (!componentManager || typeof componentManager.applyTheme !== "function") {
+    throw new Error("Mol* build is missing theme actions");
+  }
+  const StructureSelection = molstar.lib.structure.StructureSelection;
+  const selectionManager = plugin.managers.structure.selection;
+  const selection = {
+    getSelection: async (_plugin, _ctx, structure) => {
+      const picked = selectionManager && typeof selectionManager.getStructure === "function"
+        ? selectionManager.getStructure(structure)
+        : null;
+      const target = picked && picked.elementCount ? picked : structure;
+      return StructureSelection.Singletons(structure, target);
+    },
+  };
+  const structures = (plugin.managers.structure.hierarchy.current.structures) || [];
+  if (!structures.length) throw new Error("load a structure before coloring it");
+  await componentManager.applyTheme({
+    action: { name: "color", params: { color } },
+    selection,
+  }, structures);
+  return color;
+}
+
+// Remove every solid-color paint layer this window applied, restoring the
+// color theme underneath.
+async function clearViewerPaint(molstar, plugin) {
+  const componentManager = plugin.managers.structure.component;
+  if (!componentManager || typeof componentManager.applyTheme !== "function") {
+    throw new Error("Mol* build is missing theme actions");
+  }
+  const StructureSelection = molstar.lib.structure.StructureSelection;
+  const selection = {
+    getSelection: async (_plugin, _ctx, structure) => StructureSelection.Singletons(structure, structure),
+  };
+  const structures = (plugin.managers.structure.hierarchy.current.structures) || [];
+  if (!structures.length) return 0;
+  await componentManager.applyTheme({
+    action: { name: "resetColor", params: {} },
+    selection,
+  }, structures);
+  return structures.length;
+}
+
 const ViewerControls = {
   cloneSnapshot,
   zoomSnapshot,
@@ -346,6 +441,12 @@ const ViewerControls = {
   setSelectionLabels,
   measurePickedDistance,
   clearMeasuredDistances,
+  COLOR_THEMES,
+  PYMOL_COLORS,
+  pymolColor,
+  setColorTheme,
+  paintViewerSelection,
+  clearViewerPaint,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
