@@ -806,6 +806,45 @@ pub(crate) async fn read_trajectory_bytes(path: String) -> Result<Vec<u8>, Strin
     })
 }
 
+const PNG_DATA_URL_PREFIX: &str = "data:image/png;base64,";
+
+/// Decode a PNG captured from the viewer canvas and save it through the
+/// native save dialog. Returns the saved path, or `None` when the user
+/// cancels.
+#[tauri::command]
+pub(crate) async fn export_viewer_image(
+    app: AppHandle,
+    data_url: String,
+) -> Result<Option<String>, String> {
+    let payload = data_url
+        .strip_prefix(PNG_DATA_URL_PREFIX)
+        .ok_or_else(|| "expected a data:image/png;base64 data URL".to_string())?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("invalid PNG data URL: {e}"))?;
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Err("decoded data is not a PNG image".into());
+    }
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name("structure-view.png")
+        .add_filter("PNG image", &["png"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(dest) = rx.await.map_err(|e| format!("{e}"))? else {
+        return Ok(None);
+    };
+    let dest_path = PathBuf::from(dest.to_string());
+    tokio::fs::write(&dest_path, bytes)
+        .await
+        .map_err(|e| format!("failed to write {}: {e}", dest_path.display()))?;
+    Ok(Some(dest_path.to_string_lossy().into_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,5 +1081,26 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported")
         );
+    }
+
+    #[test]
+    fn png_data_urls_decode_and_reject_non_png_payloads() {
+        use base64::Engine as _;
+        fn decode(data_url: &str) -> Result<Vec<u8>, String> {
+            let payload = data_url
+                .strip_prefix(PNG_DATA_URL_PREFIX)
+                .ok_or_else(|| "expected a data:image/png;base64 data URL".to_string())?;
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .map_err(|e| format!("invalid PNG data URL: {e}"))
+        }
+        let png = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 1, 2]);
+        let bytes = decode(&format!("{PNG_DATA_URL_PREFIX}{png}")).unwrap();
+        assert_eq!(bytes, vec![0x89, b'P', b'N', b'G', 1, 2]);
+        let jpeg = base64::engine::general_purpose::STANDARD.encode([0xff, 0xd8, 0xff]);
+        let bytes = decode(&format!("{PNG_DATA_URL_PREFIX}{jpeg}")).unwrap();
+        assert!(!bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(decode("data:image/jpeg;base64,AAAA").is_err());
+        assert!(decode("not a data url").is_err());
     }
 }

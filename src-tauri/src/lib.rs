@@ -7728,6 +7728,7 @@ pub fn run() {
             viewer::select_in_viewer,
             viewer::open_artifact_in_viewer,
             viewer::list_viewer_recent,
+            viewer::export_viewer_image,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,

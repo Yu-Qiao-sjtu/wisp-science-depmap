@@ -74,6 +74,7 @@
       <option value="show">Show all</option>
     </select>
     <button id="apply-visibility" type="button">Apply</button>
+    <button id="export-image" type="button">Export PNG</button>
     <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
@@ -345,6 +346,27 @@
         var mode = document.getElementById('visibility-mode').value;
         ViewerControls.setSelectionVisibility(molstar, viewer.plugin, mode).then(function (what) {
           setStatus(what, false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('export-image').addEventListener('click', function () {
+        // Mol* canvases are created with preserveDrawingBuffer, so the current
+        // frame survives long enough to be read straight off the element.
+        var canvas = document.querySelector('#viewer canvas');
+        if (!canvas) {
+          setStatus('no canvas to export yet', true);
+          return;
+        }
+        var dataUrl;
+        try { dataUrl = canvas.toDataURL('image/png'); }
+        catch (error) {
+          setStatus(String((error && error.message) || error), true);
+          return;
+        }
+        setStatus('saving image…', false);
+        window.__TAURI__.core.invoke('export_viewer_image', { dataUrl: dataUrl }).then(function (saved) {
+          setStatus(saved ? 'saved ' + String(saved).replace(/^.*[\\/]/, '') : 'export cancelled', false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });
