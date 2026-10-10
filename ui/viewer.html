@@ -48,47 +48,47 @@
 <body>
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
-    <button id="apply-selection" type="button">Select</button>
-    <button id="zoom-selection" type="button">Zoom</button>
-    <button id="label-selection" type="button" aria-pressed="false">Label</button>
-    <button id="measure-distance" type="button" aria-pressed="false">Distance</button>
-    <select id="color-mode" title="Color by element, chain, spectrum, or a solid color">
-      <option value="element">Element</option>
-      <option value="chain">Chain</option>
-      <option value="spectrum">Spectrum</option>
-      <option value="red">Red</option>
-      <option value="green">Green</option>
-      <option value="blue">Blue</option>
-      <option value="yellow">Yellow</option>
-      <option value="cyan">Cyan</option>
-      <option value="magenta">Magenta</option>
-      <option value="orange">Orange</option>
-      <option value="white">White</option>
-      <option value="gray">Gray</option>
-      <option value="clear-paint">Clear paint</option>
+    <button id="apply-selection" type="button" data-i18n="button.select">Select</button>
+    <button id="zoom-selection" type="button" data-i18n="button.zoom">Zoom</button>
+    <button id="label-selection" type="button" aria-pressed="false" data-i18n="button.label">Label</button>
+    <button id="measure-distance" type="button" aria-pressed="false" data-i18n="button.distance">Distance</button>
+    <select id="color-mode" data-i18n-title="hint.color" title="Color by element, chain, spectrum, or a solid color">
+      <option value="element" data-i18n="color.element">Element</option>
+      <option value="chain" data-i18n="color.chain">Chain</option>
+      <option value="spectrum" data-i18n="color.spectrum">Spectrum</option>
+      <option value="red" data-i18n="color.red">Red</option>
+      <option value="green" data-i18n="color.green">Green</option>
+      <option value="blue" data-i18n="color.blue">Blue</option>
+      <option value="yellow" data-i18n="color.yellow">Yellow</option>
+      <option value="cyan" data-i18n="color.cyan">Cyan</option>
+      <option value="magenta" data-i18n="color.magenta">Magenta</option>
+      <option value="orange" data-i18n="color.orange">Orange</option>
+      <option value="white" data-i18n="color.white">White</option>
+      <option value="gray" data-i18n="color.gray">Gray</option>
+      <option value="clear-paint" data-i18n="color.clearPaint">Clear paint</option>
     </select>
-    <button id="apply-color" type="button">Color</button>
-    <select id="visibility-mode" title="Hide the selection, hide everything else, or show everything">
-      <option value="hide">Hide selection</option>
-      <option value="others">Hide others</option>
-      <option value="show">Show all</option>
+    <button id="apply-color" type="button" data-i18n="button.color">Color</button>
+    <select id="visibility-mode" data-i18n-title="hint.visibility" title="Hide the selection, hide everything else, or show everything">
+      <option value="hide" data-i18n="visibility.hide">Hide selection</option>
+      <option value="others" data-i18n="visibility.others">Hide others</option>
+      <option value="show" data-i18n="visibility.show">Show all</option>
     </select>
-    <button id="apply-visibility" type="button">Apply</button>
-    <button id="export-image" type="button">Export PNG</button>
-    <button id="clear-selection" type="button">Clear</button>
-    <button id="explain-selection" type="button">Explain in chat</button>
+    <button id="apply-visibility" type="button" data-i18n="button.apply">Apply</button>
+    <button id="export-image" type="button" data-i18n="button.export">Export PNG</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
     <button id="rep-stick" type="button" aria-pressed="false">Stick</button>
     <button id="rep-sphere" type="button" aria-pressed="false">Sphere</button>
     <button id="rep-surface" type="button" aria-pressed="false">Surface</button>
+    <button id="clear-selection" type="button" data-i18n="button.clear">Clear</button>
+    <button id="explain-selection" type="button" data-i18n="button.explain">Explain in chat</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
   <div id="viewer">
-    <div id="splitter-left" class="splitter" title="Drag to resize the left panel"></div>
-    <div id="splitter-right" class="splitter" title="Drag to resize the right panel"></div>
+    <div id="splitter-left" class="splitter" data-i18n-title="hint.splitter" title="Drag to resize the left panel"></div>
+    <div id="splitter-right" class="splitter" data-i18n-title="hint.splitter" title="Drag to resize the right panel"></div>
   </div>
-  <div id="status">initializing viewer…</div>
+  <div id="status" data-i18n="status.initializing">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script src="viewer_controls.js"></script>
   <script>
@@ -99,6 +99,31 @@
         statusEl.textContent = message;
         statusEl.className = isError ? 'error' : '';
       }
+
+      // Chrome language (#247): the desktop UI language rides the URL on the
+      // first open and the viewer://locale event afterwards. Mol* panels keep
+      // Mol*'s own language.
+      var chromeLang = ViewerControls.normalizeChromeLocale(queryParam('lang'));
+      var currentMode = 'structure';
+      function t(key, params) {
+        return ViewerControls.chromeText(chromeLang, key, params);
+      }
+      function applyChromeLanguage() {
+        ViewerControls.setChromeLocale(chromeLang);
+        document.documentElement.lang = chromeLang === 'zh' ? 'zh-CN' : 'en';
+        Array.prototype.forEach.call(document.querySelectorAll('[data-i18n]'), function (el) {
+          el.textContent = t(el.getAttribute('data-i18n'));
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('[data-i18n-title]'), function (el) {
+          el.title = t(el.getAttribute('data-i18n-title'));
+        });
+        var title = t(currentMode === 'trajectory' ? 'title.trajectory' : 'title.structure');
+        document.title = title;
+        try {
+          window.__TAURI__.core.invoke('set_viewer_window_title', { title: title }).catch(function () {});
+        } catch (error) { /* plain browser preview */ }
+      }
+      applyChromeLanguage();
 
       var FORMAT_BY_EXT = { pdb: 'pdb', ent: 'pdb', cif: 'cif', mmcif: 'mmcif', gro: 'gro' };
       // Coordinate formats parsed by Mol* mol-io; `.nc` is GROMACS' alternate
@@ -129,8 +154,10 @@
       function showStructure(path, selection) {
         var seq = ++loadSeq;
         currentPath = path;
+        currentMode = 'structure';
+        applyChromeLanguage();
         var name = basename(path);
-        setStatus('loading ' + name + '…', false);
+        setStatus(t('status.loading', { name: name }), false);
         var format;
         try { format = formatFor(FORMAT_BY_EXT, 'structure', path); }
         catch (error) { setStatus(String(error.message || error), true); return; }
@@ -167,9 +194,12 @@
       // preset - playback controls come from the vendored viewer itself.
       function showTrajectory(structurePath, trajectoryPath) {
         var seq = ++loadSeq;
+        currentPath = structurePath;
+        currentMode = 'trajectory';
+        applyChromeLanguage();
         var topoName = basename(structurePath);
         var trajName = basename(trajectoryPath);
-        setStatus('loading ' + topoName + ' + ' + trajName + '…', false);
+        setStatus(t('status.loadingTrajectory', { topo: topoName, traj: trajName }), false);
         var topoFormat, trajFormat;
         try {
           topoFormat = formatFor(FORMAT_BY_EXT, 'structure', structurePath);
@@ -252,6 +282,13 @@
         window.__TAURI__.event.listen('viewer://control-camera', function (event) {
           applyCamera(event && event.payload);
         });
+        window.__TAURI__.event.listen('viewer://locale', function (event) {
+          var locale = event && event.payload && event.payload.locale;
+          if (locale) {
+            chromeLang = ViewerControls.normalizeChromeLocale(locale);
+            applyChromeLanguage();
+          }
+        });
       } catch (error) {
         /* event bridge unavailable (plain browser preview) */
       }
@@ -270,7 +307,7 @@
         if (!payload || !payload.action) return;
         try {
           ViewerControls.applyCameraPayload(molstar, viewer.plugin, payload);
-          setStatus('camera ' + payload.action, false);
+          setStatus(t('status.camera', { action: payload.action }), false);
         } catch (error) {
           setStatus(String((error && error.message) || error), true);
         }
@@ -294,7 +331,7 @@
       document.getElementById('zoom-selection').addEventListener('click', function () {
         try {
           var framed = ViewerControls.focusCurrentSelection(molstar, viewer.plugin);
-          setStatus(framed === 'selection' ? 'zoomed to selection' : 'zoomed to whole structure', false);
+          setStatus(framed === 'selection' ? t('status.zoomedSelection') : t('status.zoomedStructure'), false);
         } catch (error) {
           setStatus(String((error && error.message) || error), true);
         }
@@ -304,7 +341,7 @@
         var next = button.getAttribute('aria-pressed') !== 'true';
         ViewerControls.setSelectionLabels(molstar, viewer.plugin, next).then(function (count) {
           button.setAttribute('aria-pressed', next ? 'true' : 'false');
-          setStatus(next ? 'labels on ' + count + ' selection' + (count === 1 ? '' : 's') : 'labels off', false);
+          setStatus(next ? t('status.labelsOn', { count: count, s: count === 1 ? '' : 's' }) : t('status.labelsOff'), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });
@@ -315,7 +352,7 @@
         if (pressed) {
           ViewerControls.clearMeasuredDistances(viewer.plugin).then(function () {
             button.setAttribute('aria-pressed', 'false');
-            setStatus('distances cleared', false);
+            setStatus(t('status.distancesCleared'), false);
           }).catch(function (error) {
             setStatus(String((error && error.message) || error), true);
           });
@@ -323,7 +360,7 @@
         }
         ViewerControls.measurePickedDistance(molstar, viewer.plugin).then(function (distance) {
           button.setAttribute('aria-pressed', 'true');
-          setStatus('distance ' + distance.toFixed(2) + ' A', false);
+          setStatus(t('status.distance', { value: distance.toFixed(2) }), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });
@@ -336,7 +373,7 @@
             ? ViewerControls.setColorTheme(viewer.plugin, mode).then(function () { return mode; })
             : ViewerControls.paintViewerSelection(molstar, viewer.plugin, mode).then(function () { return mode; });
         applied.then(function (what) {
-          setStatus('colored by ' + what, false);
+          setStatus(t('status.coloredBy', { what: t('color.' + what) }), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });
@@ -354,7 +391,7 @@
         // frame survives long enough to be read straight off the element.
         var canvas = document.querySelector('#viewer canvas');
         if (!canvas) {
-          setStatus('no canvas to export yet', true);
+          setStatus(t('status.noCanvas'), true);
           return;
         }
         var dataUrl;
@@ -363,9 +400,11 @@
           setStatus(String((error && error.message) || error), true);
           return;
         }
-        setStatus('saving image…', false);
+        setStatus(t('status.savingImage'), false);
         window.__TAURI__.core.invoke('export_viewer_image', { dataUrl: dataUrl }).then(function (saved) {
-          setStatus(saved ? 'saved ' + String(saved).replace(/^.*[\\/]/, '') : 'export cancelled', false);
+          setStatus(saved
+            ? t('status.saved', { name: String(saved).replace(/^.*[\\/]/, '') })
+            : t('status.exportCancelled'), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });
@@ -375,22 +414,22 @@
         document.getElementById('selection-echo').textContent = '';
         try {
           ViewerControls.clearStructureSelection(viewer.plugin);
-          setStatus('selection cleared', false);
+          setStatus(t('status.selectionCleared'), false);
         } catch (error) {
           setStatus(String((error && error.message) || error), true);
         }
       });
       document.getElementById('explain-selection').addEventListener('click', function () {
         if (!currentPath) {
-          setStatus('load a structure before asking for an explanation', true);
+          setStatus(t('status.explainNeedsStructure'), true);
           return;
         }
-        setStatus('asking chat…', false);
+        setStatus(t('status.askingChat'), false);
         window.__TAURI__.core.invoke('explain_structure_selection', {
           path: currentPath,
           selection: document.getElementById('selection').value || null
         }).then(function () {
-          setStatus('explanation requested in chat', false);
+          setStatus(t('status.explanationRequested'), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });

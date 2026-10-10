@@ -31,6 +31,58 @@ const CONTROL_CAMERA_EVENT: &str = "viewer://control-camera";
 /// PyMOL-style selection for an already-open viewer (#194).
 const SELECT_EVENT: &str = "viewer://select";
 
+/// Chrome-language update for an open viewer window (#247). The page owns
+/// its string table; this event only tells it which column to render.
+pub(crate) const LOCALE_EVENT: &str = "viewer://locale";
+
+#[derive(Clone, Serialize)]
+struct LocalePayload {
+    locale: String,
+}
+
+/// The chrome language for a viewer about to open, read from the desktop UI
+/// language setting. Only `zh` switches the chrome; anything else is `en`.
+async fn chrome_locale(app: &AppHandle) -> String {
+    let state = app.state::<crate::AppState>();
+    match state
+        .store
+        .get_setting("locale")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("zh") => "zh".into(),
+        _ => "en".into(),
+    }
+}
+
+/// Tell an already-open viewer window that the desktop UI language changed.
+/// The page re-renders its own chrome and resets its title, so Mol*'s
+/// bundled panels stay on Mol*'s language.
+pub(crate) fn emit_viewer_locale(app: &AppHandle, locale: &str) {
+    let _ = app.emit_to(
+        VIEWER_WINDOW_LABEL,
+        LOCALE_EVENT,
+        LocalePayload {
+            locale: locale.to_string(),
+        },
+    );
+}
+
+/// Native window title in the chrome language. The page corrects the title
+/// through [`set_viewer_window_title`] once it knows its own mode, so this
+/// only covers the moment between spawn and first paint.
+fn viewer_window_title(kind: &str, locale: &str) -> &'static str {
+    match (kind, locale) {
+        ("trajectory", "zh") => "轨迹查看器",
+        ("trajectory", _) => "Trajectory viewer",
+        (_, "zh") => "结构查看器",
+        (_, _) => "Structure viewer",
+    }
+}
+
 /// Upper bound for a structure file handed to the viewer. Structures are tiny
 /// next to trajectories; a larger "structure" is almost certainly the wrong
 /// file (e.g. a multi-frame trajectory), which is routed through the
@@ -142,12 +194,6 @@ fn percent_encode_path(path: &str) -> String {
     encoded
 }
 
-pub(crate) fn viewer_url(path: &str) -> String {
-    viewer_url_with_selection(path, None)
-}
-
-/// First open cannot listen for events yet, so the optional selection rides
-/// the same URL as the structure path and is applied after that load settles.
 pub(crate) fn viewer_url_with_selection(path: &str, selection: Option<&str>) -> String {
     let mut url = format!("viewer.html?src={}", percent_encode_path(path));
     if let Some(selection) = selection {
@@ -162,6 +208,24 @@ pub(crate) fn viewer_trajectory_url(structure: &str, trajectory: &str) -> String
         "viewer.html?topo={}&traj={}",
         percent_encode_path(structure),
         percent_encode_path(trajectory)
+    )
+}
+
+/// Same URLs with the chrome language appended, so the freshly opened page
+/// renders the right column before its event listeners exist (#247).
+pub(crate) fn viewer_url_with_locale(path: &str, selection: Option<&str>, locale: &str) -> String {
+    format!(
+        "{}&lang={}",
+        viewer_url_with_selection(path, selection),
+        if locale == "zh" { "zh" } else { "en" }
+    )
+}
+
+pub(crate) fn viewer_trajectory_url_with_locale(structure: &str, trajectory: &str, locale: &str) -> String {
+    format!(
+        "{}&lang={}",
+        viewer_trajectory_url(structure, trajectory),
+        if locale == "zh" { "zh" } else { "en" }
     )
 }
 
@@ -222,7 +286,14 @@ pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Resul
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(&app, viewer_url(&path), "Structure viewer")?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, None, &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
     }
     remember_viewer_path(&path);
     Ok(())
@@ -265,11 +336,14 @@ pub(crate) async fn present_structure_in_viewer(
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(
-            &app,
-            viewer_url_with_selection(&path, selection.as_deref()),
-            "Structure viewer",
-        )?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, selection.as_deref(), &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
     }
     remember_viewer_path(&path);
     Ok(())
@@ -481,11 +555,14 @@ pub(crate) async fn open_trajectory_viewer(
             )
             .map_err(|e| format!("failed to deliver trajectory to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(
-            &app,
-            viewer_trajectory_url(&structure_path, &trajectory_path),
-            "Trajectory viewer",
-        )?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_trajectory_url_with_locale(&structure_path, &trajectory_path, &locale),
+                viewer_window_title("trajectory", &locale),
+            )?
+        }
     }
     remember_viewer_path(&structure_path);
     remember_viewer_path(&trajectory_path);
@@ -845,6 +922,23 @@ pub(crate) async fn export_viewer_image(
     Ok(Some(dest_path.to_string_lossy().into_owned()))
 }
 
+/// Let the viewer page correct its native window title after the chrome
+/// language or the loaded mode changes (#247). The title comes from the
+/// page's own string table, so it always matches what the chrome shows.
+#[tauri::command]
+pub(crate) async fn set_viewer_window_title(app: AppHandle, title: String) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("viewer window title must not be empty".into());
+    }
+    let window = app
+        .get_webview_window(VIEWER_WINDOW_LABEL)
+        .ok_or_else(|| "viewer window is not open".to_string())?;
+    window
+        .set_title(title)
+        .map_err(|e| format!("failed to set the viewer window title: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -972,13 +1066,33 @@ mod tests {
     #[test]
     fn viewer_url_percent_encodes_spaces_but_keeps_path_separators() {
         assert_eq!(
-            viewer_url("C:/a b/model.pdb"),
-            "viewer.html?src=C:/a%20b/model.pdb"
+            viewer_url_with_locale("C:/a b/model.pdb", None, "en"),
+            "viewer.html?src=C:/a%20b/model.pdb&lang=en"
         );
         assert_eq!(
-            viewer_url("D:\\pdb library\\x (1).cif"),
-            "viewer.html?src=D:\\pdb%20library\\x%20%281%29.cif"
+            viewer_url_with_locale("D:\\pdb library\\x (1).cif", Some("chain A"), "zh"),
+            "viewer.html?src=D:\\pdb%20library\\x%20%281%29.cif&sel=chain%20A&lang=zh"
         );
+    }
+
+    #[test]
+    fn viewer_trajectory_url_appends_the_chrome_language() {
+        assert_eq!(
+            viewer_trajectory_url_with_locale("C:/t/x.pdb", "C:/t/y.nc", "zh"),
+            "viewer.html?topo=C:/t/x.pdb&traj=C:/t/y.nc&lang=zh"
+        );
+        assert_eq!(
+            viewer_trajectory_url_with_locale("C:/t/x.pdb", "C:/t/y.xtc", "fr"),
+            "viewer.html?topo=C:/t/x.pdb&traj=C:/t/y.xtc&lang=en"
+        );
+    }
+
+    #[test]
+    fn viewer_window_titles_follow_the_chrome_language() {
+        assert_eq!(viewer_window_title("structure", "zh"), "结构查看器");
+        assert_eq!(viewer_window_title("structure", "en"), "Structure viewer");
+        assert_eq!(viewer_window_title("trajectory", "zh"), "轨迹查看器");
+        assert_eq!(viewer_window_title("trajectory", "en"), "Trajectory viewer");
     }
 
     #[test]

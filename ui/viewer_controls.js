@@ -1,6 +1,197 @@
 // Camera math and PyMOL highlight for the Mol* viewer window.
 // Kept free of the DOM so the transforms can be tested without a GPU.
 
+// Chrome strings for the viewer window, English and Chinese. Mol*'s bundled
+// panels keep Mol*'s own language; this table covers only the toolbar and
+// status line the desktop shell owns. The desktop UI language picks the
+// column, delivered via the viewer URL and the viewer://locale event.
+const CHROME_I18N = {
+  en: {
+    "title.structure": "Structure viewer",
+    "title.trajectory": "Trajectory viewer",
+    "button.select": "Select",
+    "button.zoom": "Zoom",
+    "button.label": "Label",
+    "button.distance": "Distance",
+    "button.color": "Color",
+    "button.apply": "Apply",
+    "button.export": "Export PNG",
+    "button.clear": "Clear",
+    "button.explain": "Explain in chat",
+    "color.element": "Element",
+    "color.chain": "Chain",
+    "color.spectrum": "Spectrum",
+    "color.red": "Red",
+    "color.green": "Green",
+    "color.blue": "Blue",
+    "color.yellow": "Yellow",
+    "color.cyan": "Cyan",
+    "color.magenta": "Magenta",
+    "color.orange": "Orange",
+    "color.white": "White",
+    "color.gray": "Gray",
+    "color.clearPaint": "Clear paint",
+    "visibility.hide": "Hide selection",
+    "visibility.others": "Hide others",
+    "visibility.show": "Show all",
+    "hint.color": "Color by element, chain, spectrum, or a solid color",
+    "hint.visibility": "Hide the selection, hide everything else, or show everything",
+    "hint.splitter": "Drag to resize the panel",
+    "status.initializing": "initializing viewer…",
+    "status.loading": "loading {name}…",
+    "status.loadingTrajectory": "loading {topo} + {traj}…",
+    "status.camera": "camera {action}",
+    "status.zoomedSelection": "zoomed to selection",
+    "status.zoomedStructure": "zoomed to whole structure",
+    "status.labelsOn": "labels on {count} selection{s}",
+    "status.labelsOff": "labels off",
+    "status.distance": "distance {value} Å",
+    "status.distancesCleared": "distances cleared",
+    "status.coloredBy": "colored by {what}",
+    "status.selectionHidden": "selection hidden",
+    "status.othersHidden": "everything except the selection hidden",
+    "status.everythingShown": "everything shown",
+    "status.selectionCleared": "selection cleared",
+    "status.savingImage": "saving image…",
+    "status.saved": "saved {name}",
+    "status.exportCancelled": "export cancelled",
+    "status.noCanvas": "no canvas to export yet",
+    "status.explainNeedsStructure": "load a structure before asking for an explanation",
+    "status.askingChat": "asking chat…",
+    "status.explanationRequested": "explanation requested in chat",
+    "cmd.selected": "selected {expression}",
+    "cmd.shown": "{representation} shown",
+    "cmd.hidden": "{representation} hidden",
+    "cmd.coloredByTheme": "colored by {theme}",
+    "cmd.coloredSolid": "colored {color}",
+    "cmd.zoomedSelection": "zoomed to selection",
+    "cmd.zoomedStructure": "zoomed to whole structure",
+    "cmd.zoomedExpression": "zoomed to {expression}",
+    "cmd.centeredSelection": "centered on selection",
+    "cmd.centeredStructure": "centered on structure",
+    "error.emptyCommand": "type a command first",
+    "error.outsideSubset": "'{verb}' is outside the PyMOL subset (select, show, hide, color, zoom, center)",
+    "error.needsRepresentation": "{command} needs a representation: cartoon, sticks, spheres, or surface",
+    "error.unsupportedRepresentation": "unsupported representation {name}; expected cartoon, sticks, spheres, or surface",
+    "error.needsColor": "color needs a theme or color name",
+    "error.unsupportedColor": "unsupported color {name}; expected element, chain, spectrum, or a PyMOL color name",
+    "error.needsExpression": "select needs a selection expression",
+    "error.noAtomsMatched": "no atoms matched {expression}",
+    "error.loadBeforeColoring": "load a structure before coloring it",
+    "error.loadBeforeHiding": "load a structure before hiding parts of it",
+    "error.loadBeforeCentering": "load a structure before centering it",
+    "error.pickTwoAtoms": "pick two atoms before measuring",
+    "error.selectBeforeLabeling": "select residues before labeling them",
+  },
+  zh: {
+    "title.structure": "结构查看器",
+    "title.trajectory": "轨迹查看器",
+    "button.select": "选择",
+    "button.zoom": "缩放",
+    "button.label": "标签",
+    "button.distance": "距离",
+    "button.color": "着色",
+    "button.apply": "应用",
+    "button.export": "导出 PNG",
+    "button.clear": "清除",
+    "button.explain": "在对话中解释",
+    "color.element": "元素",
+    "color.chain": "链",
+    "color.spectrum": "光谱",
+    "color.red": "红色",
+    "color.green": "绿色",
+    "color.blue": "蓝色",
+    "color.yellow": "黄色",
+    "color.cyan": "青色",
+    "color.magenta": "品红",
+    "color.orange": "橙色",
+    "color.white": "白色",
+    "color.gray": "灰色",
+    "color.clearPaint": "清除着色",
+    "visibility.hide": "隐藏所选",
+    "visibility.others": "隐藏其它",
+    "visibility.show": "全部显示",
+    "hint.color": "按元素、链、光谱或纯色着色",
+    "hint.visibility": "隐藏所选、隐藏其它或全部显示",
+    "hint.splitter": "拖动调整面板宽度",
+    "status.initializing": "正在初始化查看器…",
+    "status.loading": "正在加载 {name}…",
+    "status.loadingTrajectory": "正在加载 {topo} + {traj}…",
+    "status.camera": "相机 {action}",
+    "status.zoomedSelection": "已缩放到所选",
+    "status.zoomedStructure": "已缩放到整个结构",
+    "status.labelsOn": "已为 {count} 个所选加标签",
+    "status.labelsOff": "已关闭标签",
+    "status.distance": "距离 {value} Å",
+    "status.distancesCleared": "已清除距离",
+    "status.coloredBy": "已按{what}着色",
+    "status.selectionHidden": "已隐藏所选",
+    "status.othersHidden": "已隐藏所选之外的全部",
+    "status.everythingShown": "已显示全部",
+    "status.selectionCleared": "已清除选择",
+    "status.savingImage": "正在保存图像…",
+    "status.saved": "已保存 {name}",
+    "status.exportCancelled": "已取消导出",
+    "status.noCanvas": "暂无可导出的画布",
+    "status.explainNeedsStructure": "请先加载结构再请求解释",
+    "status.askingChat": "正在询问对话…",
+    "status.explanationRequested": "已在对话中请求解释",
+    "cmd.selected": "已选择 {expression}",
+    "cmd.shown": "已显示 {representation}",
+    "cmd.hidden": "已隐藏 {representation}",
+    "cmd.coloredByTheme": "已按{theme}着色",
+    "cmd.coloredSolid": "已着色 {color}",
+    "cmd.zoomedSelection": "已缩放到所选",
+    "cmd.zoomedStructure": "已缩放到整个结构",
+    "cmd.zoomedExpression": "已缩放到 {expression}",
+    "cmd.centeredSelection": "已居中到所选",
+    "cmd.centeredStructure": "已居中到结构",
+    "error.emptyCommand": "请先输入命令",
+    "error.outsideSubset": "“{verb}”不在 PyMOL 子集内（select、show、hide、color、zoom、center）",
+    "error.needsRepresentation": "{command} 需要表示方式：cartoon、sticks、spheres 或 surface",
+    "error.unsupportedRepresentation": "不支持的表示方式 {name}；应为 cartoon、sticks、spheres 或 surface",
+    "error.needsColor": "color 需要主题或颜色名",
+    "error.unsupportedColor": "不支持的颜色 {name}；应为 element、chain、spectrum 或 PyMOL 颜色名",
+    "error.needsExpression": "select 需要选择表达式",
+    "error.noAtomsMatched": "没有原子匹配 {expression}",
+    "error.loadBeforeColoring": "请先加载结构再着色",
+    "error.loadBeforeHiding": "请先加载结构再隐藏",
+    "error.loadBeforeCentering": "请先加载结构再居中",
+    "error.pickTwoAtoms": "请先拾取两个原子再测量",
+    "error.selectBeforeLabeling": "请先选择残基再加标签",
+  },
+};
+
+let chromeLanguage = "en";
+
+function normalizeChromeLocale(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "zh" || raw === "zh-cn" || raw === "zh-tw" ? "zh" : "en";
+}
+
+function setChromeLocale(value) {
+  chromeLanguage = normalizeChromeLocale(value);
+  return chromeLanguage;
+}
+
+// Translate one chrome key with `{placeholder}` interpolation. Unknown keys
+// return the key itself so missing strings stay visible instead of blank.
+function chromeText(locale, key, params) {
+  const table = CHROME_I18N[normalizeChromeLocale(locale)] || CHROME_I18N.en;
+  let text = table[key] !== undefined ? table[key] : CHROME_I18N.en[key];
+  if (text === undefined) return key;
+  if (params) {
+    text = String(text).replace(/\{(\w+)\}/g, (match, name) => (
+      params[name] !== undefined ? String(params[name]) : match
+    ));
+  }
+  return text;
+}
+
+function ct(key, params) {
+  return chromeText(chromeLanguage, key, params);
+}
+
 function cloneSnapshot(snapshot) {
   return {
     ...snapshot,
@@ -220,7 +411,7 @@ async function setSelectionLabels(molstar, plugin, visible) {
   }
   const lociList = currentSelectionLoci(molstar, plugin);
   if (!lociList.length) {
-    throw new Error("select residues before labeling them");
+    throw new Error(ct("error.selectBeforeLabeling"));
   }
   let added = 0;
   for (const loci of lociList) {
@@ -308,7 +499,7 @@ async function measurePickedDistance(molstar, plugin) {
   const selection = plugin.managers.structure && plugin.managers.structure.selection;
   const history = (selection && selection.additionsHistory) || [];
   if (history.length < 2) {
-    throw new Error("pick two atoms before measuring");
+    throw new Error(ct("error.pickTwoAtoms"));
   }
   const [a, b] = history.slice(0, 2);
   const Stats = molstar.lib.structure.StructureElement.Stats;
@@ -356,7 +547,7 @@ const PYMOL_COLORS = {
 function pymolColor(name) {
   const color = PYMOL_COLORS[name];
   if (color === undefined) {
-    throw new Error("unsupported color " + name + "; expected element, chain, spectrum, or a PyMOL color name");
+    throw new Error(ct("error.unsupportedColor", { name }));
   }
   return color;
 }
@@ -369,7 +560,7 @@ async function setColorTheme(plugin, kind) {
   for (const entry of (plugin.managers.structure.hierarchy.current.structures) || []) {
     for (const component of entry.components || []) components.push(component);
   }
-  if (!components.length) throw new Error("load a structure before coloring it");
+  if (!components.length) throw new Error(ct("error.loadBeforeColoring"));
   const componentManager = plugin.managers.structure.component;
   if (!componentManager || typeof componentManager.updateRepresentationsTheme !== "function") {
     throw new Error("Mol* build is missing theme updates");
@@ -397,7 +588,7 @@ async function paintViewerSelection(molstar, plugin, name) {
     },
   };
   const structures = (plugin.managers.structure.hierarchy.current.structures) || [];
-  if (!structures.length) throw new Error("load a structure before coloring it");
+  if (!structures.length) throw new Error(ct("error.loadBeforeColoring"));
   await componentManager.applyTheme({
     action: { name: "color", params: { color } },
     selection,
@@ -448,7 +639,7 @@ async function applyTransparency(molstar, plugin, value, mode) {
     throw new Error("Mol* build is missing theme actions");
   }
   const structures = (plugin.managers.structure.hierarchy.current.structures) || [];
-  if (!structures.length) throw new Error("load a structure before hiding parts of it");
+  if (!structures.length) throw new Error(ct("error.loadBeforeHiding"));
   await componentManager.applyTheme({
     action: { name: "transparency", params: { value } },
     selection: themeSelectionOf(molstar, plugin, mode),
@@ -462,16 +653,16 @@ async function applyTransparency(molstar, plugin, value, mode) {
 async function setSelectionVisibility(molstar, plugin, mode) {
   if (mode === "hide") {
     await applyTransparency(molstar, plugin, 1, "selection");
-    return "selection hidden";
+    return ct("status.selectionHidden");
   }
   if (mode === "others") {
     await applyTransparency(molstar, plugin, 1, "whole");
     await applyTransparency(molstar, plugin, 0, "selection");
-    return "everything except the selection hidden";
+    return ct("status.othersHidden");
   }
   if (mode === "show") {
     await applyTransparency(molstar, plugin, 0, "whole");
-    return "everything shown";
+    return ct("status.everythingShown");
   }
   throw new Error("unsupported visibility mode " + mode);
 }
@@ -486,11 +677,11 @@ const PYMOL_COMMANDS = ["select", "show", "hide", "color", "zoom", "center"];
 // `center` take the whole remainder as their selection expression.
 function parsePymolCommand(input) {
   const text = String(input || "").trim();
-  if (!text) throw new Error("type a command first");
+  if (!text) throw new Error(ct("error.emptyCommand"));
   const cut = text.search(/\s/);
   const command = cut === -1 ? text : text.slice(0, cut);
   if (PYMOL_COMMANDS.indexOf(command) === -1) {
-    throw new Error(`'${command}' is outside the PyMOL subset (select, show, hide, color, zoom, center)`);
+    throw new Error(ct("error.outsideSubset", { verb: command }));
   }
   const rest = cut === -1 ? "" : text.slice(cut + 1).trim();
   if (command === "select" || command === "zoom" || command === "center") {
@@ -535,7 +726,7 @@ function centerCurrentSelection(molstar, plugin) {
     center = scale(sum, 1 / lociList.length);
   } else {
     const sphere = canvas.boundingSphereVisible;
-    if (!sphere) throw new Error("load a structure before centering it");
+    if (!sphere) throw new Error(ct("error.loadBeforeCentering"));
     center = sphere.center;
   }
   const snapshot = cloneSnapshot(canvas.camera.getSnapshot());
@@ -559,11 +750,11 @@ async function runPymolCommand(molstar, plugin, input) {
   } catch (error) {
     try {
       const matched = highlightPymol(molstar, plugin, text);
-      if (!matched) throw new Error("no atoms matched " + text);
-      return "selected " + text;
+      if (!matched) throw new Error(ct("error.noAtomsMatched", { expression: text }));
+      return ct("cmd.selected", { expression: text });
     } catch (compileError) {
       const verb = text.split(/\s+/)[0];
-      throw new Error(`'${verb}' is outside the PyMOL subset (select, show, hide, color, zoom, center)`);
+      throw new Error(ct("error.outsideSubset", { verb }));
     }
   }
   const { command, argument, selection } = parsed;
@@ -571,45 +762,51 @@ async function runPymolCommand(molstar, plugin, input) {
     // `,<selection>` becomes the current selection first so the action that
     // follows paints exactly the atoms the user named.
     const matched = highlightPymol(molstar, plugin, selection);
-    if (!matched) throw new Error("no atoms matched " + selection);
+    if (!matched) throw new Error(ct("error.noAtomsMatched", { expression: selection }));
   }
   if (command === "select") {
-    if (!selection) throw new Error("select needs a selection expression");
+    if (!selection) throw new Error(ct("error.needsExpression"));
     const matched = highlightPymol(molstar, plugin, selection);
-    if (!matched) throw new Error("no atoms matched " + selection);
-    return "selected " + selection;
+    if (!matched) throw new Error(ct("error.noAtomsMatched", { expression: selection }));
+    return ct("cmd.selected", { expression: selection });
   }
   if (command === "show" || command === "hide") {
-    if (!argument) throw new Error(command + " needs a representation: cartoon, sticks, spheres, or surface");
+    if (!argument) throw new Error(ct("error.needsRepresentation", { command }));
     const kind = COMMAND_REPRESENTATIONS[argument.toLowerCase()];
-    if (!kind) throw new Error("unsupported representation " + argument + "; expected cartoon, sticks, spheres, or surface");
+    if (!kind) throw new Error(ct("error.unsupportedRepresentation", { name: argument }));
     await setStructureRepresentation(plugin, kind, command === "show");
-    return argument + " " + (command === "show" ? "shown" : "hidden");
+    return command === "show"
+      ? ct("cmd.shown", { representation: argument })
+      : ct("cmd.hidden", { representation: argument });
   }
   if (command === "color") {
-    if (!argument) throw new Error("color needs a theme or color name");
+    if (!argument) throw new Error(ct("error.needsColor"));
     if (COLOR_THEMES[argument]) {
       await setColorTheme(plugin, argument);
-      return "colored by " + argument;
+      return ct("cmd.coloredByTheme", { theme: ct("color." + argument) });
     }
     pymolColor(argument);
     await paintViewerSelection(molstar, plugin, argument);
-    return "colored " + argument;
+    return ct("cmd.coloredSolid", { color: ct("color." + argument) });
   }
   if (command === "zoom") {
     if (selection) {
       const matched = highlightPymol(molstar, plugin, selection);
-      if (!matched) throw new Error("no atoms matched " + selection);
-      return "zoomed to " + selection;
+      if (!matched) throw new Error(ct("error.noAtomsMatched", { expression: selection }));
+      return ct("cmd.zoomedExpression", { expression: selection });
     }
-    return "zoomed to " + (focusCurrentSelection(molstar, plugin) === "selection" ? "selection" : "whole structure");
+    return focusCurrentSelection(molstar, plugin) === "selection"
+      ? ct("cmd.zoomedSelection")
+      : ct("cmd.zoomedStructure");
   }
   if (command === "center") {
     if (selection) {
       const matched = highlightPymol(molstar, plugin, selection);
-      if (!matched) throw new Error("no atoms matched " + selection);
+      if (!matched) throw new Error(ct("error.noAtomsMatched", { expression: selection }));
     }
-    return "centered on " + (centerCurrentSelection(molstar, plugin) === "selection" ? "selection" : "structure");
+    return centerCurrentSelection(molstar, plugin) === "selection"
+      ? ct("cmd.centeredSelection")
+      : ct("cmd.centeredStructure");
   }
   throw new Error("unsupported command " + command);
 }
@@ -642,6 +839,10 @@ const ViewerControls = {
   centerCurrentSelection,
   setStructureRepresentation,
   REPRESENTATIONS,
+  CHROME_I18N,
+  chromeText,
+  normalizeChromeLocale,
+  setChromeLocale,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

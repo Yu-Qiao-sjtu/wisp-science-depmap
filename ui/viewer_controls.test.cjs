@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -427,9 +427,9 @@ test("command lines dispatch to the toolbar actions", async () => {
   assert.deepEqual(added, [[1, "ball-and-stick"]]);
   assert.equal(await runPymolCommand(molstar, plugin, "hide cartoon"), "cartoon hidden");
 
-  assert.equal(await runPymolCommand(molstar, plugin, "color element"), "colored by element");
+  assert.equal(await runPymolCommand(molstar, plugin, "color element"), "colored by Element");
   assert.deepEqual(themed[0], { color: "element-symbol" });
-  assert.equal(await runPymolCommand(molstar, plugin, "color red, ok chain A"), "colored red");
+  assert.equal(await runPymolCommand(molstar, plugin, "color red, ok chain A"), "colored Red");
   assert.deepEqual(themed[1], ["color", 0xff0000]);
   assert.deepEqual(molstar.queried, ["ok chain A"]);
 
@@ -466,6 +466,37 @@ test("center keeps the viewing distance while sliding the target", () => {
   // position moves by the same vector, so the camera keeps its distance.
   assert.deepEqual(snapshot.position, [1, 2, 13]);
   assert.deepEqual(snapshot.up, [0, 1, 0]);
+});
+
+test("the chrome language switches and interpolates", () => {
+  assert.equal(normalizeChromeLocale("zh"), "zh");
+  assert.equal(normalizeChromeLocale("zh-CN"), "zh");
+  assert.equal(normalizeChromeLocale("en"), "en");
+  assert.equal(normalizeChromeLocale(""), "en");
+  assert.equal(normalizeChromeLocale(null), "en");
+  assert.equal(chromeText("en", "button.select"), "Select");
+  assert.equal(chromeText("zh", "button.select"), "选择");
+  assert.equal(chromeText("zh", "status.loading", { name: "1abc.pdb" }), "正在加载 1abc.pdb…");
+  assert.equal(chromeText("en", "status.labelsOn", { count: 2, s: "s" }), "labels on 2 selections");
+  // Unknown keys fall back to English and then to the key itself.
+  assert.equal(chromeText("zh", "missing.key"), "missing.key");
+});
+
+test("command feedback follows the chrome language", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  try {
+    assert.equal(setChromeLocale("zh"), "zh");
+    assert.equal(await runPymolCommand(molstar, plugin, "show sticks"), "已显示 sticks");
+    assert.equal(await runPymolCommand(molstar, plugin, "color element"), "已按元素着色");
+    await assert.rejects(
+      () => runPymolCommand(molstar, plugin, "orient"),
+      /“orient”不在 PyMOL 子集内/,
+    );
+  } finally {
+    setChromeLocale("en");
+  }
+  assert.equal(await runPymolCommand(molstar, plugin, "show cartoon"), "cartoon shown");
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
