@@ -51,6 +51,10 @@
     <button id="apply-selection" type="button">Select</button>
     <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
+    <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
+    <button id="rep-stick" type="button" aria-pressed="false">Stick</button>
+    <button id="rep-sphere" type="button" aria-pressed="false">Sphere</button>
+    <button id="rep-surface" type="button" aria-pressed="false">Surface</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
@@ -247,6 +251,18 @@
         }
       }
 
+      ['cartoon', 'stick', 'sphere', 'surface'].forEach(function (kind) {
+        document.getElementById('rep-' + kind).addEventListener('click', function (event) {
+          var next = event.currentTarget.getAttribute('aria-pressed') !== 'true';
+          event.currentTarget.setAttribute('aria-pressed', next ? 'true' : 'false');
+          ViewerControls.setStructureRepresentation(viewer.plugin, kind, next).then(function () {
+            setStatus(kind + (next ? ' on' : ' off'), false);
+          }).catch(function (error) {
+            event.currentTarget.setAttribute('aria-pressed', next ? 'false' : 'true');
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+      });
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
       });
