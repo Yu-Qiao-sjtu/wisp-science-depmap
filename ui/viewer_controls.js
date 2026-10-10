@@ -188,6 +188,26 @@ function focusCurrentSelection(molstar, plugin) {
 // only ours and leaves Mol*'s own measurements alone.
 const VIEWER_LABEL_TAG = "wisp-viewer-label";
 
+// Tag stamped on distance cells added by the two-atom measurement action.
+const VIEWER_DISTANCE_TAG = "wisp-viewer-distance";
+
+// Remove every state cell carrying `tag` (selection + representation pairs
+// the tagged measurement created). Returns how many cells were removed.
+async function removeTaggedCells(plugin, tag) {
+  const state = plugin.state.data;
+  const build = state.build();
+  let removed = 0;
+  for (const [ref, cell] of state.cells) {
+    const tags = cell.transform && cell.transform.tags;
+    if (Array.isArray(tags) && tags.includes(tag)) {
+      build.delete(ref);
+      removed += 1;
+    }
+  }
+  if (removed) await build.commit();
+  return removed;
+}
+
 // PyMOL `label`: residue name+number labels on the current selection. Mol*'s
 // label representation derives that text from each selected loci.
 async function setSelectionLabels(molstar, plugin, visible) {
@@ -196,18 +216,7 @@ async function setSelectionLabels(molstar, plugin, visible) {
     throw new Error("Mol* build is missing selection labels");
   }
   if (!visible) {
-    const state = plugin.state.data;
-    const build = state.build();
-    let removed = 0;
-    for (const [ref, cell] of state.cells) {
-      const tags = cell.transform && cell.transform.tags;
-      if (Array.isArray(tags) && tags.includes(VIEWER_LABEL_TAG)) {
-        build.delete(ref);
-        removed += 1;
-      }
-    }
-    if (removed) await build.commit();
-    return removed;
+    return removeTaggedCells(plugin, VIEWER_LABEL_TAG);
   }
   const lociList = currentSelectionLoci(molstar, plugin);
   if (!lociList.length) {
@@ -292,6 +301,35 @@ function applyCameraPayload(molstar, plugin, payload) {
   throw new Error("unsupported camera action " + payload.action);
 }
 
+// PyMOL `dist`: draw and report the distance between the two most recently
+// picked atoms. The picked loci come from Mol*'s selection history, the same
+// source its own measurement panel uses.
+async function measurePickedDistance(molstar, plugin) {
+  const selection = plugin.managers.structure && plugin.managers.structure.selection;
+  const history = (selection && selection.additionsHistory) || [];
+  if (history.length < 2) {
+    throw new Error("pick two atoms before measuring");
+  }
+  const [a, b] = history.slice(0, 2);
+  const Stats = molstar.lib.structure.StructureElement.Stats;
+  const pa = Stats.ofLoci(a.loci).center;
+  const pb = Stats.ofLoci(b.loci).center;
+  const distance = Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+  const measurement = plugin.managers.structure.measurement;
+  if (!measurement || typeof measurement.addDistance !== "function") {
+    throw new Error("Mol* build is missing distance measurements");
+  }
+  await measurement.addDistance(a.loci, b.loci, {
+    selectionTags: [VIEWER_DISTANCE_TAG],
+    reprTags: [VIEWER_DISTANCE_TAG],
+  });
+  return distance;
+}
+
+async function clearMeasuredDistances(plugin) {
+  return removeTaggedCells(plugin, VIEWER_DISTANCE_TAG);
+}
+
 const ViewerControls = {
   cloneSnapshot,
   zoomSnapshot,
@@ -306,6 +344,8 @@ const ViewerControls = {
   currentSelectionLoci,
   focusCurrentSelection,
   setSelectionLabels,
+  measurePickedDistance,
+  clearMeasuredDistances,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

@@ -51,6 +51,7 @@
     <button id="apply-selection" type="button">Select</button>
     <button id="zoom-selection" type="button">Zoom</button>
     <button id="label-selection" type="button" aria-pressed="false">Label</button>
+    <button id="measure-distance" type="button" aria-pressed="false">Distance</button>
     <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
@@ -282,6 +283,25 @@
         ViewerControls.setSelectionLabels(molstar, viewer.plugin, next).then(function (count) {
           button.setAttribute('aria-pressed', next ? 'true' : 'false');
           setStatus(next ? 'labels on ' + count + ' selection' + (count === 1 ? '' : 's') : 'labels off', false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('measure-distance').addEventListener('click', function (event) {
+        var button = event.currentTarget;
+        var pressed = button.getAttribute('aria-pressed') === 'true';
+        if (pressed) {
+          ViewerControls.clearMeasuredDistances(viewer.plugin).then(function () {
+            button.setAttribute('aria-pressed', 'false');
+            setStatus('distances cleared', false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+          return;
+        }
+        ViewerControls.measurePickedDistance(molstar, viewer.plugin).then(function (distance) {
+          button.setAttribute('aria-pressed', 'true');
+          setStatus('distance ' + distance.toFixed(2) + ' A', false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });

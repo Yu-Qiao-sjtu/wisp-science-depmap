@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -172,6 +172,59 @@ test("labeling without a selection reports an error", async () => {
   };
   const molstar = { lib: { loci: { Loci: { isEmpty: () => true } } } };
   await assert.rejects(() => setSelectionLabels(molstar, plugin, true), /select residues/);
+});
+
+test("distance uses the two most recent picks and draws the measurement", async () => {
+  const distances = [];
+  const deleted = [];
+  const cells = new Map([
+    ["d-repr", { transform: { tags: ["wisp-viewer-distance"] }, obj: {} }],
+    ["d-sel", { transform: { tags: ["wisp-viewer-distance"] }, obj: {} }],
+  ]);
+  const structure = {};
+  const plugin = {
+    managers: {
+      structure: {
+        selection: {
+          additionsHistory: [
+            { loci: { structure, units: [] } },
+            { loci: { structure, units: [] } },
+            { loci: { structure, units: [] } },
+          ],
+        },
+        measurement: {
+          addDistance(a, b, options) { distances.push([a, b, options]); },
+        },
+      },
+    },
+    state: {
+      data: {
+        cells,
+        build() { return { delete(ref) { deleted.push(ref); }, commit: async () => {} }; },
+      },
+    },
+  };
+  const centers = [[0, 0, 0], [3, 4, 0]];
+  const molstar = { lib: { structure: { StructureElement: { Stats: { ofLoci(l) { return { center: l.center }; } } } } } };
+  plugin.managers.structure.selection.additionsHistory[0].loci.center = centers[0];
+  plugin.managers.structure.selection.additionsHistory[1].loci.center = centers[1];
+  plugin.managers.structure.selection.additionsHistory[2].loci.center = centers[0];
+  const distance = await measurePickedDistance(molstar, plugin);
+  assert.equal(distance, 5);
+  assert.equal(distances.length, 1);
+  assert.deepEqual(distances[0][2], {
+    selectionTags: ["wisp-viewer-distance"],
+    reprTags: ["wisp-viewer-distance"],
+  });
+  assert.equal(await clearMeasuredDistances(plugin), 2);
+  assert.deepEqual(deleted, ["d-repr", "d-sel"]);
+});
+
+test("measuring without two picks reports an error", async () => {
+  const plugin = {
+    managers: { structure: { selection: { additionsHistory: [{ loci: {} }] } } },
+  };
+  await assert.rejects(() => measurePickedDistance({ lib: {} }, plugin), /pick two atoms/);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
