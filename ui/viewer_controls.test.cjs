@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -117,6 +117,61 @@ test("focus frames the current selection, or the whole structure when empty", ()
   assert.equal(focusCurrentSelection(molstar, plugin), "structure");
   assert.equal(focused.length, 1);
   assert.deepEqual(snapshots, [{ radius: 5 }]);
+});
+
+test("labels turn on for the selection and off again by tag", async () => {
+  const structure = {};
+  const loci = { structure };
+  const labels = [];
+  const deleted = [];
+  const cells = new Map([
+    ["keep", { transform: { tags: undefined }, obj: {} }],
+    ["sel-1", { transform: { tags: ["wisp-viewer-label"] }, obj: {} }],
+    ["repr-1", { transform: { tags: ["wisp-viewer-label"] }, obj: {} }],
+  ]);
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getLoci: () => loci },
+        measurement: {
+          addLabel(l, options) { labels.push([l, options]); },
+        },
+      },
+    },
+    state: {
+      data: {
+        cells,
+        build() {
+          const ops = { delete(ref) { deleted.push(ref); }, commit: async () => {} };
+          return ops;
+        },
+      },
+    },
+  };
+  const molstar = { lib: { loci: { Loci: { isEmpty: (l) => !l } } } };
+  assert.equal(await setSelectionLabels(molstar, plugin, true), 1);
+  assert.deepEqual(labels, [[loci, {
+    selectionTags: ["wisp-viewer-label"],
+    reprTags: ["wisp-viewer-label"],
+  }]]);
+  // Off removes only the tagged cells, in one commit.
+  assert.equal(await setSelectionLabels(molstar, plugin, false), 2);
+  assert.deepEqual(deleted, ["sel-1", "repr-1"]);
+});
+
+test("labeling without a selection reports an error", async () => {
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [] } },
+        selection: {},
+        measurement: { addLabel() {} },
+      },
+    },
+  };
+  const molstar = { lib: { loci: { Loci: { isEmpty: () => true } } } };
+  await assert.rejects(() => setSelectionLabels(molstar, plugin, true), /select residues/);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

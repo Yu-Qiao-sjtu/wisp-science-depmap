@@ -184,6 +184,46 @@ function focusCurrentSelection(molstar, plugin) {
   return "structure";
 }
 
+// Tag stamped on the label cells this window adds, so hiding labels removes
+// only ours and leaves Mol*'s own measurements alone.
+const VIEWER_LABEL_TAG = "wisp-viewer-label";
+
+// PyMOL `label`: residue name+number labels on the current selection. Mol*'s
+// label representation derives that text from each selected loci.
+async function setSelectionLabels(molstar, plugin, visible) {
+  const measurement = plugin.managers.structure && plugin.managers.structure.measurement;
+  if (!measurement || typeof measurement.addLabel !== "function") {
+    throw new Error("Mol* build is missing selection labels");
+  }
+  if (!visible) {
+    const state = plugin.state.data;
+    const build = state.build();
+    let removed = 0;
+    for (const [ref, cell] of state.cells) {
+      const tags = cell.transform && cell.transform.tags;
+      if (Array.isArray(tags) && tags.includes(VIEWER_LABEL_TAG)) {
+        build.delete(ref);
+        removed += 1;
+      }
+    }
+    if (removed) await build.commit();
+    return removed;
+  }
+  const lociList = currentSelectionLoci(molstar, plugin);
+  if (!lociList.length) {
+    throw new Error("select residues before labeling them");
+  }
+  let added = 0;
+  for (const loci of lociList) {
+    await measurement.addLabel(loci, {
+      selectionTags: [VIEWER_LABEL_TAG],
+      reprTags: [VIEWER_LABEL_TAG],
+    });
+    added += 1;
+  }
+  return added;
+}
+
 function structuresOf(plugin) {
   const current = plugin.managers.structure.hierarchy.current.structures || [];
   return current
@@ -265,6 +305,7 @@ const ViewerControls = {
   clearStructureSelection,
   currentSelectionLoci,
   focusCurrentSelection,
+  setSelectionLabels,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
