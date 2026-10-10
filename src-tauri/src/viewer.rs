@@ -31,6 +31,22 @@ const CONTROL_CAMERA_EVENT: &str = "viewer://control-camera";
 /// PyMOL-style selection for an already-open viewer (#194).
 const SELECT_EVENT: &str = "viewer://select";
 
+/// Representation switch pushed into an open viewer (#248). Same action as
+/// the window's representation buttons.
+const REPRESENTATION_EVENT: &str = "viewer://representation";
+
+/// Color action pushed into an open viewer (#248).
+const COLOR_EVENT: &str = "viewer://color";
+
+/// Label toggle pushed into an open viewer (#248).
+const LABELS_EVENT: &str = "viewer://labels";
+
+/// Visibility action pushed into an open viewer (#248).
+const VISIBILITY_EVENT: &str = "viewer://visibility";
+
+/// Distance measurement pushed into an open viewer (#248).
+const MEASURE_EVENT: &str = "viewer://measure";
+
 /// Chrome-language update for an open viewer window (#247). The page owns
 /// its string table; this event only tells it which column to render.
 pub(crate) const LOCALE_EVENT: &str = "viewer://locale";
@@ -221,7 +237,11 @@ pub(crate) fn viewer_url_with_locale(path: &str, selection: Option<&str>, locale
     )
 }
 
-pub(crate) fn viewer_trajectory_url_with_locale(structure: &str, trajectory: &str, locale: &str) -> String {
+pub(crate) fn viewer_trajectory_url_with_locale(
+    structure: &str,
+    trajectory: &str,
+    locale: &str,
+) -> String {
     format!(
         "{}&lang={}",
         viewer_trajectory_url(structure, trajectory),
@@ -248,16 +268,15 @@ struct LoadTrajectoryPayload {
 /// structure and trajectory entry points reuse this so the two modes share
 /// one window (and therefore one Mol\* instance) at a time.
 fn spawn_viewer_window(app: &AppHandle, url: String, title: &str) -> Result<(), String> {
-    let builder =
-        WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
-            .title(title)
-            .inner_size(1200.0, 840.0)
-            .min_inner_size(640.0, 480.0)
-            .resizable(true)
-            .minimizable(true)
-            .maximizable(true)
-            .general_autofill_enabled(false)
-            .on_navigation(crate::guard_webview_navigation);
+    let builder = WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(1200.0, 840.0)
+        .min_inner_size(640.0, 480.0)
+        .resizable(true)
+        .minimizable(true)
+        .maximizable(true)
+        .general_autofill_enabled(false)
+        .on_navigation(crate::guard_webview_navigation);
     builder
         .build()
         .map_err(|e| format!("failed to open the viewer window: {e}"))
@@ -452,6 +471,227 @@ impl Tool for PresentStructureTool {
 /// each written pose. The research assistant does not receive it.
 pub(crate) struct DockLigandTool {
     app: AppHandle,
+}
+
+/// Chat-side tool that drives the already-open structure window (#248). Every
+/// action forwards to the same events the window's own controls use, so the
+/// chat cannot drift from what the user sees. It never sends messages into
+/// the chat: viewer-to-chat traffic stays on the explicit Explain-in-chat
+/// action, and neither direction starts a docking run.
+pub(crate) struct ControlViewerTool {
+    app: AppHandle,
+}
+
+impl ControlViewerTool {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+
+    /// Validation shared by the chat tool and the window itself: the color
+    /// words the viewer chrome understands.
+    fn normalize_color_mode(mode: &str) -> Result<String, String> {
+        const MODES: [&str; 13] = [
+            "element",
+            "chain",
+            "spectrum",
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "cyan",
+            "magenta",
+            "orange",
+            "white",
+            "gray",
+            "clear-paint",
+        ];
+        let mode = mode.trim();
+        if MODES.contains(&mode) {
+            Ok(mode.to_string())
+        } else {
+            Err(format!(
+                "unsupported color mode {mode:?}; expected one of {}",
+                MODES.join(", ")
+            ))
+        }
+    }
+
+    fn normalize_representation_kind(kind: &str) -> Result<String, String> {
+        const KINDS: [&str; 4] = ["cartoon", "stick", "sphere", "surface"];
+        let kind = kind.trim();
+        if KINDS.contains(&kind) {
+            Ok(kind.to_string())
+        } else {
+            Err(format!(
+                "unsupported representation {kind:?}; expected one of {}",
+                KINDS.join(", ")
+            ))
+        }
+    }
+
+    fn normalize_visibility_mode(mode: &str) -> Result<String, String> {
+        const MODES: [&str; 3] = ["hide", "others", "show"];
+        let mode = mode.trim();
+        if MODES.contains(&mode) {
+            Ok(mode.to_string())
+        } else {
+            Err(format!(
+                "unsupported visibility mode {mode:?}; expected one of {}",
+                MODES.join(", ")
+            ))
+        }
+    }
+
+    async fn emit<T: Serialize + Clone>(
+        app: &AppHandle,
+        event: &str,
+        payload: T,
+    ) -> Result<(), String> {
+        require_viewer_window(app)?;
+        app.emit_to(VIEWER_WINDOW_LABEL, event, payload)
+            .map_err(|e| format!("failed to deliver viewer command: {e}"))
+    }
+}
+
+#[async_trait]
+impl Tool for ControlViewerTool {
+    fn name(&self) -> &str {
+        "control_viewer"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "control_viewer",
+            "Drive the open structure window: select atoms, switch representations, recolor, move the camera, toggle residue labels, hide or show parts, and measure the distance between two selections. The window must already be open. This tool only changes the viewer; it never sends messages to the chat.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["select", "representation", "color", "reset", "zoom", "rotate", "labels", "visibility", "measure"],
+                        "description": "What to do in the viewer."
+                    },
+                    "expression": {"type": "string", "description": "PyMOL selection, for action=select."},
+                    "kind": {"type": "string", "enum": ["cartoon", "stick", "sphere", "surface"], "description": "Representation, for action=representation."},
+                    "visible": {"type": "boolean", "description": "On or off, for action=representation and action=labels."},
+                    "mode": {"type": "string", "description": "Color (element, chain, spectrum, a color word, or clear-paint) for action=color; hide, others, or show for action=visibility."},
+                    "factor": {"type": "number", "description": "Zoom factor > 1 moves closer, for action=zoom."},
+                    "axis": {"type": "string", "enum": ["x", "y", "z"], "description": "For action=rotate."},
+                    "degrees": {"type": "number", "description": "Rotation angle, for action=rotate."},
+                    "a": {"type": "string", "description": "First PyMOL selection, for action=measure."},
+                    "b": {"type": "string", "description": "Second PyMOL selection, for action=measure."}
+                },
+                "required": ["action"]
+            }),
+        )
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        arg_str_opt(args, "action").unwrap_or_default()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let Ok(action) = arg_str(args, "action") else {
+            return ToolResult::fail("action is required");
+        };
+        let app = self.app.clone();
+        let outcome = match action.as_str() {
+            "select" => {
+                let Ok(expression) = arg_str(args, "expression") else {
+                    return ToolResult::fail("select needs an expression");
+                };
+                select_in_viewer(app, expression)
+                    .await
+                    .map(|expression| format!("selected {expression}"))
+            }
+            "representation" => {
+                let Ok(kind) = arg_str(args, "kind") else {
+                    return ToolResult::fail("representation needs a kind");
+                };
+                let kind = match Self::normalize_representation_kind(&kind) {
+                    Ok(kind) => kind,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                let visible = args.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                Self::emit(
+                    &app,
+                    REPRESENTATION_EVENT,
+                    json!({ "kind": kind, "visible": visible }),
+                )
+                .await
+                .map(|()| format!("{kind} {}", if visible { "shown" } else { "hidden" }))
+            }
+            "color" => {
+                let Ok(mode) = arg_str(args, "mode") else {
+                    return ToolResult::fail("color needs a mode");
+                };
+                let mode = match Self::normalize_color_mode(&mode) {
+                    Ok(mode) => mode,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, COLOR_EVENT, json!({ "mode": mode }))
+                    .await
+                    .map(|()| format!("colored by {mode}"))
+            }
+            "reset" | "zoom" | "rotate" => {
+                let payload = match normalize_camera_command(
+                    &action,
+                    arg_str_opt(args, "axis"),
+                    args.get("degrees").and_then(Value::as_f64),
+                    args.get("factor").and_then(Value::as_f64),
+                    None,
+                ) {
+                    Ok(payload) => payload,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, CONTROL_CAMERA_EVENT, payload)
+                    .await
+                    .map(|()| format!("camera {action}"))
+            }
+            "labels" => {
+                let visible = args.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                Self::emit(&app, LABELS_EVENT, json!({ "visible": visible }))
+                    .await
+                    .map(|()| format!("labels {}", if visible { "on" } else { "off" }))
+            }
+            "visibility" => {
+                let Ok(mode) = arg_str(args, "mode") else {
+                    return ToolResult::fail("visibility needs a mode");
+                };
+                let mode = match Self::normalize_visibility_mode(&mode) {
+                    Ok(mode) => mode,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, VISIBILITY_EVENT, json!({ "mode": mode }))
+                    .await
+                    .map(|()| format!("visibility {mode}"))
+            }
+            "measure" => {
+                let Ok(a) = arg_str(args, "a") else {
+                    return ToolResult::fail("measure needs selections a and b");
+                };
+                let Ok(b) = arg_str(args, "b") else {
+                    return ToolResult::fail("measure needs selections a and b");
+                };
+                let a = match normalize_pymol_selection(&a) {
+                    Ok(a) => a,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                let b = match normalize_pymol_selection(&b) {
+                    Ok(b) => b,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, MEASURE_EVENT, json!({ "a": a, "b": b }))
+                    .await
+                    .map(|()| format!("measuring {a} to {b}"))
+            }
+            other => return ToolResult::fail(format!("unsupported viewer action {other:?}")),
+        };
+        match outcome {
+            Ok(message) => ToolResult::ok(message),
+            Err(error) => ToolResult::fail(error),
+        }
+    }
 }
 
 impl DockLigandTool {
@@ -1321,5 +1561,46 @@ mod tests {
         assert!(!bytes.starts_with(&[0x89, b'P', b'N', b'G']));
         assert!(decode("data:image/jpeg;base64,AAAA").is_err());
         assert!(decode("not a data url").is_err());
+    }
+
+    #[test]
+    fn control_viewer_arguments_match_the_window_chrome() {
+        for mode in [
+            "element",
+            "chain",
+            "spectrum",
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "cyan",
+            "magenta",
+            "orange",
+            "white",
+            "gray",
+            "clear-paint",
+        ] {
+            assert_eq!(ControlViewerTool::normalize_color_mode(mode).unwrap(), mode);
+        }
+        assert!(ControlViewerTool::normalize_color_mode(" violet ").is_err());
+        // Surrounding whitespace is tolerated, mirroring the command box.
+        assert_eq!(
+            ControlViewerTool::normalize_color_mode(" red ").unwrap(),
+            "red"
+        );
+        for kind in ["cartoon", "stick", "sphere", "surface"] {
+            assert_eq!(
+                ControlViewerTool::normalize_representation_kind(kind).unwrap(),
+                kind
+            );
+        }
+        assert!(ControlViewerTool::normalize_representation_kind("metal").is_err());
+        for mode in ["hide", "others", "show"] {
+            assert_eq!(
+                ControlViewerTool::normalize_visibility_mode(mode).unwrap(),
+                mode
+            );
+        }
+        assert!(ControlViewerTool::normalize_visibility_mode("isolate").is_err());
     }
 }

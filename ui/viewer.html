@@ -289,6 +289,59 @@
             applyChromeLanguage();
           }
         });
+        // Chat-driven controls (#248): the same actions the toolbar buttons
+        // perform, pushed from the control_viewer agent tool.
+        window.__TAURI__.event.listen('viewer://representation', function (event) {
+          var payload = event && event.payload;
+          if (!payload || !payload.kind) return;
+          ViewerControls.setStructureRepresentation(viewer.plugin, payload.kind, payload.visible !== false).then(function () {
+            setStatus(t(payload.visible === false ? 'cmd.hidden' : 'cmd.shown', { representation: payload.kind }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://color', function (event) {
+          var mode = event && event.payload && event.payload.mode;
+          if (!mode) return;
+          var applied = mode === 'clear-paint'
+            ? ViewerControls.clearViewerPaint(molstar, viewer.plugin)
+            : (mode === 'element' || mode === 'chain' || mode === 'spectrum')
+              ? ViewerControls.setColorTheme(viewer.plugin, mode).then(function () { return mode; })
+              : ViewerControls.paintViewerSelection(molstar, viewer.plugin, mode).then(function () { return mode; });
+          applied.then(function (what) {
+            setStatus(t('status.coloredBy', { what: t('color.' + what) }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://labels', function (event) {
+          var visible = !!(event && event.payload && event.payload.visible);
+          var button = document.getElementById('label-selection');
+          ViewerControls.setSelectionLabels(molstar, viewer.plugin, visible).then(function (count) {
+            button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+            setStatus(visible ? t('status.labelsOn', { count: count, s: count === 1 ? '' : 's' }) : t('status.labelsOff'), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://visibility', function (event) {
+          var mode = event && event.payload && event.payload.mode;
+          if (!mode) return;
+          ViewerControls.setSelectionVisibility(molstar, viewer.plugin, mode).then(function (what) {
+            setStatus(what, false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://measure', function (event) {
+          var payload = event && event.payload;
+          if (!payload || !payload.a || !payload.b) return;
+          ViewerControls.measureSelectionDistance(molstar, viewer.plugin, payload.a, payload.b).then(function (distance) {
+            setStatus(t('status.distance', { value: distance.toFixed(2) }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
       } catch (error) {
         /* event bridge unavailable (plain browser preview) */
       }

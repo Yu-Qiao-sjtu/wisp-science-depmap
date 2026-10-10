@@ -523,6 +523,50 @@ async function clearMeasuredDistances(plugin) {
   return removeTaggedCells(plugin, VIEWER_DISTANCE_TAG);
 }
 
+// PyMOL `dist a, b` for the command bridge (#248): compile both expressions,
+// take the first loci each one matches, draw the distance between their
+// centers, and report it in angstroms.
+async function measureSelectionDistance(molstar, plugin, expressionA, expressionB) {
+  if (typeof molstar.scriptToQuery !== "function") {
+    throw new Error("Mol* build is missing scriptToQuery");
+  }
+  const measurement = plugin.managers.structure && plugin.managers.structure.measurement;
+  if (!measurement || typeof measurement.addDistance !== "function") {
+    throw new Error("Mol* build is missing distance measurements");
+  }
+  const queryA = molstar.scriptToQuery({ language: "pymol", expression: expressionA });
+  const queryB = molstar.scriptToQuery({ language: "pymol", expression: expressionB });
+  const StructureSelection = molstar.lib.structure.StructureSelection;
+  const QueryContext = molstar.lib.structure.QueryContext;
+  const Stats = molstar.lib.structure.StructureElement.Stats;
+  let lociA = null;
+  let lociB = null;
+  for (const structure of structuresOf(plugin)) {
+    if (!lociA) {
+      const selection = queryA(new QueryContext(structure));
+      if (!StructureSelection.isEmpty(selection)) {
+        lociA = StructureSelection.toLociWithSourceUnits(selection);
+      }
+    }
+    if (!lociB) {
+      const selection = queryB(new QueryContext(structure));
+      if (!StructureSelection.isEmpty(selection)) {
+        lociB = StructureSelection.toLociWithSourceUnits(selection);
+      }
+    }
+  }
+  if (!lociA) throw new Error(ct("error.noAtomsMatched", { expression: expressionA }));
+  if (!lociB) throw new Error(ct("error.noAtomsMatched", { expression: expressionB }));
+  const pa = Stats.ofLoci(lociA).center;
+  const pb = Stats.ofLoci(lociB).center;
+  const distance = Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+  await measurement.addDistance(lociA, lociB, {
+    selectionTags: [VIEWER_DISTANCE_TAG],
+    reprTags: [VIEWER_DISTANCE_TAG],
+  });
+  return distance;
+}
+
 // Mol* color-theme names behind the PyMOL coloring words. Element, chain, and
 // spectrum recolor every loaded representation; named colors paint only the
 // current selection (or the whole structure when nothing is selected).
@@ -829,6 +873,7 @@ const ViewerControls = {
   setSelectionLabels,
   measurePickedDistance,
   clearMeasuredDistances,
+  measureSelectionDistance,
   COLOR_THEMES,
   PYMOL_COLORS,
   pymolColor,

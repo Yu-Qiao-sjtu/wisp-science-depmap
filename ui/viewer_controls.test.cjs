@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -497,6 +497,67 @@ test("command feedback follows the chrome language", async () => {
     setChromeLocale("en");
   }
   assert.equal(await runPymolCommand(molstar, plugin, "show cartoon"), "cartoon shown");
+});
+
+// Fake Mol* surface for the chat-driven distance bridge (#248): expressions
+// starting with "ok" match, anything else compiles to an empty selection.
+function distanceMolstar(centers) {
+  const structure = {};
+  return {
+    structure,
+    scriptToQuery({ expression }) {
+      return () => ({ expression, empty: !/^ok/.test(expression) });
+    },
+    lib: {
+      structure: {
+        QueryContext: function QueryContext(s) { this.structure = s; },
+        StructureSelection: {
+          isEmpty: (selection) => selection.empty,
+          toLociWithSourceUnits: (selection) => ({ id: selection.expression }),
+        },
+        StructureElement: {
+          Stats: { ofLoci: (loci) => ({ center: centers[loci.id] }) },
+        },
+      },
+    },
+  };
+}
+
+function distancePlugin(molstar) {
+  const distances = [];
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: molstar.structure } } }] } },
+        measurement: {
+          addDistance(a, b, options) { distances.push([a.id, b.id, options]); },
+        },
+      },
+    },
+  };
+  plugin.distances = distances;
+  return plugin;
+}
+
+test("chat-driven distances draw between two expression centers", async () => {
+  const molstar = distanceMolstar({ "ok resi 1": [0, 0, 0], "ok resi 2": [3, 4, 0] });
+  const plugin = distancePlugin(molstar);
+  const value = await measureSelectionDistance(molstar, plugin, "ok resi 1", "ok resi 2");
+  assert.equal(value, 5); // the 3-4-5 triangle
+  assert.deepEqual(plugin.distances, [[
+    "ok resi 1", "ok resi 2",
+    { selectionTags: ["wisp-viewer-distance"], reprTags: ["wisp-viewer-distance"] },
+  ]]);
+});
+
+test("chat-driven distances need both expressions to match", async () => {
+  const molstar = distanceMolstar({ "ok resi 1": [0, 0, 0] });
+  const plugin = distancePlugin(molstar);
+  await assert.rejects(
+    () => measureSelectionDistance(molstar, plugin, "ok resi 1", "missing"),
+    /no atoms matched/,
+  );
+  assert.deepEqual(plugin.distances, []);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
