@@ -86,6 +86,18 @@ async function replaceLoadedStructure(viewer, data, format) {
   return viewer.loadStructureFromData(data, format);
 }
 
+function clearStructureSelection(plugin) {
+  const interactivity = plugin && plugin.managers && plugin.managers.interactivity;
+  if (!interactivity) return false;
+  if (interactivity.lociSelects && typeof interactivity.lociSelects.deselectAll === "function") {
+    interactivity.lociSelects.deselectAll();
+  }
+  if (interactivity.lociHighlights && typeof interactivity.lociHighlights.clearHighlights === "function") {
+    interactivity.lociHighlights.clearHighlights();
+  }
+  return true;
+}
+
 function structuresOf(plugin) {
   const current = plugin.managers.structure.hierarchy.current.structures || [];
   return current
@@ -162,6 +174,7 @@ const ViewerControls = {
   applyCameraPayload,
   replaceLoadedStructure,
   clearLoadedStructures,
+  clearStructureSelection,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
