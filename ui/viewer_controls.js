@@ -41,6 +41,8 @@ const CHROME_I18N = {
     "status.downloading": "downloading {id}…",
     "status.loading": "loading {name}…",
     "status.loadingTrajectory": "loading {topo} + {traj}…",
+    "status.superposed": "superposed {count} backbone residue{s} onto the reference",
+    "status.superposeNoMatch": "no matching backbone residues; pose shown as loaded",
     "status.camera": "camera {action}",
     "status.zoomedSelection": "zoomed to selection",
     "status.zoomedStructure": "zoomed to whole structure",
@@ -119,6 +121,8 @@ const CHROME_I18N = {
     "status.downloading": "正在下载 {id}…",
     "status.loading": "正在加载 {name}…",
     "status.loadingTrajectory": "正在加载 {topo} + {traj}…",
+    "status.superposed": "已将 {count} 个骨架残基叠加到参考结构",
+    "status.superposeNoMatch": "没有可匹配的骨架残基；按原坐标显示",
     "status.camera": "相机 {action}",
     "status.zoomedSelection": "已缩放到所选",
     "status.zoomedStructure": "已缩放到整个结构",
@@ -336,6 +340,323 @@ async function clearLoadedStructures(viewer) {
 async function replaceLoadedStructure(viewer, data, format) {
   await clearLoadedStructures(viewer);
   return viewer.loadStructureFromData(data, format);
+}
+
+// #244: the superpose counterpart — keep the reference on screen and add the
+// (already transformed) pose beside it instead of clearing first.
+async function appendLoadedStructure(viewer, data, format) {
+  return viewer.loadStructureFromData(data, format);
+}
+
+// ---- backbone superposition (#244) ---------------------------------------
+//
+// Docking and design poses arrive in their own coordinate frame. Before one is
+// appended beside an open reference, both polymer backbones' alpha carbons are
+// read straight from the structure text, fitted with a closed-form Kabsch
+// (quaternion) solution, and the whole pose file is rewritten in the
+// reference's frame. Pure text math keeps this testable without Mol*.
+
+// Residue names whose "CA" is a protein alpha carbon — keeps metal ions out.
+const BACKBONE_RESIDUES = new Set([
+  "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+  "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+  "MSE", "SEC", "PYL", "HID", "HIE", "HIP", "CYX",
+]);
+
+// PDB records carry atom coordinates in fixed columns 31-54.
+function isPdbBackboneCarbonLine(line) {
+  return /^ATOM  /.test(line)
+    && line.length >= 54
+    && line.slice(12, 16) === " CA "
+    && BACKBONE_RESIDUES.has(line.slice(17, 20).trim());
+}
+
+// Locate the atom_site table of a CIF/mmCIF file: the loop's column names and
+// its data rows (as token lists with their line numbers so the writer can put
+// transformed coordinates back at the same lines).
+function cifAtomSiteRows(data) {
+  const lines = String(data).split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== "loop_") continue;
+    const names = [];
+    let j = i + 1;
+    while (j < lines.length && lines[j].trimStart().startsWith("_atom_site.")) {
+      names.push(lines[j].trim().slice("_atom_site.".length));
+      j++;
+    }
+    if (names.length < 4) continue;
+    const rows = [];
+    while (j < lines.length) {
+      const trimmed = lines[j].trim();
+      if (!trimmed || trimmed === "#" || trimmed === "loop_" || trimmed.startsWith("_")) break;
+      rows.push({ index: j, tokens: lines[j].trim().split(/\s+/) });
+      j++;
+    }
+    const pick = (...candidates) => {
+      for (const candidate of candidates) {
+        const at = names.indexOf(candidate);
+        if (at !== -1) return at;
+      }
+      return -1;
+    };
+    return {
+      rows,
+      groupIndex: pick("group_PDB"),
+      nameIndex: pick("label_atom_id", "auth_atom_id"),
+      xIndex: pick("Cartn_x"),
+      yIndex: pick("Cartn_y"),
+      zIndex: pick("Cartn_z"),
+      seqIndex: pick("auth_seq_id", "label_seq_id"),
+      chainIndex: pick("auth_asym_id", "label_asym_id"),
+      compIndex: pick("label_comp_id", "auth_comp_id"),
+    };
+  }
+  return null;
+}
+
+// Alpha carbons by residue key (chain|number), one per residue — the pairing
+// used to fit the pose onto the reference.
+function parseBackboneAlphaCarbons(data, format) {
+  const carbons = new Map();
+  if (format === "pdb" || format === "ent") {
+    for (const line of String(data).split(/\r?\n/)) {
+      if (!isPdbBackboneCarbonLine(line)) continue;
+      const key = (line[21] || "") + "|" + line.slice(22, 27).trim();
+      if (!carbons.has(key)) {
+        carbons.set(key, [
+          parseFloat(line.slice(30, 38)),
+          parseFloat(line.slice(38, 46)),
+          parseFloat(line.slice(46, 54)),
+        ]);
+      }
+    }
+    return carbons;
+  }
+  if (format === "cif" || format === "mmcif") {
+    const table = cifAtomSiteRows(data);
+    if (!table || table.nameIndex === -1 || table.xIndex === -1) return carbons;
+    for (const row of table.rows) {
+      const name = String(row.tokens[table.nameIndex] || "").replace(/^["']|["']$/g, "");
+      if (name !== "CA") continue;
+      if (table.groupIndex !== -1 && row.tokens[table.groupIndex] !== "ATOM") continue;
+      if (table.compIndex !== -1 && !BACKBONE_RESIDUES.has(row.tokens[table.compIndex])) continue;
+      const key = (row.tokens[table.chainIndex] || "?") + "|" + (row.tokens[table.seqIndex] || "?");
+      if (!carbons.has(key)) {
+        carbons.set(key, [
+          parseFloat(row.tokens[table.xIndex]),
+          parseFloat(row.tokens[table.yIndex]),
+          parseFloat(row.tokens[table.zIndex]),
+        ]);
+      }
+    }
+    return carbons;
+  }
+  if (format === "gro") {
+    for (const line of String(data).split(/\r?\n/)) {
+      // Fixed columns: 0-5 resnum, 5-10 resname, 10-15 atom name, 20-44 xyz.
+      if (line.length < 44 || line.slice(10, 15).trim() !== "CA") continue;
+      if (!BACKBONE_RESIDUES.has(line.slice(5, 10).trim())) continue;
+      const key = "|" + line.slice(0, 5).trim();
+      if (!carbons.has(key)) {
+        carbons.set(key, [
+          parseFloat(line.slice(20, 28)),
+          parseFloat(line.slice(28, 36)),
+          parseFloat(line.slice(36, 44)),
+        ]);
+      }
+    }
+  }
+  return carbons;
+}
+
+// Largest eigenvector of a symmetric 4x4 matrix (Jacobi rotations) — the
+// rotation quaternion of Horn's method.
+function jacobiEigen4(matrix) {
+  const a = matrix.map((row) => row.slice());
+  const v = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+  ];
+  for (let sweep = 0; sweep < 64; sweep++) {
+    let off = 0;
+    for (let p = 0; p < 4; p++) {
+      for (let q = p + 1; q < 4; q++) off += a[p][q] * a[p][q];
+    }
+    if (off < 1e-24) break;
+    for (let p = 0; p < 4; p++) {
+      for (let q = p + 1; q < 4; q++) {
+        if (Math.abs(a[p][q]) < 1e-18) continue;
+        const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const sign = theta < 0 ? -1 : 1;
+        const t = sign / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1);
+        const s = t * c;
+        for (let k = 0; k < 4; k++) {
+          const akp = a[k][p];
+          const akq = a[k][q];
+          a[k][p] = c * akp - s * akq;
+          a[k][q] = s * akp + c * akq;
+        }
+        for (let k = 0; k < 4; k++) {
+          const apk = a[p][k];
+          const aqk = a[q][k];
+          a[p][k] = c * apk - s * aqk;
+          a[q][k] = s * apk + c * aqk;
+        }
+        for (let k = 0; k < 4; k++) {
+          const vkp = v[k][p];
+          const vkq = v[k][q];
+          v[k][p] = c * vkp - s * vkq;
+          v[k][q] = s * vkp + c * vkq;
+        }
+      }
+    }
+  }
+  let best = 0;
+  for (let i = 1; i < 4; i++) {
+    if (a[i][i] > a[best][best]) best = i;
+  }
+  return [v[0][best], v[1][best], v[2][best], v[3][best]];
+}
+
+// Closed-form Kabsch fit (Horn's quaternion method). `pairs` are
+// [mx, my, mz, rx, ry, rz] rows; the result is a row-major 3x4 transform that
+// maps mobile coordinates onto the reference.
+function kabschTransform(pairs) {
+  const n = pairs.length;
+  const mobileCenter = [0, 0, 0];
+  const referenceCenter = [0, 0, 0];
+  for (const pair of pairs) {
+    for (let k = 0; k < 3; k++) {
+      mobileCenter[k] += pair[k];
+      referenceCenter[k] += pair[3 + k];
+    }
+  }
+  for (let k = 0; k < 3; k++) {
+    mobileCenter[k] /= n;
+    referenceCenter[k] /= n;
+  }
+  const sum = Array.from({ length: 3 }, () => [0, 0, 0]);
+  for (const pair of pairs) {
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        sum[i][j] += (pair[i] - mobileCenter[i]) * (pair[3 + j] - referenceCenter[j]);
+      }
+    }
+  }
+  const [Sxx, Sxy, Sxz] = sum[0];
+  const [Syx, Syy, Syz] = sum[1];
+  const [Szx, Szy, Szz] = sum[2];
+  const [q0, q1, q2, q3] = jacobiEigen4([
+    [Sxx + Syy + Szz, Syz - Szy, Szx - Sxz, Sxy - Syx],
+    [Syz - Szy, Sxx - Syy - Szz, Sxy + Syx, Szx + Sxz],
+    [Szx - Sxz, Sxy + Syx, -Sxx + Syy - Szz, Syz + Szy],
+    [Sxy - Syx, Szx + Sxz, Syz + Szy, -Sxx - Syy + Szz],
+  ]);
+  const rotation = [
+    q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3,
+    2 * (q1 * q2 - q0 * q3),
+    2 * (q1 * q3 + q0 * q2),
+    2 * (q1 * q2 + q0 * q3),
+    q0 * q0 - q1 * q1 + q2 * q2 - q3 * q3,
+    2 * (q2 * q3 - q0 * q1),
+    2 * (q1 * q3 - q0 * q2),
+    2 * (q2 * q3 + q0 * q1),
+    q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3,
+  ];
+  const translation = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    translation[i] = referenceCenter[i]
+      - (rotation[i * 3] * mobileCenter[0]
+        + rotation[i * 3 + 1] * mobileCenter[1]
+        + rotation[i * 3 + 2] * mobileCenter[2]);
+  }
+  // Row-major 3x4: each row carries its rotation plus its translation term.
+  return [
+    rotation[0], rotation[1], rotation[2], translation[0],
+    rotation[3], rotation[4], rotation[5], translation[1],
+    rotation[6], rotation[7], rotation[8], translation[2],
+  ];
+}
+
+function fixedWidth8(value) {
+  return (Math.abs(value) < 1e-4 ? 0 : value).toFixed(3).padStart(8).slice(-8);
+}
+
+// Rewrite every atom coordinate in the structure text with the transform —
+// the pose lands in the reference's frame before Mol* ever sees it.
+function transformStructureText(data, format, transform) {
+  const apply = (x, y, z) => [
+    transform[0] * x + transform[1] * y + transform[2] * z + transform[3],
+    transform[4] * x + transform[5] * y + transform[6] * z + transform[7],
+    transform[8] * x + transform[9] * y + transform[10] * z + transform[11],
+  ];
+  const lines = String(data).split(/\r?\n/);
+  if (format === "pdb" || format === "ent") {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!/^(ATOM|HETATM)/.test(line) || line.length < 54) continue;
+      const [x, y, z] = apply(
+        parseFloat(line.slice(30, 38)),
+        parseFloat(line.slice(38, 46)),
+        parseFloat(line.slice(46, 54)),
+      );
+      lines[i] = line.slice(0, 30) + fixedWidth8(x) + fixedWidth8(y) + fixedWidth8(z) + line.slice(54);
+    }
+    return lines.join("\n");
+  }
+  if (format === "cif" || format === "mmcif") {
+    const table = cifAtomSiteRows(data);
+    if (table && table.xIndex !== -1) {
+      for (const row of table.rows) {
+        const [x, y, z] = apply(
+          parseFloat(row.tokens[table.xIndex]),
+          parseFloat(row.tokens[table.yIndex]),
+          parseFloat(row.tokens[table.zIndex]),
+        );
+        row.tokens[table.xIndex] = x.toFixed(3);
+        row.tokens[table.yIndex] = y.toFixed(3);
+        row.tokens[table.zIndex] = z.toFixed(3);
+        lines[row.index] = row.tokens.join(" ");
+      }
+    }
+    return lines.join("\n");
+  }
+  if (format === "gro") {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.length < 44 || !/^\s*\d/.test(line)) continue;
+      const [x, y, z] = apply(
+        parseFloat(line.slice(20, 28)),
+        parseFloat(line.slice(28, 36)),
+        parseFloat(line.slice(36, 44)),
+      );
+      lines[i] = line.slice(0, 20) + fixedWidth8(x) + fixedWidth8(y) + fixedWidth8(z) + line.slice(44);
+    }
+  }
+  return typeof data === "string" ? data : lines.join("\n");
+}
+
+// Fit a pose onto a reference by shared backbone residues. Fewer than three
+// matched alpha carbons cannot define a rotation, so the pose passes through
+// unchanged and the caller reports it.
+function superposeStructureText(poseData, poseFormat, referenceData, referenceFormat) {
+  const reference = parseBackboneAlphaCarbons(referenceData, referenceFormat);
+  const pose = parseBackboneAlphaCarbons(poseData, poseFormat);
+  const pairs = [];
+  for (const [key, mobile] of pose) {
+    const target = reference.get(key);
+    if (target) {
+      pairs.push([mobile[0], mobile[1], mobile[2], target[0], target[1], target[2]]);
+    }
+  }
+  if (pairs.length < 3) return { data: poseData, pairs: pairs.length };
+  return {
+    data: transformStructureText(poseData, poseFormat, kabschTransform(pairs)),
+    pairs: pairs.length,
+  };
 }
 
 function clearStructureSelection(plugin) {
@@ -866,7 +1187,12 @@ const ViewerControls = {
   setStructureRepresentation,
   REPRESENTATIONS,
   replaceLoadedStructure,
+  appendLoadedStructure,
   clearLoadedStructures,
+  parseBackboneAlphaCarbons,
+  kabschTransform,
+  transformStructureText,
+  superposeStructureText,
   clearStructureSelection,
   currentSelectionLoci,
   focusCurrentSelection,

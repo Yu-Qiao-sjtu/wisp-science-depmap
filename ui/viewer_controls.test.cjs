@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance, parseBackboneAlphaCarbons, kabschTransform, transformStructureText, superposeStructureText } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -558,6 +558,163 @@ test("chat-driven distances need both expressions to match", async () => {
     /no atoms matched/,
   );
   assert.deepEqual(plugin.distances, []);
+});
+
+// ---- backbone superposition (#244) ---------------------------------------
+
+function pdbAtom(serial, name, resName, chain, resSeq, x, y, z, record = "ATOM  ") {
+  return record
+    + String(serial).padStart(5)
+    + " "
+    + name.padEnd(3).padStart(4)
+    + " "
+    + resName.padEnd(3)
+    + " "
+    + chain
+    + String(resSeq).padStart(4)
+    + " "
+    + "   "
+    + x.toFixed(3).padStart(8)
+    + y.toFixed(3).padStart(8)
+    + z.toFixed(3).padStart(8);
+}
+
+test("alpha carbons come from protein residues, not metal ions", () => {
+  const data = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 2, 3),
+    pdbAtom(2, "CA", "GLY", "A", 2, 4, 5, 6),
+    pdbAtom(3, "CA", "VAL", "B", 3, 7, 8, 9),
+    // HETATM calcium: same atom-name columns but not a protein residue.
+    pdbAtom(4, "CA", "CA", "A", 101, 9, 9, 9, "HETATM"),
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "pdb");
+  assert.deepEqual(Array.from(carbons.keys()), ["A|1", "A|2", "B|3"]);
+  assert.deepEqual(carbons.get("A|1"), [1, 2, 3]);
+});
+
+test("mmCIF atom_site rows yield alpha carbons", () => {
+  const data = [
+    "data_test",
+    "#",
+    "loop_",
+    "_atom_site.group_PDB",
+    "_atom_site.label_atom_id",
+    "_atom_site.label_comp_id",
+    "_atom_site.auth_asym_id",
+    "_atom_site.auth_seq_id",
+    "_atom_site.Cartn_x",
+    "_atom_site.Cartn_y",
+    "_atom_site.Cartn_z",
+    "ATOM CA ALA A 1 1.000 2.000 3.000",
+    "HETATM CA CA A 2 9.000 9.000 9.000",
+    "#",
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "mmcif");
+  assert.deepEqual(Array.from(carbons.keys()), ["A|1"]);
+  assert.deepEqual(carbons.get("A|1"), [1, 2, 3]);
+});
+
+function groLine(resnum, resname, atomname, atomnum, x, y, z) {
+  return String(resnum).padStart(5)
+    + resname.padEnd(5)
+    + (" " + atomname).padEnd(5)
+    + String(atomnum).padStart(5)
+    + x.toFixed(3).padStart(8)
+    + y.toFixed(3).padStart(8)
+    + z.toFixed(3).padStart(8);
+}
+
+test("gro alpha carbons use fixed columns", () => {
+  const data = [
+    "two atoms",
+    "    2",
+    groLine(1, "ALA", "CA", 1, 1, 2, 3),
+    groLine(2, "GLY", "CA", 2, 4, 5, 6),
+    "   0.000   0.000   0.000",
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "gro");
+  assert.deepEqual(Array.from(carbons.keys()), ["|1", "|2"]);
+  assert.deepEqual(carbons.get("|1"), [1, 2, 3]);
+});
+
+test("the Kabsch fit recovers a known rotation and translation", () => {
+  // Rotate 90 degrees about z, then shift: T(x, y, z) = (-y + 10, x, z).
+  const mobile = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 3, 4], [5, 1, 2]];
+  const pairs = mobile.map(([x, y, z]) => [x, y, z, -y + 10, x, z]);
+  const transform = kabschTransform(pairs);
+  const expected = [0, -1, 0, 10, 1, 0, 0, 0, 0, 0, 1, 0];
+  for (let i = 0; i < expected.length; i++) {
+    assert.ok(Math.abs(transform[i] - expected[i]) < 1e-9, `component ${i}`);
+  }
+});
+
+test("transformed PDB text keeps its fixed columns", () => {
+  const line = pdbAtom(1, "CA", "ALA", "A", 1, 1, 2, 3);
+  const data = [line, "TER"].join("\n");
+  const out = transformStructureText(data, "pdb", [0, -1, 0, 10, 1, 0, 0, 0, 0, 0, 1, 0]);
+  const rewritten = out.split("\n")[0];
+  assert.equal(rewritten.length, line.length);
+  assert.equal(rewritten.slice(0, 30), line.slice(0, 30));
+  assert.ok(Math.abs(parseFloat(rewritten.slice(30, 38)) - 8) < 1e-6);
+  assert.ok(Math.abs(parseFloat(rewritten.slice(38, 46)) - 1) < 1e-6);
+  assert.ok(Math.abs(parseFloat(rewritten.slice(46, 54)) - 3) < 1e-6);
+});
+
+test("transformed mmCIF text swaps the coordinate tokens", () => {
+  const data = [
+    "data_test",
+    "#",
+    "loop_",
+    "_atom_site.group_PDB",
+    "_atom_site.label_atom_id",
+    "_atom_site.label_comp_id",
+    "_atom_site.auth_asym_id",
+    "_atom_site.auth_seq_id",
+    "_atom_site.Cartn_x",
+    "_atom_site.Cartn_y",
+    "_atom_site.Cartn_z",
+    "ATOM CA ALA A 1 1.000 2.000 3.000",
+    "ATOM N  ALA A 1 0.000 0.000 0.000",
+    "#",
+  ].join("\n");
+  const out = transformStructureText(data, "cif", [1, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 0]);
+  const lines = out.split("\n");
+  assert.equal(lines[11], "ATOM CA ALA A 1 11.000 2.000 3.000");
+  assert.equal(lines[12], "ATOM N ALA A 1 10.000 0.000 0.000");
+});
+
+test("a pose superposes onto the reference through shared residues", () => {
+  const reference = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 1, 1),
+    pdbAtom(2, "CA", "ALA", "A", 2, 3, 1, 1),
+    pdbAtom(3, "CA", "ALA", "A", 3, 1, 3, 1),
+    pdbAtom(4, "CA", "ALA", "A", 4, 1, 1, 3),
+  ].join("\n");
+  // The same residues after the inverse of (rotate 90 about z, shift +10 x):
+  // T(x, y, z) = (-y + 10, x, z), so pose = T^-1(reference).
+  const pose = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 9, 1),
+    pdbAtom(2, "CA", "ALA", "A", 2, 1, 7, 1),
+    pdbAtom(3, "CA", "ALA", "A", 3, 3, 9, 1),
+    pdbAtom(4, "CA", "ALA", "A", 4, 1, 9, 3),
+  ].join("\n");
+  const fitted = superposeStructureText(pose, "pdb", reference, "pdb");
+  assert.equal(fitted.pairs, 4);
+  const back = parseBackboneAlphaCarbons(fitted.data, "pdb");
+  for (const [key, expected] of parseBackboneAlphaCarbons(reference, "pdb")) {
+    const got = back.get(key);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(got[i] - expected[i]) < 2e-3, `${key} axis ${i}`);
+    }
+  }
+});
+
+test("poses without shared residues pass through unchanged", () => {
+  const reference = pdbAtom(1, "CA", "ALA", "A", 1, 1, 1, 1);
+  const pose = pdbAtom(1, "CA", "ALA", "B", 90, 8, 8, 8);
+  const fitted = superposeStructureText(pose, "pdb", reference, "pdb");
+  assert.equal(fitted.pairs, 0);
+  assert.equal(fitted.data, pose);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

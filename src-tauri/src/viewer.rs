@@ -256,6 +256,11 @@ struct LoadStructurePayload {
     /// caller only wants the file swapped in.
     #[serde(skip_serializing_if = "Option::is_none")]
     selection: Option<String>,
+    /// #244: keep the structure already on screen as the reference and append
+    /// this file superposed onto it by polymer backbone, instead of replacing
+    /// it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    superpose: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -301,6 +306,7 @@ pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Resul
                 LoadStructurePayload {
                     path: path.clone(),
                     selection: None,
+                    superpose: false,
                 },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
@@ -338,8 +344,10 @@ pub(crate) async fn present_structure_in_viewer(
     app: AppHandle,
     path: String,
     selection: Option<String>,
+    superpose: Option<bool>,
 ) -> Result<(), String> {
     let selection = normalize_presentation_selection(selection.as_deref())?;
+    let superpose = superpose.unwrap_or(false);
     let canonical = validate_structure_path(&path)?;
     let path = canonical.to_string_lossy().into_owned();
     wait_for_frame_gap().await;
@@ -351,6 +359,7 @@ pub(crate) async fn present_structure_in_viewer(
                 LoadStructurePayload {
                     path: path.clone(),
                     selection,
+                    superpose,
                 },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
@@ -438,12 +447,13 @@ impl Tool for PresentStructureTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "present_structure",
-            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure.",
+            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure. Set superpose to true when a pose should be fitted onto the reference structure already on screen by polymer backbone instead of replacing it.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Local pdb, ent, cif, mmcif, or gro file."},
-                    "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."}
+                    "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."},
+                    "superpose": {"type": "boolean", "description": "Keep the structure already on screen as the reference and append this pose superposed onto it by backbone. Replaces the current structure when false."}
                 },
                 "required": ["path"]
             }),
@@ -460,7 +470,12 @@ impl Tool for PresentStructureTool {
             Err(error) => return ToolResult::fail(error),
         };
         let selection = arg_str_opt(args, "selection");
-        match present_structure_in_viewer(self.app.clone(), path, selection).await {
+        let superpose = args
+            .get("superpose")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match present_structure_in_viewer(self.app.clone(), path, selection, Some(superpose)).await
+        {
             Ok(()) => ToolResult::ok("structure presented"),
             Err(error) => ToolResult::fail(error),
         }
@@ -758,6 +773,7 @@ impl Tool for DockLigandTool {
                 self.app.clone(),
                 frame.to_string_lossy().into_owned(),
                 Some("hetatm".to_string()),
+                None,
             )
             .await
             {
@@ -1253,6 +1269,7 @@ pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(),
                 LoadStructurePayload {
                     path: path.clone(),
                     selection: None,
+                    superpose: false,
                 },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
@@ -1602,5 +1619,24 @@ mod tests {
             );
         }
         assert!(ControlViewerTool::normalize_visibility_mode("isolate").is_err());
+    }
+
+    #[test]
+    fn load_structure_payload_only_announces_superpose_when_set() {
+        let replacing = serde_json::to_value(LoadStructurePayload {
+            path: "a.pdb".into(),
+            selection: None,
+            superpose: false,
+        })
+        .unwrap();
+        assert!(replacing.get("superpose").is_none());
+        let superposing = serde_json::to_value(LoadStructurePayload {
+            path: "pose.pdb".into(),
+            selection: Some("hetatm".into()),
+            superpose: true,
+        })
+        .unwrap();
+        assert_eq!(superposing["superpose"], json!(true));
+        assert_eq!(superposing["selection"], json!("hetatm"));
     }
 }

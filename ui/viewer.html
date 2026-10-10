@@ -150,8 +150,11 @@
       var viewer = null;
       var loadSeq = 0;
       var currentPath = queryParam('src') || queryParam('topo') || '';
+      // First structure loaded on screen stays the superposition reference
+      // (#244); poses presented with superpose=true are fitted onto it.
+      var referenceStructure = null;
 
-      function showStructure(path, selection) {
+      function showStructure(path, selection, superpose) {
         var seq = ++loadSeq;
         currentPath = path;
         currentMode = 'structure';
@@ -167,21 +170,40 @@
             // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
             // the string to Mol*.
             var data = new TextDecoder().decode(bytesToU8(bytes));
-            return ViewerControls.replaceLoadedStructure(viewer, data, format);
-          })
-          .then(function () {
+            // A presented pose can arrive in its own coordinate frame (#244):
+            // fit it onto the reference's backbone and keep that reference on
+            // screen instead of replacing it. Re-presenting the same file
+            // reloads it (replace), so a run's frames keep their swap mode.
+            var keepReference = superpose && referenceStructure && referenceStructure.path !== path;
+            var superposed = 0;
+            if (keepReference) {
+              var fitted = ViewerControls.superposeStructureText(
+                data, format, referenceStructure.data, referenceStructure.format);
+              data = fitted.data;
+              superposed = fitted.pairs;
+            }
+            var load = keepReference
+              ? ViewerControls.appendLoadedStructure(viewer, data, format)
+              : ViewerControls.replaceLoadedStructure(viewer, data, format);
+            return load.then(function () {
             if (seq !== loadSeq) return;
+            if (!keepReference) referenceStructure = { path: path, data: data, format: format };
             try {
               ViewerControls.clearStructureSelection(viewer.plugin);
               ViewerControls.applyCameraPayload(molstar, viewer.plugin, { action: 'reset' });
             } catch (error) { /* camera follows once the new structure is drawable */ }
-            setStatus(name, false);
-            // Highlight only this load. A newer pose increments loadSeq and
-            // this callback becomes a no-op, so it cannot mark the old scene.
-            if (selection) {
-              document.getElementById('selection').value = selection;
-              applySelection(selection);
-            }
+              setStatus(keepReference
+                ? (superposed >= 3
+                  ? t('status.superposed', { count: superposed, s: superposed === 1 ? '' : 's' })
+                  : t('status.superposeNoMatch'))
+                : name, false);
+              // Highlight only this load. A newer pose increments loadSeq and
+              // this callback becomes a no-op, so it cannot mark the old scene.
+              if (selection) {
+                document.getElementById('selection').value = selection;
+                applySelection(selection);
+              }
+            });
           })
           .catch(function (error) {
             if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
@@ -267,7 +289,8 @@
         window.__TAURI__.event.listen('viewer://load-structure', function (event) {
           var path = event && event.payload && event.payload.path;
           var selection = event && event.payload && event.payload.selection;
-          if (path) showStructure(path, selection || null);
+          var superpose = !!(event && event.payload && event.payload.superpose);
+          if (path) showStructure(path, selection || null, superpose);
         });
         window.__TAURI__.event.listen('viewer://load-trajectory', function (event) {
           var payload = event && event.payload;
