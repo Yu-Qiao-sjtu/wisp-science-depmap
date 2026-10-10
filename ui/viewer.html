@@ -109,7 +109,7 @@
             // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
             // the string to Mol*.
             var data = new TextDecoder().decode(bytesToU8(bytes));
-            return viewer.loadStructureFromData(data, format);
+            return ViewerControls.replaceLoadedStructure(viewer, data, format);
           })
           .then(function () {
             if (seq !== loadSeq) return;
@@ -150,19 +150,21 @@
         ])
           .then(function (parts) {
             if (seq !== loadSeq) return;
-            return viewer.loadTrajectory({
-              model: {
-                kind: 'model-data',
-                data: new TextDecoder().decode(parts[0]),
-                format: topoFormat,
-              },
-              modelLabel: topoName,
-              coordinates: {
-                kind: 'coordinates-data',
-                data: parts[1], // binary; Mol* readers consume the raw buffer
-                format: trajFormat,
-              },
-              coordinatesLabel: trajName,
+            return ViewerControls.clearLoadedStructures(viewer).then(function () {
+              return viewer.loadTrajectory({
+                model: {
+                  kind: 'model-data',
+                  data: new TextDecoder().decode(parts[0]),
+                  format: topoFormat,
+                },
+                modelLabel: topoName,
+                coordinates: {
+                  kind: 'coordinates-data',
+                  data: parts[1], // binary; Mol* readers consume the raw buffer
+                  format: trajFormat,
+                },
+                coordinatesLabel: trajName,
+              });
             });
           })
           .then(function () {
