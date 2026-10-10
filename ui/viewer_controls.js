@@ -425,6 +425,57 @@ async function clearViewerPaint(molstar, plugin) {
   return structures.length;
 }
 
+// Selection-aware object for Mol*'s applyTheme: `picked` decides which
+// sub-structure the action covers, falling back to the whole structure.
+function themeSelectionOf(molstar, plugin, mode) {
+  const StructureSelection = molstar.lib.structure.StructureSelection;
+  const selectionManager = plugin.managers.structure && plugin.managers.structure.selection;
+  return {
+    getSelection: async (_plugin, _ctx, structure) => {
+      if (mode === "whole") return StructureSelection.Singletons(structure, structure);
+      const picked = selectionManager && typeof selectionManager.getStructure === "function"
+        ? selectionManager.getStructure(structure)
+        : null;
+      const target = picked && picked.elementCount ? picked : structure;
+      return StructureSelection.Singletons(structure, target);
+    },
+  };
+}
+
+async function applyTransparency(molstar, plugin, value, mode) {
+  const componentManager = plugin.managers.structure.component;
+  if (!componentManager || typeof componentManager.applyTheme !== "function") {
+    throw new Error("Mol* build is missing theme actions");
+  }
+  const structures = (plugin.managers.structure.hierarchy.current.structures) || [];
+  if (!structures.length) throw new Error("load a structure before hiding parts of it");
+  await componentManager.applyTheme({
+    action: { name: "transparency", params: { value } },
+    selection: themeSelectionOf(molstar, plugin, mode),
+  }, structures);
+}
+
+// PyMOL `hide`/`show`: transparency layers make the chosen atoms invisible
+// without deleting the underlying structure data. Later layers win, so
+// hiding everything except the selection paints the whole structure opaque-
+// first and then re-shows the selection on top.
+async function setSelectionVisibility(molstar, plugin, mode) {
+  if (mode === "hide") {
+    await applyTransparency(molstar, plugin, 1, "selection");
+    return "selection hidden";
+  }
+  if (mode === "others") {
+    await applyTransparency(molstar, plugin, 1, "whole");
+    await applyTransparency(molstar, plugin, 0, "selection");
+    return "everything except the selection hidden";
+  }
+  if (mode === "show") {
+    await applyTransparency(molstar, plugin, 0, "whole");
+    return "everything shown";
+  }
+  throw new Error("unsupported visibility mode " + mode);
+}
+
 const ViewerControls = {
   cloneSnapshot,
   zoomSnapshot,
@@ -447,6 +498,7 @@ const ViewerControls = {
   setColorTheme,
   paintViewerSelection,
   clearViewerPaint,
+  setSelectionVisibility,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

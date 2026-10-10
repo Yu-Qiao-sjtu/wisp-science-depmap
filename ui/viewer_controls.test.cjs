@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -286,6 +286,41 @@ test("solid colors paint the selection and clear again", async () => {
   // ...while resetting covers the whole structure.
   const resetSelection = await reset[0].selection.getSelection(null, null, structure);
   assert.equal(resetSelection.target, structure);
+});
+
+test("visibility modes hide the selection, the rest, or nothing", async () => {
+  const actions = [];
+  const structure = { elementCount: 4 };
+  const picked = { elementCount: 1 };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getStructure: (s) => (s === structure ? picked : null) },
+        component: {
+          applyTheme(action, structures) { actions.push([action.action.name, action.action.params.value, action.selection]); },
+        },
+      },
+    },
+  };
+  const molstar = {
+    lib: { structure: { StructureSelection: { Singletons: (source, target) => ({ source, target }) } } },
+  };
+  assert.equal(await setSelectionVisibility(molstar, plugin, "hide"), "selection hidden");
+  assert.equal(await setSelectionVisibility(molstar, plugin, "others"), "everything except the selection hidden");
+  assert.equal(await setSelectionVisibility(molstar, plugin, "show"), "everything shown");
+  assert.deepEqual(actions.map((a) => [a[0], a[1]]), [
+    ["transparency", 1],
+    ["transparency", 1],
+    ["transparency", 0],
+    ["transparency", 0],
+  ]);
+  // hide targets the picked sub-structure, show covers the whole structure.
+  const hideSelection = await actions[0][2].getSelection(null, null, structure);
+  assert.equal(hideSelection.target, picked);
+  const showSelection = await actions[3][2].getSelection(null, null, structure);
+  assert.equal(showSelection.target, structure);
+  await assert.rejects(() => setSelectionVisibility(molstar, plugin, "nonsense"), /unsupported visibility mode/);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
