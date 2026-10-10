@@ -7210,7 +7210,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-acp"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -7221,11 +7221,9 @@ dependencies = [
  "tokio",
 ]
 
-
-
 [[package]]
 name = "wisp-app"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -7237,11 +7235,9 @@ dependencies = [
  "wisp-store",
 ]
 
-
-
 [[package]]
 name = "wisp-bio"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7262,11 +7258,9 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-cli"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7292,11 +7286,9 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-core"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7317,27 +7309,21 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-dev"
-version = "0.18.0"
-
-
+version = "0.19.0"
 
 [[package]]
 name = "wisp-dto"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
-
-
 [[package]]
 name = "wisp-llm"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7354,11 +7340,9 @@ dependencies = [
  "windows-registry",
 ]
 
-
-
 [[package]]
 name = "wisp-mcp"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7378,17 +7362,13 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-paths"
-version = "0.18.0"
-
-
+version = "0.19.0"
 
 [[package]]
 name = "wisp-runs"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7412,11 +7392,9 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-runtime"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7435,11 +7413,9 @@ dependencies = [
  "wisp-tools",
 ]
 
-
-
 [[package]]
 name = "wisp-service"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -7450,11 +7426,9 @@ dependencies = [
  "wisp-store",
 ]
 
-
-
 [[package]]
 name = "wisp-skills"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -7474,11 +7448,9 @@ dependencies = [
  "zip 2.4.2",
 ]
 
-
-
 [[package]]
 name = "wisp-store"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7501,11 +7473,9 @@ dependencies = [
  "zeroize",
 ]
 
-
-
 [[package]]
 name = "wisp-sync"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7524,11 +7494,9 @@ dependencies = [
  "uuid",
 ]
 
-
-
 [[package]]
 name = "wisp-tauri"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7596,11 +7564,9 @@ dependencies = [
  "zip 2.4.2",
 ]
 
-
-
 [[package]]
 name = "wisp-tools"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anydoc",
  "async-trait",
@@ -7620,8 +7586,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "wisp-llm",
 ]
-
-
 
 [[package]]
 name = "wit-bindgen"
