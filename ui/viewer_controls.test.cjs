@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -44,6 +44,33 @@ test("stick can be turned on and cartoon turned off", async () => {
   assert.deepEqual(added, [[1, "ball-and-stick"]]);
   assert.equal(await setStructureRepresentation(plugin, "cartoon", false), 1);
   assert.deepEqual(removed, [[cartoon]]);
+});
+
+test("a new structure replaces the one already in the session", async () => {
+  const removed = [];
+  const loaded = [];
+  const viewer = {
+    plugin: {
+      managers: {
+        structure: {
+          hierarchy: {
+            current: { structures: [{ id: "previous" }] },
+            remove(entries) {
+              removed.push(entries.map((entry) => entry.id));
+              this.current.structures = [];
+            },
+          },
+        },
+      },
+    },
+    loadStructureFromData(data, format) {
+      loaded.push([data, format]);
+    },
+  };
+  await replaceLoadedStructure(viewer, "ATOM", "pdb");
+  assert.deepEqual(removed, [["previous"]]);
+  assert.deepEqual(loaded, [["ATOM", "pdb"]]);
+  assert.deepEqual(viewer.plugin.managers.structure.hierarchy.current.structures, []);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

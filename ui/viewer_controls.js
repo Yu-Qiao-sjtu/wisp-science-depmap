@@ -126,6 +126,25 @@ async function setStructureRepresentation(plugin, kind, visible) {
   return matching.length;
 }
 
+// Drop structures already in this Mol* session, then load the new file into
+// that same session. A later frame or a newly opened file replaces what is
+// on screen instead of leaving a second molecule beside it.
+async function clearLoadedStructures(viewer) {
+  const plugin = viewer.plugin;
+  const hierarchy = plugin
+    && plugin.managers
+    && plugin.managers.structure
+    && plugin.managers.structure.hierarchy;
+  if (!hierarchy || typeof hierarchy.remove !== "function") return;
+  const structures = (hierarchy.current && hierarchy.current.structures) || [];
+  if (structures.length) await hierarchy.remove(structures, true);
+}
+
+async function replaceLoadedStructure(viewer, data, format) {
+  await clearLoadedStructures(viewer);
+  return viewer.loadStructureFromData(data, format);
+}
+
 function structuresOf(plugin) {
   const current = plugin.managers.structure.hierarchy.current.structures || [];
   return current
@@ -202,6 +221,8 @@ const ViewerControls = {
   applyCameraPayload,
   setStructureRepresentation,
   REPRESENTATIONS,
+  replaceLoadedStructure,
+  clearLoadedStructures,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;
