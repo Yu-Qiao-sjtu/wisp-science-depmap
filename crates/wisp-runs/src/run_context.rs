@@ -2910,8 +2910,12 @@ fn present_local_structure_frame(
     let Some(root) = remote.harvest_root.as_deref() else {
         return;
     };
+    let frames = crate::structure_frames::scan_structure_frames(root);
+    let Some(latest) = crate::structure_frames::latest_local_frame(&frames, not_before_ms) else {
+        return;
+    };
     if let Some(path) = crate::structure_frames::next_stable_frame(
-        &crate::structure_frames::scan_structure_frames(root),
+        std::slice::from_ref(&latest),
         watch,
         not_before_ms,
     ) {
