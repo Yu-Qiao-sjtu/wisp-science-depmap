@@ -48,21 +48,47 @@
 <body>
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
-    <button id="apply-selection" type="button">Select</button>
-    <button id="clear-selection" type="button">Clear</button>
-    <button id="explain-selection" type="button">Explain in chat</button>
+    <button id="apply-selection" type="button" data-i18n="button.select">Select</button>
+    <button id="zoom-selection" type="button" data-i18n="button.zoom">Zoom</button>
+    <button id="label-selection" type="button" aria-pressed="false" data-i18n="button.label">Label</button>
+    <button id="measure-distance" type="button" aria-pressed="false" data-i18n="button.distance">Distance</button>
+    <select id="color-mode" data-i18n-title="hint.color" title="Color by element, chain, spectrum, or a solid color">
+      <option value="element" data-i18n="color.element">Element</option>
+      <option value="chain" data-i18n="color.chain">Chain</option>
+      <option value="spectrum" data-i18n="color.spectrum">Spectrum</option>
+      <option value="red" data-i18n="color.red">Red</option>
+      <option value="green" data-i18n="color.green">Green</option>
+      <option value="blue" data-i18n="color.blue">Blue</option>
+      <option value="yellow" data-i18n="color.yellow">Yellow</option>
+      <option value="cyan" data-i18n="color.cyan">Cyan</option>
+      <option value="magenta" data-i18n="color.magenta">Magenta</option>
+      <option value="orange" data-i18n="color.orange">Orange</option>
+      <option value="white" data-i18n="color.white">White</option>
+      <option value="gray" data-i18n="color.gray">Gray</option>
+      <option value="clear-paint" data-i18n="color.clearPaint">Clear paint</option>
+    </select>
+    <button id="apply-color" type="button" data-i18n="button.color">Color</button>
+    <select id="visibility-mode" data-i18n-title="hint.visibility" title="Hide the selection, hide everything else, or show everything">
+      <option value="hide" data-i18n="visibility.hide">Hide selection</option>
+      <option value="others" data-i18n="visibility.others">Hide others</option>
+      <option value="show" data-i18n="visibility.show">Show all</option>
+    </select>
+    <button id="apply-visibility" type="button" data-i18n="button.apply">Apply</button>
+    <button id="export-image" type="button" data-i18n="button.export">Export PNG</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
     <button id="rep-stick" type="button" aria-pressed="false">Stick</button>
     <button id="rep-sphere" type="button" aria-pressed="false">Sphere</button>
     <button id="rep-surface" type="button" aria-pressed="false">Surface</button>
+    <button id="clear-selection" type="button" data-i18n="button.clear">Clear</button>
+    <button id="explain-selection" type="button" data-i18n="button.explain">Explain in chat</button>
     <span id="selection-echo"></span>
     <span id="recent"></span>
   </div>
   <div id="viewer">
-    <div id="splitter-left" class="splitter" title="Drag to resize the left panel"></div>
-    <div id="splitter-right" class="splitter" title="Drag to resize the right panel"></div>
+    <div id="splitter-left" class="splitter" data-i18n-title="hint.splitter" title="Drag to resize the left panel"></div>
+    <div id="splitter-right" class="splitter" data-i18n-title="hint.splitter" title="Drag to resize the right panel"></div>
   </div>
-  <div id="status">initializing viewer…</div>
+  <div id="status" data-i18n="status.initializing">initializing viewer…</div>
   <script src="vendor-runtime/molstar-viewer-5.12.0.js"></script>
   <script src="viewer_controls.js"></script>
   <script>
@@ -73,6 +99,31 @@
         statusEl.textContent = message;
         statusEl.className = isError ? 'error' : '';
       }
+
+      // Chrome language (#247): the desktop UI language rides the URL on the
+      // first open and the viewer://locale event afterwards. Mol* panels keep
+      // Mol*'s own language.
+      var chromeLang = ViewerControls.normalizeChromeLocale(queryParam('lang'));
+      var currentMode = 'structure';
+      function t(key, params) {
+        return ViewerControls.chromeText(chromeLang, key, params);
+      }
+      function applyChromeLanguage() {
+        ViewerControls.setChromeLocale(chromeLang);
+        document.documentElement.lang = chromeLang === 'zh' ? 'zh-CN' : 'en';
+        Array.prototype.forEach.call(document.querySelectorAll('[data-i18n]'), function (el) {
+          el.textContent = t(el.getAttribute('data-i18n'));
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('[data-i18n-title]'), function (el) {
+          el.title = t(el.getAttribute('data-i18n-title'));
+        });
+        var title = t(currentMode === 'trajectory' ? 'title.trajectory' : 'title.structure');
+        document.title = title;
+        try {
+          window.__TAURI__.core.invoke('set_viewer_window_title', { title: title }).catch(function () {});
+        } catch (error) { /* plain browser preview */ }
+      }
+      applyChromeLanguage();
 
       var FORMAT_BY_EXT = { pdb: 'pdb', ent: 'pdb', cif: 'cif', mmcif: 'mmcif', gro: 'gro' };
       // Coordinate formats parsed by Mol* mol-io; `.nc` is GROMACS' alternate
@@ -99,12 +150,17 @@
       var viewer = null;
       var loadSeq = 0;
       var currentPath = queryParam('src') || queryParam('topo') || '';
+      // First structure loaded on screen stays the superposition reference
+      // (#244); poses presented with superpose=true are fitted onto it.
+      var referenceStructure = null;
 
-      function showStructure(path, selection) {
+      function showStructure(path, selection, superpose) {
         var seq = ++loadSeq;
         currentPath = path;
+        currentMode = 'structure';
+        applyChromeLanguage();
         var name = basename(path);
-        setStatus('loading ' + name + '…', false);
+        setStatus(t('status.loading', { name: name }), false);
         var format;
         try { format = formatFor(FORMAT_BY_EXT, 'structure', path); }
         catch (error) { setStatus(String(error.message || error), true); return; }
@@ -114,21 +170,40 @@
             // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
             // the string to Mol*.
             var data = new TextDecoder().decode(bytesToU8(bytes));
-            return ViewerControls.replaceLoadedStructure(viewer, data, format);
-          })
-          .then(function () {
+            // A presented pose can arrive in its own coordinate frame (#244):
+            // fit it onto the reference's backbone and keep that reference on
+            // screen instead of replacing it. Re-presenting the same file
+            // reloads it (replace), so a run's frames keep their swap mode.
+            var keepReference = superpose && referenceStructure && referenceStructure.path !== path;
+            var superposed = 0;
+            if (keepReference) {
+              var fitted = ViewerControls.superposeStructureText(
+                data, format, referenceStructure.data, referenceStructure.format);
+              data = fitted.data;
+              superposed = fitted.pairs;
+            }
+            var load = keepReference
+              ? ViewerControls.appendLoadedStructure(viewer, data, format)
+              : ViewerControls.replaceLoadedStructure(viewer, data, format);
+            return load.then(function () {
             if (seq !== loadSeq) return;
+            if (!keepReference) referenceStructure = { path: path, data: data, format: format };
             try {
               ViewerControls.clearStructureSelection(viewer.plugin);
               ViewerControls.applyCameraPayload(molstar, viewer.plugin, { action: 'reset' });
             } catch (error) { /* camera follows once the new structure is drawable */ }
-            setStatus(name, false);
-            // Highlight only this load. A newer pose increments loadSeq and
-            // this callback becomes a no-op, so it cannot mark the old scene.
-            if (selection) {
-              document.getElementById('selection').value = selection;
-              applySelection(selection);
-            }
+              setStatus(keepReference
+                ? (superposed >= 3
+                  ? t('status.superposed', { count: superposed, s: superposed === 1 ? '' : 's' })
+                  : t('status.superposeNoMatch'))
+                : name, false);
+              // Highlight only this load. A newer pose increments loadSeq and
+              // this callback becomes a no-op, so it cannot mark the old scene.
+              if (selection) {
+                document.getElementById('selection').value = selection;
+                applySelection(selection);
+              }
+            });
           })
           .catch(function (error) {
             if (seq === loadSeq) setStatus(String((error && error.message) || error), true);
@@ -141,9 +216,12 @@
       // preset - playback controls come from the vendored viewer itself.
       function showTrajectory(structurePath, trajectoryPath) {
         var seq = ++loadSeq;
+        currentPath = structurePath;
+        currentMode = 'trajectory';
+        applyChromeLanguage();
         var topoName = basename(structurePath);
         var trajName = basename(trajectoryPath);
-        setStatus('loading ' + topoName + ' + ' + trajName + '…', false);
+        setStatus(t('status.loadingTrajectory', { topo: topoName, traj: trajName }), false);
         var topoFormat, trajFormat;
         try {
           topoFormat = formatFor(FORMAT_BY_EXT, 'structure', structurePath);
@@ -211,7 +289,8 @@
         window.__TAURI__.event.listen('viewer://load-structure', function (event) {
           var path = event && event.payload && event.payload.path;
           var selection = event && event.payload && event.payload.selection;
-          if (path) showStructure(path, selection || null);
+          var superpose = !!(event && event.payload && event.payload.superpose);
+          if (path) showStructure(path, selection || null, superpose);
         });
         window.__TAURI__.event.listen('viewer://load-trajectory', function (event) {
           var payload = event && event.payload;
@@ -226,26 +305,97 @@
         window.__TAURI__.event.listen('viewer://control-camera', function (event) {
           applyCamera(event && event.payload);
         });
+        window.__TAURI__.event.listen('viewer://locale', function (event) {
+          var locale = event && event.payload && event.payload.locale;
+          if (locale) {
+            chromeLang = ViewerControls.normalizeChromeLocale(locale);
+            applyChromeLanguage();
+          }
+        });
+        // Chat-driven controls (#248): the same actions the toolbar buttons
+        // perform, pushed from the control_viewer agent tool.
+        window.__TAURI__.event.listen('viewer://representation', function (event) {
+          var payload = event && event.payload;
+          if (!payload || !payload.kind) return;
+          ViewerControls.setStructureRepresentation(viewer.plugin, payload.kind, payload.visible !== false).then(function () {
+            setStatus(t(payload.visible === false ? 'cmd.hidden' : 'cmd.shown', { representation: payload.kind }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://color', function (event) {
+          var mode = event && event.payload && event.payload.mode;
+          if (!mode) return;
+          var applied = mode === 'clear-paint'
+            ? ViewerControls.clearViewerPaint(molstar, viewer.plugin)
+            : (mode === 'element' || mode === 'chain' || mode === 'spectrum')
+              ? ViewerControls.setColorTheme(viewer.plugin, mode).then(function () { return mode; })
+              : ViewerControls.paintViewerSelection(molstar, viewer.plugin, mode).then(function () { return mode; });
+          applied.then(function (what) {
+            setStatus(t('status.coloredBy', { what: t('color.' + what) }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://labels', function (event) {
+          var visible = !!(event && event.payload && event.payload.visible);
+          var button = document.getElementById('label-selection');
+          ViewerControls.setSelectionLabels(molstar, viewer.plugin, visible).then(function (count) {
+            button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+            setStatus(visible ? t('status.labelsOn', { count: count, s: count === 1 ? '' : 's' }) : t('status.labelsOff'), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://visibility', function (event) {
+          var mode = event && event.payload && event.payload.mode;
+          if (!mode) return;
+          ViewerControls.setSelectionVisibility(molstar, viewer.plugin, mode).then(function (what) {
+            setStatus(what, false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
+        window.__TAURI__.event.listen('viewer://measure', function (event) {
+          var payload = event && event.payload;
+          if (!payload || !payload.a || !payload.b) return;
+          ViewerControls.measureSelectionDistance(molstar, viewer.plugin, payload.a, payload.b).then(function (distance) {
+            setStatus(t('status.distance', { value: distance.toFixed(2) }), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+        });
       } catch (error) {
         /* event bridge unavailable (plain browser preview) */
       }
 
-      function applySelection(expression) {
+      function applySelection(input) {
         var echo = document.getElementById('selection-echo');
-        echo.textContent = expression;
-        try {
-          var matched = ViewerControls.highlightPymol(molstar, viewer.plugin, expression);
-          setStatus(matched ? expression : 'no atoms matched ' + expression, matched === 0);
-        } catch (error) {
-          setStatus(String((error && error.message) || error), true);
+        echo.textContent = input;
+        var trimmed = String(input || '').trim();
+        // One bare four-character word opens that RCSB entry instead of
+        // compiling as a selection (#249); longer input stays a command or
+        // expression.
+        if (window.__TAURI__ && window.__TAURI__.core && /^[A-Za-z0-9]{4}$/.test(trimmed)) {
+          setStatus(t('status.downloading', { id: trimmed.toUpperCase() }), false);
+          window.__TAURI__.core.invoke('open_pdb_entry', { pdbId: trimmed })
+            .catch(function (error) {
+              setStatus(String((error && error.message) || error), true);
+            });
+          return;
         }
+        ViewerControls.runPymolCommand(molstar, viewer.plugin, input).then(function (message) {
+          setStatus(message, false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
       }
 
       function applyCamera(payload) {
         if (!payload || !payload.action) return;
         try {
           ViewerControls.applyCameraPayload(molstar, viewer.plugin, payload);
-          setStatus('camera ' + payload.action, false);
+          setStatus(t('status.camera', { action: payload.action }), false);
         } catch (error) {
           setStatus(String((error && error.message) || error), true);
         }
@@ -266,27 +416,108 @@
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
       });
+      document.getElementById('zoom-selection').addEventListener('click', function () {
+        try {
+          var framed = ViewerControls.focusCurrentSelection(molstar, viewer.plugin);
+          setStatus(framed === 'selection' ? t('status.zoomedSelection') : t('status.zoomedStructure'), false);
+        } catch (error) {
+          setStatus(String((error && error.message) || error), true);
+        }
+      });
+      document.getElementById('label-selection').addEventListener('click', function (event) {
+        var button = event.currentTarget;
+        var next = button.getAttribute('aria-pressed') !== 'true';
+        ViewerControls.setSelectionLabels(molstar, viewer.plugin, next).then(function (count) {
+          button.setAttribute('aria-pressed', next ? 'true' : 'false');
+          setStatus(next ? t('status.labelsOn', { count: count, s: count === 1 ? '' : 's' }) : t('status.labelsOff'), false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('measure-distance').addEventListener('click', function (event) {
+        var button = event.currentTarget;
+        var pressed = button.getAttribute('aria-pressed') === 'true';
+        if (pressed) {
+          ViewerControls.clearMeasuredDistances(viewer.plugin).then(function () {
+            button.setAttribute('aria-pressed', 'false');
+            setStatus(t('status.distancesCleared'), false);
+          }).catch(function (error) {
+            setStatus(String((error && error.message) || error), true);
+          });
+          return;
+        }
+        ViewerControls.measurePickedDistance(molstar, viewer.plugin).then(function (distance) {
+          button.setAttribute('aria-pressed', 'true');
+          setStatus(t('status.distance', { value: distance.toFixed(2) }), false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('apply-color').addEventListener('click', function () {
+        var mode = document.getElementById('color-mode').value;
+        var applied = mode === 'clear-paint'
+          ? ViewerControls.clearViewerPaint(molstar, viewer.plugin)
+          : (mode === 'element' || mode === 'chain' || mode === 'spectrum')
+            ? ViewerControls.setColorTheme(viewer.plugin, mode).then(function () { return mode; })
+            : ViewerControls.paintViewerSelection(molstar, viewer.plugin, mode).then(function () { return mode; });
+        applied.then(function (what) {
+          setStatus(t('status.coloredBy', { what: t('color.' + what) }), false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('apply-visibility').addEventListener('click', function () {
+        var mode = document.getElementById('visibility-mode').value;
+        ViewerControls.setSelectionVisibility(molstar, viewer.plugin, mode).then(function (what) {
+          setStatus(what, false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
+      document.getElementById('export-image').addEventListener('click', function () {
+        // Mol* canvases are created with preserveDrawingBuffer, so the current
+        // frame survives long enough to be read straight off the element.
+        var canvas = document.querySelector('#viewer canvas');
+        if (!canvas) {
+          setStatus(t('status.noCanvas'), true);
+          return;
+        }
+        var dataUrl;
+        try { dataUrl = canvas.toDataURL('image/png'); }
+        catch (error) {
+          setStatus(String((error && error.message) || error), true);
+          return;
+        }
+        setStatus(t('status.savingImage'), false);
+        window.__TAURI__.core.invoke('export_viewer_image', { dataUrl: dataUrl }).then(function (saved) {
+          setStatus(saved
+            ? t('status.saved', { name: String(saved).replace(/^.*[\\/]/, '') })
+            : t('status.exportCancelled'), false);
+        }).catch(function (error) {
+          setStatus(String((error && error.message) || error), true);
+        });
+      });
       document.getElementById('clear-selection').addEventListener('click', function () {
         document.getElementById('selection').value = '';
         document.getElementById('selection-echo').textContent = '';
         try {
           ViewerControls.clearStructureSelection(viewer.plugin);
-          setStatus('selection cleared', false);
+          setStatus(t('status.selectionCleared'), false);
         } catch (error) {
           setStatus(String((error && error.message) || error), true);
         }
       });
       document.getElementById('explain-selection').addEventListener('click', function () {
         if (!currentPath) {
-          setStatus('load a structure before asking for an explanation', true);
+          setStatus(t('status.explainNeedsStructure'), true);
           return;
         }
-        setStatus('asking chat…', false);
+        setStatus(t('status.askingChat'), false);
         window.__TAURI__.core.invoke('explain_structure_selection', {
           path: currentPath,
           selection: document.getElementById('selection').value || null
         }).then(function () {
-          setStatus('explanation requested in chat', false);
+          setStatus(t('status.explanationRequested'), false);
         }).catch(function (error) {
           setStatus(String((error && error.message) || error), true);
         });

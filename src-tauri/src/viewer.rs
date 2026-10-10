@@ -31,6 +31,74 @@ const CONTROL_CAMERA_EVENT: &str = "viewer://control-camera";
 /// PyMOL-style selection for an already-open viewer (#194).
 const SELECT_EVENT: &str = "viewer://select";
 
+/// Representation switch pushed into an open viewer (#248). Same action as
+/// the window's representation buttons.
+const REPRESENTATION_EVENT: &str = "viewer://representation";
+
+/// Color action pushed into an open viewer (#248).
+const COLOR_EVENT: &str = "viewer://color";
+
+/// Label toggle pushed into an open viewer (#248).
+const LABELS_EVENT: &str = "viewer://labels";
+
+/// Visibility action pushed into an open viewer (#248).
+const VISIBILITY_EVENT: &str = "viewer://visibility";
+
+/// Distance measurement pushed into an open viewer (#248).
+const MEASURE_EVENT: &str = "viewer://measure";
+
+/// Chrome-language update for an open viewer window (#247). The page owns
+/// its string table; this event only tells it which column to render.
+pub(crate) const LOCALE_EVENT: &str = "viewer://locale";
+
+#[derive(Clone, Serialize)]
+struct LocalePayload {
+    locale: String,
+}
+
+/// The chrome language for a viewer about to open, read from the desktop UI
+/// language setting. Only `zh` switches the chrome; anything else is `en`.
+async fn chrome_locale(app: &AppHandle) -> String {
+    let state = app.state::<crate::AppState>();
+    match state
+        .store
+        .get_setting("locale")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("zh") => "zh".into(),
+        _ => "en".into(),
+    }
+}
+
+/// Tell an already-open viewer window that the desktop UI language changed.
+/// The page re-renders its own chrome and resets its title, so Mol*'s
+/// bundled panels stay on Mol*'s language.
+pub(crate) fn emit_viewer_locale(app: &AppHandle, locale: &str) {
+    let _ = app.emit_to(
+        VIEWER_WINDOW_LABEL,
+        LOCALE_EVENT,
+        LocalePayload {
+            locale: locale.to_string(),
+        },
+    );
+}
+
+/// Native window title in the chrome language. The page corrects the title
+/// through [`set_viewer_window_title`] once it knows its own mode, so this
+/// only covers the moment between spawn and first paint.
+fn viewer_window_title(kind: &str, locale: &str) -> &'static str {
+    match (kind, locale) {
+        ("trajectory", "zh") => "轨迹查看器",
+        ("trajectory", _) => "Trajectory viewer",
+        (_, "zh") => "结构查看器",
+        (_, _) => "Structure viewer",
+    }
+}
+
 /// Upper bound for a structure file handed to the viewer. Structures are tiny
 /// next to trajectories; a larger "structure" is almost certainly the wrong
 /// file (e.g. a multi-frame trajectory), which is routed through the
@@ -142,12 +210,6 @@ fn percent_encode_path(path: &str) -> String {
     encoded
 }
 
-pub(crate) fn viewer_url(path: &str) -> String {
-    viewer_url_with_selection(path, None)
-}
-
-/// First open cannot listen for events yet, so the optional selection rides
-/// the same URL as the structure path and is applied after that load settles.
 pub(crate) fn viewer_url_with_selection(path: &str, selection: Option<&str>) -> String {
     let mut url = format!("viewer.html?src={}", percent_encode_path(path));
     if let Some(selection) = selection {
@@ -165,6 +227,28 @@ pub(crate) fn viewer_trajectory_url(structure: &str, trajectory: &str) -> String
     )
 }
 
+/// Same URLs with the chrome language appended, so the freshly opened page
+/// renders the right column before its event listeners exist (#247).
+pub(crate) fn viewer_url_with_locale(path: &str, selection: Option<&str>, locale: &str) -> String {
+    format!(
+        "{}&lang={}",
+        viewer_url_with_selection(path, selection),
+        if locale == "zh" { "zh" } else { "en" }
+    )
+}
+
+pub(crate) fn viewer_trajectory_url_with_locale(
+    structure: &str,
+    trajectory: &str,
+    locale: &str,
+) -> String {
+    format!(
+        "{}&lang={}",
+        viewer_trajectory_url(structure, trajectory),
+        if locale == "zh" { "zh" } else { "en" }
+    )
+}
+
 #[derive(Clone, Serialize)]
 struct LoadStructurePayload {
     path: String,
@@ -172,6 +256,11 @@ struct LoadStructurePayload {
     /// caller only wants the file swapped in.
     #[serde(skip_serializing_if = "Option::is_none")]
     selection: Option<String>,
+    /// #244: keep the structure already on screen as the reference and append
+    /// this file superposed onto it by polymer backbone, instead of replacing
+    /// it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    superpose: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -184,16 +273,15 @@ struct LoadTrajectoryPayload {
 /// structure and trajectory entry points reuse this so the two modes share
 /// one window (and therefore one Mol\* instance) at a time.
 fn spawn_viewer_window(app: &AppHandle, url: String, title: &str) -> Result<(), String> {
-    let builder =
-        WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
-            .title(title)
-            .inner_size(1200.0, 840.0)
-            .min_inner_size(640.0, 480.0)
-            .resizable(true)
-            .minimizable(true)
-            .maximizable(true)
-            .general_autofill_enabled(false)
-            .on_navigation(crate::guard_webview_navigation);
+    let builder = WebviewWindowBuilder::new(app, VIEWER_WINDOW_LABEL, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(1200.0, 840.0)
+        .min_inner_size(640.0, 480.0)
+        .resizable(true)
+        .minimizable(true)
+        .maximizable(true)
+        .general_autofill_enabled(false)
+        .on_navigation(crate::guard_webview_navigation);
     builder
         .build()
         .map_err(|e| format!("failed to open the viewer window: {e}"))
@@ -218,11 +306,19 @@ pub(crate) async fn open_structure_viewer(app: AppHandle, path: String) -> Resul
                 LoadStructurePayload {
                     path: path.clone(),
                     selection: None,
+                    superpose: false,
                 },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(&app, viewer_url(&path), "Structure viewer")?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, None, &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
     }
     remember_viewer_path(&path);
     Ok(())
@@ -248,8 +344,10 @@ pub(crate) async fn present_structure_in_viewer(
     app: AppHandle,
     path: String,
     selection: Option<String>,
+    superpose: Option<bool>,
 ) -> Result<(), String> {
     let selection = normalize_presentation_selection(selection.as_deref())?;
+    let superpose = superpose.unwrap_or(false);
     let canonical = validate_structure_path(&path)?;
     let path = canonical.to_string_lossy().into_owned();
     wait_for_frame_gap().await;
@@ -261,15 +359,19 @@ pub(crate) async fn present_structure_in_viewer(
                 LoadStructurePayload {
                     path: path.clone(),
                     selection,
+                    superpose,
                 },
             )
             .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(
-            &app,
-            viewer_url_with_selection(&path, selection.as_deref()),
-            "Structure viewer",
-        )?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, selection.as_deref(), &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
     }
     remember_viewer_path(&path);
     Ok(())
@@ -345,12 +447,13 @@ impl Tool for PresentStructureTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "present_structure",
-            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure.",
+            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure. Set superpose to true when a pose should be fitted onto the reference structure already on screen by polymer backbone instead of replacing it.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Local pdb, ent, cif, mmcif, or gro file."},
-                    "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."}
+                    "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."},
+                    "superpose": {"type": "boolean", "description": "Keep the structure already on screen as the reference and append this pose superposed onto it by backbone. Replaces the current structure when false."}
                 },
                 "required": ["path"]
             }),
@@ -367,7 +470,12 @@ impl Tool for PresentStructureTool {
             Err(error) => return ToolResult::fail(error),
         };
         let selection = arg_str_opt(args, "selection");
-        match present_structure_in_viewer(self.app.clone(), path, selection).await {
+        let superpose = args
+            .get("superpose")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match present_structure_in_viewer(self.app.clone(), path, selection, Some(superpose)).await
+        {
             Ok(()) => ToolResult::ok("structure presented"),
             Err(error) => ToolResult::fail(error),
         }
@@ -378,6 +486,227 @@ impl Tool for PresentStructureTool {
 /// each written pose. The research assistant does not receive it.
 pub(crate) struct DockLigandTool {
     app: AppHandle,
+}
+
+/// Chat-side tool that drives the already-open structure window (#248). Every
+/// action forwards to the same events the window's own controls use, so the
+/// chat cannot drift from what the user sees. It never sends messages into
+/// the chat: viewer-to-chat traffic stays on the explicit Explain-in-chat
+/// action, and neither direction starts a docking run.
+pub(crate) struct ControlViewerTool {
+    app: AppHandle,
+}
+
+impl ControlViewerTool {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+
+    /// Validation shared by the chat tool and the window itself: the color
+    /// words the viewer chrome understands.
+    fn normalize_color_mode(mode: &str) -> Result<String, String> {
+        const MODES: [&str; 13] = [
+            "element",
+            "chain",
+            "spectrum",
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "cyan",
+            "magenta",
+            "orange",
+            "white",
+            "gray",
+            "clear-paint",
+        ];
+        let mode = mode.trim();
+        if MODES.contains(&mode) {
+            Ok(mode.to_string())
+        } else {
+            Err(format!(
+                "unsupported color mode {mode:?}; expected one of {}",
+                MODES.join(", ")
+            ))
+        }
+    }
+
+    fn normalize_representation_kind(kind: &str) -> Result<String, String> {
+        const KINDS: [&str; 4] = ["cartoon", "stick", "sphere", "surface"];
+        let kind = kind.trim();
+        if KINDS.contains(&kind) {
+            Ok(kind.to_string())
+        } else {
+            Err(format!(
+                "unsupported representation {kind:?}; expected one of {}",
+                KINDS.join(", ")
+            ))
+        }
+    }
+
+    fn normalize_visibility_mode(mode: &str) -> Result<String, String> {
+        const MODES: [&str; 3] = ["hide", "others", "show"];
+        let mode = mode.trim();
+        if MODES.contains(&mode) {
+            Ok(mode.to_string())
+        } else {
+            Err(format!(
+                "unsupported visibility mode {mode:?}; expected one of {}",
+                MODES.join(", ")
+            ))
+        }
+    }
+
+    async fn emit<T: Serialize + Clone>(
+        app: &AppHandle,
+        event: &str,
+        payload: T,
+    ) -> Result<(), String> {
+        require_viewer_window(app)?;
+        app.emit_to(VIEWER_WINDOW_LABEL, event, payload)
+            .map_err(|e| format!("failed to deliver viewer command: {e}"))
+    }
+}
+
+#[async_trait]
+impl Tool for ControlViewerTool {
+    fn name(&self) -> &str {
+        "control_viewer"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            "control_viewer",
+            "Drive the open structure window: select atoms, switch representations, recolor, move the camera, toggle residue labels, hide or show parts, and measure the distance between two selections. The window must already be open. This tool only changes the viewer; it never sends messages to the chat.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["select", "representation", "color", "reset", "zoom", "rotate", "labels", "visibility", "measure"],
+                        "description": "What to do in the viewer."
+                    },
+                    "expression": {"type": "string", "description": "PyMOL selection, for action=select."},
+                    "kind": {"type": "string", "enum": ["cartoon", "stick", "sphere", "surface"], "description": "Representation, for action=representation."},
+                    "visible": {"type": "boolean", "description": "On or off, for action=representation and action=labels."},
+                    "mode": {"type": "string", "description": "Color (element, chain, spectrum, a color word, or clear-paint) for action=color; hide, others, or show for action=visibility."},
+                    "factor": {"type": "number", "description": "Zoom factor > 1 moves closer, for action=zoom."},
+                    "axis": {"type": "string", "enum": ["x", "y", "z"], "description": "For action=rotate."},
+                    "degrees": {"type": "number", "description": "Rotation angle, for action=rotate."},
+                    "a": {"type": "string", "description": "First PyMOL selection, for action=measure."},
+                    "b": {"type": "string", "description": "Second PyMOL selection, for action=measure."}
+                },
+                "required": ["action"]
+            }),
+        )
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        arg_str_opt(args, "action").unwrap_or_default()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        let Ok(action) = arg_str(args, "action") else {
+            return ToolResult::fail("action is required");
+        };
+        let app = self.app.clone();
+        let outcome = match action.as_str() {
+            "select" => {
+                let Ok(expression) = arg_str(args, "expression") else {
+                    return ToolResult::fail("select needs an expression");
+                };
+                select_in_viewer(app, expression)
+                    .await
+                    .map(|expression| format!("selected {expression}"))
+            }
+            "representation" => {
+                let Ok(kind) = arg_str(args, "kind") else {
+                    return ToolResult::fail("representation needs a kind");
+                };
+                let kind = match Self::normalize_representation_kind(&kind) {
+                    Ok(kind) => kind,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                let visible = args.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                Self::emit(
+                    &app,
+                    REPRESENTATION_EVENT,
+                    json!({ "kind": kind, "visible": visible }),
+                )
+                .await
+                .map(|()| format!("{kind} {}", if visible { "shown" } else { "hidden" }))
+            }
+            "color" => {
+                let Ok(mode) = arg_str(args, "mode") else {
+                    return ToolResult::fail("color needs a mode");
+                };
+                let mode = match Self::normalize_color_mode(&mode) {
+                    Ok(mode) => mode,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, COLOR_EVENT, json!({ "mode": mode }))
+                    .await
+                    .map(|()| format!("colored by {mode}"))
+            }
+            "reset" | "zoom" | "rotate" => {
+                let payload = match normalize_camera_command(
+                    &action,
+                    arg_str_opt(args, "axis"),
+                    args.get("degrees").and_then(Value::as_f64),
+                    args.get("factor").and_then(Value::as_f64),
+                    None,
+                ) {
+                    Ok(payload) => payload,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, CONTROL_CAMERA_EVENT, payload)
+                    .await
+                    .map(|()| format!("camera {action}"))
+            }
+            "labels" => {
+                let visible = args.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                Self::emit(&app, LABELS_EVENT, json!({ "visible": visible }))
+                    .await
+                    .map(|()| format!("labels {}", if visible { "on" } else { "off" }))
+            }
+            "visibility" => {
+                let Ok(mode) = arg_str(args, "mode") else {
+                    return ToolResult::fail("visibility needs a mode");
+                };
+                let mode = match Self::normalize_visibility_mode(&mode) {
+                    Ok(mode) => mode,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, VISIBILITY_EVENT, json!({ "mode": mode }))
+                    .await
+                    .map(|()| format!("visibility {mode}"))
+            }
+            "measure" => {
+                let Ok(a) = arg_str(args, "a") else {
+                    return ToolResult::fail("measure needs selections a and b");
+                };
+                let Ok(b) = arg_str(args, "b") else {
+                    return ToolResult::fail("measure needs selections a and b");
+                };
+                let a = match normalize_pymol_selection(&a) {
+                    Ok(a) => a,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                let b = match normalize_pymol_selection(&b) {
+                    Ok(b) => b,
+                    Err(error) => return ToolResult::fail(error),
+                };
+                Self::emit(&app, MEASURE_EVENT, json!({ "a": a, "b": b }))
+                    .await
+                    .map(|()| format!("measuring {a} to {b}"))
+            }
+            other => return ToolResult::fail(format!("unsupported viewer action {other:?}")),
+        };
+        match outcome {
+            Ok(message) => ToolResult::ok(message),
+            Err(error) => ToolResult::fail(error),
+        }
+    }
 }
 
 impl DockLigandTool {
@@ -444,6 +773,7 @@ impl Tool for DockLigandTool {
                 self.app.clone(),
                 frame.to_string_lossy().into_owned(),
                 Some("hetatm".to_string()),
+                None,
             )
             .await
             {
@@ -481,11 +811,14 @@ pub(crate) async fn open_trajectory_viewer(
             )
             .map_err(|e| format!("failed to deliver trajectory to the viewer window: {e}"))?;
         }
-        None => spawn_viewer_window(
-            &app,
-            viewer_trajectory_url(&structure_path, &trajectory_path),
-            "Trajectory viewer",
-        )?,
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_trajectory_url_with_locale(&structure_path, &trajectory_path, &locale),
+                viewer_window_title("trajectory", &locale),
+            )?
+        }
     }
     remember_viewer_path(&structure_path);
     remember_viewer_path(&trajectory_path);
@@ -806,6 +1139,154 @@ pub(crate) async fn read_trajectory_bytes(path: String) -> Result<Vec<u8>, Strin
     })
 }
 
+const PNG_DATA_URL_PREFIX: &str = "data:image/png;base64,";
+
+/// Decode a PNG captured from the viewer canvas and save it through the
+/// native save dialog. Returns the saved path, or `None` when the user
+/// cancels.
+#[tauri::command]
+pub(crate) async fn export_viewer_image(
+    app: AppHandle,
+    data_url: String,
+) -> Result<Option<String>, String> {
+    let payload = data_url
+        .strip_prefix(PNG_DATA_URL_PREFIX)
+        .ok_or_else(|| "expected a data:image/png;base64 data URL".to_string())?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("invalid PNG data URL: {e}"))?;
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Err("decoded data is not a PNG image".into());
+    }
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name("structure-view.png")
+        .add_filter("PNG image", &["png"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(dest) = rx.await.map_err(|e| format!("{e}"))? else {
+        return Ok(None);
+    };
+    let dest_path = PathBuf::from(dest.to_string());
+    tokio::fs::write(&dest_path, bytes)
+        .await
+        .map_err(|e| format!("failed to write {}: {e}", dest_path.display()))?;
+    Ok(Some(dest_path.to_string_lossy().into_owned()))
+}
+
+/// Let the viewer page correct its native window title after the chrome
+/// language or the loaded mode changes (#247). The title comes from the
+/// page's own string table, so it always matches what the chrome shows.
+#[tauri::command]
+pub(crate) async fn set_viewer_window_title(app: AppHandle, title: String) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("viewer window title must not be empty".into());
+    }
+    let window = app
+        .get_webview_window(VIEWER_WINDOW_LABEL)
+        .ok_or_else(|| "viewer window is not open".to_string())?;
+    window
+        .set_title(title)
+        .map_err(|e| format!("failed to set the viewer window title: {e}"))
+}
+
+/// A PDB identifier: exactly four ASCII alphanumerics, normalized to upper
+/// case (classic RCSB entry ids such as `4KC3`).
+pub(crate) fn normalize_pdb_id(raw: &str) -> Result<String, String> {
+    let id = raw.trim();
+    if id.len() == 4 && id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        Ok(id.to_ascii_uppercase())
+    } else {
+        Err(format!(
+            "'{raw}' is not a PDB identifier; expected four characters like 4KC3"
+        ))
+    }
+}
+
+/// Download the RCSB mmCIF for one entry into the app cache and present it
+/// through the same load-structure path a local file uses (#249). The
+/// structure window's command box and the chat tools that steer the window
+/// both land here; the download itself never starts a chat turn. Local
+/// files keep their extension whitelist — this path only accepts ids.
+#[tauri::command]
+pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(), String> {
+    let id = normalize_pdb_id(&pdb_id)?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("viewer cache directory is unavailable: {e}"))?
+        .join("pdb");
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| format!("failed to create the PDB cache directory: {e}"))?;
+    let dest = cache_dir.join(format!("{id}.cif"));
+    if !tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        let client = reqwest::Client::builder()
+            .user_agent("wisp-depmap-viewer")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("failed to build the PDB download client: {e}"))?;
+        let response = client
+            .get(format!("https://files.rcsb.org/download/{id}.cif"))
+            .send()
+            .await
+            .map_err(|e| format!("failed to reach files.rcsb.org for {id}: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "RCSB returned {} for {id}",
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("failed to download {id}: {e}"))?;
+        if bytes.len() as u64 > MAX_STRUCTURE_BYTES {
+            return Err(format!(
+                "entry {id} is {} bytes, above the {} byte structure cap",
+                bytes.len(),
+                MAX_STRUCTURE_BYTES
+            ));
+        }
+        tokio::fs::write(&dest, &bytes)
+            .await
+            .map_err(|e| format!("failed to cache {id}: {e}"))?;
+    }
+    let canonical = validate_structure_path(&dest.to_string_lossy())?;
+    let path = canonical.to_string_lossy().into_owned();
+    match app.get_webview_window(VIEWER_WINDOW_LABEL) {
+        Some(window) => {
+            let _ = window.set_focus();
+            app.emit_to(
+                VIEWER_WINDOW_LABEL,
+                LOAD_STRUCTURE_EVENT,
+                LoadStructurePayload {
+                    path: path.clone(),
+                    selection: None,
+                    superpose: false,
+                },
+            )
+            .map_err(|e| format!("failed to deliver structure to the viewer window: {e}"))?;
+        }
+        None => {
+            let locale = chrome_locale(&app).await;
+            spawn_viewer_window(
+                &app,
+                viewer_url_with_locale(&path, None, &locale),
+                viewer_window_title("structure", &locale),
+            )?
+        }
+    }
+    remember_viewer_path(&path);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,13 +1414,47 @@ mod tests {
     #[test]
     fn viewer_url_percent_encodes_spaces_but_keeps_path_separators() {
         assert_eq!(
-            viewer_url("C:/a b/model.pdb"),
-            "viewer.html?src=C:/a%20b/model.pdb"
+            viewer_url_with_locale("C:/a b/model.pdb", None, "en"),
+            "viewer.html?src=C:/a%20b/model.pdb&lang=en"
         );
         assert_eq!(
-            viewer_url("D:\\pdb library\\x (1).cif"),
-            "viewer.html?src=D:\\pdb%20library\\x%20%281%29.cif"
+            viewer_url_with_locale("D:\\pdb library\\x (1).cif", Some("chain A"), "zh"),
+            "viewer.html?src=D:\\pdb%20library\\x%20%281%29.cif&sel=chain%20A&lang=zh"
         );
+    }
+
+    #[test]
+    fn viewer_trajectory_url_appends_the_chrome_language() {
+        assert_eq!(
+            viewer_trajectory_url_with_locale("C:/t/x.pdb", "C:/t/y.nc", "zh"),
+            "viewer.html?topo=C:/t/x.pdb&traj=C:/t/y.nc&lang=zh"
+        );
+        assert_eq!(
+            viewer_trajectory_url_with_locale("C:/t/x.pdb", "C:/t/y.xtc", "fr"),
+            "viewer.html?topo=C:/t/x.pdb&traj=C:/t/y.xtc&lang=en"
+        );
+    }
+
+    #[test]
+    fn viewer_window_titles_follow_the_chrome_language() {
+        assert_eq!(viewer_window_title("structure", "zh"), "结构查看器");
+        assert_eq!(viewer_window_title("structure", "en"), "Structure viewer");
+        assert_eq!(viewer_window_title("trajectory", "zh"), "轨迹查看器");
+        assert_eq!(viewer_window_title("trajectory", "en"), "Trajectory viewer");
+    }
+
+    #[test]
+    fn pdb_ids_normalize_and_reject_other_input() {
+        assert_eq!(normalize_pdb_id("4kc3").unwrap(), "4KC3");
+        assert_eq!(normalize_pdb_id(" 4KC3 ").unwrap(), "4KC3");
+        assert_eq!(normalize_pdb_id("1crn").unwrap(), "1CRN");
+        assert!(normalize_pdb_id("4KC").is_err());
+        assert!(normalize_pdb_id("4KC33").is_err());
+        assert!(normalize_pdb_id("").is_err());
+        assert!(normalize_pdb_id("C:/a.pdb").is_err());
+        // Four plain letters still parse as an id; the frontend only routes
+        // here when the whole command box is one bare word, and RCSB decides.
+        assert!(normalize_pdb_id("7ABC").is_ok());
     }
 
     #[test]
@@ -1042,5 +1557,86 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported")
         );
+    }
+
+    #[test]
+    fn png_data_urls_decode_and_reject_non_png_payloads() {
+        use base64::Engine as _;
+        fn decode(data_url: &str) -> Result<Vec<u8>, String> {
+            let payload = data_url
+                .strip_prefix(PNG_DATA_URL_PREFIX)
+                .ok_or_else(|| "expected a data:image/png;base64 data URL".to_string())?;
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .map_err(|e| format!("invalid PNG data URL: {e}"))
+        }
+        let png = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 1, 2]);
+        let bytes = decode(&format!("{PNG_DATA_URL_PREFIX}{png}")).unwrap();
+        assert_eq!(bytes, vec![0x89, b'P', b'N', b'G', 1, 2]);
+        let jpeg = base64::engine::general_purpose::STANDARD.encode([0xff, 0xd8, 0xff]);
+        let bytes = decode(&format!("{PNG_DATA_URL_PREFIX}{jpeg}")).unwrap();
+        assert!(!bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(decode("data:image/jpeg;base64,AAAA").is_err());
+        assert!(decode("not a data url").is_err());
+    }
+
+    #[test]
+    fn control_viewer_arguments_match_the_window_chrome() {
+        for mode in [
+            "element",
+            "chain",
+            "spectrum",
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "cyan",
+            "magenta",
+            "orange",
+            "white",
+            "gray",
+            "clear-paint",
+        ] {
+            assert_eq!(ControlViewerTool::normalize_color_mode(mode).unwrap(), mode);
+        }
+        assert!(ControlViewerTool::normalize_color_mode(" violet ").is_err());
+        // Surrounding whitespace is tolerated, mirroring the command box.
+        assert_eq!(
+            ControlViewerTool::normalize_color_mode(" red ").unwrap(),
+            "red"
+        );
+        for kind in ["cartoon", "stick", "sphere", "surface"] {
+            assert_eq!(
+                ControlViewerTool::normalize_representation_kind(kind).unwrap(),
+                kind
+            );
+        }
+        assert!(ControlViewerTool::normalize_representation_kind("metal").is_err());
+        for mode in ["hide", "others", "show"] {
+            assert_eq!(
+                ControlViewerTool::normalize_visibility_mode(mode).unwrap(),
+                mode
+            );
+        }
+        assert!(ControlViewerTool::normalize_visibility_mode("isolate").is_err());
+    }
+
+    #[test]
+    fn load_structure_payload_only_announces_superpose_when_set() {
+        let replacing = serde_json::to_value(LoadStructurePayload {
+            path: "a.pdb".into(),
+            selection: None,
+            superpose: false,
+        })
+        .unwrap();
+        assert!(replacing.get("superpose").is_none());
+        let superposing = serde_json::to_value(LoadStructurePayload {
+            path: "pose.pdb".into(),
+            selection: Some("hetatm".into()),
+            superpose: true,
+        })
+        .unwrap();
+        assert_eq!(superposing["superpose"], json!(true));
+        assert_eq!(superposing["selection"], json!("hetatm"));
     }
 }

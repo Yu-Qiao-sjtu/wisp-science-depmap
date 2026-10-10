@@ -1,12 +1,35 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance, parseBackboneAlphaCarbons, kabschTransform, transformStructureText, superposeStructureText } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
   target: [0, 0, 0],
   up: [0, 1, 0],
 };
+
+test("the command grammar splits verb, argument, and selection", () => {
+  assert.deepEqual(parsePymolCommand("show cartoon, chain A"), {
+    command: "show", argument: "cartoon", selection: "chain A",
+  });
+  assert.deepEqual(parsePymolCommand("color red"), {
+    command: "color", argument: "red", selection: "",
+  });
+  assert.deepEqual(parsePymolCommand("select resi 100"), {
+    command: "select", argument: "", selection: "resi 100",
+  });
+  assert.deepEqual(parsePymolCommand("zoom"), {
+    command: "zoom", argument: "", selection: "",
+  });
+  assert.deepEqual(parsePymolCommand("center chain A"), {
+    command: "center", argument: "", selection: "chain A",
+  });
+  assert.throws(() => parsePymolCommand(""), /type a command first/);
+  assert.throws(
+    () => parsePymolCommand("orient"),
+    /'orient' is outside the PyMOL subset \(select, show, hide, color, zoom, center\)/,
+  );
+});
 
 test("zoom moves the camera closer without moving the target", () => {
   const next = zoomSnapshot(start, 2);
@@ -86,6 +109,612 @@ test("clearing a structure removes the selection and the highlight", () => {
   assert.equal(clearStructureSelection(plugin), true);
   assert.deepEqual(calls, ["deselect", "clear"]);
   assert.equal(clearStructureSelection({}), false);
+});
+
+test("focus frames the current selection, or the whole structure when empty", () => {
+  const focused = [];
+  const snapshots = [];
+  const structure = {};
+  const loci = { kind: "loci" };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getLoci(s) { return s === structure ? loci : null; } },
+      },
+      interactivity: {},
+      camera: { focusLoci(list, options) { focused.push([list, options]); } },
+    },
+    canvas3d: {
+      camera: { getInvariantFocus: () => ({ radius: 5 }), getSnapshot: () => start },
+      boundingSphereVisible: { center: [0, 0, 0], radius: 5 },
+    },
+  };
+  const camera = plugin.managers.camera;
+  camera.setSnapshot = (snapshot) => snapshots.push(snapshot);
+  const molstar = { lib: { loci: { Loci: { isEmpty(l) { return !l; } } } } };
+  assert.equal(focusCurrentSelection(molstar, plugin), "selection");
+  assert.deepEqual(focused, [[[loci], { extraRadius: 2, durationMs: 300 }]]);
+  // Empty selection falls back to framing the whole structure.
+  plugin.managers.structure.selection.getLoci = () => null;
+  assert.equal(focusCurrentSelection(molstar, plugin), "structure");
+  assert.equal(focused.length, 1);
+  assert.deepEqual(snapshots, [{ radius: 5 }]);
+});
+
+test("labels turn on for the selection and off again by tag", async () => {
+  const structure = {};
+  const loci = { structure };
+  const labels = [];
+  const deleted = [];
+  const cells = new Map([
+    ["keep", { transform: { tags: undefined }, obj: {} }],
+    ["sel-1", { transform: { tags: ["wisp-viewer-label"] }, obj: {} }],
+    ["repr-1", { transform: { tags: ["wisp-viewer-label"] }, obj: {} }],
+  ]);
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getLoci: () => loci },
+        measurement: {
+          addLabel(l, options) { labels.push([l, options]); },
+        },
+      },
+    },
+    state: {
+      data: {
+        cells,
+        build() {
+          const ops = { delete(ref) { deleted.push(ref); }, commit: async () => {} };
+          return ops;
+        },
+      },
+    },
+  };
+  const molstar = { lib: { loci: { Loci: { isEmpty: (l) => !l } } } };
+  assert.equal(await setSelectionLabels(molstar, plugin, true), 1);
+  assert.deepEqual(labels, [[loci, {
+    selectionTags: ["wisp-viewer-label"],
+    reprTags: ["wisp-viewer-label"],
+  }]]);
+  // Off removes only the tagged cells, in one commit.
+  assert.equal(await setSelectionLabels(molstar, plugin, false), 2);
+  assert.deepEqual(deleted, ["sel-1", "repr-1"]);
+});
+
+test("labeling without a selection reports an error", async () => {
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [] } },
+        selection: {},
+        measurement: { addLabel() {} },
+      },
+    },
+  };
+  const molstar = { lib: { loci: { Loci: { isEmpty: () => true } } } };
+  await assert.rejects(() => setSelectionLabels(molstar, plugin, true), /select residues/);
+});
+
+test("distance uses the two most recent picks and draws the measurement", async () => {
+  const distances = [];
+  const deleted = [];
+  const cells = new Map([
+    ["d-repr", { transform: { tags: ["wisp-viewer-distance"] }, obj: {} }],
+    ["d-sel", { transform: { tags: ["wisp-viewer-distance"] }, obj: {} }],
+  ]);
+  const structure = {};
+  const plugin = {
+    managers: {
+      structure: {
+        selection: {
+          additionsHistory: [
+            { loci: { structure, units: [] } },
+            { loci: { structure, units: [] } },
+            { loci: { structure, units: [] } },
+          ],
+        },
+        measurement: {
+          addDistance(a, b, options) { distances.push([a, b, options]); },
+        },
+      },
+    },
+    state: {
+      data: {
+        cells,
+        build() { return { delete(ref) { deleted.push(ref); }, commit: async () => {} }; },
+      },
+    },
+  };
+  const centers = [[0, 0, 0], [3, 4, 0]];
+  const molstar = { lib: { structure: { StructureElement: { Stats: { ofLoci(l) { return { center: l.center }; } } } } } };
+  plugin.managers.structure.selection.additionsHistory[0].loci.center = centers[0];
+  plugin.managers.structure.selection.additionsHistory[1].loci.center = centers[1];
+  plugin.managers.structure.selection.additionsHistory[2].loci.center = centers[0];
+  const distance = await measurePickedDistance(molstar, plugin);
+  assert.equal(distance, 5);
+  assert.equal(distances.length, 1);
+  assert.deepEqual(distances[0][2], {
+    selectionTags: ["wisp-viewer-distance"],
+    reprTags: ["wisp-viewer-distance"],
+  });
+  assert.equal(await clearMeasuredDistances(plugin), 2);
+  assert.deepEqual(deleted, ["d-repr", "d-sel"]);
+});
+
+test("measuring without two picks reports an error", async () => {
+  const plugin = {
+    managers: { structure: { selection: { additionsHistory: [{ loci: {} }] } } },
+  };
+  await assert.rejects(() => measurePickedDistance({ lib: {} }, plugin), /pick two atoms/);
+});
+
+test("color themes switch every component to the Mol* theme", async () => {
+  const updates = [];
+  const component = { representations: [] };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ components: [component] }] } },
+        component: {
+          updateRepresentationsTheme(components, theme) { updates.push([components.length, theme]); },
+        },
+      },
+    },
+  };
+  assert.equal(await setColorTheme(plugin, "element"), "element-symbol");
+  assert.equal(await setColorTheme(plugin, "chain"), "chain-id");
+  assert.equal(await setColorTheme(plugin, "spectrum"), "sequence");
+  assert.deepEqual(updates, [
+    [1, { color: "element-symbol" }],
+    [1, { color: "chain-id" }],
+    [1, { color: "sequence" }],
+  ]);
+  await assert.rejects(() => setColorTheme(plugin, "nonsense"), /unsupported color theme/);
+});
+
+test("solid colors paint the selection and clear again", async () => {
+  const actions = [];
+  const structure = { elementCount: 4 };
+  const picked = { elementCount: 2 };
+  const entry = { cell: { obj: { data: structure } } };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [entry] } },
+        selection: { getStructure: (s) => (s === structure ? picked : null) },
+        component: {
+          applyTheme(action, structures) { actions.push([action, structures]); },
+        },
+      },
+    },
+  };
+  const molstar = {
+    lib: { structure: { StructureSelection: { Singletons: (source, target) => ({ source, target }) } } },
+  };
+  assert.equal(pymolColor("red"), 0xff0000);
+  assert.equal(pymolColor("gray"), 0x808080);
+  assert.throws(() => pymolColor("chartreuse"), /unsupported color/);
+  assert.equal(await paintViewerSelection(molstar, plugin, "red"), 0xff0000);
+  assert.equal(await clearViewerPaint(molstar, plugin), 1);
+  assert.equal(actions.length, 2);
+  const [paint, reset] = actions;
+  assert.deepEqual(paint[0], { action: { name: "color", params: { color: 0xff0000 } }, selection: paint[0].selection });
+  assert.equal(reset[0].action.name, "resetColor");
+  assert.equal(paint[1].length, 1);
+  // The painted selection is the picked sub-structure...
+  const paintedSelection = await paint[0].selection.getSelection(null, null, structure);
+  assert.equal(paintedSelection.target, picked);
+  // ...while resetting covers the whole structure.
+  const resetSelection = await reset[0].selection.getSelection(null, null, structure);
+  assert.equal(resetSelection.target, structure);
+});
+
+test("visibility modes hide the selection, the rest, or nothing", async () => {
+  const actions = [];
+  const structure = { elementCount: 4 };
+  const picked = { elementCount: 1 };
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: structure } } }] } },
+        selection: { getStructure: (s) => (s === structure ? picked : null) },
+        component: {
+          applyTheme(action, structures) { actions.push([action.action.name, action.action.params.value, action.selection]); },
+        },
+      },
+    },
+  };
+  const molstar = {
+    lib: { structure: { StructureSelection: { Singletons: (source, target) => ({ source, target }) } } },
+  };
+  assert.equal(await setSelectionVisibility(molstar, plugin, "hide"), "selection hidden");
+  assert.equal(await setSelectionVisibility(molstar, plugin, "others"), "everything except the selection hidden");
+  assert.equal(await setSelectionVisibility(molstar, plugin, "show"), "everything shown");
+  assert.deepEqual(actions.map((a) => [a[0], a[1]]), [
+    ["transparency", 1],
+    ["transparency", 1],
+    ["transparency", 0],
+    ["transparency", 0],
+  ]);
+  // hide targets the picked sub-structure, show covers the whole structure.
+  const hideSelection = await actions[0][2].getSelection(null, null, structure);
+  assert.equal(hideSelection.target, picked);
+  const showSelection = await actions[3][2].getSelection(null, null, structure);
+  assert.equal(showSelection.target, structure);
+  await assert.rejects(() => setSelectionVisibility(molstar, plugin, "nonsense"), /unsupported visibility mode/);
+});
+
+// Fake Mol* surface: scriptToQuery compiles "ok ..." expressions and rejects
+// anything else, mirroring how the vendored parser reports bad selections.
+function commandMolstar() {
+  const structure = {};
+  const queried = [];
+  const molstar = {
+    scriptToQuery({ expression }) {
+      if (!/^ok/.test(expression)) throw new Error("could not compile " + expression);
+      queried.push(expression);
+      return () => ({ empty: false });
+    },
+    queried,
+    structure,
+    lib: {
+      loci: { Loci: { isEmpty: (l) => !l } },
+      structure: {
+        QueryContext: function QueryContext(s) { this.structure = s; },
+        StructureSelection: {
+          isEmpty: (s) => s && s.empty,
+          toLociWithSourceUnits: () => ({ loci: true }),
+          Singletons: (source, target) => ({ source, target }),
+        },
+        StructureElement: { Stats: { ofLoci: () => ({ center: [1, 2, 3] }) } },
+      },
+    },
+  };
+  return molstar;
+}
+
+function commandPlugin(molstar) {
+  const added = [];
+  const themed = [];
+  const focused = [];
+  const snapshots = [];
+  const plugin = {
+    managers: {
+      interactivity: {
+        lociSelects: { deselectAll() {}, select() {} },
+        lociHighlights: { clearHighlights() {}, highlight() {} },
+      },
+      structure: {
+        hierarchy: {
+          current: { structures: [{ cell: { obj: { data: molstar.structure } }, components: [{ representations: [] }] }] },
+          remove() {},
+        },
+        selection: {
+          getLoci: () => null,
+          getStructure: () => null,
+        },
+        component: {
+          addRepresentation(components, type) { added.push([components.length, type]); },
+          updateRepresentationsTheme(components, theme) { themed.push(theme); },
+          applyTheme(action, structures) { themed.push([action.action.name, action.action.params.color]); },
+        },
+      },
+      camera: {
+        focusLoci(list, options) { focused.push([list, options]); },
+        setSnapshot(snapshot, durationMs) { snapshots.push([snapshot, durationMs]); },
+      },
+    },
+    canvas3d: {
+      boundingSphereVisible: { center: [0, 0, 0], radius: 8 },
+      camera: {
+        getSnapshot: () => ({ position: [0, 0, 10], target: [0, 0, 0], up: [0, 1, 0], radius: 8 }),
+        getInvariantFocus: () => ({ radius: 8 }),
+      },
+    },
+  };
+  plugin.trackers = { added, themed, focused, snapshots };
+  return plugin;
+}
+
+test("command lines dispatch to the toolbar actions", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  const { added, themed } = plugin.trackers;
+
+  assert.equal(await runPymolCommand(molstar, plugin, "show sticks"), "sticks shown");
+  assert.deepEqual(added, [[1, "ball-and-stick"]]);
+  assert.equal(await runPymolCommand(molstar, plugin, "hide cartoon"), "cartoon hidden");
+
+  assert.equal(await runPymolCommand(molstar, plugin, "color element"), "colored by Element");
+  assert.deepEqual(themed[0], { color: "element-symbol" });
+  assert.equal(await runPymolCommand(molstar, plugin, "color red, ok chain A"), "colored Red");
+  assert.deepEqual(themed[1], ["color", 0xff0000]);
+  assert.deepEqual(molstar.queried, ["ok chain A"]);
+
+  assert.equal(await runPymolCommand(molstar, plugin, "select ok resi 5"), "selected ok resi 5");
+  assert.equal(await runPymolCommand(molstar, plugin, "zoom"), "zoomed to whole structure");
+  assert.equal(await runPymolCommand(molstar, plugin, "center"), "centered on structure");
+
+  await assert.rejects(() => runPymolCommand(molstar, plugin, "show metal"), /unsupported representation metal/);
+  await assert.rejects(() => runPymolCommand(molstar, plugin, "color violet"), /unsupported color violet/);
+  await assert.rejects(
+    () => runPymolCommand(molstar, plugin, "orient"),
+    /'orient' is outside the PyMOL subset/,
+  );
+});
+
+test("a bare expression still selects, keeping the event bridge compatible", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  assert.equal(await runPymolCommand(molstar, plugin, "ok chain A"), "selected ok chain A");
+  await assert.rejects(
+    () => runPymolCommand(molstar, plugin, "bogus input"),
+    /'bogus' is outside the PyMOL subset/,
+  );
+});
+
+test("center keeps the viewing distance while sliding the target", () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  plugin.managers.structure.selection.getLoci = () => ({ loci: true });
+  assert.equal(centerCurrentSelection(molstar, plugin), "selection");
+  const [[snapshot, durationMs]] = plugin.trackers.snapshots;
+  assert.equal(durationMs, 300);
+  assert.deepEqual(snapshot.target, [1, 2, 3]);
+  // position moves by the same vector, so the camera keeps its distance.
+  assert.deepEqual(snapshot.position, [1, 2, 13]);
+  assert.deepEqual(snapshot.up, [0, 1, 0]);
+});
+
+test("the chrome language switches and interpolates", () => {
+  assert.equal(normalizeChromeLocale("zh"), "zh");
+  assert.equal(normalizeChromeLocale("zh-CN"), "zh");
+  assert.equal(normalizeChromeLocale("en"), "en");
+  assert.equal(normalizeChromeLocale(""), "en");
+  assert.equal(normalizeChromeLocale(null), "en");
+  assert.equal(chromeText("en", "button.select"), "Select");
+  assert.equal(chromeText("zh", "button.select"), "选择");
+  assert.equal(chromeText("zh", "status.loading", { name: "1abc.pdb" }), "正在加载 1abc.pdb…");
+  assert.equal(chromeText("en", "status.labelsOn", { count: 2, s: "s" }), "labels on 2 selections");
+  // Unknown keys fall back to English and then to the key itself.
+  assert.equal(chromeText("zh", "missing.key"), "missing.key");
+});
+
+test("command feedback follows the chrome language", async () => {
+  const molstar = commandMolstar();
+  const plugin = commandPlugin(molstar);
+  try {
+    assert.equal(setChromeLocale("zh"), "zh");
+    assert.equal(await runPymolCommand(molstar, plugin, "show sticks"), "已显示 sticks");
+    assert.equal(await runPymolCommand(molstar, plugin, "color element"), "已按元素着色");
+    await assert.rejects(
+      () => runPymolCommand(molstar, plugin, "orient"),
+      /“orient”不在 PyMOL 子集内/,
+    );
+  } finally {
+    setChromeLocale("en");
+  }
+  assert.equal(await runPymolCommand(molstar, plugin, "show cartoon"), "cartoon shown");
+});
+
+// Fake Mol* surface for the chat-driven distance bridge (#248): expressions
+// starting with "ok" match, anything else compiles to an empty selection.
+function distanceMolstar(centers) {
+  const structure = {};
+  return {
+    structure,
+    scriptToQuery({ expression }) {
+      return () => ({ expression, empty: !/^ok/.test(expression) });
+    },
+    lib: {
+      structure: {
+        QueryContext: function QueryContext(s) { this.structure = s; },
+        StructureSelection: {
+          isEmpty: (selection) => selection.empty,
+          toLociWithSourceUnits: (selection) => ({ id: selection.expression }),
+        },
+        StructureElement: {
+          Stats: { ofLoci: (loci) => ({ center: centers[loci.id] }) },
+        },
+      },
+    },
+  };
+}
+
+function distancePlugin(molstar) {
+  const distances = [];
+  const plugin = {
+    managers: {
+      structure: {
+        hierarchy: { current: { structures: [{ cell: { obj: { data: molstar.structure } } }] } },
+        measurement: {
+          addDistance(a, b, options) { distances.push([a.id, b.id, options]); },
+        },
+      },
+    },
+  };
+  plugin.distances = distances;
+  return plugin;
+}
+
+test("chat-driven distances draw between two expression centers", async () => {
+  const molstar = distanceMolstar({ "ok resi 1": [0, 0, 0], "ok resi 2": [3, 4, 0] });
+  const plugin = distancePlugin(molstar);
+  const value = await measureSelectionDistance(molstar, plugin, "ok resi 1", "ok resi 2");
+  assert.equal(value, 5); // the 3-4-5 triangle
+  assert.deepEqual(plugin.distances, [[
+    "ok resi 1", "ok resi 2",
+    { selectionTags: ["wisp-viewer-distance"], reprTags: ["wisp-viewer-distance"] },
+  ]]);
+});
+
+test("chat-driven distances need both expressions to match", async () => {
+  const molstar = distanceMolstar({ "ok resi 1": [0, 0, 0] });
+  const plugin = distancePlugin(molstar);
+  await assert.rejects(
+    () => measureSelectionDistance(molstar, plugin, "ok resi 1", "missing"),
+    /no atoms matched/,
+  );
+  assert.deepEqual(plugin.distances, []);
+});
+
+// ---- backbone superposition (#244) ---------------------------------------
+
+function pdbAtom(serial, name, resName, chain, resSeq, x, y, z, record = "ATOM  ") {
+  return record
+    + String(serial).padStart(5)
+    + " "
+    + name.padEnd(3).padStart(4)
+    + " "
+    + resName.padEnd(3)
+    + " "
+    + chain
+    + String(resSeq).padStart(4)
+    + " "
+    + "   "
+    + x.toFixed(3).padStart(8)
+    + y.toFixed(3).padStart(8)
+    + z.toFixed(3).padStart(8);
+}
+
+test("alpha carbons come from protein residues, not metal ions", () => {
+  const data = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 2, 3),
+    pdbAtom(2, "CA", "GLY", "A", 2, 4, 5, 6),
+    pdbAtom(3, "CA", "VAL", "B", 3, 7, 8, 9),
+    // HETATM calcium: same atom-name columns but not a protein residue.
+    pdbAtom(4, "CA", "CA", "A", 101, 9, 9, 9, "HETATM"),
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "pdb");
+  assert.deepEqual(Array.from(carbons.keys()), ["A|1", "A|2", "B|3"]);
+  assert.deepEqual(carbons.get("A|1"), [1, 2, 3]);
+});
+
+test("mmCIF atom_site rows yield alpha carbons", () => {
+  const data = [
+    "data_test",
+    "#",
+    "loop_",
+    "_atom_site.group_PDB",
+    "_atom_site.label_atom_id",
+    "_atom_site.label_comp_id",
+    "_atom_site.auth_asym_id",
+    "_atom_site.auth_seq_id",
+    "_atom_site.Cartn_x",
+    "_atom_site.Cartn_y",
+    "_atom_site.Cartn_z",
+    "ATOM CA ALA A 1 1.000 2.000 3.000",
+    "HETATM CA CA A 2 9.000 9.000 9.000",
+    "#",
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "mmcif");
+  assert.deepEqual(Array.from(carbons.keys()), ["A|1"]);
+  assert.deepEqual(carbons.get("A|1"), [1, 2, 3]);
+});
+
+function groLine(resnum, resname, atomname, atomnum, x, y, z) {
+  return String(resnum).padStart(5)
+    + resname.padEnd(5)
+    + (" " + atomname).padEnd(5)
+    + String(atomnum).padStart(5)
+    + x.toFixed(3).padStart(8)
+    + y.toFixed(3).padStart(8)
+    + z.toFixed(3).padStart(8);
+}
+
+test("gro alpha carbons use fixed columns", () => {
+  const data = [
+    "two atoms",
+    "    2",
+    groLine(1, "ALA", "CA", 1, 1, 2, 3),
+    groLine(2, "GLY", "CA", 2, 4, 5, 6),
+    "   0.000   0.000   0.000",
+  ].join("\n");
+  const carbons = parseBackboneAlphaCarbons(data, "gro");
+  assert.deepEqual(Array.from(carbons.keys()), ["|1", "|2"]);
+  assert.deepEqual(carbons.get("|1"), [1, 2, 3]);
+});
+
+test("the Kabsch fit recovers a known rotation and translation", () => {
+  // Rotate 90 degrees about z, then shift: T(x, y, z) = (-y + 10, x, z).
+  const mobile = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 3, 4], [5, 1, 2]];
+  const pairs = mobile.map(([x, y, z]) => [x, y, z, -y + 10, x, z]);
+  const transform = kabschTransform(pairs);
+  const expected = [0, -1, 0, 10, 1, 0, 0, 0, 0, 0, 1, 0];
+  for (let i = 0; i < expected.length; i++) {
+    assert.ok(Math.abs(transform[i] - expected[i]) < 1e-9, `component ${i}`);
+  }
+});
+
+test("transformed PDB text keeps its fixed columns", () => {
+  const line = pdbAtom(1, "CA", "ALA", "A", 1, 1, 2, 3);
+  const data = [line, "TER"].join("\n");
+  const out = transformStructureText(data, "pdb", [0, -1, 0, 10, 1, 0, 0, 0, 0, 0, 1, 0]);
+  const rewritten = out.split("\n")[0];
+  assert.equal(rewritten.length, line.length);
+  assert.equal(rewritten.slice(0, 30), line.slice(0, 30));
+  assert.ok(Math.abs(parseFloat(rewritten.slice(30, 38)) - 8) < 1e-6);
+  assert.ok(Math.abs(parseFloat(rewritten.slice(38, 46)) - 1) < 1e-6);
+  assert.ok(Math.abs(parseFloat(rewritten.slice(46, 54)) - 3) < 1e-6);
+});
+
+test("transformed mmCIF text swaps the coordinate tokens", () => {
+  const data = [
+    "data_test",
+    "#",
+    "loop_",
+    "_atom_site.group_PDB",
+    "_atom_site.label_atom_id",
+    "_atom_site.label_comp_id",
+    "_atom_site.auth_asym_id",
+    "_atom_site.auth_seq_id",
+    "_atom_site.Cartn_x",
+    "_atom_site.Cartn_y",
+    "_atom_site.Cartn_z",
+    "ATOM CA ALA A 1 1.000 2.000 3.000",
+    "ATOM N  ALA A 1 0.000 0.000 0.000",
+    "#",
+  ].join("\n");
+  const out = transformStructureText(data, "cif", [1, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 0]);
+  const lines = out.split("\n");
+  assert.equal(lines[11], "ATOM CA ALA A 1 11.000 2.000 3.000");
+  assert.equal(lines[12], "ATOM N ALA A 1 10.000 0.000 0.000");
+});
+
+test("a pose superposes onto the reference through shared residues", () => {
+  const reference = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 1, 1),
+    pdbAtom(2, "CA", "ALA", "A", 2, 3, 1, 1),
+    pdbAtom(3, "CA", "ALA", "A", 3, 1, 3, 1),
+    pdbAtom(4, "CA", "ALA", "A", 4, 1, 1, 3),
+  ].join("\n");
+  // The same residues after the inverse of (rotate 90 about z, shift +10 x):
+  // T(x, y, z) = (-y + 10, x, z), so pose = T^-1(reference).
+  const pose = [
+    pdbAtom(1, "CA", "ALA", "A", 1, 1, 9, 1),
+    pdbAtom(2, "CA", "ALA", "A", 2, 1, 7, 1),
+    pdbAtom(3, "CA", "ALA", "A", 3, 3, 9, 1),
+    pdbAtom(4, "CA", "ALA", "A", 4, 1, 9, 3),
+  ].join("\n");
+  const fitted = superposeStructureText(pose, "pdb", reference, "pdb");
+  assert.equal(fitted.pairs, 4);
+  const back = parseBackboneAlphaCarbons(fitted.data, "pdb");
+  for (const [key, expected] of parseBackboneAlphaCarbons(reference, "pdb")) {
+    const got = back.get(key);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(got[i] - expected[i]) < 2e-3, `${key} axis ${i}`);
+    }
+  }
+});
+
+test("poses without shared residues pass through unchanged", () => {
+  const reference = pdbAtom(1, "CA", "ALA", "A", 1, 1, 1, 1);
+  const pose = pdbAtom(1, "CA", "ALA", "B", 90, 8, 8, 8);
+  const fitted = superposeStructureText(pose, "pdb", reference, "pdb");
+  assert.equal(fitted.pairs, 0);
+  assert.equal(fitted.data, pose);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {

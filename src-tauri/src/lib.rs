@@ -7486,7 +7486,7 @@ pub fn run() {
                     let path = path.to_string_lossy().into_owned();
                     tauri::async_runtime::spawn(async move {
                         if let Err(error) =
-                            viewer::present_structure_in_viewer(app, path, None).await
+                            viewer::present_structure_in_viewer(app, path, None, None).await
                         {
                             tracing::warn!("structure frame was not presented: {error}");
                         }
@@ -7728,6 +7728,9 @@ pub fn run() {
             viewer::select_in_viewer,
             viewer::open_artifact_in_viewer,
             viewer::list_viewer_recent,
+            viewer::export_viewer_image,
+            viewer::set_viewer_window_title,
+            viewer::open_pdb_entry,
             agent_turn::send_message,
             update_mcp_app_context,
             save_motif_workbench_snapshot,

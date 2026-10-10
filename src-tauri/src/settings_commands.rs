@@ -251,6 +251,9 @@ pub(super) async fn set_locale(
         .set_setting("locale", locale)
         .await
         .map_err(|e| format!("{e}"))?;
+    // The viewer window re-renders its own chrome from this language (#247);
+    // Mol* panels stay on Mol*'s language.
+    super::viewer::emit_viewer_locale(&app, locale);
     #[cfg(target_os = "macos")]
     super::install_macos_app_menu(&app, locale)?;
     #[cfg(target_os = "windows")]
@@ -334,6 +337,7 @@ pub(super) async fn set_settings(
         .set_setting("locale", locale)
         .await
         .map_err(|e| format!("{e}"))?;
+    super::viewer::emit_viewer_locale(&app, locale);
     #[cfg(target_os = "macos")]
     super::install_macos_app_menu(&app, locale)?;
     #[cfg(target_os = "windows")]
