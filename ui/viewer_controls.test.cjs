@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, replaceLoadedStructure } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, replaceLoadedStructure, clearStructureSelection } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -47,6 +47,21 @@ test("a new structure replaces the one already in the session", async () => {
   assert.deepEqual(removed, [["previous"]]);
   assert.deepEqual(loaded, [["ATOM", "pdb"]]);
   assert.deepEqual(viewer.plugin.managers.structure.hierarchy.current.structures, []);
+});
+
+test("clearing a structure removes the selection and the highlight", () => {
+  const calls = [];
+  const plugin = {
+    managers: {
+      interactivity: {
+        lociSelects: { deselectAll() { calls.push("deselect"); } },
+        lociHighlights: { clearHighlights() { calls.push("clear"); } },
+      },
+    },
+  };
+  assert.equal(clearStructureSelection(plugin), true);
+  assert.deepEqual(calls, ["deselect", "clear"]);
+  assert.equal(clearStructureSelection({}), false);
 });
 
 test("vendored Mol* compiles a PyMOL selection", () => {
