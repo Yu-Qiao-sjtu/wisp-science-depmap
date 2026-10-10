@@ -49,6 +49,7 @@
   <div id="tools">
     <input id="selection" type="text" placeholder="name CA and polymer.protein" />
     <button id="apply-selection" type="button">Select</button>
+    <button id="clear-selection" type="button">Clear</button>
     <button id="explain-selection" type="button">Explain in chat</button>
     <button id="rep-cartoon" type="button" aria-pressed="true">Cartoon</button>
     <button id="rep-stick" type="button" aria-pressed="false">Stick</button>
@@ -118,6 +119,7 @@
           .then(function () {
             if (seq !== loadSeq) return;
             try {
+              ViewerControls.clearStructureSelection(viewer.plugin);
               ViewerControls.applyCameraPayload(molstar, viewer.plugin, { action: 'reset' });
             } catch (error) { /* camera follows once the new structure is drawable */ }
             setStatus(name, false);
@@ -263,6 +265,16 @@
       });
       document.getElementById('apply-selection').addEventListener('click', function () {
         applySelection(document.getElementById('selection').value);
+      });
+      document.getElementById('clear-selection').addEventListener('click', function () {
+        document.getElementById('selection').value = '';
+        document.getElementById('selection-echo').textContent = '';
+        try {
+          ViewerControls.clearStructureSelection(viewer.plugin);
+          setStatus('selection cleared', false);
+        } catch (error) {
+          setStatus(String((error && error.message) || error), true);
+        }
       });
       document.getElementById('explain-selection').addEventListener('click', function () {
         if (!currentPath) {
