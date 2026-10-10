@@ -68,6 +68,26 @@ pub fn next_remote_structure_frame(
     next_stable_frame(&frames, watch, 0).map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Newest structure written at or after `not_before_ms`.
+///
+/// Local and WSL runs present this file only. Older files in the same tree,
+/// including ones written during the run, are not walked into the viewer.
+pub fn latest_local_frame(
+    frames: &[StructureFrame],
+    not_before_ms: u128,
+) -> Option<StructureFrame> {
+    frames
+        .iter()
+        .filter(|frame| frame.id.modified_ms >= not_before_ms)
+        .max_by(|left, right| {
+            left.id
+                .modified_ms
+                .cmp(&right.id.modified_ms)
+                .then_with(|| left.id.path.cmp(&right.id.path))
+        })
+        .cloned()
+}
+
 /// Next stable structure written at or after `not_before_ms`.
 ///
 /// The first observation of a new identity is held. The same identity on the
@@ -202,6 +222,20 @@ mod tests {
             Some(PathBuf::from("pose.pdb"))
         );
         assert!(next_stable_frame(&frames, &mut watch, 1_000).is_none());
+    }
+
+    #[test]
+    fn the_local_watch_keeps_only_the_newest_file() {
+        let frames = vec![
+            frame("old-snapshot.pdb", 1_500, 10),
+            frame("pose.pdb", 4_000, 10),
+            frame("middle.cif", 2_500, 10),
+        ];
+        assert_eq!(
+            latest_local_frame(&frames, 1_000).map(|frame| frame.id.path),
+            Some(PathBuf::from("pose.pdb"))
+        );
+        assert!(latest_local_frame(&frames, 5_000).is_none());
     }
 
     #[test]
