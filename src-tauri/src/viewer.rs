@@ -830,8 +830,10 @@ pub(crate) async fn open_trajectory_viewer(
             )?
         }
     }
+    // Only the topology joins the recent list: the chips re-present through
+    // the structure path, which rejects trajectory extensions. Reopening a
+    // trajectory pair stays on the artifact button, which knows both files.
     remember_viewer_path(&structure_path);
-    remember_viewer_path(&trajectory_path);
     Ok(())
 }
 
