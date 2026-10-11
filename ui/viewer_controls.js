@@ -40,6 +40,7 @@ const CHROME_I18N = {
     "status.initializing": "initializing viewer…",
     "status.downloading": "downloading {id}…",
     "status.loading": "loading {name}…",
+    "status.phaseBuilding": "building the 3D view…",
     "status.loadingTrajectory": "loading {topo} + {traj}…",
     "status.superposed": "superposed {count} backbone residue{s} onto the reference",
     "status.superposeNoMatch": "no matching backbone residues; pose shown as loaded",
@@ -120,6 +121,7 @@ const CHROME_I18N = {
     "status.initializing": "正在初始化查看器…",
     "status.downloading": "正在下载 {id}…",
     "status.loading": "正在加载 {name}…",
+    "status.phaseBuilding": "正在构建 3D 视图…",
     "status.loadingTrajectory": "正在加载 {topo} + {traj}…",
     "status.superposed": "已将 {count} 个骨架残基叠加到参考结构",
     "status.superposeNoMatch": "没有可匹配的骨架残基；按原坐标显示",
@@ -196,6 +198,17 @@ function chromeText(locale, key, params) {
 
 function ct(key, params) {
   return chromeText(chromeLanguage, key, params);
+}
+
+// Recent-structure chips: the full paths from list_viewer_recent become
+// clickable file names; a click asks the shell to present that path again
+// through the same reuse path (focus + event) as any other open.
+function recentChips(paths, limit) {
+  const count = limit == null ? 3 : limit;
+  return (paths || []).slice(0, count).map((path) => {
+    const full = String(path);
+    return { name: full.replace(/^.*[\\/]/, ""), path: full };
+  });
 }
 
 function cloneSnapshot(snapshot) {
@@ -1216,6 +1229,7 @@ const ViewerControls = {
   chromeText,
   normalizeChromeLocale,
   setChromeLocale,
+  recentChips,
 };
 globalThis.ViewerControls = ViewerControls;
 if (typeof module !== "undefined" && module.exports) module.exports = ViewerControls;

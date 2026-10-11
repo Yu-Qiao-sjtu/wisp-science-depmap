@@ -1310,7 +1310,7 @@ fn depmap_route(args: &Value) -> Result<Value, String> {
                 "single_call": true,
                 "forbidden_tools": ["depmap_read_resource"]
             })
-        },
+        }
         ("true_love_gene_catalog", Some(_)) if !requires_user_input => json!({
             "tool": "depmap_true_love_evidence",
             "arguments": {

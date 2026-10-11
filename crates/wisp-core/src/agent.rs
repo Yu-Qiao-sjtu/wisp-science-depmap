@@ -915,7 +915,9 @@ async fn agent_loop_execute(
                             tool: requested_name.to_string(),
                             arguments: args.clone(),
                             schema: None,
-                            allowed_tools: ctx.active_turn_allowed_tools().map(|tools| tools.to_vec()),
+                            allowed_tools: ctx
+                                .active_turn_allowed_tools()
+                                .map(|tools| tools.to_vec()),
                             approval_required: false,
                             approval_granted: false,
                             stale_approval: false,

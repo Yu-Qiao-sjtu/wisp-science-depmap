@@ -24,6 +24,8 @@
     #selection-echo, #recent {
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    #recent { display: inline-flex; gap: 4px; flex: 0 1 auto; }
+    #recent .recent-chip { flex: 0 0 auto; font-size: 11px; padding: 2px 6px; border-color: #dadce0; background: #f1f3f4; cursor: pointer; }
     #tools input, #tools button {
       font: inherit; border: 1px solid #dadce0; border-radius: 4px; background: #fff; padding: 3px 6px;
     }
@@ -167,6 +169,9 @@
         window.__TAURI__.core.invoke('read_structure_bytes', { path: path })
           .then(function (bytes) {
             if (seq !== loadSeq) return; // a newer load superseded this one
+            // Bytes are in; parsing and building the 3D view is the slow part
+            // for large entries, so say so instead of keeping "loading…".
+            setStatus(t('status.phaseBuilding'), false);
             // Slice 1 formats (pdb/cif/mmcif/gro) are all text; decode and hand
             // the string to Mol*.
             var data = new TextDecoder().decode(bytesToU8(bytes));
@@ -234,6 +239,7 @@
         ])
           .then(function (parts) {
             if (seq !== loadSeq) return;
+            setStatus(t('status.phaseBuilding'), false);
             return ViewerControls.clearLoadedStructures(viewer).then(function () {
               return viewer.loadTrajectory({
                 model: {
@@ -558,9 +564,23 @@
       })();
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke('list_viewer_recent').then(function (paths) {
-          document.getElementById('recent').textContent = (paths || []).slice(0, 3).map(function (path) {
-            return path.replace(/^.*[\\/]/, '');
-          }).join(' · ');
+          var container = document.getElementById('recent');
+          container.textContent = '';
+          ViewerControls.recentChips(paths, 3).forEach(function (chip) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'recent-chip';
+            button.title = chip.path;
+            button.textContent = chip.name;
+            button.addEventListener('click', function () {
+              setStatus(t('status.loading', { name: chip.name }), false);
+              window.__TAURI__.core.invoke('open_structure_viewer', { path: chip.path })
+                .catch(function (error) {
+                  setStatus(String((error && error.message) || error), true);
+                });
+            });
+            container.appendChild(button);
+          });
         }).catch(function () {});
       }
     })();

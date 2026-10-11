@@ -447,11 +447,11 @@ impl Tool for PresentStructureTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "present_structure",
-            "Show a structure file in the molecular viewer. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this file finishes loading. Call again with the next file to replace the current structure. Set superpose to true when a pose should be fitted onto the reference structure already on screen by polymer backbone instead of replacing it.",
+            "Show a structure in the molecular viewer. The path is a local pdb, ent, cif, mmcif, or gro file, or a four-character RCSB entry id such as 4KC3 which is downloaded into the app cache first. An optional PyMOL selection (organic, hetatm, name, resi, polymer.protein) is applied only after this structure finishes loading. Call again with the next one to replace the current structure. Set superpose to true when a pose should be fitted onto the reference structure already on screen by polymer backbone instead of replacing it.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Local pdb, ent, cif, mmcif, or gro file."},
+                    "path": {"type": "string", "description": "Local pdb, ent, cif, mmcif, or gro file, or a four-character RCSB entry id such as 4KC3."},
                     "selection": {"type": "string", "description": "Optional PyMOL selection applied after the load."},
                     "superpose": {"type": "boolean", "description": "Keep the structure already on screen as the reference and append this pose superposed onto it by backbone. Replaces the current structure when false."}
                 },
@@ -465,7 +465,7 @@ impl Tool for PresentStructureTool {
     }
 
     async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
-        let path = match arg_str(args, "path") {
+        let raw_path = match arg_str(args, "path") {
             Ok(path) => path,
             Err(error) => return ToolResult::fail(error),
         };
@@ -474,6 +474,16 @@ impl Tool for PresentStructureTool {
             .get("superpose")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        // A bare four-character entry id resolves through the same cache the
+        // window command box uses, so "show 4KC3" needs no separate download
+        // step; anything else is a local file and keeps its extension checks.
+        let path = match present_target(&raw_path) {
+            PresentTarget::PdbEntry(id) => match ensure_pdb_entry_cached(&self.app, &id).await {
+                Ok(dest) => dest.to_string_lossy().into_owned(),
+                Err(error) => return ToolResult::fail(error),
+            },
+            PresentTarget::Local(path) => path,
+        };
         match present_structure_in_viewer(self.app.clone(), path, selection, Some(superpose)).await
         {
             Ok(()) => ToolResult::ok("structure presented"),
@@ -820,8 +830,10 @@ pub(crate) async fn open_trajectory_viewer(
             )?
         }
     }
+    // Only the topology joins the recent list: the chips re-present through
+    // the structure path, which rejects trajectory extensions. Reopening a
+    // trajectory pair stays on the artifact button, which knows both files.
     remember_viewer_path(&structure_path);
-    remember_viewer_path(&trajectory_path);
     Ok(())
 }
 
@@ -1195,27 +1207,28 @@ pub(crate) async fn set_viewer_window_title(app: AppHandle, title: String) -> Re
         .map_err(|e| format!("failed to set the viewer window title: {e}"))
 }
 
-/// A PDB identifier: exactly four ASCII alphanumerics, normalized to upper
-/// case (classic RCSB entry ids such as `4KC3`).
-pub(crate) fn normalize_pdb_id(raw: &str) -> Result<String, String> {
-    let id = raw.trim();
-    if id.len() == 4 && id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        Ok(id.to_ascii_uppercase())
-    } else {
-        Err(format!(
-            "'{raw}' is not a PDB identifier; expected four characters like 4KC3"
-        ))
+/// Where a `present_structure` path argument points: a local file, or a
+/// four-character RCSB entry id that resolves through the shared cache. A
+/// bare id carries no extension, so it can never collide with the local
+/// file whitelist, which requires one.
+enum PresentTarget {
+    Local(String),
+    PdbEntry(String),
+}
+
+fn present_target(raw: &str) -> PresentTarget {
+    match normalize_pdb_id(raw) {
+        Ok(id) => PresentTarget::PdbEntry(id),
+        Err(_) => PresentTarget::Local(raw.trim().to_string()),
     }
 }
 
-/// Download the RCSB mmCIF for one entry into the app cache and present it
-/// through the same load-structure path a local file uses (#249). The
-/// structure window's command box and the chat tools that steer the window
-/// both land here; the download itself never starts a chat turn. Local
-/// files keep their extension whitelist — this path only accepts ids.
-#[tauri::command]
-pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(), String> {
-    let id = normalize_pdb_id(&pdb_id)?;
+/// Download the RCSB mmCIF for one entry into the app cache unless a copy is
+/// already there, and return the cached file path. Shared by the window
+/// command box ([`open_pdb_entry`]) and the chat-side [`PresentStructureTool`]
+/// so both see the same cache.
+async fn ensure_pdb_entry_cached(app: &AppHandle, pdb_id: &str) -> Result<PathBuf, String> {
+    let id = normalize_pdb_id(pdb_id)?;
     let cache_dir = app
         .path()
         .app_cache_dir()
@@ -1258,6 +1271,30 @@ pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(),
             .await
             .map_err(|e| format!("failed to cache {id}: {e}"))?;
     }
+    Ok(dest)
+}
+
+/// A PDB identifier: exactly four ASCII alphanumerics, normalized to upper
+/// case (classic RCSB entry ids such as `4KC3`).
+pub(crate) fn normalize_pdb_id(raw: &str) -> Result<String, String> {
+    let id = raw.trim();
+    if id.len() == 4 && id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        Ok(id.to_ascii_uppercase())
+    } else {
+        Err(format!(
+            "'{raw}' is not a PDB identifier; expected four characters like 4KC3"
+        ))
+    }
+}
+
+/// Download the RCSB mmCIF for one entry into the app cache and present it
+/// through the same load-structure path a local file uses (#249). The
+/// structure window's command box and the chat tools that steer the window
+/// both land here; the download itself never starts a chat turn. Local
+/// files keep their extension whitelist — this path only accepts ids.
+#[tauri::command]
+pub(crate) async fn open_pdb_entry(app: AppHandle, pdb_id: String) -> Result<(), String> {
+    let dest = ensure_pdb_entry_cached(&app, &pdb_id).await?;
     let canonical = validate_structure_path(&dest.to_string_lossy())?;
     let path = canonical.to_string_lossy().into_owned();
     match app.get_webview_window(VIEWER_WINDOW_LABEL) {
@@ -1455,6 +1492,33 @@ mod tests {
         // Four plain letters still parse as an id; the frontend only routes
         // here when the whole command box is one bare word, and RCSB decides.
         assert!(normalize_pdb_id("7ABC").is_ok());
+    }
+
+    #[test]
+    fn present_target_routes_ids_and_local_files() {
+        assert!(matches!(
+            present_target("4KC3"),
+            PresentTarget::PdbEntry(id) if id == "4KC3"
+        ));
+        assert!(matches!(
+            present_target(" 1crn "),
+            PresentTarget::PdbEntry(id) if id == "1CRN"
+        ));
+        // Anything with an extension or separator stays a local file, and a
+        // 4-character file with no extension is not presentable locally, so
+        // treating it as an id is the only useful reading.
+        assert!(matches!(
+            present_target("pose-001.pdb"),
+            PresentTarget::Local(path) if path == "pose-001.pdb"
+        ));
+        assert!(matches!(
+            present_target("C:/md run/x.cif"),
+            PresentTarget::Local(path) if path == "C:/md run/x.cif"
+        ));
+        assert!(matches!(
+            present_target("D:\\t\\y.cif"),
+            PresentTarget::Local(path) if path == "D:\\t\\y.cif"
+        ));
     }
 
     #[test]

@@ -280,9 +280,17 @@ pub fn claims_from_output(output: &Value) -> Result<Vec<ClaimRecord>, String> {
 
 pub fn enrichment_wording_is_statistical(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    ["nes", "gsea", "fdr", "p-value", "p_value", "enrichment_z", "检验"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    [
+        "nes",
+        "gsea",
+        "fdr",
+        "p-value",
+        "p_value",
+        "enrichment_z",
+        "检验",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
         || text.contains("p值")
 }
 
@@ -333,9 +341,9 @@ pub fn rewrite_unsupported_claims(
                     rewritten.p_value = None;
                     rewritten.direction = None;
                     rewritten.text = Some(match check.code {
-                        ClaimCheckCode::UngroundedEnrichment => rewrite_manual_enrichment_prose(
-                            claim.text.as_deref().unwrap_or("富集"),
-                        ),
+                        ClaimCheckCode::UngroundedEnrichment => {
+                            rewrite_manual_enrichment_prose(claim.text.as_deref().unwrap_or("富集"))
+                        }
                         _ => format!(
                             "Unsupported claim {} withheld ({})",
                             claim.claim_id,

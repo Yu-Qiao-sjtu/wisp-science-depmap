@@ -832,8 +832,8 @@ mod tests {
         sqlx::query("DELETE FROM wisp_schema_migrations WHERE version=?")
             .bind(crate::CONTEXT_EPOCH_IDENTITY_MIGRATION)
             .execute(&store.pool)
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         Store::apply_context_epochs(&store.pool).await.unwrap();
         Store::apply_context_epochs(&store.pool).await.unwrap();
         let high: i64 =
