@@ -560,7 +560,11 @@ pub(crate) async fn dispatch(broker: &Broker, request: &Request) -> Result<Value
             if request.command == "native_conversation_trajectory_html" {
                 let exported_at = chrono::Utc::now().to_rfc3339();
                 return Ok(Value::String(
-                    crate::trajectory_export::render_native_trajectory_html(&snapshot, "zh", &exported_at),
+                    crate::trajectory_export::render_native_trajectory_html(
+                        &snapshot,
+                        "zh",
+                        &exported_at,
+                    ),
                 ));
             }
             let value = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;

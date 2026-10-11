@@ -10,9 +10,9 @@ mod agent_workflow_run_activities;
 mod agent_workflows;
 mod artifacts;
 mod ask_user_requests;
+mod assistant_tasks;
 mod bridge_checkpoints;
 mod claim_records;
-mod assistant_tasks;
 mod codex_imports;
 mod context_epochs;
 mod execution_contexts;
@@ -63,9 +63,9 @@ pub use agent_workflows::{
 };
 pub use artifacts::{logical_artifact_id, scoped_logical_artifact_id};
 pub use ask_user_requests::AskUserPoll;
+pub use assistant_tasks::{AssistantTask, ASSISTANT_TASK_STATUSES};
 pub use bridge_checkpoints::BridgeCheckpointRecord;
 pub use claim_records::ClaimRecordRow;
-pub use assistant_tasks::{AssistantTask, ASSISTANT_TASK_STATUSES};
 pub use context_epochs::{ContextEpochRecord, OpenContextEpoch};
 pub use execution_contexts::FRAME_DEFAULT_EXECUTION_CONTEXT_PREFIX;
 pub use explorations::{

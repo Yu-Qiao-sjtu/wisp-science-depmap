@@ -3195,12 +3195,9 @@ async fn remote_lifecycle(
                                         local_not_before_ms,
                                         presenter,
                                     );
-                                } else if let Some(local) = pull_remote_structure_frame(
-                                    runner,
-                                    &remote,
-                                    &mut remote_frames,
-                                )
-                                .await
+                                } else if let Some(local) =
+                                    pull_remote_structure_frame(runner, &remote, &mut remote_frames)
+                                        .await
                                 {
                                     presenter(&local);
                                 }
