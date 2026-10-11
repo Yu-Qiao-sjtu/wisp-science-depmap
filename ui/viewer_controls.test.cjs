@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance, parseBackboneAlphaCarbons, kabschTransform, transformStructureText, superposeStructureText } = require("./viewer_controls.js");
+const { rotateSnapshot, zoomSnapshot, setStructureRepresentation, replaceLoadedStructure, clearStructureSelection, focusCurrentSelection, setSelectionLabels, measurePickedDistance, clearMeasuredDistances, pymolColor, setColorTheme, paintViewerSelection, clearViewerPaint, setSelectionVisibility, parsePymolCommand, runPymolCommand, centerCurrentSelection, chromeText, normalizeChromeLocale, setChromeLocale, measureSelectionDistance, parseBackboneAlphaCarbons, kabschTransform, transformStructureText, superposeStructureText, recentChips } = require("./viewer_controls.js");
 
 const start = {
   position: [0, 0, 10],
@@ -478,8 +478,30 @@ test("the chrome language switches and interpolates", () => {
   assert.equal(chromeText("zh", "button.select"), "选择");
   assert.equal(chromeText("zh", "status.loading", { name: "1abc.pdb" }), "正在加载 1abc.pdb…");
   assert.equal(chromeText("en", "status.labelsOn", { count: 2, s: "s" }), "labels on 2 selections");
+  // The parse/build phase after the bytes arrive is its own status in both
+  // languages so a large entry does not sit on "loading…" the whole time.
+  assert.equal(chromeText("en", "status.phaseBuilding"), "building the 3D view…");
+  assert.equal(chromeText("zh", "status.phaseBuilding"), "正在构建 3D 视图…");
   // Unknown keys fall back to English and then to the key itself.
   assert.equal(chromeText("zh", "missing.key"), "missing.key");
+});
+
+test("recent chips trim paths to file names and cap the list", () => {
+  assert.deepEqual(
+    recentChips(["C:\\runs\\pose-001.pdb", "/home/u/4KC3.cif", "C:\\x\\a.mmcif", "C:\\x\\b.gro"], 3),
+    [
+      { name: "pose-001.pdb", path: "C:\\runs\\pose-001.pdb" },
+      { name: "4KC3.cif", path: "/home/u/4KC3.cif" },
+      { name: "a.mmcif", path: "C:\\x\\a.mmcif" },
+    ],
+  );
+  assert.deepEqual(recentChips(null, 3), []);
+  assert.deepEqual(recentChips(["C:\\only.pdb"]), [
+    { name: "only.pdb", path: "C:\\only.pdb" },
+  ]);
+  assert.deepEqual(recentChips(["bare-name"], 3), [
+    { name: "bare-name", path: "bare-name" },
+  ]);
 });
 
 test("command feedback follows the chrome language", async () => {
