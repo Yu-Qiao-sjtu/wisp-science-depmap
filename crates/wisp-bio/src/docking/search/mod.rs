@@ -7,8 +7,11 @@
 //! * [`quasi_newton`] — BFGS local minimization (#271).
 //! * [`monte_carlo`] — the Metropolis outer loop, multi-start streams, mode
 //!   pooling and RMSD deduplication (#271).
+//! * [`grid`] — receptor cell-list and intramolecular pair precalculation
+//!   that accelerate scoring without changing its results (#273).
 
 pub mod conformation;
+pub mod grid;
 pub mod monte_carlo;
 pub mod quasi_newton;
 pub mod rng;
