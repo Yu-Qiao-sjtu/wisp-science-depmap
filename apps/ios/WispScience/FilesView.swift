@@ -13,9 +13,9 @@ struct FilesView: View {
     let isDirectory: Bool
     var body: some View {
         NavigationStack {
-            FileContentView(model: model, route: route, location: FileLocation(path: initialPath, directory: isDirectory))
+            FileContentView(model: model, connection: model.connection, route: route, location: FileLocation(path: initialPath, directory: isDirectory))
                 .navigationDestination(for: FileLocation.self) { location in
-                    FileContentView(model: model, route: route, location: location)
+                    FileContentView(model: model, connection: model.connection, route: route, location: location)
                 }
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { model.sheet = nil } } }
         }.accessibilityIdentifier("files-sheet")
@@ -24,13 +24,21 @@ struct FilesView: View {
 
 private struct FileContentView: View {
     @ObservedObject var model: RemoteWorkspace
+    @ObservedObject var connection: RemoteConnection
     let route: ConversationRoute
     let location: FileLocation
     @State private var value: RemoteValue?
     @State private var error: String?
+    @State private var cacheDate: Date?
+    @State private var refreshError: String?
     private var ext: String { (location.path as NSString).pathExtension.lowercased() }
     private var image: Bool { ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"].contains(ext) }
     var body: some View {
+        VStack(spacing: 0) {
+            if let cacheDate {
+                Text("缓存预览 · \(cacheDate.formatted(date: .abbreviated, time: .shortened))\(refreshError == nil ? "" : " · 刷新失败")")
+                    .font(.caption).foregroundStyle(.secondary).padding(8).accessibilityIdentifier("cached-file")
+            }
         Group {
             if let error {
                 VStack(spacing: 12) { Text(error); Button("重试") { Task { await load() } } }.padding()
@@ -49,7 +57,7 @@ private struct FileContentView: View {
                     if value["entries"].array.isEmpty { Text("空文件夹").foregroundStyle(.secondary) }
                 }.refreshable { await load() }
             } else if image {
-                ScrollView { RemoteImageView(connection: model.connection, route: route, source: ["path": .string(location.path)], label: (location.path as NSString).lastPathComponent).padding() }
+                ScrollView { RemoteImageView(model: model, route: route, source: ["path": .string(location.path)], label: (location.path as NSString).lastPathComponent).padding() }
             } else if let value {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -64,22 +72,33 @@ private struct FileContentView: View {
                 }
             } else { ProgressView("读取文件…") }
         }
+        }
         .navigationTitle(location.path == "." ? "项目文件" : (location.path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: location) { await load() }
+        .task(id: "\(location.path):\(location.directory):\(connection.state)") { await load() }
     }
     private func load() async {
         error = nil
+        refreshError = nil
         guard location.directory || !image else { return }
+        let command = location.directory ? "native_conversation_panel_file_directory" : "native_conversation_panel_file_read"
+        let args = route.args.merging(["path": .string(location.path)]) { _, v in v }
+        if let cached = await model.cachedRead(command, project: route.project, args: args) {
+            value = cached.value; cacheDate = cached.savedAt
+        }
+        guard connection.state == .online else {
+            if value == nil { error = "此内容尚未缓存，请联网后打开。" }
+            return
+        }
         do {
-            let result = try await model.connection.call(location.directory ? "native_conversation_panel_file_directory" : "native_conversation_panel_file_read",
-                project: route.project, args: route.args.merging(["path": .string(location.path)]) { _, v in v })
-            guard result["schema"].string == "wisp.native-files.v1", result["project_id"].string == route.project,
-                  result["session_id"].string == route.session else { throw RemoteError.incompatibleResponse }
+            let result = try await model.read(command, project: route.project, args: args)
             try Task.checkCancellation()
-            value = result
+            value = result; cacheDate = nil
         } catch is CancellationError { }
-        catch { self.error = error.localizedDescription }
+        catch {
+            if value == nil { self.error = error.localizedDescription }
+            else { refreshError = error.localizedDescription }
+        }
     }
 }
 
@@ -111,9 +130,9 @@ struct MarkdownView: View {
                     }.background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                 case .image(let reference, let label):
                     if let resource = resources.first(where: { $0["originalReference"].string == reference }) {
-                        RemoteImageView(connection: model.connection, route: route, source: ["resource_id": resource["id"]], label: label)
+                        RemoteImageView(model: model, route: route, source: ["resource_id": resource["id"]], label: label)
                     } else if let path = RemoteMarkdown.localPath(reference, directory: directory) {
-                        RemoteImageView(connection: model.connection, route: route, source: ["path": .string(path)], label: label)
+                        RemoteImageView(model: model, route: route, source: ["path": .string(path)], label: label)
                     } else { Text(label.isEmpty ? "外部图片" : label).foregroundStyle(.secondary) }
                 }
             }
@@ -146,30 +165,49 @@ struct CodeText: View {
 }
 
 struct RemoteImageView: View {
-    let connection: RemoteConnection
+    @ObservedObject var model: RemoteWorkspace
+    @ObservedObject private var connection: RemoteConnection
     let route: ConversationRoute
     let source: [String: RemoteValue]
     let label: String
     @State private var image: UIImage?
     @State private var error: String?
+    @State private var cacheDate: Date?
+    init(model: RemoteWorkspace, route: ConversationRoute, source: [String: RemoteValue], label: String) {
+        self.model = model; self.connection = model.connection
+        self.route = route; self.source = source; self.label = label
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let image { Image(uiImage: image).resizable().scaledToFit().accessibilityLabel(label) }
             else if let error { Text(error).font(.caption); Button("重试") { Task { await load() } } }
             else { ProgressView("读取图片…") }
             if !label.isEmpty { Text(label).font(.caption).foregroundStyle(.secondary) }
-        }.task(id: RemoteValue.object(source).display) { await load() }
+            if let cacheDate {
+                Text("缓存图片 · \(cacheDate.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if image != nil, let error { Text(error).font(.caption).foregroundStyle(.secondary) }
+        }.task(id: "\(RemoteReadCache.key(scope: route.session, command: "native_conversation_image", project: route.project, args: source)):\(connection.state)") { await load() }
     }
     private func load() async {
         error = nil
+        let args = route.args.merging(source) { _, v in v }
+        if let cached = await model.cachedRead("native_conversation_image", project: route.project, args: args),
+           let data = Data(base64Encoded: cached.value["base64"].string), let image = UIImage(data: data) {
+            self.image = image; cacheDate = cached.savedAt
+        }
+        guard connection.state == .online else {
+            if image == nil { error = "此图片尚未缓存，请联网后打开。" }
+            return
+        }
         do {
-            let value = try await connection.call("native_conversation_image", project: route.project,
-                args: route.args.merging(source) { _, v in v })
+            let value = try await model.read("native_conversation_image", project: route.project, args: args)
             guard let data = Data(base64Encoded: value["base64"].string), let image = UIImage(data: data) else {
                 throw RemoteError.service("图片无法显示。")
             }
             try Task.checkCancellation()
-            self.image = image
+            self.image = image; cacheDate = nil
         } catch is CancellationError { }
         catch { self.error = error.localizedDescription }
     }

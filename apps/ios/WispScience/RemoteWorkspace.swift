@@ -12,10 +12,12 @@ struct AttachedPhoto: Identifiable {
 
 enum WorkspaceSheet: Identifiable {
     case connection, inbox, files(ConversationRoute, String, Bool)
+    case conversationInfo(String, String)
     var id: String {
         switch self {
         case .connection: return "connection"
         case .inbox: return "inbox"
+        case .conversationInfo: return "conversation-info"
         case .files(let route, let path, _): return "files:\(route.project):\(route.session):\(path)"
         }
     }
@@ -25,6 +27,18 @@ enum WorkspaceSheet: Identifiable {
     let connection: RemoteConnection
     private let credentials: any RemoteCredentialStoring
     private let preferences: UserDefaults?
+    private let cache: RemoteReadCache?
+    private var cacheGeneration = UUID()
+    private var reads: [String: (UUID, Task<RemoteValue, Error>)] = [:]
+    private var projectsRefreshed = false
+    private var sessionsRefreshed: String?
+    @Published private(set) var snapshotIsCached = false
+    @Published private(set) var snapshotSavedAt: Date?
+    private var snapshotSession: UUID?
+    @Published private(set) var cachedHostName = ""
+    @Published private(set) var cacheBytes = 0
+    @Published private(set) var clearingCache = false
+    @Published private(set) var cacheNotice: String?
     private static let demoPreference = "wisp.workspace.demo"
     private var demo: DemoDataset?
     @Published private(set) var isDemo = false
@@ -33,10 +47,10 @@ enum WorkspaceSheet: Identifiable {
     @Published var sessions: [RemoteValue] = []
     @Published var inbox: [RemoteValue] = []
     @Published var selectedProject: String? { didSet {
-        if selectedProject != oldValue { selectedSession = nil; sessions = [] }
+        if selectedProject != oldValue { selectedSession = nil; sessions = []; sessionsRefreshed = nil }
     } }
     @Published var selectedSession: String? { didSet {
-        if selectedSession != oldValue { history = RemoteHistory(); error = nil }
+        if selectedSession != oldValue { history = RemoteHistory(); error = nil; snapshotIsCached = false; snapshotSavedAt = nil; snapshotSession = nil }
     } }
     @Published var history = RemoteHistory()
     @Published var sheet: WorkspaceSheet?
@@ -53,15 +67,25 @@ enum WorkspaceSheet: Identifiable {
     private var restored = false
 
     init(connection: RemoteConnection? = nil, credentials: any RemoteCredentialStoring = RemoteCredentials(),
-         preferences: UserDefaults? = .standard) {
+         preferences: UserDefaults? = .standard, cache: RemoteReadCache? = .shared) {
         self.connection = connection ?? RemoteConnection()
         self.credentials = credentials
         self.preferences = preferences
+        self.cache = cache
         self.connection.authenticated = { [weak self] in
             guard let self, !self.isDemo, let configuration = self.configuration else { return }
             do { try self.credentials.save(configuration) }
             catch { self.error = error.localizedDescription }
             self.seen = []
+            self.snapshotIsCached = self.snapshot != nil
+            let generation = self.cacheGeneration
+            let scope = RemoteReadCache.scope(configuration)
+            let metadata: RemoteValue = .object(["name": .string(self.connection.hostName)])
+            Task {
+                let revision = await self.cache?.currentRevision()
+                guard self.cacheGeneration == generation else { return }
+                await self.cache?.store(metadata, scope: scope, command: "host_metadata", expectedRevision: revision)
+            }
         }
     }
 
@@ -71,6 +95,9 @@ enum WorkspaceSheet: Identifiable {
     }
     var snapshot: RemoteSnapshot? { history.snapshot }
     var title: String { sessions.first { $0["id"].string == selectedSession }?["title"].string ?? "对话" }
+    var canActOnSnapshot: Bool { connection.state == .online && snapshot != nil && !snapshotIsCached && snapshotSession == connection.readSessionID }
+    var hostName: String { connection.hostName.isEmpty ? cachedHostName : connection.hostName }
+    private var cacheScope: String? { isDemo ? nil : configuration.map(RemoteReadCache.scope) }
 
     func restore() {
         guard !restored else { return }
@@ -80,6 +107,7 @@ enum WorkspaceSheet: Identifiable {
             if let saved = try credentials.load() {
                 configuration = saved
                 if active { connection.connect(saved) }
+                Task { await self.hydrateCache() }
             }
         } catch { self.error = error.localizedDescription }
     }
@@ -92,6 +120,7 @@ enum WorkspaceSheet: Identifiable {
             clearWorkspace()
             self.configuration = configuration
             connection.connect(configuration)
+            Task { await self.hydrateCache() }
         } catch { self.error = error.localizedDescription }
     }
     func setActive(_ active: Bool) {
@@ -138,19 +167,106 @@ enum WorkspaceSheet: Identifiable {
         if isDemo { exitDemo(); return }
         do {
             try credentials.remove()
+            let scope = cacheScope
             connection.disconnect()
             configuration = nil
             sheet = nil
             clearWorkspace()
+            if let scope { Task { await cache?.clear(scope: scope) } }
         } catch { self.error = error.localizedDescription }
     }
     private func clearWorkspace() {
         identity = UUID()
+        cacheGeneration = UUID()
+        for (_, task) in reads.values { task.cancel() }
+        reads = [:]; projectsRefreshed = false; sessionsRefreshed = nil
+        snapshotIsCached = false; snapshotSavedAt = nil; snapshotSession = nil; cachedHostName = ""; cacheNotice = nil
         visibleRoute = nil
         selectedProject = nil; selectedSession = nil
         projects = []; sessions = []; inbox = []; drafts = [:]; photos = [:]
         busy = []; loadingEarlier = false; creating = false
         history = RemoteHistory(); seen = []; error = nil
+    }
+
+    func cachedRead(_ command: String, project: String? = nil, args: [String: RemoteValue] = [:]) async -> RemoteReadCache.Entry? {
+        guard let cache, let scope = cacheScope else { return nil }
+        let identity = self.identity, generation = cacheGeneration
+        let entry = await cache.read(scope: scope, command: command, project: project, args: args)
+        guard self.identity == identity, cacheGeneration == generation, let entry,
+              (try? validateRead(entry.value, command: command, project: project, args: args)) != nil else { return nil }
+        return entry
+    }
+
+    /// Coalesce identical reads; mutations continue to use the connection directly.
+    func read(_ command: String, project: String? = nil, args: [String: RemoteValue] = [:]) async throws -> RemoteValue {
+        guard RemoteReadCache.accepts(command), command != "host_metadata" else { throw RemoteError.unsupported }
+        let identity = self.identity, generation = cacheGeneration
+        let session = connection.readSessionID
+        let scope = cacheScope
+        let key = RemoteReadCache.key(scope: scope ?? "demo", command: command, project: project, args: args)
+        let request: (UUID, Task<RemoteValue, Error>)
+        if let existing = reads[key] { request = existing }
+        else {
+            request = (UUID(), Task {
+                let revision = await self.cache?.currentRevision()
+                guard self.identity == identity, self.connection.readSessionID == session else { throw RemoteError.disconnected }
+                let result = try await self.connection.call(command, project: project, args: args)
+                try Task.checkCancellation()
+                guard self.identity == identity, self.connection.readSessionID == session else { throw RemoteError.disconnected }
+                try self.validateRead(result, command: command, project: project, args: args)
+                if let scope, self.cacheGeneration == generation {
+                    await self.cache?.store(result, scope: scope, command: command, project: project, args: args, expectedRevision: revision)
+                }
+                return result
+            })
+            reads[key] = request
+        }
+        defer { if reads[key]?.0 == request.0 { reads.removeValue(forKey: key) } }
+        let result = try await request.1.value
+        try Task.checkCancellation()
+        guard self.identity == identity, connection.readSessionID == session, connection.state == .online else { throw RemoteError.disconnected }
+        return result
+    }
+
+    private func validateRead(_ value: RemoteValue, command: String, project: String?, args: [String: RemoteValue]) throws {
+        switch command {
+        case "list_projects", "remote_sessions", "native_conversation_inbox":
+            guard case .array = value, value.array.allSatisfy({ !$0["id"].string.isEmpty }) else { throw RemoteError.incompatibleResponse }
+        case "native_conversation_snapshot":
+            _ = try RemoteSnapshot(value, route: ConversationRoute(project: project ?? "", session: (args["session_id"]?.string ?? "")))
+        case "native_conversation_panel_file_directory", "native_conversation_panel_file_read":
+            guard value["schema"].string == "wisp.native-files.v1", value["project_id"].string == project,
+                  value["session_id"].string == (args["session_id"]?.string ?? "") else { throw RemoteError.incompatibleResponse }
+        case "native_conversation_image":
+            guard let data = Data(base64Encoded: value["base64"].string), UIImage(data: data) != nil else { throw RemoteError.service("图片无法显示。") }
+        case "host_metadata": break
+        default: throw RemoteError.unsupported
+        }
+    }
+
+    private func hydrateCache() async {
+        guard !isDemo else { return }
+        let identity = self.identity, project = selectedProject, route = self.route
+        if let entry = await cachedRead("list_projects"), self.identity == identity, !projectsRefreshed { projects = entry.value.array }
+        if let entry = await cachedRead("host_metadata"), self.identity == identity { cachedHostName = entry.value["name"].string }
+        if let project, let entry = await cachedRead("remote_sessions", project: project),
+           self.identity == identity, selectedProject == project, sessionsRefreshed != project { sessions = entry.value.array }
+        if let route, let entry = await cachedRead("native_conversation_snapshot", project: route.project, args: route.args),
+           self.identity == identity, self.route == route, history.snapshot == nil,
+           let snapshot = try? RemoteSnapshot(entry.value, route: route) {
+            history.replace(snapshot); snapshotIsCached = true; snapshotSavedAt = entry.savedAt
+        }
+    }
+
+    func updateCacheSize() async { cacheBytes = await cache?.size() ?? 0 }
+    func clearCachedData() async {
+        guard !clearingCache else { return }
+        clearingCache = true
+        defer { clearingCache = false }
+        cacheGeneration = UUID()
+        await cache?.clear()
+        await updateCacheSize()
+        cacheNotice = "本机缓存已清除，后续读取时会重新缓存。"
     }
 
     func monitor() async {
@@ -174,17 +290,20 @@ enum WorkspaceSheet: Identifiable {
     func refreshSidebar() async throws {
         let identity = self.identity
         let configuration = self.configuration
-        let result = try await connection.call("list_projects")
+        let result = try await read("list_projects")
         try Task.checkCancellation()
         guard self.configuration == configuration, self.identity == identity else { return }
         projects = result.array
+        projectsRefreshed = true
         if let project = selectedProject {
-            let result = try await connection.call("remote_sessions", project: project)
+            let result = try await read("remote_sessions", project: project)
             try Task.checkCancellation()
-            if selectedProject == project && self.configuration == configuration && self.identity == identity { sessions = result.array }
+            if selectedProject == project && self.configuration == configuration && self.identity == identity {
+                sessions = result.array; sessionsRefreshed = project
+            }
         }
         if let project = projects.first?["id"].string, connection.supports("native_conversation_inbox") {
-            let result = try await connection.call("native_conversation_inbox", project: project)
+            let result = try await read("native_conversation_inbox", project: project)
             try Task.checkCancellation()
             if self.configuration == configuration && self.identity == identity { inbox = result.array }
         }
@@ -192,12 +311,20 @@ enum WorkspaceSheet: Identifiable {
     func refreshConversation() async throws {
         guard let route else { return }
         let identity = self.identity
+        let session = connection.readSessionID
         let configuration = self.configuration
-        let result = try await connection.call("native_conversation_snapshot", project: route.project, args: route.args)
+        let result: RemoteValue
+        do { result = try await read("native_conversation_snapshot", project: route.project, args: route.args) }
+        catch {
+            if self.route == route, self.identity == identity { snapshotIsCached = snapshot != nil }
+            throw error
+        }
         let next = try RemoteSnapshot(result, route: route)
         try Task.checkCancellation()
-        guard self.route == route, self.configuration == configuration, self.identity == identity else { return }
+        guard self.route == route, self.configuration == configuration, self.identity == identity, connection.readSessionID == session else { return }
+        guard next.supersedes(history.snapshot) else { return }
         history.replace(next)
+        snapshotIsCached = false; snapshotSavedAt = Date(); snapshotSession = session
         let stamp = "\(next.epoch):\(route.project):\(route.session):\(next.sequence)"
         if !next.running && active && visibleRoute == route && sheet == nil && connection.supports("native_conversation_seen"), !seen.contains(stamp) {
             _ = try await connection.call("native_conversation_seen", project: route.project, args: route.args)
@@ -206,6 +333,8 @@ enum WorkspaceSheet: Identifiable {
     }
     func refreshSelection() async {
         let identity = self.identity
+        await hydrateCache()
+        guard self.identity == identity, connection.state == .online else { return }
         do {
             try await refreshSidebar()
             guard self.identity == identity else { return }
@@ -230,7 +359,7 @@ enum WorkspaceSheet: Identifiable {
         } catch { if self.identity == identity { self.error = error.localizedDescription } }
     }
     func send(_ route: ConversationRoute) async {
-        guard self.route == route, let snapshot, snapshot.writable, !busy.contains(route) else { return }
+        guard canActOnSnapshot, self.route == route, let snapshot, snapshot.writable, !busy.contains(route) else { return }
         let identity = self.identity
         let message = (drafts[route] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let attached = photos[route] ?? []
@@ -252,7 +381,7 @@ enum WorkspaceSheet: Identifiable {
         } catch { if self.identity == identity { self.error = error.localizedDescription } }
     }
     func action(_ command: String, route: ConversationRoute, extra: [String: RemoteValue] = [:]) async {
-        guard !busy.contains(route) else { return }
+        guard canActOnSnapshot, self.route == route, !busy.contains(route) else { return }
         let identity = self.identity
         busy.insert(route)
         defer { busy.remove(route) }
@@ -268,13 +397,20 @@ enum WorkspaceSheet: Identifiable {
         loadingEarlier = true
         defer { loadingEarlier = false }
         let cursor = history.cursor
+        let identity = self.identity
         do {
-            let result = try await connection.call("native_conversation_snapshot", project: route.project,
-                args: route.args.merging(["before_seq": cursor]) { _, v in v })
+            let args = route.args.merging(["before_seq": cursor]) { _, v in v }
+            let result: RemoteValue
+            if connection.state == .online {
+                result = try await read("native_conversation_snapshot", project: route.project, args: args)
+            } else if let cached = await cachedRead("native_conversation_snapshot", project: route.project, args: args) {
+                result = cached.value
+            } else { throw RemoteError.service("这些更早的消息尚未缓存，请联网后加载。") }
             let page = try RemoteSnapshot(result, route: route)
-            guard self.route == route else { return }
+            guard self.route == route, self.identity == identity else { return }
+            guard page.epoch == snapshot.epoch else { throw RemoteError.service("历史缓存已过期，请联网刷新此对话。") }
             history.prepend(page, expectedEpoch: snapshot.epoch, expectedBoundary: snapshot.before, requestedCursor: cursor)
-        } catch { self.error = error.localizedDescription }
+        } catch { if self.identity == identity { self.error = error.localizedDescription } }
     }
     func upload(_ data: Data, route: ConversationRoute) async {
         let identity = self.identity

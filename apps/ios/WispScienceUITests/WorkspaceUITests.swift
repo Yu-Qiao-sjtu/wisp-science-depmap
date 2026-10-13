@@ -10,13 +10,92 @@ final class WorkspaceUITests: XCTestCase {
         app.launch()
         return app
     }
-    private func openConversation(_ app: XCUIApplication) {
+    func testCachedProjectConversationAndFileSurviveOfflineRelaunchAndClear() {
+        let id = UUID().uuidString
+        func start(_ mode: String) -> XCUIApplication {
+            let app = XCUIApplication()
+            app.launchEnvironment["WISP_UI_TESTING"] = mode
+            app.launchEnvironment["WISP_CACHE_TEST_ID"] = id
+            app.launch()
+            return app
+        }
+        let seed = start("cache-seed")
+        openConversation(seed)
+        seed.buttons["conversation-files"].tap()
+        XCTAssertTrue(seed.staticTexts["report.md"].waitForExistence(timeout: 5))
+        seed.staticTexts["report.md"].tap()
+        XCTAssertTrue(seed.staticTexts["质控通过。"].waitForExistence(timeout: 5))
+        seed.terminate()
+        let offline = start("cache-offline")
+        openConversation(offline)
+        XCTAssertTrue(offline.staticTexts["cached-conversation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(offline.buttons["send-message"].isEnabled)
+        offline.buttons["conversation-files"].tap()
+        XCTAssertTrue(offline.staticTexts["report.md"].waitForExistence(timeout: 5))
+        offline.staticTexts["report.md"].tap()
+        XCTAssertTrue(offline.staticTexts["质控通过。"].waitForExistence(timeout: 5))
+        XCTAssertTrue(offline.staticTexts["cached-file"].exists)
+        offline.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        for _ in 0..<2 {
+            if offline.buttons["connection-settings"].isHittable { break }
+            offline.navigationBars.buttons.firstMatch.tap()
+        }
+        offline.buttons["connection-settings"].tap()
+        let clear = offline.buttons["clear-cache"]
+        for _ in 0..<4 { if clear.isHittable { break }; offline.swipeUp() }
+        clear.tap()
+        XCTAssertTrue(offline.staticTexts["本机缓存已清除，后续读取时会重新缓存。"].waitForExistence(timeout: 5))
+        offline.terminate()
+        let empty = start("cache-offline")
+        XCTAssertTrue(empty.staticTexts["连接后显示项目。"].waitForExistence(timeout: 5))
+        XCTAssertFalse(empty.staticTexts["RNA-seq 研究"].exists)
+    }
+    private func openConversation(_ app: XCUIApplication, title: String = "样本质控") {
         XCTAssertTrue(app.staticTexts["RNA-seq 研究"].firstMatch.waitForExistence(timeout: 5))
         app.staticTexts["RNA-seq 研究"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["样本质控"].firstMatch.waitForExistence(timeout: 5))
-        app.staticTexts["样本质控"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 5))
+        app.staticTexts[title].firstMatch.tap()
         XCTAssertTrue(app.buttons["conversation-files"].waitForExistence(timeout: 5))
     }
+
+    func testWorkspaceListTitlesShareTheToolbarRow() {
+        verifyWorkspaceNavigation(darkAndLarge: false)
+    }
+
+    func testWorkspaceListTitlesShareTheToolbarRowWithAccessibilityText() {
+        verifyWorkspaceNavigation(darkAndLarge: true)
+    }
+
+    private func verifyWorkspaceNavigation(darkAndLarge: Bool) {
+        let app = launch(darkAndLarge: darkAndLarge)
+        let project = app.staticTexts["RNA-seq 研究"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        assertTitleSharesToolbarRow(app, title: "Wisp", action: "connection-settings")
+        assertTitleSharesToolbarRow(app, title: "Wisp", action: "inbox")
+        app.buttons["connection-settings"].tap()
+        XCTAssertTrue(app.buttons["完成"].waitForExistence(timeout: 5))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        project.tap()
+        XCTAssertTrue(app.staticTexts["样本质控"].firstMatch.waitForExistence(timeout: 5))
+        assertTitleSharesToolbarRow(app, title: "RNA-seq 研究", action: "new-conversation")
+    }
+
+    private func assertTitleSharesToolbarRow(_ app: XCUIApplication, title: String, action: String,
+                                             file: StaticString = #filePath, line: UInt = #line) {
+        let heading = app.navigationBars.staticTexts[title].firstMatch
+        let button = app.buttons[action]
+        // A large title exists in accessibility too, but sits below the controls
+        // and consumes another row before the first project or conversation.
+        let sameRow = NSPredicate { _, _ in
+            guard heading.exists, button.exists, !heading.frame.isEmpty, !button.frame.isEmpty else { return false }
+            return heading.frame.midY >= button.frame.minY && heading.frame.midY <= button.frame.maxY
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: sameRow, object: app)], timeout: 5),
+                       .completed, file: file, line: line)
+        XCTAssertTrue(button.isHittable, file: file, line: line)
+        XCTAssertFalse(heading.frame.intersects(button.frame), file: file, line: line)
+    }
+
     func testPhoneAndPadNavigateReadFilesAndDismissWithEscapeImmediately() {
         let app = launch()
         openConversation(app)
@@ -83,6 +162,153 @@ final class WorkspaceUITests: XCTestCase {
         XCTAssertEqual(failedRun.value as? String, "已折叠")
         XCTAssertFalse(app.staticTexts["Input file a.bam was not found."].exists)
         XCTAssertFalse(app.buttons["send-message"].isEnabled)
+    }
+
+    func testExecutionProcessCollapsesPathsAndKeepsFinalAnswerVisible() {
+        verifyProcessGrouping(darkAndLarge: false)
+    }
+
+    func testExecutionProcessGroupingWithAccessibilityText() {
+        verifyProcessGrouping(darkAndLarge: true)
+    }
+
+    private func verifyProcessGrouping(darkAndLarge: Bool) {
+        let app = launch("process", darkAndLarge: darkAndLarge)
+        openConversation(app)
+        let group = app.buttons["process-group-1"]
+        revealEarlier(group, in: app)
+        XCTAssertEqual(group.value as? String, "已折叠")
+        XCTAssertTrue(group.label.contains("5 步"))
+        XCTAssertTrue(group.label.contains("5 个文件"))
+        XCTAssertTrue(group.label.contains("1 项失败"))
+        XCTAssertGreaterThanOrEqual(group.frame.height, 44)
+        let path = app.staticTexts["analysis/en-expression/output/figures/OG_log2FC_heatmap.pdf"]
+        XCTAssertFalse(path.exists)
+        XCTAssertFalse(app.buttons["shell"].exists)
+        XCTAssertTrue(app.staticTexts["表达分析完成"].exists)
+        group.tap()
+        revealEarlier(path, in: app)
+        XCTAssertTrue(path.exists)
+        let shell = app.buttons["shell"].firstMatch
+        revealEarlier(shell, in: app)
+        shell.tap()
+        XCTAssertTrue(app.staticTexts["python heatmap.py"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Heatmap generated."].exists)
+        shell.tap()
+        XCTAssertEqual(group.value as? String, "已展开")
+        revealEarlier(group, in: app)
+        group.tap()
+        XCTAssertFalse(path.exists)
+        XCTAssertTrue(app.staticTexts["表达分析完成"].exists)
+        XCTAssertFalse(app.buttons["send-message"].isEnabled)
+    }
+
+    func testLiveProcessKeepsCommentaryAndApprovalOutsideTheFold() {
+        let app = launch("process-running")
+        openConversation(app)
+        XCTAssertTrue(app.buttons["批准一次"].waitForExistence(timeout: 5))
+        let group = app.buttons["process-group-3"]
+        revealEarlier(group, in: app)
+        XCTAssertEqual(group.value as? String, "已折叠")
+        XCTAssertTrue(group.label.contains("1 项失败"))
+        XCTAssertFalse(app.staticTexts["analysis/en-expression/README.md"].exists)
+        let commentary = app.staticTexts["正在整理表达数据并生成图片。"]
+        revealEarlier(commentary, in: app)
+        XCTAssertTrue(commentary.isHittable)
+    }
+
+    func testUsageIsCollapsedAndRawPayloadRequiresExplicitExpansion() {
+        let app = launch("appearance")
+        openConversation(app)
+        let usage = app.buttons["usage-details"]
+        revealEarlier(usage, in: app)
+        XCTAssertEqual(usage.value as? String, "已折叠")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "ctx_tokens")).firstMatch.exists)
+        usage.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["usage-input"].firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "ctx_tokens")).firstMatch.exists)
+        let raw = app.buttons["usage-raw"]
+        if !raw.isHittable { app.scrollViews["conversation-transcript"].swipeUp() }
+        raw.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "ctx_tokens")).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["send-message"].isEnabled)
+    }
+
+    func testMalformedUsageRemainsReadableInsideDetails() {
+        let app = launch("usage-malformed")
+        openConversation(app)
+        let usage = app.buttons["usage-details"]
+        revealEarlier(usage, in: app)
+        XCTAssertFalse(app.staticTexts["invalid usage payload"].exists)
+        usage.tap()
+        XCTAssertTrue(app.staticTexts["invalid usage payload"].waitForExistence(timeout: 3))
+    }
+
+    func testCompletedRunsAreGroupedWhileFailureStaysVisible() {
+        let app = launch("appearance")
+        openConversation(app)
+        let completed = app.buttons["completed-runs"]
+        revealEarlier(completed, in: app)
+        XCTAssertEqual(completed.value as? String, "已折叠")
+        XCTAssertFalse(app.buttons["run-probe"].exists)
+        XCTAssertTrue(app.buttons["run-merge"].exists)
+        completed.tap()
+        let success = app.buttons["run-probe"]
+        if !success.isHittable { app.scrollViews["conversation-transcript"].swipeUp() }
+        XCTAssertTrue(success.isHittable)
+        success.tap()
+        XCTAssertTrue(app.staticTexts["Gene coordinates found."].waitForExistence(timeout: 3))
+        // A second-level run disclosure must not collapse its completed group.
+        XCTAssertEqual(completed.value as? String, "已展开")
+        revealEarlier(completed, in: app)
+        completed.tap()
+        XCTAssertFalse(app.buttons["run-probe"].exists)
+        XCTAssertTrue(app.buttons["run-merge"].exists)
+    }
+
+    func testLongConversationTitleDetailsAndJumpToLatest() {
+        verifyConversationNavigation(darkAndLarge: false)
+    }
+
+    func testLongConversationNavigationWithAccessibilityText() {
+        verifyConversationNavigation(darkAndLarge: true)
+    }
+
+    private func verifyConversationNavigation(darkAndLarge: Bool) {
+        let app = launch("interaction", darkAndLarge: darkAndLarge)
+        let title = "/data1/home/research/project/PlantRootAtlas/跨物种表达分析"
+        openConversation(app, title: title)
+        let info = app.buttons["conversation-info"]
+        XCTAssertTrue(info.isHittable)
+        XCTAssertFalse(info.frame.intersects(app.buttons["conversation-files"].frame))
+        info.tap()
+        XCTAssertTrue(app.navigationBars["对话详情"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[title].firstMatch.exists)
+        // The new details sheet uses the same window-level Escape stack as files.
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(app.buttons["完成"].exists)
+        XCTAssertTrue(info.isHittable)
+        let transcript = app.scrollViews["conversation-transcript"]
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let jump = app.buttons["jump-to-latest"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 5))
+        XCTAssertTrue(jump.isHittable)
+        XCTAssertGreaterThanOrEqual(jump.frame.height, 44)
+        jump.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: jump)], timeout: 5), .completed)
+        XCTAssertTrue(app.buttons["follow-up-2"].isHittable)
+        XCTAssertFalse(app.buttons["send-message"].isEnabled)
+    }
+
+    private func revealEarlier(_ element: XCUIElement, in app: XCUIApplication,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        let transcript = app.scrollViews["conversation-transcript"]
+        for _ in 0..<10 {
+            if element.isHittable { break }
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(element.isHittable, file: file, line: line)
     }
 
     func testLongSuggestionsStayReadableAndOnlyFillDraft() {

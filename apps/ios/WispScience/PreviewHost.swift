@@ -10,8 +10,16 @@ import WispRemote
         let environment = ProcessInfo.processInfo.environment
         guard let mode = environment["WISP_UI_TESTING"] ?? (environment["WISP_TESTING"] == "1" ? "connection" : nil) else { return nil }
         let credential = MemoryCredential(connected: mode != "connection")
-        let connection = RemoteConnection(socketFactory: { _ in Socket(running: mode == "running", appearance: mode == "appearance") })
-        return RemoteWorkspace(connection: connection, credentials: credential, preferences: nil)
+        let connection = RemoteConnection(socketFactory: { _ in
+            Socket(running: mode == "running" || mode == "process-running", appearance: mode == "appearance" || mode == "interaction",
+                   interaction: mode == "interaction", malformedUsage: mode == "usage-malformed",
+                   process: mode == "process" || mode == "process-running", offline: mode == "cache-offline")
+        })
+        let cache: RemoteReadCache?
+        if mode.hasPrefix("cache-"), let id = environment["WISP_CACHE_TEST_ID"], let uuid = UUID(uuidString: id) {
+            cache = RemoteReadCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent("wisp-ui-cache-" + uuid.uuidString))
+        } else { cache = nil }
+        return RemoteWorkspace(connection: connection, credentials: credential, preferences: nil, cache: cache)
     }
     private struct MemoryCredential: RemoteCredentialStoring {
         let connected: Bool
@@ -31,16 +39,50 @@ import WispRemote
         private var sequence: UInt64 = 1
         private var running: Bool
         private let appearance: Bool
+        private let interaction: Bool
         private var approved = false
         private let commands = ["list_projects", "remote_sessions", "native_conversation_snapshot", "native_conversation_create",
             "native_conversation_send", "native_conversation_enqueue", "native_conversation_queue_action", "native_conversation_stop",
             "native_conversation_approve", "native_conversation_seen", "native_conversation_inbox", "native_conversation_panel_file_directory",
             "native_conversation_panel_file_read", "remote_attach_image"]
-        init(running: Bool, appearance: Bool) {
+        init(running: Bool, appearance: Bool, interaction: Bool, malformedUsage: Bool, process: Bool, offline: Bool) {
             self.running = running
             self.appearance = appearance
+            self.interaction = interaction
+            if interaction {
+                messages = (1...40).map { index in
+                    .object(["role": .string("assistant"), "text": .string("历史记录 \(index)\n\n这是一条较早的离线研究记录，用于验证长对话滚动和返回最新消息。")])
+                } + messages
+            }
+            if appearance || malformedUsage {
+                messages.append(.object(["role": .string("usage"), "text": .string(malformedUsage ? "invalid usage payload" :
+                    #"{"input":323738,"output":1110,"reasoning":0,"cached":112128,"ctx_tokens":79761,"max_context":272000,"context_usage":{"conversation":59150}}"#)]))
+            }
+            if process {
+                messages = [
+                    .object(["role": .string("user"), "text": .string("生成跨物种表达热图")]),
+                    .object(["role": .string("reasoning"), "text": .string("先检查表达矩阵。")]),
+                    .object(["role": .string("assistant"), "text": .string("正在整理表达数据并生成图片。")]),
+                    .object(["role": .string("tool"), "tool_name": .string("shell"), "ok": .bool(true),
+                             "input": .string("python heatmap.py"), "text": .string("Heatmap generated.")]),
+                ]
+                messages += ["OG_log2FC_heatmap.pdf", "OG_log2FC_heatmap.png", "OG_log2FC_heatmap.svg", "heatmap_metadata.json"].map {
+                    .object(["role": .string("file_changed"), "text": .string("analysis/en-expression/output/figures/" + $0)])
+                }
+                messages += [
+                    .object(["role": .string("tool"), "tool_name": .string("view_image"), "ok": .bool(true), "text": .string("Image checked.")]),
+                    .object(["role": .string("tool"), "tool_name": .string("read"), "ok": .bool(true), "text": .string("Matrix loaded.")]),
+                    .object(["role": .string("tool"), "tool_name": .string("read"), "ok": .bool(false), "text": .string("Optional metadata was not found.")]),
+                    .object(["role": .string("tool"), "tool_name": .string("edit"), "ok": .bool(true), "text": .string("README updated.")]),
+                    .object(["role": .string("file_changed"), "text": .string("analysis/en-expression/README.md")]),
+                ]
+                if !running {
+                    messages.append(.object(["role": .string("assistant"), "text": .string("# 表达分析完成\n\n热图和报告已生成，可在文件中查看。")]))
+                }
+            }
             frames = [seal(.object(["type": .string("hello"), "nonce": .string("preview"), "name": .string("离线测试主机"),
                 "version": .string("fixture"), "commands": .array(commands.map(RemoteValue.string))]))]
+            if offline { frames = [] }
         }
         func send(_ text: String) async throws {
             let data = try AES.GCM.open(AES.GCM.SealedBox(combined: Data(base64Encoded: text)!), using: key, authenticating: RemoteCrypto.clientToHost)
@@ -67,7 +109,7 @@ import WispRemote
             switch request["command"].string {
             case "list_projects": return .array([.object(["id": .string("project-a"), "name": .string("RNA-seq 研究"), "session_count": .integer(1)])])
             case "remote_sessions", "native_conversation_inbox": return .array([.object([
-                "id": .string("session-a"), "title": .string("样本质控"), "project_id": .string("project-a"),
+                "id": .string("session-a"), "title": .string(interaction ? "/data1/home/research/project/PlantRootAtlas/跨物种表达分析" : "样本质控"), "project_id": .string("project-a"),
                 "project_name": .string("RNA-seq 研究"), "status": .string(running ? "running" : "needs_you"),
             ])])
             case "native_conversation_snapshot":

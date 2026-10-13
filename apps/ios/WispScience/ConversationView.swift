@@ -12,95 +12,131 @@ struct ConversationView: View {
     @State private var initialScroll = true
     @FocusState private var composing: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var snapshot: RemoteSnapshot? { model.snapshot }
     private var draft: Binding<String> {
         Binding(get: { model.drafts[route] ?? "" }, set: { model.drafts[route] = $0 })
     }
     private var blocked: Bool {
-        connection.state != .online || snapshot?.writable != true || model.busy.contains(route) || uploading
+        !model.canActOnSnapshot || snapshot?.writable != true || model.busy.contains(route) || uploading
     }
     var body: some View {
-        ScrollViewReader { reader in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    if model.history.cursor != .null {
-                        Button("加载更早的消息") { Task { await model.earlier() } }
-                            .disabled(model.loadingEarlier).frame(maxWidth: .infinity)
-                    }
-                    ForEach(Array(model.history.older.enumerated()), id: \.offset) { _, item in
-                        MessageView(item: item, model: model, route: route)
-                    }
-                    ForEach(Array((snapshot?.items ?? []).enumerated()), id: \.offset) { _, item in
-                        MessageView(item: item, model: model, route: route)
-                    }
-                    if let runs = snapshot?.value["run_cards"].array, !runs.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("运行记录").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            ForEach(runs, id: \.recordID) { run in RunCardView(run: run) }
+        GeometryReader { viewport in
+            ScrollViewReader { reader in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 20) {
+                        if let date = model.snapshotSavedAt, model.snapshotIsCached || connection.state != .online {
+                            Text("缓存内容 · \(date.formatted(date: .abbreviated, time: .shortened)) · 联网刷新后可操作")
+                                .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("cached-conversation")
                         }
-                    }
-                    ForEach(snapshot?.value["approvals"].array ?? [], id: \.approvalID) { approval in
-                        approvalCard(approval)
-                    }
-                    if let snapshot {
-                        if snapshot.running {
-                            HStack { ProgressView(); Text(snapshot.value["activity_status"].string.isEmpty ? "运行中…" : snapshot.value["activity_status"].string) }
-                                .font(.callout).foregroundStyle(.secondary)
-                        } else if !snapshot.value["error"].string.isEmpty {
-                            Text(snapshot.value["error"].string).foregroundStyle(.red)
+                        if model.history.cursor != .null {
+                            Button("加载更早的消息") { Task { await model.earlier() } }
+                                .disabled(model.loadingEarlier).frame(maxWidth: .infinity)
                         }
-                        if snapshot.writable && !snapshot.value["follow_ups"].array.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("继续探索").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                                ForEach(Array(snapshot.value["follow_ups"].array.enumerated()), id: \.offset) { index, suggestion in
-                                    Button { model.drafts[route] = suggestion.string } label: {
-                                        Text(suggestion.string)
-                                            .font(.subheadline).foregroundStyle(.primary)
-                                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(.horizontal, 12).padding(.vertical, 11)
-                                            .frame(minHeight: 44).contentShape(Rectangle())
+                        ForEach(RemoteTranscript.groups(model.history.older + (snapshot?.items ?? []),
+                            running: snapshot?.running == true, indexOffset: -model.history.older.count)) { group in
+                            TranscriptGroupView(group: group, model: model, route: route)
+                        }
+                        .id("\(snapshot?.epoch ?? ""):\(snapshot?.before.display ?? "")")
+                        if let runs = snapshot?.value["run_cards"].array, !runs.isEmpty {
+                            RunHistoryView(runs: runs)
+                        }
+                        ForEach(snapshot?.value["approvals"].array ?? [], id: \.approvalID) { approval in
+                            approvalCard(approval)
+                        }
+                        if let snapshot {
+                            if snapshot.running && model.canActOnSnapshot {
+                                HStack { ProgressView(); Text(snapshot.value["activity_status"].string.isEmpty ? "运行中…" : snapshot.value["activity_status"].string) }
+                                    .font(.callout).foregroundStyle(.secondary)
+                            } else if !snapshot.value["error"].string.isEmpty {
+                                Text(snapshot.value["error"].string).foregroundStyle(.red)
+                            }
+                            if snapshot.writable && !snapshot.value["follow_ups"].array.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("继续探索").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                    ForEach(Array(snapshot.value["follow_ups"].array.enumerated()), id: \.offset) { index, suggestion in
+                                        Button { model.drafts[route] = suggestion.string } label: {
+                                            Text(suggestion.string)
+                                                .font(.subheadline).foregroundStyle(.primary)
+                                                .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(.horizontal, 12).padding(.vertical, 11)
+                                                .frame(minHeight: 44).contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(WispRowButtonStyle())
+                                        .background(WispStyle.canvas, in: RoundedRectangle(cornerRadius: 10))
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(WispStyle.border, lineWidth: 1) }
+                                        .accessibilityIdentifier("follow-up-\(index)")
+                                        .accessibilityHint("填入输入框，确认后再发送")
                                     }
-                                    .buttonStyle(WispRowButtonStyle())
-                                    .background(WispStyle.canvas, in: RoundedRectangle(cornerRadius: 10))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(WispStyle.border, lineWidth: 1) }
-                                    .accessibilityIdentifier("follow-up-\(index)")
-                                    .accessibilityHint("填入输入框，确认后再发送")
                                 }
                             }
-                        }
-                        ForEach(snapshot.value["queue"]["items"].array, id: \.recordID) { item in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(item["message"].string).lineLimit(3)
-                                    StatusBadge(status: item["state"].string)
+                            ForEach(snapshot.value["queue"]["items"].array, id: \.recordID) { item in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(item["message"].string).lineLimit(3)
+                                        StatusBadge(status: item["state"].string)
+                                    }
+                                    Spacer()
+                                    if item["state"].string == "queued", connection.supports("native_conversation_queue_action") {
+                                        Button("取消排队") {
+                                            Task { await model.action("native_conversation_queue_action", route: route, extra: [
+                                                "id": item["id"], "digest": item["digest"], "action": .object(["kind": .string("cancel")]),
+                                            ]) }
+                                        }.disabled(blocked)
+                                    }
+                                }.padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+                            }
+                        } else if connection.state != .online {
+                            Text("这个对话尚未缓存，请联网后打开。").foregroundStyle(.secondary)
+                        } else { ProgressView("读取对话…").frame(maxWidth: .infinity) }
+                        Color.clear.frame(height: 1).id("latest")
+                            .background {
+                                GeometryReader { position in
+                                    Color.clear.preference(key: TranscriptBottomKey.self,
+                                        value: position.frame(in: .named("conversation-scroll")).maxY)
                                 }
-                                Spacer()
-                                if item["state"].string == "queued", connection.supports("native_conversation_queue_action") {
-                                    Button("取消排队") {
-                                        Task { await model.action("native_conversation_queue_action", route: route, extra: [
-                                            "id": item["id"], "digest": item["digest"], "action": .object(["kind": .string("cancel")]),
-                                        ]) }
-                                    }.disabled(blocked)
-                                }
-                            }.padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                    } else { ProgressView("读取对话…").frame(maxWidth: .infinity) }
-                    Color.clear.frame(height: 1).id("latest")
-                        .onAppear { followLatest = true }
-                        .onDisappear { followLatest = false }
+                            }
+                    }
+                    .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 8)
+                    .frame(maxWidth: 780).frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 8)
-                .frame(maxWidth: 780).frame(maxWidth: .infinity)
-            }
-            .accessibilityIdentifier("conversation-transcript")
-            .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
-            .refreshable { await model.refreshSelection() }
-            .onChange(of: snapshot) { _, next in
-                if next != nil && (initialScroll || followLatest) { reader.scrollTo("latest", anchor: .bottom); initialScroll = false }
+                .coordinateSpace(name: "conversation-scroll")
+                .onPreferenceChange(TranscriptBottomKey.self) { bottom in
+                    // Lazy rows can be created before they reach the visible viewport.
+                    // Geometry, rather than onAppear, determines whether to follow updates.
+                    followLatest = bottom.map { $0 <= viewport.size.height + 44 } ?? false
+                }
+                .accessibilityIdentifier("conversation-transcript")
+                .scrollDismissesKeyboard(.interactively)
+                .defaultScrollAnchor(.bottom)
+                .refreshable { await model.refreshSelection() }
+                .onChange(of: snapshot) { _, next in
+                    if next != nil && (initialScroll || followLatest) { reader.scrollTo("latest", anchor: .bottom); initialScroll = false }
+                }
+                .overlay(alignment: .bottom) {
+                    if !followLatest && snapshot != nil {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                                    reader.scrollTo("latest", anchor: .bottom)
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text("回到最新").font(.subheadline.weight(.medium))
+                                    WispIcon(.chevronDown, size: 16)
+                                }.padding(.horizontal, 14).frame(minHeight: 44)
+                            }
+                            .buttonStyle(.plain).foregroundStyle(WispStyle.accent)
+                            .background(.regularMaterial, in: Capsule())
+                            .overlay { Capsule().strokeBorder(WispStyle.border, lineWidth: 1) }
+                            .accessibilityIdentifier("jump-to-latest")
+                        }.padding(.horizontal, 18).padding(.bottom, 10).frame(maxWidth: 780)
+                    }
+                }
             }
         }
         .background(WispStyle.canvas)
@@ -109,9 +145,26 @@ struct ConversationView: View {
         .toolbarBackground(WispStyle.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            Button("文件") { model.sheet = .files(route, ".", true) }
-                .disabled(!connection.supports("native_conversation_panel_file_directory"))
+            ToolbarItem(placement: .principal) {
+                Button {
+                    model.sheet = .conversationInfo(model.title,
+                        model.projects.first { $0.recordID == route.project }?["name"].string ?? "")
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(model.title.isEmpty ? "未命名对话" : model.title)
+                            .font(.headline).lineLimit(1).truncationMode(.middle)
+                        WispIcon(.chevronDown, size: 12).foregroundStyle(.secondary)
+                    }.foregroundStyle(.primary).frame(minHeight: 44)
+                }.buttonStyle(.plain)
+                    .accessibilityIdentifier("conversation-info")
+                    .accessibilityLabel("对话详情：\(model.title)")
+                    .accessibilityHint("查看完整标题和所属项目")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("文件") { model.sheet = .files(route, ".", true) }
+                .disabled(connection.state == .online && !connection.supports("native_conversation_panel_file_directory"))
                 .accessibilityIdentifier("conversation-files")
+            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .onAppear { model.visibleRoute = route }
@@ -198,7 +251,7 @@ struct ConversationView: View {
                     Button("停止", role: .destructive) { Task { await model.action("native_conversation_stop", route: route) } }
                         .font(.subheadline).foregroundStyle(WispStyle.failure)
                         .frame(minWidth: 44, minHeight: 44).buttonStyle(WispRowButtonStyle())
-                        .disabled(connection.state != .online || model.busy.contains(route) || snapshot?.value["stopping"].bool == true)
+                        .disabled(!model.canActOnSnapshot || model.busy.contains(route) || snapshot?.value["stopping"].bool == true)
                 }
                 Button { Task { await model.send(route) } } label: {
                     HStack(spacing: 5) {
@@ -225,7 +278,7 @@ struct ConversationView: View {
                     .font(.subheadline).foregroundStyle(WispStyle.failure)
                     .frame(minWidth: 60, minHeight: 44).buttonStyle(WispRowButtonStyle())
                 Button("批准一次") { decide(true, approval) }.buttonStyle(WispSendButtonStyle())
-            }.disabled(connection.state != .online || model.busy.contains(route) || !connection.supports("native_conversation_approve"))
+            }.disabled(!model.canActOnSnapshot || model.busy.contains(route) || !connection.supports("native_conversation_approve"))
         }.padding(14).background(WispStyle.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
             .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(WispStyle.warning.opacity(0.25), lineWidth: 1) }
     }
@@ -233,6 +286,46 @@ struct ConversationView: View {
         Task { await model.action("native_conversation_approve", route: route, extra: [
             "approval_id": approval["approval_id"], "approved": .bool(approved),
         ]) }
+    }
+}
+
+private struct TranscriptGroupView: View {
+    let group: RemoteTranscript.Group
+    @ObservedObject var model: RemoteWorkspace
+    let route: ConversationRoute
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var summary: String {
+        var parts = ["执行过程"]
+        if group.toolCount > 0 { parts.append("\(group.toolCount) 步") }
+        if group.changedFileCount > 0 { parts.append("\(group.changedFileCount) 个文件") }
+        return parts.joined(separator: " · ")
+    }
+    var body: some View {
+        if group.isProcess {
+            DisclosureGroup {
+                ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
+                    MessageView(item: item, model: model, route: route)
+                }
+            } label: {
+                let layout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                layout {
+                    Text(summary).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if group.failureCount > 0 {
+                        Text("\(group.failureCount) 项失败").font(.caption.weight(.medium))
+                            .foregroundStyle(WispStyle.failure).fixedSize()
+                    }
+                }
+            }.disclosureGroupStyle(WispDisclosureStyle(identifier: "process-group-\(group.id)"))
+        } else {
+            ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
+                MessageView(item: item, model: model, route: route)
+            }
+        }
     }
 }
 
@@ -246,7 +339,7 @@ struct MessageView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(item["text"].string).textSelection(.enabled)
                 ForEach(Array(item["attachments"].array.enumerated()), id: \.offset) { _, attachment in
-                    RemoteImageView(connection: model.connection, route: route, source: ["path": attachment], label: (attachment.string as NSString).lastPathComponent)
+                    RemoteImageView(model: model, route: route, source: ["path": attachment], label: (attachment.string as NSString).lastPathComponent)
                 }
             }.font(.body).foregroundStyle(.primary).multilineTextAlignment(.leading)
                 .padding(14).background(WispStyle.surface, in: RoundedRectangle(cornerRadius: 16))
@@ -254,13 +347,15 @@ struct MessageView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
         case "assistant":
             MarkdownView(text: item["text"].string, resources: item["resources"].array, model: model, route: route)
+        case "usage":
+            UsageDetailsView(text: item["text"].string)
         case "tool", "acp_tool", "reasoning":
             DisclosureGroup {
                 if !item["input"].string.isEmpty { CodeText(text: item["input"].string) }
                 CodeText(text: item["text"].string)
                 if item["tool_name"].string == "generate_image", item["ok"].bool,
                    let path = RemoteMarkdown.localPath(item["input"].string) {
-                    RemoteImageView(connection: model.connection, route: route, source: ["path": .string(path)], label: "生成的图片")
+                    RemoteImageView(model: model, route: route, source: ["path": .string(path)], label: "生成的图片")
                 }
             } label: {
                 HStack {
@@ -277,6 +372,68 @@ struct MessageView: View {
             }.foregroundStyle(.secondary)
         default:
             if !item["text"].string.isEmpty { Text(item["text"].string).foregroundStyle(.secondary).textSelection(.enabled) }
+        }
+    }
+}
+
+private struct TranscriptBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat? { nil }
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct UsageDetailsView: View {
+    let text: String
+    private var usage: RemoteValue? {
+        guard let value = try? JSONDecoder().decode(RemoteValue.self, from: Data(text.utf8)),
+              case .object = value else { return nil }
+        return value
+    }
+    private let fields = [("input", "输入"), ("output", "输出"), ("cached", "缓存"),
+                          ("reasoning", "推理"), ("ctx_tokens", "上下文"), ("max_context", "上下文上限")]
+    var body: some View {
+        DisclosureGroup {
+            if let usage {
+                ForEach(fields, id: \.0) { key, label in
+                    if let count = usage[key].uint {
+                        LabeledContent(label, value: count.formatted()).font(.caption).monospacedDigit()
+                            .accessibilityIdentifier("usage-\(key)")
+                    }
+                }
+                DisclosureGroup {
+                    CodeText(text: text)
+                } label: {
+                    Text("原始数据").font(.caption).foregroundStyle(.secondary)
+                }.disclosureGroupStyle(WispDisclosureStyle(identifier: "usage-raw"))
+            } else {
+                CodeText(text: text)
+            }
+        } label: {
+            Text("用量统计").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+        }.disclosureGroupStyle(WispDisclosureStyle(identifier: "usage-details"))
+    }
+}
+
+private struct RunHistoryView: View {
+    let runs: [RemoteValue]
+    private var completed: [RemoteValue] { runs.filter { $0["status"].string == "succeeded" } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("运行记录 · \(runs.count)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            // Failures, active runs and unknown statuses remain visible. Only
+            // confirmed successes are tucked away; refreshes never reset expansion.
+            ForEach(runs.filter { $0["status"].string != "succeeded" }, id: \.recordID) { run in
+                RunCardView(run: run)
+            }
+            if !completed.isEmpty {
+                DisclosureGroup {
+                    ForEach(completed, id: \.recordID) { run in RunCardView(run: run) }
+                } label: {
+                    Text("已完成的记录（\(completed.count)）")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }.disclosureGroupStyle(WispDisclosureStyle(identifier: "completed-runs"))
+            }
         }
     }
 }

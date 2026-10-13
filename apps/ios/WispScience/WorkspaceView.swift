@@ -17,14 +17,23 @@ struct WorkspaceView: View {
             switch sheet {
             case .connection: ConnectionSettingsView(model: model, connection: connection)
             case .inbox: InboxView(model: model)
+            case .conversationInfo(let title, let project):
+                NavigationStack {
+                    Form {
+                        Section("完整标题") { Text(title).textSelection(.enabled) }
+                        if !project.isEmpty { Section("所属项目") { Text(project).textSelection(.enabled) } }
+                    }
+                    .navigationTitle("对话详情").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { model.sheet = nil } } }
+                }.accessibilityIdentifier("conversation-info-sheet")
             case .files(let route, let path, let directory):
                 FilesView(model: model, route: route, initialPath: path, isDirectory: directory)
             }
         }
         .task { model.restore() }
         .task(id: connection.state) { if connection.state == .online { await model.monitor() } }
-        .task(id: model.selectedProject) { if connection.state == .online { await model.refreshSelection() } }
-        .task(id: model.route) { if connection.state == .online { await model.refreshSelection() } }
+        .task(id: model.selectedProject) { await model.refreshSelection() }
+        .task(id: model.route) { await model.refreshSelection() }
     }
 
     private var workspaceContent: some View {
@@ -45,10 +54,11 @@ struct WorkspaceView: View {
                                     }.padding(.vertical, 4)
                                 }
                             }
-                        } header: { Text(connection.hostName) }
+                        } header: { Text(model.hostName) }
                         if model.projects.isEmpty { Text(connection.state == .online ? "暂无项目，请先在 Wisp 主机创建项目。" : "连接后显示项目。") }
                     }
                     .navigationTitle("Wisp")
+                    .navigationBarTitleDisplayMode(.inline)
                     .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
@@ -73,6 +83,7 @@ struct WorkspaceView: View {
                         if model.sessions.isEmpty { Text(model.selectedProject == nil ? "选择一个项目" : "暂无对话") .foregroundStyle(.secondary) }
                     }
                     .navigationTitle(model.projects.first { $0["id"].string == model.selectedProject }?["name"].string ?? "对话")
+                    .navigationBarTitleDisplayMode(.inline)
                     .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 400)
                     .toolbar {
                         if !model.isDemo {
@@ -96,7 +107,8 @@ struct WorkspaceView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if connection.state != .online {
                         HStack {
-                            Text(connection.diagnostic ?? "正在连接 Wisp 主机…").font(.caption)
+                            Text(model.projects.isEmpty ? (connection.diagnostic ?? "正在连接 Wisp 主机…") : "尚未连接 · 可查看已缓存内容，状态以联网刷新为准")
+                                .font(.caption).accessibilityIdentifier("offline-cache-status")
                             Spacer()
                             Button("重新连接") { model.reconnect() }
                         }.padding(12).background(.regularMaterial)
@@ -201,14 +213,22 @@ struct ConnectionSettingsView: View {
                 } else {
                     Section("当前连接") {
                         LabeledContent("中继", value: model.configuration?.relay.absoluteString ?? "")
-                        LabeledContent("主机", value: connection.hostName)
+                        LabeledContent("主机", value: model.hostName)
                         LabeledContent("版本", value: connection.hostVersion)
                         Text(connection.state == .online ? "已建立加密连接" : "等待主机连接")
                         Button("重新连接") { model.reconnect() }
                     }
                     Section {
                         Button("忘记连接并更换服务器", role: .destructive) { model.forget() }
-                    } footer: { Text("删除这台设备保存的联机码。项目和计算任务仍保留在 Wisp 主机上。") }
+                    } footer: { Text("删除这台设备保存的联机码和当前服务器的缓存。项目和计算任务仍保留在 Wisp 主机上。") }
+                    Section {
+                        LabeledContent("已用空间", value: ByteCountFormatter.string(fromByteCount: Int64(model.cacheBytes), countStyle: .file))
+                        Button("清除本机缓存", role: .destructive) { Task { await model.clearCachedData() } }
+                            .disabled(model.clearingCache).accessibilityIdentifier("clear-cache")
+                        if let notice = model.cacheNotice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+                    } header: { Text("离线缓存") }
+                      footer: { Text("已查看的对话和文件预览缓存在此设备，最多 50 MB、保留 30 天。不自动下载整个项目；系统可能回收缓存。") }
+                    .task { await model.updateCacheSize() }
                     Section {
                         Button("体验演示项目") { model.enterDemo() }.accessibilityIdentifier("enter-demo")
                     } footer: { Text("暂时断开云端连接，保留已保存的联机码。") }

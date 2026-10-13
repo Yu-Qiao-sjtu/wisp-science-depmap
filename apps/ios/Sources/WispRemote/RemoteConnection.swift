@@ -45,6 +45,7 @@ import Combine
     @Published public private(set) var hostVersion = ""
     @Published public private(set) var commands: Set<String> = []
     @Published public private(set) var diagnostic: String?
+    public private(set) var readSessionID = UUID()
     public var authenticated: (() -> Void)?
 
     private let factory: (URL) -> any RemoteSocket
@@ -117,6 +118,7 @@ import Combine
                     hostName = hello["name"].string
                     hostVersion = hello["version"].string
                     diagnostic = nil
+                    readSessionID = UUID()
                     state = .online
                     attempt = 0
                     authenticated?()
@@ -148,6 +150,7 @@ import Combine
 
     public func disconnect() {
         generation = UUID()
+        readSessionID = UUID()
         pump?.cancel()
         pump = nil
         sendTail?.cancel()
