@@ -45,7 +45,9 @@ pub use scoring::{
 /// `output_dir`. The receptor `ATOM` records are kept verbatim so the
 /// viewer shows the same protein as the input; ligand atoms are rewritten
 /// as `HETATM` records at the searched coordinates. Returns each mode
-/// together with the frame path, best first.
+/// together with the frame path, best first. Two extra outputs make the
+/// series playable in the viewer's trajectory mode (#277): `poses.pdb`
+/// carries the topology and `poses.dcd` one frame per pose in rank order.
 pub fn dock_builtin(
     receptor_path: &std::path::Path,
     ligand_path: &std::path::Path,
@@ -99,6 +101,16 @@ pub fn dock_builtin(
         out.push((path, pose.clone()));
     }
     std::fs::write(output_dir.join("scores.tsv"), table).map_err(|e| e.to_string())?;
+    // Trajectory pair (#276, #277): the first frame doubles as the topology
+    // sibling the viewer looks up next to the DCD, and the DCD carries one
+    // frame per pose in rank order.
+    let pose_paths: Vec<std::path::PathBuf> = out.iter().map(|(path, _)| path.clone()).collect();
+    std::fs::copy(&pose_paths[0], output_dir.join("poses.pdb")).map_err(|e| e.to_string())?;
+    crate::docking::trajectory::write_dcd_from_pose_files(
+        &pose_paths,
+        &output_dir.join("poses.dcd"),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(out)
 }
 
@@ -163,6 +175,13 @@ mod tests {
         let table = std::fs::read_to_string(output.join("scores.tsv")).unwrap();
         assert!(table.starts_with("pose\tgauss1\t"));
         assert_eq!(table.lines().count(), poses.len() + 1);
+        // The trajectory pair is playable (#277): a topology sibling next to
+        // a DCD whose header declares one frame per pose.
+        assert!(output.join("poses.pdb").exists());
+        let dcd = std::fs::read(output.join("poses.dcd")).unwrap();
+        assert_eq!(&dcd[4..8], b"CORD");
+        let frames = i32::from_le_bytes(dcd[8..12].try_into().unwrap());
+        assert_eq!(frames as usize, poses.len());
         // Determinism: the same seed and inputs reproduce the same files.
         let repeat_dir = dir.join("poses-repeat");
         let repeat = dock_builtin(&receptor_path, &ligand_path, &repeat_dir, &options).unwrap();

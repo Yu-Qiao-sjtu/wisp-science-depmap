@@ -744,7 +744,8 @@ impl Tool for DockLigandTool {
                     "engine": {"type": "string", "enum": ["builtin", "preview"], "description": "builtin = Rust-native Vina-family scoring + search (default); preview = geometric placement for teaching."},
                     "samples": {"type": "integer", "description": "How many poses to write, from 1 to 24. Default 8."},
                     "seed": {"type": "integer", "description": "Deterministic RNG seed for the builtin engine. Default 0."},
-                    "exhaustiveness": {"type": "integer", "description": "Builtin engine search breadth, from 1 to 32. Default 8."}
+                    "exhaustiveness": {"type": "integer", "description": "Builtin engine search breadth, from 1 to 32. Default 8."},
+                    "animation": {"type": "boolean", "description": "builtin: after presenting the frames, reopen the pose series as a DCD animation with the viewer's trajectory playback controls. Default false."}
                 },
                 "required": ["receptor", "ligand", "output_dir"]
             }),
@@ -862,10 +863,32 @@ impl Tool for DockLigandTool {
         } else {
             "preview engine (geometric placement)"
         };
-        ToolResult::ok(format!(
+        let mut message = format!(
             "presented {} docking poses ({engine_note}){score_table}",
             frames.len()
-        ))
+        );
+        if engine == "builtin"
+            && args
+                .get("animation")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        {
+            let topology = std::path::Path::new(&output_dir).join("poses.pdb");
+            let trajectory = std::path::Path::new(&output_dir).join("poses.dcd");
+            match open_trajectory_viewer(
+                self.app.clone(),
+                topology.to_string_lossy().into_owned(),
+                trajectory.to_string_lossy().into_owned(),
+            )
+            .await
+            {
+                Ok(()) => message.push_str("; animation opened in trajectory mode"),
+                Err(error) => message.push_str(&format!(
+                    "; animation unavailable ({error}); open poses.dcd next to poses.pdb instead"
+                )),
+            }
+        }
+        ToolResult::ok(message)
     }
 }
 
