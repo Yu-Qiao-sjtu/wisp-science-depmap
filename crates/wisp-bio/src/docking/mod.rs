@@ -15,6 +15,8 @@
 //!   grid-accelerated evaluation paths.
 //! * [`engine`] — the [`DockingEngine`] contract shared by every backend,
 //!   the per-term [`ScoreTerms`] decomposition, and the built-in engine.
+//! * [`trajectory`] — DCD output so pose series play in the viewer's
+//!   stock trajectory pipeline (#276).
 //!
 //! NOTICE: the Vina scoring constants and typing conventions derive from
 //! AutoDock Vina (Apache-2.0), Copyright AutoDock contributors, and from
@@ -26,6 +28,7 @@ pub mod engine;
 pub mod prep;
 pub mod scoring;
 pub mod search;
+pub mod trajectory;
 
 pub use engine::{DockingEngine, ScoreTerms, ScoredPose, SearchOptions, VinaEngine};
 pub use prep::{
