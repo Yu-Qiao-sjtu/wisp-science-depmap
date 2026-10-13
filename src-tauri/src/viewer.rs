@@ -734,14 +734,17 @@ impl Tool for DockLigandTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             "dock_ligand",
-            "Rigid-dock a ligand PDB onto a receptor PDB. Each sample is written as pose-NNN.pdb and shown in the molecular viewer before the next sample, so the open window advances through the search. This is geometric placement, not an affinity prediction.",
+            "Dock a ligand PDB onto a receptor PDB. With engine=\"builtin\" (default) the Rust-native Vina-family engine scores and searches (Monte-Carlo + quasi-Newton, deterministic per seed) and each mode is written as pose-NNN.pdb with a scores.tsv energy table; with engine=\"preview\" poses are geometric placements for teaching/demos. Every frame is shown in the molecular viewer before the next sample, so the open window advances through the search. Neither engine is an affinity prediction.",
             json!({
                 "type": "object",
                 "properties": {
                     "receptor": {"type": "string", "description": "Receptor PDB path."},
                     "ligand": {"type": "string", "description": "Ligand PDB path."},
                     "output_dir": {"type": "string", "description": "Directory that receives pose-001.pdb and the following frames."},
-                    "samples": {"type": "integer", "description": "How many poses to write, from 1 to 24. Default 8."}
+                    "engine": {"type": "string", "enum": ["builtin", "preview"], "description": "builtin = Rust-native Vina-family scoring + search (default); preview = geometric placement for teaching."},
+                    "samples": {"type": "integer", "description": "How many poses to write, from 1 to 24. Default 8."},
+                    "seed": {"type": "integer", "description": "Deterministic RNG seed for the builtin engine. Default 0."},
+                    "exhaustiveness": {"type": "integer", "description": "Builtin engine search breadth, from 1 to 32. Default 8."}
                 },
                 "required": ["receptor", "ligand", "output_dir"]
             }),
@@ -769,19 +772,83 @@ impl Tool for DockLigandTool {
             .get("samples")
             .and_then(|value| value.as_u64())
             .unwrap_or(8) as usize;
-        let frames = match wisp_bio::dock::write_docking_frames(
-            std::path::Path::new(&receptor),
-            std::path::Path::new(&ligand),
-            std::path::Path::new(&output_dir),
-            samples,
-        ) {
+        let engine = args
+            .get("engine")
+            .and_then(|value| value.as_str())
+            .unwrap_or("builtin")
+            .to_ascii_lowercase();
+        let frames = match engine.as_str() {
+            "preview" => wisp_bio::dock::write_docking_frames(
+                std::path::Path::new(&receptor),
+                std::path::Path::new(&ligand),
+                std::path::Path::new(&output_dir),
+                samples,
+            )
+            .map(|paths| {
+                paths
+                    .into_iter()
+                    .map(|path| (path, None))
+                    .collect::<Vec<_>>()
+            }),
+            "builtin" => {
+                let seed = args.get("seed").and_then(|v| v.as_u64()).unwrap_or(0);
+                let exhaustiveness = args
+                    .get("exhaustiveness")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(8)
+                    .clamp(1, 32) as u32;
+                let options = wisp_bio::docking::SearchOptions {
+                    seed,
+                    exhaustiveness,
+                    num_modes: samples.clamp(1, 24),
+                };
+                wisp_bio::docking::dock_builtin(
+                    std::path::Path::new(&receptor),
+                    std::path::Path::new(&ligand),
+                    std::path::Path::new(&output_dir),
+                    &options,
+                )
+                .map(|poses| {
+                    poses
+                        .into_iter()
+                        .map(|(path, pose)| (path, Some(pose.terms)))
+                        .collect::<Vec<_>>()
+                })
+            }
+            other => {
+                return ToolResult::fail(format!(
+                    "unknown engine {other:?} (use builtin or preview)"
+                ))
+            }
+        };
+        let frames = match frames {
             Ok(frames) => frames,
             Err(error) => return ToolResult::fail(error),
         };
-        for frame in &frames {
+        let mut score_table = String::new();
+        for (index, (frame, terms)) in frames.iter().enumerate() {
+            if let (Some(terms), 0) = (terms, index) {
+                score_table = format!(
+                    "\n\n| pose | inter | intra | torsion | total |\n|---|---|---|---|---|\n| 1 | {:.2} | {:.2} | {:.2} | {:.2} |",
+                    terms.inter, terms.intra, terms.torsion, terms.total
+                );
+            } else if let Some(terms) = terms {
+                score_table.push_str(&format!(
+                    "\n| {} | {:.2} | {:.2} | {:.2} | {:.2} |",
+                    index + 1,
+                    terms.inter,
+                    terms.intra,
+                    terms.torsion,
+                    terms.total
+                ));
+            }
+            let body = match std::fs::read_to_string(frame) {
+                Ok(body) => body,
+                Err(error) => return ToolResult::fail(error.to_string()),
+            };
             if let Err(error) = present_structure_in_viewer(
                 self.app.clone(),
-                frame.to_string_lossy().into_owned(),
+                body,
                 Some("hetatm".to_string()),
                 None,
             )
@@ -790,7 +857,15 @@ impl Tool for DockLigandTool {
                 return ToolResult::fail(error);
             }
         }
-        ToolResult::ok(format!("presented {} docking poses", frames.len()))
+        let engine_note = if engine == "builtin" {
+            "builtin engine; full per-term table in scores.tsv"
+        } else {
+            "preview engine (geometric placement)"
+        };
+        ToolResult::ok(format!(
+            "presented {} docking poses ({engine_note}){score_table}",
+            frames.len()
+        ))
     }
 }
 
