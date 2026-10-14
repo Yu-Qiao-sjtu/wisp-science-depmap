@@ -7185,8 +7185,7 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let macos_exit_for_setup = Arc::clone(&macos_exit_in_progress);
 
-    let builder = tauri::Builder::default()
-        .manage(mcp_app_children::McpAppChildren::default());
+    let builder = tauri::Builder::default().manage(mcp_app_children::McpAppChildren::default());
     #[cfg(target_os = "macos")]
     let builder = builder.manage(native_host_lifecycle::NativeHostLifecycle::new(
         native_settings::requested(std::env::args()),
@@ -7890,6 +7889,8 @@ pub fn run() {
             artifact_commands::list_artifacts,
             artifact_commands::search_artifacts,
             session_commands::search_sessions,
+            session_commands::search_project_chats,
+            session_commands::locate_project_chat_match,
             artifact_commands::read_artifact,
             artifact_commands::read_artifact_bytes,
             artifact_commands::download_artifact,
