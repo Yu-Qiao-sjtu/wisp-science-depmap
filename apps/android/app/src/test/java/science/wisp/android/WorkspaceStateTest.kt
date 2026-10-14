@@ -30,4 +30,29 @@ class WorkspaceStateTest {
         assertFalse(state.copy(status = state.status.copy(session = "reconnected")).can("send"))
         assertFalse(state.copy(snapshotSession = "").can("send"))
     }
+    @Test fun tabsKeepIndependentNavigationAndConversationDrafts() {
+        val project = Page(PageKind.SESSIONS, "研究", "project")
+        val home = WorkspaceState(stack = listOf(WorkspaceTab.CONVERSATIONS.root, project), drafts = mapOf(route to "未发送"))
+        val calendar = home.switchingTab(WorkspaceTab.CALENDAR)
+        assertEquals(PageKind.CALENDAR, calendar.page.kind)
+        assertTrue(calendar.hasBack)
+        assertTrue(calendar.showsTabs)
+        val restored = calendar.switchingTab(WorkspaceTab.CONVERSATIONS)
+        assertEquals(home.stack, restored.stack)
+        assertEquals("未发送", restored.drafts[route])
+        assertFalse(restored.copy(stack = restored.stack + Page(PageKind.CONVERSATION, "对话", "project", "session")).showsTabs)
+        assertFalse(WorkspaceState().hasBack)
+    }
+    @Test fun journeyMonthDoesNotMoveTheCalendarTab() {
+        val day = java.time.LocalDate.of(2026, 10, 14)
+        val calendar = WorkspaceState(month = java.time.YearMonth.from(day), selectedDay = day, journeyMonth = java.time.YearMonth.from(day))
+        val journey = calendar.shiftingJourneyMonth(-1)
+        assertEquals(java.time.YearMonth.of(2026, 9), journey.journeyMonth)
+        assertEquals(calendar.month, journey.month)
+        assertEquals(day, journey.selectedDay)
+    }
+    @Test fun hostReasoningItemsAreLabelledAsThinking() {
+        assertEquals("思考", roleLabel("reasoning"))
+        assertEquals("工具", roleLabel("tool"))
+    }
 }

@@ -1,6 +1,7 @@
 package science.wisp.remote
 
 import kotlinx.serialization.json.*
+import java.time.LocalDate
 
 data class ConversationRoute(val project: String, val session: String) {
     val args: JsonObject get() = obj("session_id" to string(session))
@@ -25,6 +26,28 @@ class RemoteSnapshot(val value: JsonElement, val route: ConversationRoute) {
     fun supersedes(previous: RemoteSnapshot?): Boolean = previous == null || epoch != previous.epoch || sequence!! >= previous.sequence!!
 }
 
+/** Marks each settled snapshot read once, like the iOS client, so the host clears 待处理 for replies seen here. */
+class SeenMarker {
+    private var last = ""
+    suspend fun mark(service: RemoteService, snapshot: RemoteSnapshot) {
+        if (snapshot.running || "native_conversation_seen" !in service.status.value.commands) return
+        val stamp = "${snapshot.epoch}:${snapshot.route.project}:${snapshot.route.session}:${snapshot.sequence}"
+        if (stamp == last) return
+        service.call("native_conversation_seen", snapshot.route.project, snapshot.route.args)
+        last = stamp
+    }
+}
+
+/** The host's inbox already spans every project; the first project only routes the request. */
+suspend fun loadInbox(call: suspend (command: String, project: String?) -> JsonElement): List<JsonElement> {
+    val projects = call("list_projects", null)
+    requireRemote(projects is JsonArray)
+    val project = projects.rows().firstOrNull()?.field("id")?.text() ?: return emptyList()
+    val rows = call("native_conversation_inbox", project)
+    requireRemote(rows is JsonArray)
+    return rows.rows()
+}
+
 /** All mutations require a snapshot fetched during this authenticated socket session. */
 fun canAct(status: ConnectionStatus, snapshot: RemoteSnapshot?, snapshotSession: String, command: String): Boolean =
     status.phase == ConnectionPhase.ONLINE && status.session.isNotEmpty() && status.session == snapshotSession &&
@@ -43,7 +66,7 @@ data class Question(val text: String, val options: List<Pair<String, String>>, v
     }
 }
 
-data class LocalEntry(val id: String, val kind: String, val title: String, val text: String, val done: Boolean = false)
+data class LocalEntry(val id: String, val kind: String, val title: String, val text: String, val done: Boolean = false, val dueDate: LocalDate? = null)
 
 /** Text-only offline foundation. Photo recognition is deliberately an unsupported platform capability. */
 interface NotebookTextRecognizer {
@@ -57,14 +80,29 @@ object UnavailableTextRecognizer : NotebookTextRecognizer {
 
 object LocalEntries {
     fun encode(entries: List<LocalEntry>): String = obj("schema" to JsonPrimitive(1), "entries" to JsonArray(entries.map {
-        obj("id" to string(it.id), "kind" to string(it.kind), "title" to string(it.title), "text" to string(it.text), "done" to JsonPrimitive(it.done))
+        obj("id" to string(it.id), "kind" to string(it.kind), "title" to string(it.title), "text" to string(it.text), "done" to JsonPrimitive(it.done), "due_date" to (it.dueDate?.let { date -> string(date.toString()) } ?: JsonNull))
     })).toString()
     fun decode(text: String): List<LocalEntry> {
         val value = Json.parseToJsonElement(text)
         requireRemote(value.field("schema") == JsonPrimitive(1) && value.field("entries") is JsonArray)
         return value.field("entries").rows().map {
             requireRemote(it.field("id").text().isNotBlank() && it.field("kind").text() in setOf("checklist", "notebook"))
-            LocalEntry(it.field("id").text(), it.field("kind").text(), it.field("title").text(), it.field("text").text(), it.field("done").flag())
+            LocalEntry(it.field("id").text(), it.field("kind").text(), it.field("title").text(), it.field("text").text(), it.field("done").flag(),
+                it.field("due_date").let { date -> if (date == JsonNull) null else LocalDate.parse(date.text()) })
         }.also { requireRemote(it.map { row -> row.id }.distinct().size == it.size) }
     }
 }
+
+/** Stable device-local grouping; undated legacy entries are never silently assigned a deadline. */
+enum class ChecklistSection(val label: String) {
+    OVERDUE("逾期"), TODAY("今天"), UPCOMING("接下来"), UNDATED("未设日期"), COMPLETED("已完成")
+}
+fun LocalEntry.checklistSection(today: LocalDate): ChecklistSection = when {
+    done -> ChecklistSection.COMPLETED
+    dueDate == null -> ChecklistSection.UNDATED
+    dueDate < today -> ChecklistSection.OVERDUE
+    dueDate == today -> ChecklistSection.TODAY
+    else -> ChecklistSection.UPCOMING
+}
+
+fun completedRuns(runs: List<JsonElement>): List<JsonElement> = runs.filter { it.field("status").text() == "succeeded" }
