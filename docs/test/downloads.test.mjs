@@ -9,10 +9,12 @@ import { selectAssets, syncRelease } from "../scripts/sync-downloads.mjs";
 const release = () => ({ tagName: "v1.12.0", isDraft: false, isPrerelease: false,
   assets: PACKAGES.map(pkg => ({ id: "github-asset-id", name: assetName("v1.12.0", pkg), size: 7 })) });
 
-test("selects nine exact installer names and excludes updater/source archives", () => {
+test("selects exact standard, mobile and native installer names and excludes updater/source archives", () => {
   const data = release();
   data.assets.push({ name: "latest.json", size: 123 }, { name: "wisp-science_1.12.0_x64.app.tar.gz", size: 123 });
-  assert.equal(selectAssets(data).length, 9);
+  assert.equal(selectAssets(data).length, 13);
+  assert.ok(selectAssets(data).some(asset => asset.name === "Wisp-Science-SwiftUI_1.12.0_x86_64.dmg"));
+  assert.ok(selectAssets(data).some(asset => asset.name === "Wisp-Science-WinUI-Preview_1.12.0_x64-self-contained-setup.exe"));
   data.assets.pop();
   data.assets.shift();
   assert.throws(() => selectAssets(data), /Missing/);
@@ -22,9 +24,9 @@ test("selects nine exact installer names and excludes updater/source archives", 
   assert.throws(() => selectAssets(duplicate), /ambiguous/);
 });
 
-test("the optional APK never blocks desktop installers, but a published one is validated", () => {
+test("optional mobile and native builds never block standard installers, but published ones are validated", () => {
   const desktop = release();
-  desktop.assets = desktop.assets.filter(asset => !asset.name.endsWith(".apk"));
+  desktop.assets = desktop.assets.filter(asset => PACKAGES.some(pkg => !pkg.optional && asset.name === assetName(desktop.tagName, pkg)));
   assert.equal(selectAssets(desktop).length, 8);
   assert.equal(selectAssets(desktop).some(asset => asset.os === "android"), false);
   const missingDesktop = release();
@@ -52,6 +54,11 @@ test("download paths reject traversal, unknown files and updater manifests", () 
   assert.ok(validDownloadKey(key));
   assert.ok(validDownloadKey(key.replace("x64.dmg", "android.apk")));
   assert.equal(validDownloadKey(key.replace("x64.dmg", "android-debug.apk")), false);
+  for (const name of ["Wisp-Science-SwiftUI_1.12.0_aarch64.dmg", "Wisp-Science-SwiftUI_1.12.0_x86_64.dmg",
+    "Wisp-Science-WinUI-Preview_1.12.0_x64-framework-dependent-setup.exe", "Wisp-Science-WinUI-Preview_1.12.0_x64-self-contained-setup.exe"]) {
+    assert.ok(validDownloadKey(key.replace("wisp-science_1.12.0_x64.dmg", name)));
+    assert.equal(validDownloadKey(key.replace("wisp-science_1.12.0_x64.dmg", name + ".sha256")), false);
+  }
   for (const value of ["latest.json", "../secret", key + "/extra", key.replace("1.12.0_x64", "1.11.0_x64"), key.replace("x64.dmg", "x64.app.tar.gz")]) {
     assert.equal(validDownloadKey(value), false);
   }
@@ -69,7 +76,7 @@ async function fixture(t, overrides = {}) {
 test("publishes validated, checksummed manifest after every installer", async t => {
   const { uploads, deps } = await fixture(t);
   const manifest = await syncRelease(release(), deps);
-  assert.equal(uploads.length, 10);
+  assert.equal(uploads.length, 14);
   assert.equal(uploads.at(-1).key, "latest.json");
   assert.deepEqual(JSON.parse(uploads.at(-1).body), validateManifest(manifest));
   assert.ok(uploads.slice(0, -1).every(({ key }) => validDownloadKey(key)));
@@ -83,10 +90,49 @@ test("manifest without the APK stays valid; unknown or duplicate packages do not
   const manifest = await syncRelease(release(), deps);
   const apk = manifest.packages.find(asset => asset.id === "android-universal-apk");
   const desktop = manifest.packages.filter(asset => asset !== apk);
-  assert.equal(validateManifest({ ...manifest, packages: desktop }).packages.length, 8);
+  assert.equal(validateManifest({ ...manifest, packages: desktop }).packages.length, 12);
   assert.throws(() => validateManifest({ ...manifest, packages: [...manifest.packages, apk] }));
   assert.throws(() => validateManifest({ ...manifest, packages: [...desktop, { ...apk, id: "ios-universal-ipa" }] }), /Invalid download manifest/);
   assert.throws(() => validateManifest({ ...manifest, packages: [...desktop, { ...apk, name: "wisp-science_1.12.0_x64.dmg" }] }), /android-universal-apk/);
+});
+
+test("incomplete latest builds retain the newest published package, regardless of release-list order", () => {
+  const previous = release();
+  const older = { ...release(), tagName: "v1.9.0", assets: PACKAGES.map(pkg => ({ name: assetName("v1.9.0", pkg), size: 7 })) };
+  const latest = { ...release(), tagName: "v1.20.0", assets: [{ name: "wisp-science_1.20.0_android.apk", size: 7 }] };
+  const selected = selectAssets(latest, [older, previous, { ...previous, tagName: "v1.21.0" }, { ...previous, isDraft: true }]);
+  assert.equal(selected.length, 13);
+  assert.equal(selected.find(asset => asset.os === "android").tag, "v1.20.0");
+  assert.equal(selected.find(asset => asset.id === "macos-x64-swiftui").name, "Wisp-Science-SwiftUI_1.12.0_x86_64.dmg");
+  assert.equal(selected.find(asset => asset.id === "windows-x64-exe").tag, "v1.12.0");
+  latest.assets.push({ name: "wisp-science_1.20.0_x64-setup.exe", size: 0 });
+  assert.throws(() => selectAssets(latest, [previous]), /Missing or ambiguous/);
+});
+
+test("mixed-version synchronization downloads and links each package from its actual release", async t => {
+  const calls = [];
+  const latest = { ...release(), tagName: "v1.20.0", assets: [{ name: "wisp-science_1.20.0_android.apk", size: 7 }] };
+  const { uploads, deps } = await fixture(t, {
+    fallbackReleases: [release()], currentTag: async () => "v1.20.0",
+    download: async (name, file, tag) => { calls.push({ name, tag }); await writeFile(file, "package"); },
+  });
+  const manifest = await syncRelease(latest, deps);
+  const apk = manifest.packages.find(asset => asset.id === "android-universal-apk");
+  const native = manifest.packages.find(asset => asset.id === "windows-x64-winui-framework");
+  assert.equal(manifest.tag, "v1.20.0");
+  assert.equal(apk.tag, "v1.20.0");
+  assert.equal(native.tag, "v1.12.0");
+  assert.match(native.key, /^releases\/v1\.12\.0\//);
+  assert.ok(calls.some(item => item.tag === "v1.12.0" && item.name === native.name));
+  assert.equal(uploads.at(-1).key, "latest.json");
+  assert.equal(validateManifest(manifest), manifest);
+  const future = { ...native, tag: "v1.21.0" };
+  assert.throws(() => validateManifest({ ...manifest, packages: manifest.packages.map(item => item === native ? future : item) }));
+  const wrongPath = { ...native, key: native.key.replace("v1.12.0", "v1.20.0") };
+  assert.throws(() => validateManifest({ ...manifest, packages: manifest.packages.map(item => item === native ? wrongPath : item) }));
+  const legacy = await syncRelease(release(), (await fixture(t)).deps);
+  legacy.packages.forEach(asset => delete asset.tag);
+  assert.equal(validateManifest(legacy), legacy);
 });
 
 test("the APK is uploaded with the Android package type, installers as octet streams", async t => {

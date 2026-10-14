@@ -23,8 +23,10 @@ function render() {
     : os.value === "windows" ? [["x64", "Intel / AMD (64-bit)"]]
     : os.value === "android" ? [["universal", text("通用 · 手机与平板", "Universal · phones and tablets")]] : [];
   options(arch, architectures.length > 1 ? [["", text("请选择芯片", "Choose a processor")], ...architectures] : architectures, arch.value);
-  const formats = os.value === "windows" ? [["exe", text("EXE · 推荐", "EXE · Recommended")], ["msi", "MSI"]]
-    : os.value === "macos" ? [["dmg", "DMG"]]
+  const formats = os.value === "windows" ? [["exe", text("常规版 · EXE · 推荐", "Standard · EXE · Recommended")], ["msi", text("常规版 · MSI", "Standard · MSI")],
+      ["winui-framework", text("WinUI 预览版 · 轻量安装包", "WinUI Preview · Lightweight installer")],
+      ["winui-self-contained", text("WinUI 预览版 · 含运行时", "WinUI Preview · Runtimes included")]]
+    : os.value === "macos" ? [["dmg", text("常规版 · DMG · 推荐", "Standard · DMG · Recommended")], ["swiftui", text("SwiftUI 原生版 · DMG", "SwiftUI native · DMG")]]
     : os.value === "linux" ? [["deb", "DEB · Debian / Ubuntu"], ["appimage", "AppImage"]]
     : os.value === "android" ? [["apk", "APK"]] : [];
   options(format, formats, format.value);
@@ -37,17 +39,20 @@ function render() {
   const status = document.getElementById("release-status");
   status.removeAttribute("data-text-zh");
   status.removeAttribute("data-text-en");
-  status.textContent = manifest ? text(`可下载版本 ${manifest.tag}`, `Available release ${manifest.tag}`)
-    : failed ? text("暂时无法读取下载清单，请使用 GitHub 备用下载。", "Downloads are temporarily unavailable. Please use GitHub below.")
-    : text("正在读取可下载版本…", "Loading the available release…");
   const pkg = PACKAGES.find(item => item.os === os.value && item.arch === arch.value && item.format === format.value);
   const asset = manifest?.packages.find(item => item.id === pkg?.id);
+  const tag = asset?.tag ?? manifest?.tag;
+  status.textContent = manifest ? (tag === manifest.tag
+    ? text(`可下载版本 ${tag}`, `Available release ${tag}`)
+    : text(`可下载版本 ${tag} · 最新发布 ${manifest.tag}`, `Available release ${tag} · Latest release ${manifest.tag}`))
+    : failed ? text("暂时无法读取下载清单，请使用 GitHub 备用下载。", "Downloads are temporarily unavailable. Please use GitHub below.")
+    : text("正在读取可下载版本…", "Loading the available release…");
   primary.removeAttribute("href");
   primary.setAttribute("aria-disabled", String(!asset));
-  // An optional package (the APK) can be absent from a release; older releases may still have it.
+  // Optional mobile/native installers can be absent from all published releases.
   const absent = manifest && pkg && !asset;
   document.getElementById("download-github").href = asset
-    ? `${RELEASES}/download/${manifest.tag}/${encodeURIComponent(asset.name)}` : absent ? RELEASES : `${RELEASES}/latest`;
+    ? `${RELEASES}/download/${tag}/${encodeURIComponent(asset.name)}` : absent ? RELEASES : `${RELEASES}/latest`;
   setText("package-name", asset?.name || (absent
     ? text("此版本暂未提供该安装包，请在 GitHub 查看其他版本。", "This release does not include this package. Check GitHub for other releases.")
     : text("选择系统与芯片后显示对应安装包。", "Choose a system and processor to see your installer.")));
@@ -55,7 +60,11 @@ function render() {
   document.getElementById("checksum-details").hidden = !asset;
   setText("package-checksum", asset?.sha256 || "");
   if (asset) primary.href = `${DOWNLOAD_ORIGIN}/downloads/${asset.key}`;
-  setText("install-help", !pkg ? "" : pkg.os === "macos"
+  setText("install-help", !pkg ? "" : pkg.format === "swiftui"
+    ? text("需要 macOS 13 或更高版本。打开 DMG，将 Wisp Science SwiftUI 拖入 Applications；可与常规版并存，更新需手动下载。", "Requires macOS 13 or later. Open the DMG and drag Wisp Science SwiftUI into Applications. It installs alongside the standard app and updates by manual download.")
+    : pkg.format === "winui-framework" ? text("WinUI 预览版。安装时会从 Microsoft 下载缺少的 .NET 和 Windows App Runtime；请保持联网。", "WinUI Preview. Setup downloads missing .NET and Windows App Runtime dependencies from Microsoft; keep an internet connection available.")
+    : pkg.format === "winui-self-contained" ? text("WinUI 预览版。已包含 .NET 和 Windows App SDK 运行时，安装包较大；功能仍在持续补充。", "WinUI Preview. Includes .NET and Windows App SDK runtimes in a larger installer. Feature coverage is still growing.")
+    : pkg.os === "macos"
     ? text("打开 DMG，将 Wisp Science 拖入 Applications。", "Open the DMG and drag Wisp Science into Applications.")
     : pkg.os === "windows" ? text("运行安装包并按提示完成安装。", "Run the installer and follow the setup steps.")
     : pkg.os === "android" ? text("下载后打开 APK；首次安装需允许浏览器“安装未知应用”。升级时直接覆盖安装，无需卸载。", "Open the downloaded APK and allow your browser to install unknown apps the first time. Install updates over the existing app; no uninstall needed.")

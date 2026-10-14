@@ -12,6 +12,10 @@ export const PACKAGES = [
   // Optional: Android Release runs only once signing is configured, and desktop
   // downloads must never wait for (or be withdrawn by) a missing APK.
   { id: "android-universal-apk", os: "android", arch: "universal", format: "apk", suffix: "android.apk", optional: true },
+  { id: "macos-arm64-swiftui", os: "macos", arch: "arm64", format: "swiftui", prefix: "Wisp-Science-SwiftUI", suffix: "aarch64.dmg", optional: true },
+  { id: "macos-x64-swiftui", os: "macos", arch: "x64", format: "swiftui", prefix: "Wisp-Science-SwiftUI", suffix: "x86_64.dmg", optional: true },
+  { id: "windows-x64-winui-framework", os: "windows", arch: "x64", format: "winui-framework", prefix: "Wisp-Science-WinUI-Preview", suffix: "x64-framework-dependent-setup.exe", optional: true },
+  { id: "windows-x64-winui-self-contained", os: "windows", arch: "x64", format: "winui-self-contained", prefix: "Wisp-Science-WinUI-Preview", suffix: "x64-self-contained-setup.exe", optional: true },
 ];
 
 export function validTag(tag) {
@@ -19,7 +23,18 @@ export function validTag(tag) {
 }
 
 export function assetName(tag, pkg) {
-  return `wisp-science_${tag.slice(1)}_${pkg.suffix}`;
+  return `${pkg.prefix || "wisp-science"}_${tag.slice(1)}_${pkg.suffix}`;
+}
+
+// A package may still be building for the latest release. Its last published
+// version remains downloadable, with its own tag shown by the picker.
+export function compareTags(a, b) {
+  const left = a.slice(1).split(".").map(Number);
+  const right = b.slice(1).split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (left[i] !== right[i]) return left[i] - right[i];
+  }
+  return 0;
 }
 
 export function downloadKey(tag, name, sha256) {
@@ -39,9 +54,10 @@ export function validateManifest(manifest) {
     const matches = manifest.packages.filter(asset => asset.id === pkg.id);
     const asset = matches[0];
     if (pkg.optional && matches.length === 0) continue;
-    if (matches.length !== 1 || asset.name !== assetName(manifest.tag, pkg) ||
+    const tag = asset?.tag ?? manifest.tag;
+    if (matches.length !== 1 || !validTag(tag) || compareTags(tag, manifest.tag) > 0 || asset.name !== assetName(tag, pkg) ||
         !/^[a-f0-9]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.size) || asset.size <= 0 ||
-        asset.key !== downloadKey(manifest.tag, asset.name, asset.sha256)) {
+        asset.key !== downloadKey(tag, asset.name, asset.sha256)) {
       throw new Error(`Invalid package: ${pkg.id}`);
     }
   }
