@@ -919,6 +919,71 @@ final class WorkspaceUITests: XCTestCase {
         verifyLongSuggestion(darkAndLarge: true)
     }
 
+    func testPrivacyLinksAreReachableBeforeConnectionAndInBothSettingsModes() {
+        if padSidebar { XCUIDevice.shared.orientation = .landscapeLeft }
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launch("connection")
+        let privacy = app.descendants(matching: .any).matching(identifier: "privacy-policy").firstMatch
+        for _ in 0..<4 { if privacy.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(privacy.isHittable)
+        XCTAssertEqual(privacy.label, "隐私政策")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "app-support").firstMatch.exists)
+        for _ in 0..<4 { if app.buttons["enter-demo"].isHittable { break }; app.swipeDown() }
+        app.buttons["enter-demo"].tap()
+        XCTAssertTrue(app.buttons["connection-settings"].waitForExistence(timeout: 5))
+        app.buttons["connection-settings"].tap()
+        XCTAssertTrue(privacy.waitForExistence(timeout: 5))
+        XCTAssertTrue(privacy.isHittable)
+        app.buttons["完成"].tap()
+        XCTAssertTrue(app.buttons["connection-settings"].waitForExistence(timeout: 5))
+        app.terminate()
+        let connected = launch()
+        XCTAssertTrue(connected.buttons["connection-settings"].waitForExistence(timeout: 5))
+        connected.buttons["connection-settings"].tap()
+        let connectedPrivacy = connected.descendants(matching: .any).matching(identifier: "privacy-policy").firstMatch
+        for _ in 0..<4 { if connectedPrivacy.isHittable { break }; connected.swipeUp() }
+        XCTAssertTrue(connectedPrivacy.isHittable)
+        // Do not open external sites: this test has no network dependency.
+    }
+
+    func testAppStoreDemoScreenshots() {
+        if padSidebar { XCUIDevice.shared.orientation = .landscapeLeft }
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launch("connection")
+        func capture(_ name: String) {
+            // Capture the display, avoiding rotated app-window crop bounds on iPad.
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = "AppStore-" + name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func openDemo(_ title: String) {
+            XCTAssertTrue(app.buttons["enter-demo"].waitForExistence(timeout: 5))
+            app.buttons["enter-demo"].tap()
+            let project = app.staticTexts["RNA-seq 质控 · 演示"].firstMatch
+            XCTAssertTrue(project.waitForExistence(timeout: 5)); project.tap()
+            let conversation = app.staticTexts[title].firstMatch
+            XCTAssertTrue(conversation.waitForExistence(timeout: 5)); conversation.tap()
+            XCTAssertTrue(app.buttons["conversation-files"].waitForExistence(timeout: 5))
+        }
+        openDemo("样本质控与报告")
+        capture("01-Research")
+        app.buttons["conversation-files"].tap()
+        XCTAssertTrue(app.staticTexts["results"].waitForExistence(timeout: 5))
+        capture("02-Files")
+        app.staticTexts["results"].tap()
+        app.staticTexts["qc_report.md"].tap()
+        XCTAssertTrue(app.staticTexts["RNA-seq 质控报告"].waitForExistence(timeout: 5))
+        capture("03-Report")
+        app.terminate(); app.launch()
+        openDemo("分析流程与审批")
+        XCTAssertTrue(app.buttons["批准一次"].waitForExistence(timeout: 5))
+        capture("04-Approvals")
+        app.terminate(); app.launch()
+        openDemo("问题与选项")
+        capture("05-Questions")
+    }
+
     func testDemoEntryFilesScriptedReplyAndExitWithoutRemoteSetup() {
         let app = launch("connection")
         XCTAssertTrue(app.buttons["enter-demo"].waitForExistence(timeout: 5))

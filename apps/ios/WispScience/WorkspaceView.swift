@@ -527,6 +527,7 @@ struct ConnectionView: View {
             } footer: {
                 Text("联机码在验证成功后保存在本机钥匙串。中继转发加密数据，运行 Agent 的 Wisp 主机需要保持在线。")
             }
+            PrivacyLinksSection()
         }
     }
 }
@@ -568,10 +569,22 @@ struct ConnectionSettingsView: View {
                         Button("体验演示项目") { model.enterDemo() }.accessibilityIdentifier("enter-demo")
                     } footer: { Text("暂时断开云端连接，保留已保存的联机码。") }
                 }
+                PrivacyLinksSection()
             }
             .navigationTitle(model.isDemo ? "演示设置" : "连接设置")
             .toolbar { Button("完成") { model.sheet = nil } }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("connection-sheet")
+    }
+}
+
+private struct PrivacyLinksSection: View {
+    var body: some View {
+        Section("隐私与支持") {
+            Link("隐私政策", destination: URL(string: "https://wispscience.com/ios-privacy.html")!)
+                .accessibilityIdentifier("privacy-policy")
+            Link("帮助与反馈", destination: URL(string: "https://github.com/xuzhougeng/wisp-science/issues")!)
+                .accessibilityIdentifier("app-support")
+        }
     }
 }
 

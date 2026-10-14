@@ -395,5 +395,17 @@ iPad 侧边栏手工步骤：在 iPad mini、11 寸和 13 寸的横竖屏及分�
 真实主机上确认隐私项目被过滤、日期与桌面使用相同时区时一致；断线、旧版主机、空日期和读取失败
 均显示对应提示。更新主机与手机 App 后再验证真实连接；上述步骤和新增测试尚需获得许可后执行。
 
-本工程用于开发和真机调试。TestFlight／App Store 分发仍需开发团队、签名、导出加密合规声明、
-发布图标校验和审核资料；本次不创建分发凭据或发布 App。
+## iOS 0.1.0 上架准备
+
+首个 iOS 版本提供实验记录本、离线科研清单、远程项目与对话、Run／文件预览，以及无需账号的合成数据演示。
+构建 2 在连接页和连接设置中增加「隐私政策」与「帮助与反馈」入口。
+隐私政策源文件为 `docs/ios-privacy.html`，发布地址为 `https://wispscience.com/ios-privacy.html`。
+提交审核前应确认该页面已部署，并根据实际服务器和数据处理方式填写 App Store 隐私信息。
+
+The first iOS release includes local experiment notes and checklists, remote research projects and conversations,
+run and file previews, and a bundled synthetic-data demo. Build 2 adds privacy and support links to the connection
+screen and settings. The app uses its own iOS version; this does not change the desktop workspace release version.
+
+商店截图使用 `WorkspaceUITests.testAppStoreDemoScreenshots` 中的合成演示内容；
+`testPrivacyLinksAreReachableBeforeConnectionAndInBothSettingsModes` 检查未连接、演示及已连接状态的入口。
+这两项用例仅在用户授权后运行，覆盖 iPhone 和 iPad，不连接真实研究主机或在测试中访问外部网页。
