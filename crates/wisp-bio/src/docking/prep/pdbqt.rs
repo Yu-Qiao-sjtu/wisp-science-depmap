@@ -148,22 +148,6 @@ impl ModelBuilder {
             return Err(format!("duplicate atom serial {}", atom.raw.serial));
         }
 
-        if let Some(branch) = membership {
-            let first_direct_atom = !self
-                .ligand
-                .atom_branches
-                .iter()
-                .any(|candidate| *candidate == Some(branch));
-            if first_direct_atom && atom.raw.serial != self.ligand.branches[branch].child_serial {
-                return Err(format!(
-                    "first atom in BRANCH {} {} must be child serial {}",
-                    self.ligand.branches[branch].parent_serial,
-                    self.ligand.branches[branch].child_serial,
-                    self.ligand.branches[branch].child_serial
-                ));
-            }
-        }
-
         let index = self.ligand.atoms.len();
         self.serial_to_atom.insert(atom.raw.serial, index);
         self.ligand.atoms.push(atom);
@@ -244,7 +228,10 @@ impl ModelBuilder {
                 expected.parent_serial, expected.child_serial
             ));
         }
-        if self.ligand.atoms[direct_atoms[0]].raw.serial != expected.child_serial {
+        if !direct_atoms
+            .iter()
+            .any(|&index| self.ligand.atoms[index].raw.serial == expected.child_serial)
+        {
             return Err(format!(
                 "BRANCH child serial {} is not a direct member of its rigid fragment",
                 expected.child_serial
@@ -663,7 +650,7 @@ pub fn validate_ligand(ligand: &PdbqtLigand) -> Result<(), String> {
     let mut seen_branch_start = vec![false; ligand.branches.len()];
     let mut seen_branch_end = vec![false; ligand.branches.len()];
     let mut direct_atom_count = vec![0usize; ligand.branches.len()];
-    let mut first_direct_atom = vec![None; ligand.branches.len()];
+    let mut child_axis_seen = vec![false; ligand.branches.len()];
 
     for event in &ligand.topology {
         match *event {
@@ -700,7 +687,9 @@ pub fn validate_ligand(ligand: &PdbqtLigand) -> Result<(), String> {
                 }
                 if let Some(branch) = expected_membership {
                     direct_atom_count[branch] += 1;
-                    first_direct_atom[branch].get_or_insert(index);
+                    if atom.raw.serial == ligand.branches[branch].child_serial {
+                        child_axis_seen[branch] = true;
+                    }
                 }
                 seen_atoms[index] = true;
             }
@@ -761,11 +750,9 @@ pub fn validate_ligand(ligand: &PdbqtLigand) -> Result<(), String> {
                 if direct_atom_count[branch_index] == 0 {
                     return Err(format!("branch index {branch_index} is empty"));
                 }
-                let first = first_direct_atom[branch_index]
-                    .expect("non-empty branch must have a first direct atom");
-                if ligand.atoms[first].raw.serial != ligand.branches[branch_index].child_serial {
+                if !child_axis_seen[branch_index] {
                     return Err(format!(
-                        "branch index {branch_index} does not begin with its child-axis atom"
+                        "branch index {branch_index} does not contain its child-axis atom"
                     ));
                 }
                 stack.pop();
@@ -1052,6 +1039,30 @@ mod tests {
         );
         assert_eq!(parsed.torsdof, 9);
         let written = write_pdbqt(&parsed).unwrap();
+        assert_eq!(parse_pdbqt(&written).unwrap(), parsed);
+    }
+
+    #[test]
+    fn branch_child_axis_may_follow_another_direct_atom() {
+        let root = atom_line(1, [0.0, 0.0, 0.0], 0.0, AdType::C);
+        let body = atom_line(3, [1.5, 1.5, 0.0], 0.0, AdType::C);
+        let child = atom_line(2, [1.5, 0.0, 0.0], 0.0, AdType::C);
+        let text = format!(
+            "ROOT\n{root}\nENDROOT\nBRANCH 1 2\n{body}\n{child}\nENDBRANCH 1 2\nTORSDOF 1\n"
+        );
+        let parsed = parse_pdbqt(&text).unwrap();
+        assert_eq!(
+            parsed
+                .atoms
+                .iter()
+                .map(|atom| atom.raw.serial)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 2]
+        );
+        assert_eq!(parsed.atom_branches, vec![None, Some(0), Some(0)]);
+
+        let written = write_pdbqt(&parsed).unwrap();
+        assert!(written.find(&body).unwrap() < written.find(&child).unwrap());
         assert_eq!(parse_pdbqt(&written).unwrap(), parsed);
     }
 

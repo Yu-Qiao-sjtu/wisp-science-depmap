@@ -751,6 +751,22 @@ mod tests {
     }
 
     #[test]
+    fn child_axis_keeps_parent_mobility_when_it_follows_branch_body_atoms() {
+        let root_a = atom_line(1, -4.0, AdType::C, 0.0);
+        let root_b = atom_line(2, 1.5, AdType::C, 0.0);
+        let child_body = atom_line(4, 0.7, AdType::C, 0.0);
+        let child_axis = atom_line(3, 0.8, AdType::C, 0.0);
+        let ligand = prepare_ligand_pdbqt(&format!(
+            "ROOT\n{root_a}\n{root_b}\nENDROOT\nBRANCH 2 3\n{child_body}\n{child_axis}\nENDBRANCH 2 3\nTORSDOF 1\n"
+        ))
+        .unwrap();
+        assert_eq!(ligand.rigid_fragments[0].source_atoms, vec![0, 1, 3]);
+        assert_eq!(ligand.rigid_fragments[1].source_atoms, vec![2]);
+        assert!(ligand.is_distance_variable_pair(0, 2));
+        assert!(!ligand.is_distance_variable_pair(0, 1));
+    }
+
+    #[test]
     fn intra_eligibility_requires_variable_distance_and_preserves_one_four_exclusions() {
         // ROOT: 1-4 are kept in one rigid node. BRANCH 4->5 has child-axis 5
         // in the parent node and movable body atom 6 in the child node. 1-5 is

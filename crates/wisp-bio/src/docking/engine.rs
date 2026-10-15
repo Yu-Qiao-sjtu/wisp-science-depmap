@@ -357,6 +357,18 @@ mod tests {
         assert!(VinaEngine::new(params)
             .unwrap_err()
             .contains("non-negative"));
+        assert!(params
+            .torsion_factor(1.0)
+            .unwrap_err()
+            .contains("non-negative"));
+        assert!(ScoreTerms::from_breakdowns(
+            PairBreakdown::default(),
+            PairBreakdown::default(),
+            1.0,
+            &params,
+        )
+        .unwrap_err()
+        .contains("non-negative"));
 
         let mut params = VINA_1_1;
         params.hydrophobic_offset = params.hydrophobic_onset;

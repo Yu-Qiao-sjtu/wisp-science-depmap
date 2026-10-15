@@ -157,6 +157,7 @@ impl VinaParams {
 
     /// Denominator used by Vina's `num_tors_div` conformation-independent term.
     pub fn torsion_factor(&self, num_tors: f64) -> Result<f64, String> {
+        self.validate()?;
         if !num_tors.is_finite() || num_tors < 0.0 {
             return Err("effective rotor count must be finite and non-negative".into());
         }
