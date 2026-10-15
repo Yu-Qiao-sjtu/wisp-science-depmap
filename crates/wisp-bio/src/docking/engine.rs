@@ -10,6 +10,7 @@ use crate::docking::prep::{PreparedLigand, PreparedReceptor};
 use crate::docking::scoring::{
     evaluate_inter, evaluate_intra, PairBreakdown, VinaParams, VINA_1_1,
 };
+use crate::docking::search::{search_poses, LigandFrame, TorsionTree};
 
 /// Per-term energy decomposition of one pose.
 ///
@@ -100,9 +101,9 @@ pub trait DockingEngine {
 
 /// The built-in Vina-family engine.
 ///
-/// In this milestone `search` scores the input placement (score-only mode);
-/// the Monte-Carlo search lands with the next milestone behind the same
-/// trait, so callers already target the final contract.
+/// `search` runs the Monte-Carlo/quasi-Newton conformational search: one
+/// deterministic RNG stream per exhaustiveness run, Metropolis acceptance,
+/// and RMSD-deduplicated modes best-first (#271, #272, #274).
 #[derive(Debug, Clone)]
 pub struct VinaEngine {
     params: VinaParams,
@@ -149,11 +150,21 @@ impl DockingEngine for VinaEngine {
         &self,
         receptor: &PreparedReceptor,
         ligand: &PreparedLigand,
-        _options: &SearchOptions,
+        options: &SearchOptions,
     ) -> Vec<ScoredPose> {
-        let positions: Vec<[f64; 3]> = ligand.atoms.iter().map(|atom| atom.position).collect();
-        let terms = self.score(receptor, ligand, &positions);
-        vec![ScoredPose { terms, positions }]
+        let tree = TorsionTree::build(ligand);
+        let frame =
+            LigandFrame::from_positions(ligand.atoms.iter().map(|atom| atom.position).collect());
+        let params = self.params;
+        search_poses(
+            receptor,
+            ligand,
+            &tree,
+            &frame,
+            &params,
+            options,
+            &|positions| self.score(receptor, ligand, positions),
+        )
     }
 }
 
@@ -253,9 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn search_returns_the_input_pose_scored() {
-        // One hydrophobic carbon each at surface contact: the search result
-        // carries the pair energy and the unchanged placement.
+    fn search_finds_a_pose_at_least_as_good_as_a_contact_placement() {
+        // One hydrophobic carbon each: surface contact (3.8 A) is the
+        // optimum, and the input already sits there. The search must
+        // return a mode set whose best entry is not worse, proving the
+        // engine targets the final contract end to end.
         let receptor = prepare_receptor(
             "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00  0.00           C\n",
         )
@@ -265,10 +278,26 @@ mod tests {
         )
         .unwrap();
         let engine = VinaEngine::classic();
-        let poses = engine.search(&receptor, &ligand, &SearchOptions::default());
-        assert_eq!(poses.len(), 1);
-        assert_eq!(poses[0].positions, vec![[3.8, 0.0, 0.0]]);
-        assert!(poses[0].terms.total < 0.0);
-        assert!(poses[0].terms.hydrophobic < 0.0);
+        let input_positions: Vec<[f64; 3]> = ligand.atoms.iter().map(|a| a.position).collect();
+        let input_terms = engine.score(&receptor, &ligand, &input_positions);
+        let options = SearchOptions {
+            seed: 11,
+            exhaustiveness: 2,
+            num_modes: 3,
+        };
+        let poses = engine.search(&receptor, &ligand, &options);
+        assert!(!poses.is_empty());
+        assert!(
+            poses[0].terms.total <= input_terms.total + 1e-9,
+            "search best {} worse than input {}",
+            poses[0].terms.total,
+            input_terms.total
+        );
+        // Deterministic for a fixed seed (#274).
+        let repeat = engine.search(&receptor, &ligand, &options);
+        assert_eq!(poses, repeat);
+        // The best pose stays near the receptor.
+        let [x, y, z] = poses[0].positions[0];
+        assert!(x * x + y * y + z * z < 64.0, "pose drifted to {x},{y},{z}");
     }
 }

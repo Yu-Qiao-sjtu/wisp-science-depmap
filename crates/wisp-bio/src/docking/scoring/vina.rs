@@ -173,7 +173,9 @@ impl PairBreakdown {
         self.gauss1 + self.gauss2 + self.repulsion + self.hydrophobic + self.hbond
     }
 
-    fn absorb(&mut self, other: PairBreakdown) {
+    /// Add another breakdown field-wise. Public so the accelerated
+    /// evaluation paths accumulate in the same order as the direct one.
+    pub fn absorb(&mut self, other: PairBreakdown) {
         self.gauss1 += other.gauss1;
         self.gauss2 += other.gauss2;
         self.repulsion += other.repulsion;
