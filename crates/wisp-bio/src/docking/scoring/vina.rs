@@ -270,8 +270,21 @@ pub fn pair_energy(
     second: &DockAtom,
     distance: f64,
     params: &VinaParams,
+) -> Result<PairBreakdown, String> {
+    params.validate()?;
+    if !distance.is_finite() || distance < 0.0 {
+        return Err("pair distance must be finite and non-negative".into());
+    }
+    Ok(pair_energy_unchecked(first, second, distance, params))
+}
+
+fn pair_energy_unchecked(
+    first: &DockAtom,
+    second: &DockAtom,
+    distance: f64,
+    params: &VinaParams,
 ) -> PairBreakdown {
-    if !distance.is_finite() || distance < 0.0 || distance >= INTER_CUTOFF {
+    if distance >= INTER_CUTOFF {
         return PairBreakdown::default();
     }
     let (Some(first_type), Some(second_type)) = (first.xs_type, second.xs_type) else {
@@ -338,8 +351,8 @@ fn pair_energy_fast_r2(
     let first_distance = (index / FACTOR).sqrt();
     let second_distance = ((index + 1.0) / FACTOR).sqrt();
     average_breakdown(
-        pair_energy(first, second, first_distance, params),
-        pair_energy(first, second, second_distance, params),
+        pair_energy_unchecked(first, second, first_distance, params),
+        pair_energy_unchecked(first, second, second_distance, params),
     )
 }
 
@@ -578,7 +591,7 @@ mod tests {
     #[test]
     fn vina_and_vinardo_pair_vectors_match_their_parameters() {
         let carbon = atom(Some(XsType::C_H), [0.0; 3]);
-        let vina = pair_energy(&carbon, &carbon, 3.8, &VINA_1_1);
+        let vina = pair_energy_unchecked(&carbon, &carbon, 3.8, &VINA_1_1);
         let expected_vina = PairBreakdown {
             gauss1: -0.035579,
             gauss2: -0.005156 * (-2.25f64).exp(),
@@ -588,7 +601,7 @@ mod tests {
         };
         assert_breakdown_close(vina, expected_vina);
 
-        let vinardo = pair_energy(&carbon, &carbon, 4.0, &VINARDO);
+        let vinardo = pair_energy_unchecked(&carbon, &carbon, 4.0, &VINARDO);
         let expected_vinardo = PairBreakdown {
             gauss1: -0.045,
             gauss2: 0.0,
@@ -604,9 +617,11 @@ mod tests {
         let halogen = atom(Some(XsType::Cl_H), [0.0; 3]);
         let hydrophobic_carbon = atom(Some(XsType::C_H), [0.0; 3]);
         let polar_carbon = atom(Some(XsType::C_P), [0.0; 3]);
-        assert!(pair_energy(&halogen, &hydrophobic_carbon, 3.7, &VINA_1_1).hydrophobic < 0.0);
+        assert!(
+            pair_energy_unchecked(&halogen, &hydrophobic_carbon, 3.7, &VINA_1_1).hydrophobic < 0.0
+        );
         assert_eq!(
-            pair_energy(&halogen, &polar_carbon, 3.7, &VINA_1_1).hydrophobic,
+            pair_energy_unchecked(&halogen, &polar_carbon, 3.7, &VINA_1_1).hydrophobic,
             0.0
         );
     }
@@ -616,8 +631,11 @@ mod tests {
         let metal = atom(Some(XsType::Met_D), [0.0; 3]);
         let acceptor = atom(Some(XsType::O_A), [0.0; 3]);
         let donor = atom(Some(XsType::N_D), [0.0; 3]);
-        assert!(pair_energy(&metal, &acceptor, 2.5, &VINA_1_1).hbond < 0.0);
-        assert_eq!(pair_energy(&metal, &donor, 2.5, &VINA_1_1).hbond, 0.0);
+        assert!(pair_energy_unchecked(&metal, &acceptor, 2.5, &VINA_1_1).hbond < 0.0);
+        assert_eq!(
+            pair_energy_unchecked(&metal, &donor, 2.5, &VINA_1_1).hbond,
+            0.0
+        );
     }
 
     #[test]
@@ -630,12 +648,12 @@ mod tests {
         };
         let carbon = atom(Some(XsType::C_H), [0.0; 3]);
         assert_eq!(
-            pair_energy(&explicit_h, &carbon, 2.0, &VINA_1_1),
+            pair_energy_unchecked(&explicit_h, &carbon, 2.0, &VINA_1_1),
             PairBreakdown::default()
         );
         for xs_type in [XsType::G0, XsType::G1, XsType::G2, XsType::G3] {
             assert_eq!(
-                pair_energy(&atom(Some(xs_type), [0.0; 3]), &carbon, 2.0, &VINA_1_1),
+                pair_energy_unchecked(&atom(Some(xs_type), [0.0; 3]), &carbon, 2.0, &VINA_1_1),
                 PairBreakdown::default()
             );
         }
@@ -646,9 +664,9 @@ mod tests {
         let donor = atom(Some(XsType::N_D), [0.0; 3]);
         let acceptor = atom(Some(XsType::O_A), [0.0; 3]);
         let plain_nitrogen = atom(Some(XsType::N_P), [0.0; 3]);
-        assert!(pair_energy(&donor, &acceptor, 3.0, &VINA_1_1).hbond < 0.0);
+        assert!(pair_energy_unchecked(&donor, &acceptor, 3.0, &VINA_1_1).hbond < 0.0);
         assert_eq!(
-            pair_energy(&plain_nitrogen, &acceptor, 3.0, &VINA_1_1).hbond,
+            pair_energy_unchecked(&plain_nitrogen, &acceptor, 3.0, &VINA_1_1).hbond,
             0.0
         );
     }
@@ -703,16 +721,16 @@ mod tests {
         let exact_r2 = 3.0 / 32.0;
         let exact = pair_energy_fast_r2(&carbon, &carbon, exact_r2, &VINA_1_1);
         let expected = average_breakdown(
-            pair_energy(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
-            pair_energy(&carbon, &carbon, (4.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy_unchecked(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy_unchecked(&carbon, &carbon, (4.0_f64 / 32.0).sqrt(), &VINA_1_1),
         );
         assert_breakdown_close(exact, expected);
 
         let below_r2 = f64::from_bits(exact_r2.to_bits() - 1);
         let below = pair_energy_fast_r2(&carbon, &carbon, below_r2, &VINA_1_1);
         let below_expected = average_breakdown(
-            pair_energy(&carbon, &carbon, (2.0_f64 / 32.0).sqrt(), &VINA_1_1),
-            pair_energy(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy_unchecked(&carbon, &carbon, (2.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy_unchecked(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
         );
         assert_breakdown_close(below, below_expected);
 
@@ -793,6 +811,16 @@ mod tests {
         assert!(evaluate_intra(&ligand, &[[0.0; 3]], &invalid_params)
             .unwrap_err()
             .contains("gauss1 width"));
+        assert!(
+            pair_energy(&receptor.atoms[0], &ligand.atoms[0], 0.0, &invalid_params)
+                .unwrap_err()
+                .contains("gauss1 width")
+        );
+        assert!(
+            pair_energy(&receptor.atoms[0], &ligand.atoms[0], f64::NAN, &VINA_1_1,)
+                .unwrap_err()
+                .contains("finite and non-negative")
+        );
     }
 
     #[test]
