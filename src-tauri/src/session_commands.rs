@@ -929,7 +929,8 @@ async fn session_children(
 }
 
 /// What deleting `ids` together with their children would also remove. A
-/// selected conversation nested under another selected one is not counted.
+/// selected conversation nested under another selected one is not counted
+/// but listed as nested: deleting children takes it along with that one.
 #[tauri::command]
 pub(super) async fn preview_session_children(
     state: State<'_, AppState>,
@@ -937,16 +938,24 @@ pub(super) async fn preview_session_children(
     ids: Vec<String>,
 ) -> Result<wisp_dto::SessionChildrenPreview, String> {
     let ap = state.require_active(window.label())?;
+    children_preview(&state.store, &ap.id, &ids).await
+}
+
+async fn children_preview(
+    store: &Store,
+    project_id: &str,
+    ids: &[String],
+) -> Result<wisp_dto::SessionChildrenPreview, String> {
     let mut subagents = HashSet::new();
     let mut branches = HashSet::new();
     let mut explorations = HashSet::new();
-    for id in &ids {
-        let (descendants, rounds) = session_children(&state.store, &ap.id, id).await?;
-        for child in descendants
-            .into_iter()
-            .filter(|child| !ids.contains(&child.id))
-        {
-            if child.subagent {
+    let mut nested = BTreeSet::new();
+    for id in ids {
+        let (descendants, rounds) = session_children(store, project_id, id).await?;
+        for child in descendants {
+            if ids.contains(&child.id) {
+                nested.insert(child.id);
+            } else if child.subagent {
                 subagents.insert(child.id);
             } else {
                 branches.insert(child.id);
@@ -958,7 +967,46 @@ pub(super) async fn preview_session_children(
         subagents: subagents.len(),
         branches: branches.len(),
         explorations: explorations.len(),
+        nested: nested.into_iter().collect(),
     })
+}
+
+/// Artifact previews for deleting `ids` together with their branches and
+/// subagents. A selected conversation nested under another selected one is
+/// previewed, and deleted, as part of that one's family.
+#[tauri::command]
+pub(super) async fn preview_session_family_artifacts(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    ids: Vec<String>,
+) -> Result<Vec<wisp_dto::SessionFamilyArtifactPreview>, String> {
+    let ap = state.require_active(window.label())?;
+    let _project_activity = state.begin_project_activity(&ap.id)?;
+    let mut families = Vec::new();
+    for id in &ids {
+        let mut members = state
+            .store
+            .preview_session_family_artifacts(id, &ap.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (_, preview) = members
+            .pop()
+            .ok_or_else(|| "Session not found".to_string())?;
+        families.push(wisp_dto::SessionFamilyArtifactPreview {
+            id: id.clone(),
+            preview,
+            children: members
+                .into_iter()
+                .map(|(id, preview)| wisp_dto::SessionChildArtifactPreview { id, preview })
+                .collect(),
+        });
+    }
+    let nested: HashSet<String> = families
+        .iter()
+        .flat_map(|family| family.children.iter().map(|child| child.id.clone()))
+        .collect();
+    families.retain(|family| !nested.contains(&family.id));
+    Ok(families)
 }
 
 /// What happens to a deleted conversation's branches and subagents.
@@ -970,10 +1018,34 @@ enum ChildLinks {
     Detach,
 }
 
+/// Which artifact files go with a deleted conversation.
+enum DeletedFiles<'a> {
+    /// None; transcript-only deletion leaves them in the workspace.
+    Keep,
+    /// The ones in the preview reviewed for this conversation alone.
+    Reviewed(&'a str),
+    /// The ones in its plan within a family deletion reviewed as a whole.
+    Family(&'a mut wisp_store::SessionFamilyArtifacts),
+}
+
+/// Deleting files waits for the conversation's turn, approval or review.
+async fn require_idle_for_files(state: &AppState, id: &str) -> Result<(), String> {
+    if state.running_turns.lock().await.contains(id)
+        || state.awaiting_confirm.lock().unwrap().contains(id)
+        || state.reviewing.lock().unwrap().contains(id)
+    {
+        return Err("Wait for the session to finish before deleting its files.".into());
+    }
+    Ok(())
+}
+
 /// Delete a conversation. `include_children` deletes its branches and
 /// subagents, nested ones included, and discards the exploration rounds they
 /// own; `Some(false)` keeps branches and subagents as standalone
-/// conversations. Returns every deleted conversation id.
+/// conversations. With `include_artifacts`, each deleted conversation takes
+/// its files: `artifact_fingerprint` is the reviewed preview of `id`, and
+/// `child_artifact_fingerprints` those of its branches and subagents (from
+/// `preview_session_family_artifacts`). Returns every deleted conversation id.
 #[tauri::command]
 pub(super) async fn delete_session(
     state: State<'_, AppState>,
@@ -983,9 +1055,13 @@ pub(super) async fn delete_session(
     include_artifacts: Option<bool>,
     artifact_fingerprint: Option<String>,
     include_children: Option<bool>,
+    child_artifact_fingerprints: Option<HashMap<String, String>>,
 ) -> Result<Vec<String>, String> {
     let ap = state.require_active(window.label())?;
     let include_artifacts = include_artifacts.unwrap_or(false);
+    if include_artifacts && artifact_fingerprint.is_none() {
+        return Err("Deleting artifacts requires a fresh preview.".into());
+    }
     let children = match include_children {
         None => ChildLinks::Refuse,
         Some(false) => ChildLinks::Detach,
@@ -1000,7 +1076,31 @@ pub(super) async fn delete_session(
                     .require_unarchived_session(frame)
                     .await
                     .map_err(|error| error.to_string())?;
+                if include_artifacts {
+                    require_idle_for_files(&state, frame).await?;
+                }
             }
+            // Deleting one conversation changes what the others would
+            // preview, so every reviewed preview is checked now and each
+            // conversation is deleted from its reviewed plan.
+            let mut reviewed = match artifact_fingerprint.filter(|_| include_artifacts) {
+                Some(fingerprint) => {
+                    let mut fingerprints: BTreeMap<String, String> = child_artifact_fingerprints
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    fingerprints.insert(id.clone(), fingerprint);
+                    let _exclusive = state.begin_project_exclusive_activity(&ap.id)?;
+                    Some(
+                        state
+                            .store
+                            .review_session_family_artifacts(&id, &ap.id, &fingerprints)
+                            .await
+                            .map_err(|error| error.to_string())?,
+                    )
+                }
+                None => None,
+            };
             let mut rounds = explorations
                 .into_iter()
                 .map(|summary| summary.source_frame_id)
@@ -1012,42 +1112,33 @@ pub(super) async fn delete_session(
             }
             let mut deleted = Vec::new();
             for child in descendants {
+                let files = reviewed
+                    .as_mut()
+                    .map_or(DeletedFiles::Keep, DeletedFiles::Family);
                 delete_one_session(
                     &state,
                     window.label(),
                     &ap,
                     &child.id,
-                    false,
-                    None,
+                    files,
                     ChildLinks::Detach,
                 )
                 .await?;
                 deleted.push(child.id);
             }
-            delete_one_session(
-                &state,
-                window.label(),
-                &ap,
-                &id,
-                include_artifacts,
-                artifact_fingerprint.as_deref(),
-                ChildLinks::Detach,
-            )
-            .await?;
+            let files = reviewed
+                .as_mut()
+                .map_or(DeletedFiles::Keep, DeletedFiles::Family);
+            delete_one_session(&state, window.label(), &ap, &id, files, ChildLinks::Detach).await?;
             deleted.push(id);
             return Ok(deleted);
         }
     };
-    delete_one_session(
-        &state,
-        window.label(),
-        &ap,
-        &id,
-        include_artifacts,
-        artifact_fingerprint.as_deref(),
-        children,
-    )
-    .await?;
+    let files = match artifact_fingerprint.as_deref() {
+        Some(fingerprint) if include_artifacts => DeletedFiles::Reviewed(fingerprint),
+        _ => DeletedFiles::Keep,
+    };
+    delete_one_session(&state, window.label(), &ap, &id, files, children).await?;
     Ok(vec![id])
 }
 
@@ -1056,8 +1147,7 @@ async fn delete_one_session(
     window_label: &str,
     ap: &ActiveProject,
     id: &str,
-    include_artifacts: bool,
-    artifact_fingerprint: Option<&str>,
+    files: DeletedFiles<'_>,
     children: ChildLinks,
 ) -> Result<(), String> {
     let id = id.to_string();
@@ -1066,15 +1156,9 @@ async fn delete_one_session(
         .require_unarchived_session(&id)
         .await
         .map_err(|e| e.to_string())?;
-    if include_artifacts && artifact_fingerprint.is_none() {
-        return Err("Deleting artifacts requires a fresh preview.".into());
-    }
-    if include_artifacts
-        && (state.running_turns.lock().await.contains(&id)
-            || state.awaiting_confirm.lock().unwrap().contains(&id)
-            || state.reviewing.lock().unwrap().contains(&id))
-    {
-        return Err("Wait for the session to finish before deleting its files.".into());
+    let include_artifacts = !matches!(files, DeletedFiles::Keep);
+    if include_artifacts {
+        require_idle_for_files(state, &id).await?;
     }
     let _exclusive = if include_artifacts {
         Some(state.begin_project_exclusive_activity(&ap.id)?)
@@ -1157,18 +1241,15 @@ async fn delete_one_session(
             return Err(error.to_string());
         }
     }
-    let result = if include_artifacts {
-        state
-            .store
-            .operate_session_with_artifacts(
-                &id,
-                &ap.id,
-                None,
-                artifact_fingerprint.unwrap_or_default(),
-            )
-            .await
-    } else {
-        state.store.delete_session(&id, &ap.id).await
+    let result = match files {
+        DeletedFiles::Keep => state.store.delete_session(&id, &ap.id).await,
+        DeletedFiles::Reviewed(fingerprint) => {
+            state
+                .store
+                .operate_session_with_artifacts(&id, &ap.id, None, fingerprint)
+                .await
+        }
+        DeletedFiles::Family(family) => state.store.delete_session_in_family(family, &id).await,
     };
     if let Err(error) = result {
         if let Some(runtime) = runtime.as_ref() {
@@ -2880,5 +2961,54 @@ mod delete_children_tests {
         assert!(explorations.is_empty());
         let (descendants, _) = session_children(&store, "p", "other").await.unwrap();
         assert!(descendants.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_selection_holding_a_whole_family_lists_it_as_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("wisp.sqlite")).await.unwrap();
+        store.create_project("p", "P", "").await.unwrap();
+        for id in ["main", "branch", "sub", "sub-branch", "other"] {
+            store.create_frame(id, "p", "OPERON", "m").await.unwrap();
+        }
+        store
+            .set_session_branch_point("branch", "main", 0, "before_user")
+            .await
+            .unwrap();
+        store
+            .set_session_dispatched_from("sub", "main")
+            .await
+            .unwrap();
+        store
+            .set_session_branch_point("sub-branch", "sub", 0, "after_response")
+            .await
+            .unwrap();
+        let select = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+        // Select all: nothing is left to count, but every conversation under
+        // `main` goes with it rather than on its own.
+        let all = children_preview(
+            &store,
+            "p",
+            &select(&["sub-branch", "other", "branch", "sub", "main"]),
+        )
+        .await
+        .unwrap();
+        assert!(all.is_empty());
+        assert_eq!(all.nested, ["branch", "sub", "sub-branch"]);
+
+        // A partly selected family counts what is left and lists the rest.
+        let partial = children_preview(&store, "p", &select(&["main", "sub"]))
+            .await
+            .unwrap();
+        assert_eq!((partial.subagents, partial.branches), (0, 2));
+        assert_eq!(partial.nested, ["sub"]);
+
+        // Unrelated conversations are not nested in one another.
+        let apart = children_preview(&store, "p", &select(&["sub-branch", "other"]))
+            .await
+            .unwrap();
+        assert!(apart.is_empty());
+        assert!(apart.nested.is_empty());
     }
 }
