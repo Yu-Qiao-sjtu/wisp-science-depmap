@@ -377,6 +377,7 @@ pub fn evaluate_inter(
     ligand_positions: &[[f64; 3]],
     params: &VinaParams,
 ) -> Result<PairBreakdown, String> {
+    params.validate()?;
     validate_receptor(receptor)?;
     validate_positions(ligand, ligand_positions)?;
     let mut total = PairBreakdown::default();
@@ -401,6 +402,7 @@ pub fn evaluate_intra(
     ligand_positions: &[[f64; 3]],
     params: &VinaParams,
 ) -> Result<PairBreakdown, String> {
+    params.validate()?;
     validate_positions(ligand, ligand_positions)?;
     let mut total = PairBreakdown::default();
     for i in 0..ligand.atoms.len() {
@@ -423,6 +425,12 @@ pub fn evaluate_intra(
 }
 
 fn validate_receptor(receptor: &PreparedReceptor) -> Result<(), String> {
+    if receptor.atoms.is_empty() {
+        return Err("receptor has no scorable atoms".into());
+    }
+    if receptor.atoms.iter().any(|atom| atom.xs_type.is_none()) {
+        return Err("receptor contains an atom without an XS scoring type".into());
+    }
     if receptor
         .atoms
         .iter()
@@ -438,6 +446,12 @@ fn validate_positions(
     ligand: &PreparedLigand,
     ligand_positions: &[[f64; 3]],
 ) -> Result<(), String> {
+    if ligand.atoms.is_empty() {
+        return Err("ligand has no scorable atoms".into());
+    }
+    if ligand.atoms.iter().any(|atom| atom.xs_type.is_none()) {
+        return Err("ligand contains an atom without an XS scoring type".into());
+    }
     if ligand_positions.len() != ligand.atoms.len() {
         return Err(format!(
             "ligand position count {} does not match scored atom count {}",
@@ -734,10 +748,10 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_rejects_wrong_length_and_non_finite_positions() {
+    fn public_evaluation_rejects_invalid_models_positions_and_empty_inputs() {
         let ligand = empty_ligand(vec![atom(Some(XsType::C_H), [0.0; 3])]);
         let receptor = PreparedReceptor {
-            atoms: Vec::new(),
+            atoms: vec![atom(Some(XsType::C_H), [0.0; 3])],
             bonds: Vec::new(),
         };
         assert!(evaluate_inter(&receptor, &ligand, &[], &VINA_1_1)
@@ -746,6 +760,39 @@ mod tests {
         assert!(evaluate_intra(&ligand, &[[f64::NAN, 0.0, 0.0]], &VINA_1_1)
             .unwrap_err()
             .contains("non-finite"));
+
+        let empty_receptor = PreparedReceptor {
+            atoms: Vec::new(),
+            bonds: Vec::new(),
+        };
+        assert!(
+            evaluate_inter(&empty_receptor, &ligand, &[[0.0; 3]], &VINA_1_1)
+                .unwrap_err()
+                .contains("no scorable atoms")
+        );
+        let empty_ligand = empty_ligand(Vec::new());
+        assert!(evaluate_intra(&empty_ligand, &[], &VINA_1_1)
+            .unwrap_err()
+            .contains("no scorable atoms"));
+
+        let mut untyped_receptor = receptor.clone();
+        untyped_receptor.atoms[0].xs_type = None;
+        assert!(
+            evaluate_inter(&untyped_receptor, &ligand, &[[0.0; 3]], &VINA_1_1)
+                .unwrap_err()
+                .contains("without an XS scoring type")
+        );
+
+        let mut invalid_params = VINA_1_1;
+        invalid_params.gauss1_width = 0.0;
+        assert!(
+            evaluate_inter(&receptor, &ligand, &[[0.0; 3]], &invalid_params)
+                .unwrap_err()
+                .contains("gauss1 width")
+        );
+        assert!(evaluate_intra(&ligand, &[[0.0; 3]], &invalid_params)
+            .unwrap_err()
+            .contains("gauss1 width"));
     }
 
     #[test]
