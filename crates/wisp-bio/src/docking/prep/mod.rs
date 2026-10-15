@@ -1,16 +1,10 @@
 //! Docking structure preparation.
 //!
-//! Two pipelines feed the scoring layer:
-//!
-//! * **PDB path** — parse records, perceive bonds geometrically, detect
-//!   aromatic rings, assign AutoDock atom types, compute Gasteiger charges,
-//!   then merge nonpolar hydrogens into their parent heavy atoms.
-//! * **PDBQT path** — trust the file's atom types and charges, perceive only
-//!   the connectivity needed for intramolecular exclusions and the torsion
-//!   count.
-//!
-//! Both paths converge on the same prepared types, so the scoring functions
-//! and later the search treat input format as an implementation detail.
+//! PDBQT is the authoritative ligand input because it alone carries charges,
+//! exact AutoDock wire types, and a torsion tree. Plain PDB ligand preparation
+//! fails closed rather than presenting geometry-derived heuristics as a
+//! scientifically prepared ligand. The receptor PDB compatibility path remains
+//! available for rigid receptor input.
 
 pub mod atom_type;
 pub mod bonds;
@@ -18,21 +12,28 @@ pub mod charge;
 pub mod pdb;
 pub mod pdbqt;
 
-use atom_type::{AtomType, Bond, Element};
+use atom_type::{AdType, Bond, Element, XsType};
 use pdb::RawAtom;
+use pdbqt::PdbqtLigand;
+use std::collections::{HashMap, HashSet};
 
-/// A scoring-ready atom: the parsed record plus everything the Vina-family
-/// functions need. `polar_carbon` marks C/A atoms bonded to heteroatoms;
-/// they drop out of hydrophobic pair interactions.
+/// One scoring-facing atom.
+///
+/// `wire_ad_type` preserves source PDBQT identity without carrying scoring
+/// semantics. `xs_type` is the sole donor/acceptor/hydrophobic scoring
+/// identity; explicit hydrogens have `xs_type == None` and remain in
+/// `source_atoms` only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DockAtom {
+    /// Index in `PreparedLigand::source_atoms` for ligands, or in the parsed PDB
+    /// atom list for receptors.
+    pub source_index: usize,
     pub serial: i32,
     pub name: String,
     pub element: Element,
-    pub ad_type: AtomType,
-    /// Heavy atom bearing a polar hydrogen; Vina scores this atom as the donor.
-    pub hbond_donor: bool,
-    pub polar_carbon: bool,
+    /// Exact source PDBQT identity when one exists.
+    pub wire_ad_type: Option<AdType>,
+    pub xs_type: Option<XsType>,
     pub position: [f64; 3],
     pub charge: f64,
     pub residue_name: String,
@@ -43,350 +44,748 @@ pub struct DockAtom {
 }
 
 impl DockAtom {
-    /// True when this atom participates in hydrophobic pair scoring.
     pub fn is_hydrophobic(&self) -> bool {
-        matches!(self.ad_type, AtomType::C | AtomType::A) && !self.polar_carbon
+        self.xs_type.is_some_and(XsType::is_hydrophobic)
+    }
+
+    pub fn is_donor(&self) -> bool {
+        self.xs_type.is_some_and(XsType::is_donor)
+    }
+
+    pub fn is_acceptor(&self) -> bool {
+        self.xs_type.is_some_and(XsType::is_acceptor)
     }
 }
 
-/// A prepared ligand: united-atom model with connectivity bookkeeping.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PreparedLigand {
-    pub atoms: Vec<DockAtom>,
-    pub bonds: Vec<Bond>,
-    pub rotatable: Vec<Bond>,
-    pub torsdof: u32,
-    /// Atom pairs within three bonds; excluded from the intramolecular score.
-    pub intra_excluded: Vec<(usize, usize)>,
+/// One rigid fragment induced by ROOT or a BRANCH body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RigidFragment {
+    /// `None` for ROOT; otherwise the PDBQT branch index.
+    pub branch: Option<usize>,
+    /// Parent fragment index; ROOT has no parent.
+    pub parent: Option<usize>,
+    /// Source atom indices in original ordered topology.
+    pub source_atoms: Vec<usize>,
 }
 
-/// A prepared receptor: rigid for the classic Vina workflow.
+/// One authoritative PDBQT rotor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LigandBranch {
+    pub parent_serial: i32,
+    pub child_serial: i32,
+    pub parent_source_index: usize,
+    pub child_source_index: usize,
+    pub parent_fragment: usize,
+    pub child_fragment: usize,
+    pub parent_branch: Option<usize>,
+}
+
+/// A prepared ligand with explicit source/scored mappings and authoritative
+/// PDBQT topology.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedLigand {
+    /// Every parsed PDBQT atom, including explicit H and glue/water identities.
+    pub source_atoms: Vec<DockAtom>,
+    /// Heavy/scorable atoms only, in source order.
+    pub atoms: Vec<DockAtom>,
+    /// Source-index to scored-index mapping. Explicit H and non-scoring glue
+    /// atoms map to `None`.
+    pub source_to_scored: Vec<Option<usize>>,
+    /// Scored-index to source-index mapping.
+    pub scored_to_source: Vec<usize>,
+    /// Perceived source-atom connectivity, augmented with authoritative branch
+    /// axis edges when geometry alone does not recover them.
+    pub source_bonds: Vec<Bond>,
+    /// Scored-heavy-atom projection of `source_bonds`.
+    pub bonds: Vec<Bond>,
+    pub rigid_fragments: Vec<RigidFragment>,
+    pub branches: Vec<LigandBranch>,
+    /// Compatibility projection of authoritative branch axes onto scored atoms.
+    pub rotatable: Vec<Bond>,
+    /// Vina's effective heavy-atom rotor count derived from authoritative
+    /// branch axes. Each axis endpoint contributes 0.5 when the opposite
+    /// endpoint has more than one bonded heavy atom.
+    pub num_tors: f64,
+    /// Independent TORSDOF declared by the file.
+    pub torsdof: u32,
+    /// Scored atom pairs separated by at most three bonds (1-2/1-3/1-4).
+    pub intra_excluded: Vec<(usize, usize)>,
+    /// Non-excluded scored pairs whose distance can vary across at least one
+    /// authoritative branch. Same-rigid-fragment pairs are absent.
+    pub distance_variable_pairs: Vec<(usize, usize)>,
+}
+
+impl PreparedLigand {
+    pub fn is_intra_excluded(&self, first: usize, second: usize) -> bool {
+        contains_pair(&self.intra_excluded, first, second)
+    }
+
+    pub fn is_distance_variable_pair(&self, first: usize, second: usize) -> bool {
+        contains_pair(&self.distance_variable_pairs, first, second)
+    }
+
+    /// A pair is eligible for the variable intramolecular score only when a
+    /// branch can change its distance and the 1-2/1-3/1-4 exclusion does not.
+    pub fn is_intra_eligible(&self, first: usize, second: usize) -> bool {
+        self.is_distance_variable_pair(first, second) && !self.is_intra_excluded(first, second)
+    }
+}
+
+/// A validated rigid receptor prepared from authoritative PDBQT input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedReceptor {
     pub atoms: Vec<DockAtom>,
     pub bonds: Vec<Bond>,
 }
 
-/// Prepare a receptor from PDB text (typical protein side of a docking run).
-pub fn prepare_receptor(pdb_text: &str) -> Result<PreparedReceptor, String> {
+/// Geometry-derived PDB receptor used only by explicitly approximate workflows.
+/// This type cannot be passed to [`crate::docking::engine::DockingEngine`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApproximatePreparedReceptor {
+    pub atoms: Vec<DockAtom>,
+    pub bonds: Vec<Bond>,
+}
+
+/// Plain PDB does not carry authoritative Vina atom types or charges.
+pub fn prepare_receptor(_pdb_text: &str) -> Result<PreparedReceptor, String> {
+    Err("plain PDB receptor preparation is not a validated Vina input: provide a prepared PDBQT, or call prepare_receptor_pdb_approximate explicitly for non-scientific geometry workflows".into())
+}
+
+/// Approximate receptor preparation retained for geometry-only workflows.
+///
+/// This path guesses connectivity, XS types, and charges from PDB coordinates.
+/// Its output must not be presented as a validated Vina preparation.
+pub fn prepare_receptor_pdb_approximate(
+    pdb_text: &str,
+) -> Result<ApproximatePreparedReceptor, String> {
     let raw = pdb::parse_pdb_atoms(pdb_text)?;
     if raw.is_empty() {
         return Err("receptor has no ATOM or HETATM records".into());
     }
-    let (atoms, bonds) = from_raw_atoms(raw)?;
+    let elements: Vec<Element> = raw.iter().map(|atom| atom.element).collect();
+    let positions: Vec<[f64; 3]> = raw.iter().map(|atom| atom.position).collect();
+    if positions
+        .iter()
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err("receptor contains non-finite coordinates".into());
+    }
+    let bonds = bonds::perceive_bonds(&elements, &positions);
+    let aromatic = bonds::aromatic_atoms(&elements, &positions, &bonds);
+    let xs_types = atom_type::assign_xs_types(&elements, &positions, &bonds, &aromatic);
+    let charges = charge::gasteiger_charges(&elements, &bonds, 0.0);
+    if charges.iter().any(|charge| !charge.is_finite()) {
+        return Err("receptor charge preparation produced a non-finite value".into());
+    }
+    let atoms = raw
+        .into_iter()
+        .enumerate()
+        .map(|(source_index, atom)| {
+            dock_atom(
+                source_index,
+                atom,
+                None,
+                xs_types[source_index],
+                charges[source_index],
+            )
+        })
+        .collect();
+    Ok(ApproximatePreparedReceptor { atoms, bonds })
+}
+
+/// Prepare a rigid receptor from strict PDBQT atom records.
+///
+/// File charges and AD identities are preserved, and XS identities are derived
+/// from the explicit PDBQT chemistry. Explicit hydrogens remain outside the
+/// scored atom list.
+pub fn prepare_receptor_pdbqt(pdbqt_text: &str) -> Result<PreparedReceptor, String> {
+    let parsed = pdbqt::parse_receptor_pdbqt(pdbqt_text)?;
+    let elements: Vec<Element> = parsed.atoms.iter().map(|atom| atom.raw.element).collect();
+    let positions: Vec<[f64; 3]> = parsed.atoms.iter().map(|atom| atom.raw.position).collect();
+    let ad_types: Vec<AdType> = parsed.atoms.iter().map(|atom| atom.ad_type).collect();
+    let source_bonds = bonds::perceive_pdbqt_bonds(&ad_types, &positions, |_, _| true);
+    let xs_types = atom_type::xs_types_from_ad(&ad_types, &elements, &source_bonds)?;
+
+    let mut source_to_scored = vec![None; parsed.atoms.len()];
+    let mut atoms = Vec::new();
+    for (source_index, atom) in parsed.atoms.into_iter().enumerate() {
+        if atom.raw.element == Element::H || xs_types[source_index].is_none() {
+            continue;
+        }
+        source_to_scored[source_index] = Some(atoms.len());
+        atoms.push(dock_atom(
+            source_index,
+            atom.raw,
+            Some(atom.ad_type),
+            xs_types[source_index],
+            atom.charge,
+        ));
+    }
+    if atoms.is_empty() {
+        return Err("rigid receptor PDBQT has no scorable heavy atoms".into());
+    }
+    let bonds = project_bonds(&source_bonds, &source_to_scored);
     Ok(PreparedReceptor { atoms, bonds })
 }
 
-/// Prepare a ligand from PDB text, perceiving types and charges.
-pub fn prepare_ligand_pdb(pdb_text: &str) -> Result<PreparedLigand, String> {
-    let raw = pdb::parse_pdb_atoms(pdb_text)?;
-    if raw.is_empty() {
-        return Err("ligand has no ATOM or HETATM records".into());
-    }
-    finish_ligand(raw, None)
+/// Plain PDB cannot authoritatively provide ligand charge/type/topology.
+pub fn prepare_ligand_pdb(_pdb_text: &str) -> Result<PreparedLigand, String> {
+    Err("plain PDB ligand preparation is unsupported: provide a prepared PDBQT with explicit charges, AutoDock types, and torsion topology".into())
 }
 
-/// Prepare a ligand from PDBQT text, trusting the file's typing.
+/// Prepare a ligand from a strictly validated PDBQT model.
 pub fn prepare_ligand_pdbqt(pdbqt_text: &str) -> Result<PreparedLigand, String> {
-    let parsed = pdbqt::parse_pdbqt(pdbqt_text)?;
-    if parsed.atoms.is_empty() {
-        return Err("ligand PDBQT has no ATOM or HETATM records".into());
-    }
-    let raw: Vec<RawAtom> = parsed.atoms.iter().map(|atom| atom.raw.clone()).collect();
-    let override_types: Vec<Option<(AtomType, f64)>> = parsed
-        .atoms
-        .iter()
-        .map(|atom| Some((atom.ad_type, atom.charge)))
-        .collect();
-    let torsdof = parsed.torsdof;
-    finish_ligand(raw, Some((override_types, torsdof)))
+    prepare_parsed_ligand(pdbqt::parse_pdbqt(pdbqt_text)?)
 }
 
-/// Type, charge, and merge a parsed atom list into docking atoms.
-fn from_raw_atoms(raw: Vec<RawAtom>) -> Result<(Vec<DockAtom>, Vec<Bond>), String> {
-    let elements: Vec<Element> = raw.iter().map(|atom| atom.element).collect();
-    let positions: Vec<[f64; 3]> = raw.iter().map(|atom| atom.position).collect();
-    let bonds = bonds::perceive_bonds(&elements, &positions);
-    let aromatic = bonds::aromatic_atoms(&elements, &positions, &bonds);
-    let types = atom_type::assign_types(&elements, &positions, &bonds, &aromatic);
-    let charges = charge::gasteiger_charges(&elements, &bonds, 0.0);
-    let (atoms, remap) = merge_nonpolar_hydrogens(raw, &types, &charges, &bonds);
-    let remaining_bonds = reindex_bonds(&bonds, &remap);
-    Ok((atoms, remaining_bonds))
-}
+fn prepare_parsed_ligand(parsed: PdbqtLigand) -> Result<PreparedLigand, String> {
+    pdbqt::validate_ligand(&parsed)?;
+    let source_raw: Vec<RawAtom> = parsed.atoms.iter().map(|atom| atom.raw.clone()).collect();
+    let elements: Vec<Element> = source_raw.iter().map(|atom| atom.element).collect();
+    let positions: Vec<[f64; 3]> = source_raw.iter().map(|atom| atom.position).collect();
+    let ad_types: Vec<AdType> = parsed.atoms.iter().map(|atom| atom.ad_type).collect();
+    let charges: Vec<f64> = parsed.atoms.iter().map(|atom| atom.charge).collect();
 
-fn finish_ligand(
-    raw: Vec<RawAtom>,
-    overrides: Option<(Vec<Option<(AtomType, f64)>>, u32)>,
-) -> Result<PreparedLigand, String> {
-    let (elements, positions): (Vec<Element>, Vec<[f64; 3]>) =
-        raw.iter().map(|atom| (atom.element, atom.position)).unzip();
-    let bonds = bonds::perceive_bonds(&elements, &positions);
-    let aromatic = bonds::aromatic_atoms(&elements, &positions, &bonds);
-    let has_overrides = overrides.is_some();
-    let (types, charges, torsdof) = match overrides {
-        Some((file_types, file_torsdof)) => {
-            let mut types = atom_type::assign_types(&elements, &positions, &bonds, &aromatic);
-            let mut charges = charge::gasteiger_charges(&elements, &bonds, 0.0);
-            for (index, slot) in file_types.iter().enumerate() {
-                if let Some((ad_type, charge)) = slot {
-                    types[index] = *ad_type;
-                    charges[index] = *charge;
-                }
-            }
-            (types, charges, file_torsdof)
-        }
-        None => {
-            let types = atom_type::assign_types(&elements, &positions, &bonds, &aromatic);
-            let charges = charge::gasteiger_charges(&elements, &bonds, 0.0);
-            let rotatable = bonds::rotatable_bonds(&elements, &positions, &bonds, &aromatic);
-            (types, charges, rotatable.len() as u32)
-        }
-    };
-    let (atoms, remap) = merge_nonpolar_hydrogens(raw, &types, &charges, &bonds);
-    let remaining_bonds = reindex_bonds(&bonds, &remap);
-    let remaining_elements: Vec<Element> = atoms.iter().map(|atom| atom.element).collect();
-    let remaining_positions: Vec<[f64; 3]> = atoms.iter().map(|atom| atom.position).collect();
-    let remaining_aromatic: std::collections::HashSet<usize> = atoms
+    let serial_to_source: HashMap<i32, usize> = source_raw
         .iter()
         .enumerate()
-        .filter(|(_, atom)| matches!(atom.ad_type, AtomType::A))
-        .map(|(index, _)| index)
+        .map(|(index, atom)| (atom.serial, index))
         .collect();
-    let rotatable = bonds::rotatable_bonds(
-        &remaining_elements,
-        &remaining_positions,
-        &remaining_bonds,
-        &remaining_aromatic,
-    );
-    let torsdof = if has_overrides {
-        torsdof
-    } else {
-        rotatable.len() as u32
-    };
-    let intra_excluded = bonds::bonded_exclusions(atoms.len(), &remaining_bonds);
+    let mobility = source_mobility(&parsed, &serial_to_source);
+    let mut source_bonds = bonds::perceive_pdbqt_bonds(&ad_types, &positions, |first, second| {
+        mobility.is_non_variable(first, second)
+    });
+    for branch in &parsed.branches {
+        let a = serial_to_source[&branch.parent_serial];
+        let b = serial_to_source[&branch.child_serial];
+        let axis = Bond { a, b }.canonical();
+        if !source_bonds
+            .iter()
+            .any(|candidate| candidate.canonical() == axis)
+        {
+            return Err(format!(
+                "BRANCH axis {} {} is not a covalent bond under the Vina PDBQT geometry rule",
+                branch.parent_serial, branch.child_serial
+            ));
+        }
+    }
+    source_bonds.sort_unstable_by_key(|bond| {
+        let canonical = bond.canonical();
+        (canonical.a, canonical.b)
+    });
+    source_bonds.dedup_by_key(|bond| {
+        let canonical = bond.canonical();
+        (canonical.a, canonical.b)
+    });
+
+    let xs_types = atom_type::xs_types_from_ad(&ad_types, &elements, &source_bonds)?;
+    let source_atoms: Vec<DockAtom> = source_raw
+        .into_iter()
+        .enumerate()
+        .map(|(index, atom)| {
+            dock_atom(
+                index,
+                atom,
+                Some(ad_types[index]),
+                xs_types[index],
+                charges[index],
+            )
+        })
+        .collect();
+
+    let mut source_to_scored = vec![None; source_atoms.len()];
+    let mut scored_to_source = Vec::new();
+    let mut atoms = Vec::new();
+    for atom in &source_atoms {
+        if atom.element == Element::H || atom.xs_type.is_none() {
+            continue;
+        }
+        source_to_scored[atom.source_index] = Some(atoms.len());
+        scored_to_source.push(atom.source_index);
+        atoms.push(atom.clone());
+    }
+    if atoms.is_empty() {
+        return Err("ligand has no scorable heavy atoms".into());
+    }
+
+    let bonds = project_bonds(&source_bonds, &source_to_scored);
+    let intra_excluded = bonds::bonded_exclusions(atoms.len(), &bonds);
+    let rigid_fragments = build_rigid_fragments(&parsed);
+    let branches = parsed
+        .branches
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| pdbqt::branch_is_active(&parsed, *index))
+        .map(|(index, branch)| {
+            let parent_source_index = serial_to_source[&branch.parent_serial];
+            let child_source_index = serial_to_source[&branch.child_serial];
+            LigandBranch {
+                parent_serial: branch.parent_serial,
+                child_serial: branch.child_serial,
+                parent_source_index,
+                child_source_index,
+                parent_fragment: branch
+                    .parent
+                    .map(|parent| {
+                        effective_active_branch(&parsed, parent).map_or(0, |active| active + 1)
+                    })
+                    .unwrap_or(0),
+                child_fragment: index + 1,
+                parent_branch: branch
+                    .parent
+                    .and_then(|parent| effective_active_branch(&parsed, parent)),
+            }
+        })
+        .collect::<Vec<_>>();
+    let rotatable = branches
+        .iter()
+        .filter_map(|branch| {
+            Some(Bond {
+                a: source_to_scored[branch.parent_source_index]?,
+                b: source_to_scored[branch.child_source_index]?,
+            })
+        })
+        .collect();
+    let distance_variable_pairs =
+        distance_variable_pairs(atoms.len(), &scored_to_source, &mobility, &intra_excluded);
+    let num_tors = vina_effective_num_tors(&branches, &source_bonds, &elements);
+
     Ok(PreparedLigand {
+        source_atoms,
         atoms,
-        bonds: remaining_bonds,
+        source_to_scored,
+        scored_to_source,
+        source_bonds,
+        bonds,
+        rigid_fragments,
+        branches,
         rotatable,
-        torsdof,
+        num_tors,
+        torsdof: parsed.torsdof,
         intra_excluded,
+        distance_variable_pairs,
     })
 }
 
-/// Apply the united-atom model: fold every nonpolar hydrogen into its parent.
-///
-/// The hydrogen's charge moves to the parent so the molecule stays neutral;
-/// its position disappears from the scored set entirely. Returns the merged
-/// atoms plus the old-to-new index map used to rebuild bonds.
-fn merge_nonpolar_hydrogens(
-    raw: Vec<RawAtom>,
-    types: &[AtomType],
-    charges: &[f64],
-    bonds: &[Bond],
-) -> (Vec<DockAtom>, Vec<Option<usize>>) {
-    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); raw.len()];
-    for bond in bonds {
-        neighbors[bond.a].push(bond.b);
-        neighbors[bond.b].push(bond.a);
+fn dock_atom(
+    source_index: usize,
+    atom: RawAtom,
+    wire_ad_type: Option<AdType>,
+    xs_type: Option<XsType>,
+    charge: f64,
+) -> DockAtom {
+    DockAtom {
+        source_index,
+        serial: atom.serial,
+        name: atom.name,
+        element: atom.element,
+        wire_ad_type,
+        xs_type,
+        position: atom.position,
+        charge,
+        residue_name: atom.residue_name,
+        chain: atom.chain,
+        residue_seq: atom.residue_seq,
+        insertion_code: atom.insertion_code,
+        is_hetero: atom.is_hetero,
     }
-    let mut merged_charge = charges.to_vec();
-    let mut dropped = vec![false; raw.len()];
-    for bond in bonds {
-        let (hydrogen, parent) = if types[bond.a] == AtomType::Hc {
-            (bond.a, bond.b)
-        } else if types[bond.b] == AtomType::Hc {
-            (bond.b, bond.a)
-        } else {
-            continue;
-        };
-        dropped[hydrogen] = true;
-        merged_charge[parent] += merged_charge[hydrogen];
-        merged_charge[hydrogen] = 0.0;
-    }
-    let hetero_neighbor: Vec<bool> = raw
-        .iter()
-        .map(|atom| {
-            atom.element != Element::H
-                && matches!(
-                    atom.element,
-                    Element::N
-                        | Element::O
-                        | Element::S
-                        | Element::P
-                        | Element::F
-                        | Element::Cl
-                        | Element::Br
-                        | Element::I
-                )
-        })
-        .collect();
-    let mut remap: Vec<Option<usize>> = vec![None; raw.len()];
-    let mut atoms = Vec::with_capacity(raw.len());
-    for (index, atom) in raw.into_iter().enumerate() {
-        if dropped[index] {
-            continue;
-        }
-        let polar_carbon = matches!(types[index], AtomType::C | AtomType::A)
-            && neighbors[index].iter().any(|&other| hetero_neighbor[other]);
-        let hbond_donor = atom.element != Element::H
-            && neighbors[index]
-                .iter()
-                .any(|&other| types[other] == AtomType::H);
-        remap[index] = Some(atoms.len());
-        atoms.push(DockAtom {
-            serial: atom.serial,
-            name: atom.name,
-            element: atom.element,
-            ad_type: types[index],
-            hbond_donor,
-            polar_carbon,
-            position: atom.position,
-            charge: merged_charge[index],
-            residue_name: atom.residue_name,
-            chain: atom.chain,
-            residue_seq: atom.residue_seq,
-            insertion_code: atom.insertion_code,
-            is_hetero: atom.is_hetero,
-        });
-    }
-    (atoms, remap)
 }
 
-/// Remap bond endpoints onto the post-merge atom list, dropping bonds that
-/// touched a merged hydrogen.
-fn reindex_bonds(bonds: &[Bond], remap: &[Option<usize>]) -> Vec<Bond> {
-    bonds
+fn project_bonds(source_bonds: &[Bond], source_to_scored: &[Option<usize>]) -> Vec<Bond> {
+    let mut projected: Vec<Bond> = source_bonds
         .iter()
         .filter_map(|bond| {
-            Some(Bond {
-                a: remap.get(bond.a).copied().flatten()?,
-                b: remap.get(bond.b).copied().flatten()?,
-            })
+            Some(
+                Bond {
+                    a: source_to_scored.get(bond.a).copied().flatten()?,
+                    b: source_to_scored.get(bond.b).copied().flatten()?,
+                }
+                .canonical(),
+            )
+        })
+        .collect();
+    projected.sort_unstable_by_key(|bond| (bond.a, bond.b));
+    projected.dedup();
+    projected
+}
+
+fn build_rigid_fragments(parsed: &PdbqtLigand) -> Vec<RigidFragment> {
+    let fragments_by_source = effective_fragments(parsed);
+    let mut fragments = Vec::with_capacity(parsed.branches.len() + 1);
+    fragments.push(RigidFragment {
+        branch: None,
+        parent: None,
+        source_atoms: Vec::new(),
+    });
+    fragments.extend(
+        parsed
+            .branches
+            .iter()
+            .enumerate()
+            .map(|(index, branch)| RigidFragment {
+                branch: Some(index),
+                parent: Some(branch.parent.map_or(0, |parent| parent + 1)),
+                source_atoms: Vec::new(),
+            }),
+    );
+    for (source_index, fragment) in fragments_by_source.into_iter().enumerate() {
+        fragments[fragment].source_atoms.push(source_index);
+    }
+    fragments
+}
+
+fn effective_active_branch(parsed: &PdbqtLigand, branch: usize) -> Option<usize> {
+    let mut current = Some(branch);
+    while let Some(index) = current {
+        if pdbqt::branch_is_active(parsed, index) {
+            return Some(index);
+        }
+        current = parsed.branches[index].parent;
+    }
+    None
+}
+
+fn effective_fragments(parsed: &PdbqtLigand) -> Vec<usize> {
+    let effective_branch_fragment =
+        |branch: usize| effective_active_branch(parsed, branch).map_or(0, |index| index + 1);
+    let child_axis_to_parent = parsed
+        .branches
+        .iter()
+        .map(|branch| {
+            let parent_fragment = branch.parent.map(effective_branch_fragment).unwrap_or(0);
+            (branch.child_serial, parent_fragment)
+        })
+        .collect::<HashMap<_, _>>();
+    parsed
+        .atoms
+        .iter()
+        .enumerate()
+        .map(|(source_index, atom)| {
+            child_axis_to_parent
+                .get(&atom.raw.serial)
+                .copied()
+                .unwrap_or_else(|| {
+                    parsed.atom_branches[source_index]
+                        .map(effective_branch_fragment)
+                        .unwrap_or(0)
+                })
         })
         .collect()
+}
+
+fn vina_effective_num_tors(
+    branches: &[LigandBranch],
+    source_bonds: &[Bond],
+    elements: &[Element],
+) -> f64 {
+    let mut heavy_degree = vec![0usize; elements.len()];
+    for bond in source_bonds {
+        if elements[bond.a] != Element::H && elements[bond.b] != Element::H {
+            heavy_degree[bond.a] += 1;
+            heavy_degree[bond.b] += 1;
+        }
+    }
+    branches
+        .iter()
+        .map(|branch| {
+            if elements[branch.parent_source_index] == Element::H
+                || elements[branch.child_source_index] == Element::H
+            {
+                return 0.0;
+            }
+            let mut contribution = 0.0;
+            if elements[branch.child_source_index] != Element::H
+                && heavy_degree[branch.child_source_index] > 1
+            {
+                contribution += 0.5;
+            }
+            if elements[branch.parent_source_index] != Element::H
+                && heavy_degree[branch.parent_source_index] > 1
+            {
+                contribution += 0.5;
+            }
+            contribution
+        })
+        .sum()
+}
+
+#[derive(Debug, Clone)]
+struct SourceMobility {
+    count: usize,
+    non_variable: HashSet<(usize, usize)>,
+}
+
+impl SourceMobility {
+    fn new(count: usize) -> SourceMobility {
+        SourceMobility {
+            count,
+            non_variable: HashSet::new(),
+        }
+    }
+
+    fn mark_non_variable(&mut self, first: usize, second: usize) {
+        if first == second {
+            return;
+        }
+        debug_assert!(first < self.count && second < self.count);
+        self.non_variable.insert(canonical_pair(first, second));
+    }
+
+    fn mark_group(&mut self, atoms: &[usize]) {
+        for (offset, &first) in atoms.iter().enumerate() {
+            for &second in &atoms[(offset + 1)..] {
+                self.mark_non_variable(first, second);
+            }
+        }
+    }
+
+    fn is_non_variable(&self, first: usize, second: usize) -> bool {
+        first == second || self.non_variable.contains(&canonical_pair(first, second))
+    }
+}
+
+fn source_mobility(parsed: &PdbqtLigand, serial_to_source: &HashMap<i32, usize>) -> SourceMobility {
+    let mut mobility = SourceMobility::new(parsed.atoms.len());
+    let fragments = effective_fragments(parsed);
+    let root = fragments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fragment)| (*fragment == 0).then_some(index))
+        .collect::<Vec<_>>();
+    mobility.mark_group(&root);
+
+    for (branch_index, branch) in parsed.branches.iter().enumerate() {
+        if !pdbqt::branch_is_active(parsed, branch_index) {
+            continue;
+        }
+        let body = fragments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, fragment)| (*fragment == branch_index + 1).then_some(index))
+            .collect::<Vec<_>>();
+        mobility.mark_group(&body);
+        let parent_axis = serial_to_source[&branch.parent_serial];
+        let child_axis = serial_to_source[&branch.child_serial];
+        mobility.mark_non_variable(parent_axis, child_axis);
+        for &atom in &body {
+            mobility.mark_non_variable(parent_axis, atom);
+            mobility.mark_non_variable(child_axis, atom);
+        }
+    }
+    mobility
+}
+
+fn distance_variable_pairs(
+    scored_count: usize,
+    scored_to_source: &[usize],
+    mobility: &SourceMobility,
+    excluded: &[(usize, usize)],
+) -> Vec<(usize, usize)> {
+    let excluded: HashSet<(usize, usize)> = excluded.iter().copied().collect();
+    let mut pairs = Vec::new();
+    for first in 0..scored_count {
+        for second in (first + 1)..scored_count {
+            if excluded.contains(&(first, second)) {
+                continue;
+            }
+            if !mobility.is_non_variable(scored_to_source[first], scored_to_source[second]) {
+                pairs.push((first, second));
+            }
+        }
+    }
+    pairs
+}
+
+fn canonical_pair(first: usize, second: usize) -> (usize, usize) {
+    if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+fn contains_pair(pairs: &[(usize, usize)], first: usize, second: usize) -> bool {
+    if first == second {
+        return false;
+    }
+    let pair = if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    pairs.binary_search(&pair).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn hexagon_pdb(element_bond: f64) -> String {
-        let mut body = String::new();
-        for index in 0..6 {
-            let angle = index as f64 * std::f64::consts::FRAC_PI_3;
-            let x = element_bond * angle.cos();
-            let y = element_bond * angle.sin();
-            body.push_str(&format!(
-                "HETATM{serial:5}  C   BEN L   1    {x:8.3}{y:8.3}{z:8.3}  1.00  0.00           C\n",
-                serial = index + 1,
-                z = 0.0
-            ));
-        }
-        body
+    fn atom_line(serial: i32, x: f64, ad_type: AdType, charge: f64) -> String {
+        pdbqt::format_atom_line(&pdbqt::PdbqtAtom {
+            raw: RawAtom {
+                serial,
+                name: format!("X{serial}"),
+                element: ad_type.element(),
+                position: [x, 0.0, 0.0],
+                residue_name: "LIG".into(),
+                chain: 'L',
+                residue_seq: 1,
+                insertion_code: ' ',
+                is_hetero: true,
+            },
+            charge,
+            ad_type,
+        })
+        .unwrap()
     }
 
     #[test]
-    fn benzene_preparation_merges_hydrogens_and_types_aromatic() {
-        let mut body = hexagon_pdb(1.39);
-        // One hydrogen per carbon, radially outward at 1.09 A.
-        for index in 0..6 {
-            let angle = index as f64 * std::f64::consts::FRAC_PI_3;
-            let x = (1.39 + 1.09) * angle.cos();
-            let y = (1.39 + 1.09) * angle.sin();
-            body.push_str(&format!(
-                "HETATM{serial:5}  H   BEN L   1    {x:8.3}{y:8.3}{z:8.3}  1.00  0.00           H\n",
-                serial = index + 7,
-                z = 0.0
-            ));
-        }
-        let ligand = prepare_ligand_pdb(&body).unwrap();
-        assert_eq!(ligand.atoms.len(), 6);
-        assert!(ligand.atoms.iter().all(|atom| atom.ad_type == AtomType::A));
-        assert_eq!(ligand.torsdof, 0);
-        let charge_sum: f64 = ligand.atoms.iter().map(|atom| atom.charge).sum();
-        assert!(charge_sum.abs() < 1e-9);
+    fn plain_pdb_ligand_preparation_fails_closed() {
+        let pdb =
+            "HETATM    1  C   LIG L   1       0.000   0.000   0.000  1.00  0.00           C\n";
+        let error = prepare_ligand_pdb(pdb).unwrap_err();
+        assert!(error.contains("prepared PDBQT"));
     }
 
     #[test]
-    fn phenol_keeps_its_polar_hydrogen_and_marks_the_ring_polar() {
-        // Benzene ring plus an OH: the C bonded to O is a polar carbon.
-        let mut body = hexagon_pdb(1.39);
-        let attach_angle = 0.0_f64;
-        let ox = (1.39 + 1.36) * attach_angle.cos();
-        let oy = (1.39 + 1.36) * attach_angle.sin();
-        let hx = (1.39 + 1.36 + 0.96) * attach_angle.cos();
-        let hy = (1.39 + 1.36 + 0.96) * attach_angle.sin();
-        body.push_str(&format!(
-            "HETATM    7  O   BEN L   1    {ox:8.3}{oy:8.3}{z:8.3}  1.00  0.00           O\nHETATM    8  H   BEN L   1    {hx:8.3}{hy:8.3}{z:8.3}  1.00  0.00           H\n",
-            z = 0.0
-        ));
-        let ligand = prepare_ligand_pdb(&body).unwrap();
-        // 6 ring carbons + O + polar H = 8 atoms survive.
-        assert_eq!(ligand.atoms.len(), 8);
-        let attached_carbon = ligand
-            .atoms
-            .iter()
-            .find(|atom| atom.polar_carbon)
-            .expect("the carbon bonded to O is polar");
-        assert_eq!(attached_carbon.ad_type, AtomType::A);
-        assert!(!attached_carbon.is_hydrophobic());
-        assert!(
-            ligand
-                .atoms
-                .iter()
-                .filter(|a| a.ad_type == AtomType::A)
-                .count()
-                == 6
-        );
-        assert!(ligand.atoms.iter().any(|a| a.ad_type == AtomType::Oa));
-        assert!(ligand.atoms.iter().any(|a| a.ad_type == AtomType::H));
+    fn source_atoms_preserve_explicit_hydrogens_but_scored_mapping_omits_them() {
+        let n = atom_line(1, 0.0, AdType::Na, 0.1);
+        let hd = atom_line(2, 1.0, AdType::Hd, 0.05);
+        let c = atom_line(3, -1.45, AdType::C, -0.15);
+        let text = format!("ROOT\n{n}\n{hd}\n{c}\nENDROOT\nTORSDOF 0\n");
+        let ligand = prepare_ligand_pdbqt(&text).unwrap();
+        assert_eq!(ligand.source_atoms.len(), 3);
+        assert_eq!(ligand.atoms.len(), 2);
+        assert_eq!(ligand.source_to_scored, vec![Some(0), None, Some(1)]);
+        assert_eq!(ligand.scored_to_source, vec![0, 2]);
+        assert_eq!(ligand.source_atoms[1].wire_ad_type, Some(AdType::Hd));
+        assert_eq!(ligand.source_atoms[1].xs_type, None);
+        assert_eq!(ligand.atoms[0].xs_type, Some(XsType::N_DA));
+        assert!(ligand.atoms[0].is_donor());
+        assert!(ligand.atoms[0].is_acceptor());
     }
 
     #[test]
-    fn butane_counts_two_rotatable_bonds_and_excludes_neighbors() {
-        // C-C-C-C chain with enough spacing to avoid 1-3 shortcuts.
-        let mut body = String::new();
-        let xs = [0.0, 1.54, 2.51, 3.98]; // zig-zag with a rotatable middle
-        let ys = [0.0, 0.0, 0.89, 0.89];
-        for index in 0..4 {
-            body.push_str(&format!(
-                "HETATM{serial:5}  C   BUT L   1    {x:8.3}{y:8.3}{z:8.3}  1.00  0.00           C\n",
-                serial = index + 1,
-                x = xs[index],
-                y = ys[index],
-                z = 0.0
-            ));
-        }
-        let ligand = prepare_ligand_pdb(&body).unwrap();
-        assert_eq!(ligand.atoms.len(), 4);
-        // Only the middle bond joins two non-terminal carbons.
+    fn nonpolar_h_does_not_make_a_heavy_atom_a_donor() {
+        let n = atom_line(1, 0.0, AdType::Na, 0.0);
+        let h = atom_line(2, 1.0, AdType::H, 0.0);
+        let text = format!("ROOT\n{n}\n{h}\nENDROOT\nTORSDOF 0\n");
+        let ligand = prepare_ligand_pdbqt(&text).unwrap();
+        assert_eq!(ligand.atoms[0].xs_type, Some(XsType::N_A));
+        assert!(!ligand.atoms[0].is_donor());
+    }
+
+    #[test]
+    fn active_branch_with_hydrogen_axis_does_not_contribute_num_tors() {
+        let root = atom_line(1, 0.0, AdType::C, 0.0);
+        let hydrogen_axis = atom_line(2, 1.0, AdType::H, 0.0);
+        let body = atom_line(3, 2.0, AdType::C, 0.0);
+        let ligand = prepare_ligand_pdbqt(&format!(
+            "ROOT\n{root}\nENDROOT\nBRANCH 1 2\n{hydrogen_axis}\n{body}\nENDBRANCH 1 2\nTORSDOF 1\n"
+        ))
+        .unwrap();
+        assert_eq!(ligand.branches.len(), 1);
+        assert_eq!(ligand.num_tors, 0.0);
         assert_eq!(ligand.torsdof, 1);
-        assert_eq!(ligand.rotatable.len(), 1);
-        assert!(ligand.intra_excluded.contains(&(0, 1)));
-        assert!(ligand.intra_excluded.contains(&(0, 2)));
-        assert!(ligand.intra_excluded.contains(&(0, 3)));
     }
 
     #[test]
-    fn pdbqt_input_trusts_file_types_and_torsdof() {
-        let text = "\
-HETATM    1  N   LIG X   1       0.000   0.000   0.000  1.00  0.00     0.100 NA
-HETATM    2  C   LIG X   1       1.470   0.000   0.000  1.00  0.00    -0.100 C
-ROOT
-ENDROOT
-TORSDOF 7
-";
-        let ligand = prepare_ligand_pdbqt(text).unwrap();
+    fn branch_topology_controls_num_tors_independently_of_file_torsdof() {
+        let root = atom_line(1, 0.0, AdType::C, 0.0);
+        let child = atom_line(2, 1.5, AdType::C, 0.0);
+        let child_body = atom_line(4, 1.5, AdType::C, 0.0);
+        let grandchild = atom_line(3, 3.0, AdType::Oa, 0.0);
+        let grandchild_body = atom_line(5, 4.3, AdType::C, 0.0);
+        let text = format!(
+            "ROOT\n{root}\nENDROOT\nBRANCH 1 2\n{child}\n{child_body}\nBRANCH 2 3\n{grandchild}\n{grandchild_body}\nENDBRANCH 2 3\nENDBRANCH 1 2\nTORSDOF 7\n"
+        );
+        let ligand = prepare_ligand_pdbqt(&text).unwrap();
+        assert_eq!(ligand.num_tors, 2.0);
         assert_eq!(ligand.torsdof, 7);
-        assert_eq!(ligand.atoms[0].ad_type, AtomType::Na);
-        assert!((ligand.atoms[0].charge - 0.1).abs() < 5e-4);
-        assert_eq!(ligand.atoms[1].ad_type, AtomType::C);
+        assert_eq!(ligand.branches.len(), 2);
+        assert_eq!(ligand.rigid_fragments.len(), 3);
+        assert_eq!(ligand.rigid_fragments[0].source_atoms, vec![0, 1]);
+        assert_eq!(ligand.rigid_fragments[1].source_atoms, vec![2, 3]);
+        assert_eq!(ligand.rigid_fragments[2].source_atoms, vec![4]);
     }
 
     #[test]
-    fn empty_input_reports_a_clear_error() {
-        assert!(prepare_receptor("END\n").is_err());
-        assert!(prepare_ligand_pdb("REMARK nothing\n").is_err());
+    fn branch_axis_is_parent_rigid_but_non_axis_body_atoms_remain_variable() {
+        let root_a = atom_line(1, -4.0, AdType::C, 0.0);
+        let root_b = atom_line(2, 1.5, AdType::C, 0.0);
+        let child_axis = atom_line(3, 0.8, AdType::C, 0.0);
+        let child_body = atom_line(4, 0.7, AdType::C, 0.0);
+        let text = format!(
+            "ROOT\n{root_a}\n{root_b}\nENDROOT\nBRANCH 2 3\n{child_axis}\n{child_body}\nENDBRANCH 2 3\nTORSDOF 1\n"
+        );
+        let ligand = prepare_ligand_pdbqt(&text).unwrap();
+        assert_eq!(ligand.rigid_fragments[0].source_atoms, vec![0, 1, 2]);
+        assert_eq!(ligand.rigid_fragments[1].source_atoms, vec![3]);
+        assert!(!ligand.is_distance_variable_pair(0, 2));
+        assert!(ligand.is_distance_variable_pair(0, 3));
+    }
+
+    #[test]
+    fn intra_eligibility_requires_variable_distance_and_preserves_one_four_exclusions() {
+        // ROOT: 1-4 are kept in one rigid node. BRANCH 4->5 has child-axis 5
+        // in the parent node and movable body atom 6 in the child node. 1-5 is
+        // fixed by the axis relation; 1-6 is variable and beyond the 1-4 graph
+        // exclusion, so it is eligible.
+        let atoms = (1..=6)
+            .map(|serial| atom_line(serial, (serial - 1) as f64 * 1.5, AdType::C, 0.0))
+            .collect::<Vec<_>>();
+        let text = format!(
+            "ROOT\n{}\n{}\n{}\n{}\nENDROOT\nBRANCH 4 5\n{}\n{}\nENDBRANCH 4 5\nTORSDOF 1\n",
+            atoms[0], atoms[1], atoms[2], atoms[3], atoms[4], atoms[5]
+        );
+        let ligand = prepare_ligand_pdbqt(&text).unwrap();
+        assert!(ligand.is_intra_excluded(0, 3));
+        assert!(!ligand.is_distance_variable_pair(0, 3));
+        assert!(!ligand.is_distance_variable_pair(0, 4));
+        assert!(ligand.is_distance_variable_pair(0, 5));
+        assert_eq!(
+            ligand.is_intra_eligible(0, 5),
+            !ligand.is_intra_excluded(0, 5)
+        );
+        assert_eq!(
+            ligand.is_intra_eligible(1, 5),
+            !ligand.is_intra_excluded(1, 5)
+        );
+        assert!(!ligand.is_intra_eligible(0, 3)); // same rigid node
+    }
+
+    #[test]
+    fn receptor_pdb_path_is_explicitly_approximate() {
+        let pdb =
+            "ATOM      1  C   GLY A   1       0.000   0.000   0.000  1.00  0.00           C\n";
+        assert!(prepare_receptor(pdb)
+            .unwrap_err()
+            .contains("not a validated Vina input"));
+        let receptor = prepare_receptor_pdb_approximate(pdb).unwrap();
+        assert_eq!(receptor.atoms.len(), 1);
+        assert_eq!(receptor.atoms[0].wire_ad_type, None);
+        assert_eq!(receptor.atoms[0].xs_type, Some(XsType::C_H));
+    }
+
+    #[test]
+    fn pair_lookup_is_order_independent() {
+        let ligand = PreparedLigand {
+            source_atoms: Vec::new(),
+            atoms: Vec::new(),
+            source_to_scored: Vec::new(),
+            scored_to_source: Vec::new(),
+            source_bonds: Vec::new(),
+            bonds: Vec::new(),
+            rigid_fragments: Vec::new(),
+            branches: Vec::new(),
+            rotatable: Vec::new(),
+            num_tors: 0.0,
+            torsdof: 0,
+            intra_excluded: vec![(1, 3)],
+            distance_variable_pairs: vec![(0, 2)],
+        };
+        assert!(ligand.is_intra_excluded(3, 1));
+        assert!(ligand.is_distance_variable_pair(2, 0));
     }
 }

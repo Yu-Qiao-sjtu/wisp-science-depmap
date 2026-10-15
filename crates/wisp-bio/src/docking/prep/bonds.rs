@@ -5,7 +5,7 @@
 //! alternate paths around each bond, and aromaticity from ring size, member
 //! elements, and geometric planarity — no external chemistry toolkit.
 
-use super::atom_type::{Bond, Element};
+use super::atom_type::{AdType, Bond, Element};
 use std::collections::HashSet;
 
 /// Slack added to summed covalent radii before two atoms count as bonded.
@@ -30,11 +30,20 @@ pub fn covalent_radius(element: Element) -> f64 {
         Element::Cl => 1.02,
         Element::Br => 1.20,
         Element::I => 1.39,
+        Element::At => 1.50,
         Element::Mg => 1.41,
         Element::Mn => 1.39,
         Element::Zn => 1.22,
         Element::Ca => 1.76,
         Element::Fe => 1.32,
+        Element::Cu
+        | Element::Na
+        | Element::K
+        | Element::Hg
+        | Element::Co
+        | Element::U
+        | Element::Cd
+        | Element::Ni => 1.75,
         Element::Other => 1.50,
     }
 }
@@ -54,28 +63,137 @@ pub fn perceive_bonds(elements: &[Element], positions: &[[f64; 3]]) -> Vec<Bond>
     bonds
 }
 
-/// Atom indices that belong to a ring of at most [`MAX_AROMATIC_RING_SIZE`]
-/// plus one members (5- and 6-rings for the accepted value).
-pub fn ring_atoms(count: usize, bonds: &[Bond]) -> HashSet<usize> {
-    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); count];
-    for bond in bonds {
-        neighbors[bond.a].push(bond.b);
-        neighbors[bond.b].push(bond.a);
+/// Assign fixed-fragment PDBQT bonds with the AutoDock Vina v1.2.7 rule.
+///
+/// Candidate pairs must belong to the same rigid fragment, lie within 1.1 times
+/// the sum of their AD covalent radii, and have no closer same-fragment atom
+/// between both endpoints. Branch rotor axes are added separately by the caller.
+pub fn perceive_pdbqt_bonds<F>(
+    ad_types: &[AdType],
+    positions: &[[f64; 3]],
+    is_non_variable: F,
+) -> Vec<Bond>
+where
+    F: Fn(usize, usize) -> bool,
+{
+    const ALLOWANCE: f64 = 1.1;
+    assert_eq!(ad_types.len(), positions.len());
+
+    let mut candidates = Vec::new();
+    for first in 0..ad_types.len() {
+        for second in (first + 1)..ad_types.len() {
+            if !is_non_variable(first, second) {
+                continue;
+            }
+            let limit = ALLOWANCE
+                * (ad_covalent_radius(ad_types[first]) + ad_covalent_radius(ad_types[second]));
+            let distance = distance(positions[first], positions[second]);
+            if distance < limit {
+                candidates.push((first, second, distance));
+            }
+        }
     }
+
+    candidates
+        .iter()
+        .filter_map(|&(first, second, distance)| {
+            let blocked = (0..ad_types.len()).any(|between| {
+                between != first
+                    && between != second
+                    && is_non_variable(first, between)
+                    && is_non_variable(second, between)
+                    && distance_sq(positions[first], positions[between]) < distance * distance
+                    && distance_sq(positions[second], positions[between]) < distance * distance
+            });
+            (!blocked).then_some(Bond {
+                a: first,
+                b: second,
+            })
+        })
+        .collect()
+}
+
+fn ad_covalent_radius(ad_type: AdType) -> f64 {
+    match ad_type {
+        AdType::C
+        | AdType::A
+        | AdType::Cg0
+        | AdType::Cg1
+        | AdType::Cg2
+        | AdType::Cg3
+        | AdType::G0
+        | AdType::G1
+        | AdType::G2
+        | AdType::G3 => 0.77,
+        AdType::N | AdType::Na => 0.75,
+        AdType::O | AdType::Oa => 0.73,
+        AdType::P => 1.06,
+        AdType::S | AdType::Sa | AdType::Se => 1.02,
+        AdType::H | AdType::Hd => 0.37,
+        AdType::F => 0.71,
+        AdType::Cl => 0.99,
+        AdType::Br => 1.14,
+        AdType::I => 1.33,
+        AdType::Mg => 1.30,
+        AdType::Mn => 1.39,
+        AdType::Zn => 1.31,
+        AdType::Ca => 1.74,
+        AdType::Fe => 1.25,
+        AdType::Si => 1.11,
+        AdType::At => 1.44,
+        AdType::W => 0.0,
+        AdType::Cu
+        | AdType::Sodium
+        | AdType::K
+        | AdType::Hg
+        | AdType::Co
+        | AdType::U
+        | AdType::Cd
+        | AdType::Ni => 1.75,
+    }
+}
+
+/// Atom indices that belong to a ring no larger than
+/// [`MAX_AROMATIC_RING_SIZE`]. This bounded set is used only for aromaticity.
+pub fn ring_atoms(count: usize, bonds: &[Bond]) -> HashSet<usize> {
+    let neighbors = neighbor_lists(count, bonds);
     let mut rings = HashSet::new();
     for bond in bonds {
-        // Removing the bond must leave an alternate path to close a ring.
+        // Removing the bond must leave an alternate path to close a ring. The
+        // path excludes both endpoints, so the cycle size is `len + 2`.
         if let Some(path) = shortest_path(bond.a, bond.b, &neighbors, *bond) {
-            if path.len() + 1 <= MAX_AROMATIC_RING_SIZE + 1 {
+            if path.len() + 2 <= MAX_AROMATIC_RING_SIZE {
                 rings.insert(bond.a);
                 rings.insert(bond.b);
-                for node in path {
-                    rings.insert(node);
-                }
+                rings.extend(path);
             }
         }
     }
     rings
+}
+
+/// Exact bond edges that belong to any cycle.
+///
+/// Rotor perception must test the edge, not whether either endpoint happens to
+/// be a ring atom: an exocyclic or biaryl bond can be rotatable even though one
+/// or both endpoints are ring members.
+pub fn ring_bonds(count: usize, bonds: &[Bond]) -> HashSet<Bond> {
+    let neighbors = neighbor_lists(count, bonds);
+    bonds
+        .iter()
+        .copied()
+        .filter(|bond| shortest_path(bond.a, bond.b, &neighbors, *bond).is_some())
+        .map(Bond::canonical)
+        .collect()
+}
+
+fn neighbor_lists(count: usize, bonds: &[Bond]) -> Vec<Vec<usize>> {
+    let mut neighbors = vec![Vec::new(); count];
+    for bond in bonds {
+        neighbors[bond.a].push(bond.b);
+        neighbors[bond.b].push(bond.a);
+    }
+    neighbors
 }
 
 /// BFS shortest path from `from` to `to`, forbidden to use `skip`.
@@ -220,14 +338,10 @@ pub fn rotatable_bonds(
     elements: &[Element],
     positions: &[[f64; 3]],
     bonds: &[Bond],
-    aromatic: &HashSet<usize>,
+    _aromatic: &HashSet<usize>,
 ) -> Vec<Bond> {
-    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); elements.len()];
-    for bond in bonds {
-        neighbors[bond.a].push(bond.b);
-        neighbors[bond.b].push(bond.a);
-    }
-    let rings = ring_atoms(elements.len(), bonds);
+    let neighbors = neighbor_lists(elements.len(), bonds);
+    let cycle_edges = ring_bonds(elements.len(), bonds);
     let is_carbonyl_carbon = |index: usize| -> bool {
         elements[index] == Element::C
             && neighbors[index].iter().any(|&other| {
@@ -251,10 +365,7 @@ pub fn rotatable_bonds(
                 && heavy(bond.b)
                 && !terminal(bond.a)
                 && !terminal(bond.b)
-                && !rings.contains(&bond.a)
-                && !rings.contains(&bond.b)
-                && !aromatic.contains(&bond.a)
-                && !aromatic.contains(&bond.b)
+                && !cycle_edges.contains(&bond.canonical())
                 && !((elements[bond.a] == Element::N && is_carbonyl_carbon(bond.b))
                     || (elements[bond.b] == Element::N && is_carbonyl_carbon(bond.a)))
         })
@@ -298,11 +409,15 @@ pub fn bonded_exclusions(count: usize, bonds: &[Bond]) -> Vec<(usize, usize)> {
     pairs
 }
 
-fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+fn distance_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
+    dx * dx + dy * dy + dz * dz
+}
+
+fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+    distance_sq(a, b).sqrt()
 }
 
 #[cfg(test)]
@@ -357,6 +472,34 @@ mod tests {
     }
 
     #[test]
+    fn pdbqt_fixed_bonds_follow_vina_allowance_fragments_and_intervening_atoms() {
+        let types = [AdType::C, AdType::C, AdType::C];
+        let positions = [[0.0, 0.0, 0.0], [0.7, 0.0, 0.0], [1.5, 0.0, 0.0]];
+        let bonds = perceive_pdbqt_bonds(&types, &positions, |first, second| {
+            [0, 0, 0][first] == [0, 0, 0][second]
+        });
+        assert_eq!(bonds, vec![Bond { a: 0, b: 1 }, Bond { a: 1, b: 2 }]);
+
+        let separated = perceive_pdbqt_bonds(&types, &positions, |first, second| {
+            [0, 1, 2][first] == [0, 1, 2][second]
+        });
+        assert!(separated.is_empty());
+
+        let near_limit = perceive_pdbqt_bonds(
+            &[AdType::C, AdType::C],
+            &[[0.0, 0.0, 0.0], [1.69, 0.0, 0.0]],
+            |_, _| true,
+        );
+        assert_eq!(near_limit, vec![Bond { a: 0, b: 1 }]);
+        let beyond_limit = perceive_pdbqt_bonds(
+            &[AdType::C, AdType::C],
+            &[[0.0, 0.0, 0.0], [1.70, 0.0, 0.0]],
+            |_, _| true,
+        );
+        assert!(beyond_limit.is_empty());
+    }
+
+    #[test]
     fn distant_atoms_do_not_bond() {
         let elements = vec![Element::C, Element::C];
         let positions = [[0.0, 0.0, 0.0], [3.8, 0.0, 0.0]];
@@ -393,6 +536,34 @@ mod tests {
         assert_eq!(bonds.len(), 3);
         let rotatable = rotatable_bonds(&elements, &positions, &bonds, &HashSet::new());
         assert_eq!(rotatable, vec![Bond { a: 1, b: 2 }]);
+    }
+
+    #[test]
+    fn exocyclic_and_biaryl_edges_are_not_mistaken_for_ring_edges() {
+        // Two triangles joined by one bond. Every endpoint of the joining edge
+        // is a ring atom, but the edge itself is not in a cycle and is a rotor.
+        let elements = vec![Element::C; 6];
+        let positions = [
+            [0.0, 0.0, 0.0],
+            [1.4, 0.0, 0.0],
+            [0.7, 1.2, 0.0],
+            [2.9, 0.0, 0.0],
+            [3.6, 1.2, 0.0],
+            [4.3, 0.0, 0.0],
+        ];
+        let bonds = vec![
+            Bond { a: 0, b: 1 },
+            Bond { a: 1, b: 2 },
+            Bond { a: 2, b: 0 },
+            Bond { a: 3, b: 4 },
+            Bond { a: 4, b: 5 },
+            Bond { a: 5, b: 3 },
+            Bond { a: 1, b: 3 },
+        ];
+        let cycle_edges = ring_bonds(elements.len(), &bonds);
+        assert!(!cycle_edges.contains(&Bond { a: 1, b: 3 }));
+        let rotatable = rotatable_bonds(&elements, &positions, &bonds, &HashSet::new());
+        assert_eq!(rotatable, vec![Bond { a: 1, b: 3 }]);
     }
 
     #[test]

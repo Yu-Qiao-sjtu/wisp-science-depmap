@@ -1,79 +1,99 @@
-//! The Vina and Vinardo empirical scoring functions.
+//! AutoDock Vina 1.2.7 Vina and Vinardo empirical scoring functions.
 //!
-//! Both functions are pairwise-additive over interatomic "surface distances"
-//! d = r - Ri - Rj (Trott & Olson, J Comput Chem 2010; Quiroga & Villarreal,
-//! PLOS ONE 2016, Tables 1-3, which this port follows parameter by
-//! parameter):
+//! Ordinary pair terms use the Vina XS atom identity carried by [`DockAtom`]:
 //!
-//! * gauss1  w1 * exp(-((d - o1)/s1)^2)         steric attraction
-//! * gauss2  w2 * exp(-((d - o2)/s2)^2)         long-range attraction (vina only)
-//! * repulsion  w3 * d^2 when d < 0             steric clash
-//! * hydrophobic  linear ramp, both atoms hydrophobic
-//! * hbond  linear ramp, donor heavy atom to acceptor
-//! * rot  normalizes the intermolecular score by `1 + w6 * N_rotatable_bonds`
+//! * `gauss1 = w * exp(-((d - offset) / width)^2)`
+//! * `gauss2` uses the same shape and is disabled by Vinardo
+//! * `repulsion = w * d^2` for negative surface distance
+//! * hydrophobic and hydrogen-bond terms use linear ramps
 //!
-//! Atom pairs beyond 8 A do not interact. Every term decomposes into the
-//! [`PairBreakdown`] so results can report per-term contributions.
+//! Here `d = distance - radius(first) - radius(second)`. Explicit hydrogen,
+//! water, glue, and otherwise untyped atoms do not enter ordinary pair scoring.
+//! Macrocycle glue attraction is intentionally not implemented in this R1
+//! ordinary-pair scorer; glue identities therefore contribute zero safely.
 
-use crate::docking::prep::atom_type::AtomType;
+use crate::docking::prep::atom_type::XsType;
 use crate::docking::prep::{DockAtom, PreparedLigand, PreparedReceptor};
 
-/// Maximum interatomic distance for any pair interaction.
+/// Maximum center-to-center distance for ordinary Vina-family pair terms.
 pub const INTER_CUTOFF: f64 = 8.0;
 
-/// Surface radii per atom type for one parameter set.
+/// Official XS surface radii from AutoDock Vina v1.2.7.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfaceRadii {
     pub c: f64,
-    pub a: f64,
     pub n: f64,
-    pub na: f64,
     pub o: f64,
-    pub oa: f64,
     pub s: f64,
-    pub sa: f64,
     pub p: f64,
     pub f: f64,
     pub cl: f64,
     pub br: f64,
     pub i: f64,
-    pub h: f64,
+    pub si: f64,
+    pub at: f64,
     pub metal: f64,
 }
 
 impl SurfaceRadii {
-    fn of(self, ad_type: AtomType) -> f64 {
-        match ad_type {
-            AtomType::H => self.h,
-            AtomType::Hc => self.h,
-            AtomType::C => self.c,
-            AtomType::A => self.a,
-            AtomType::N => self.n,
-            AtomType::Na => self.na,
-            AtomType::O => self.o,
-            AtomType::Oa => self.oa,
-            AtomType::S => self.s,
-            AtomType::Sa => self.sa,
-            AtomType::P => self.p,
-            AtomType::F => self.f,
-            AtomType::Cl => self.cl,
-            AtomType::Br => self.br,
-            AtomType::I => self.i,
-            AtomType::Mg | AtomType::Mn | AtomType::Zn | AtomType::Ca | AtomType::Fe => self.metal,
-            AtomType::Unknown => self.c,
+    /// Radius for an ordinary XS pair participant.
+    ///
+    /// Glue and water are deliberately absent from ordinary pair scoring.
+    pub fn of(self, xs_type: XsType) -> Option<f64> {
+        match xs_type {
+            XsType::C_H | XsType::C_P => Some(self.c),
+            XsType::N_P | XsType::N_D | XsType::N_A | XsType::N_DA => Some(self.n),
+            XsType::O_P | XsType::O_D | XsType::O_A | XsType::O_DA => Some(self.o),
+            XsType::S_P => Some(self.s),
+            XsType::P_P => Some(self.p),
+            XsType::F_H => Some(self.f),
+            XsType::Cl_H => Some(self.cl),
+            XsType::Br_H => Some(self.br),
+            XsType::I_H => Some(self.i),
+            XsType::Si => Some(self.si),
+            XsType::At => Some(self.at),
+            XsType::Met_D => Some(self.metal),
+            XsType::G0 | XsType::G1 | XsType::G2 | XsType::G3 => None,
         }
+    }
+
+    fn validate(self) -> Result<(), String> {
+        for (name, radius) in [
+            ("C radius", self.c),
+            ("N radius", self.n),
+            ("O radius", self.o),
+            ("S radius", self.s),
+            ("P radius", self.p),
+            ("F radius", self.f),
+            ("Cl radius", self.cl),
+            ("Br radius", self.br),
+            ("I radius", self.i),
+            ("Si radius", self.si),
+            ("At radius", self.at),
+            ("metal radius", self.metal),
+        ] {
+            require_finite(name, radius)?;
+            if radius <= 0.0 {
+                return Err(format!("{name} must be positive"));
+            }
+        }
+        Ok(())
     }
 }
 
-/// One parameterized scoring function: term weights, term shape parameters,
-/// and surface radii.
+/// One immutable Vina-family scoring model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VinaParams {
+    /// Stable artifact/API identifier.
+    pub model_id: &'static str,
+    /// Human-readable model name.
+    pub model_name: &'static str,
     pub w_gauss1: f64,
     pub w_gauss2: f64,
     pub w_repulsion: f64,
     pub w_hydrophobic: f64,
     pub w_hbond: f64,
+    /// Coefficient in `1 + w_rot * num_tors`.
     pub w_rot: f64,
     pub gauss1_offset: f64,
     pub gauss1_width: f64,
@@ -85,11 +105,73 @@ pub struct VinaParams {
     pub hydrophobic_offset: f64,
     /// Full-strength hydrogen bond below this surface distance.
     pub hbond_onset: f64,
+    /// Hydrogen-bond contact vanishes at this surface distance.
+    pub hbond_offset: f64,
     pub radii: SurfaceRadii,
 }
 
-/// The classic Vina weights (Trott & Olson 2010).
+impl VinaParams {
+    /// Reject a model that could produce undefined or ambiguous scores.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.model_id.trim().is_empty() {
+            return Err("Vina model id must not be empty".into());
+        }
+        if self.model_name.trim().is_empty() {
+            return Err("Vina model name must not be empty".into());
+        }
+        for (name, value) in [
+            ("gauss1 weight", self.w_gauss1),
+            ("gauss2 weight", self.w_gauss2),
+            ("repulsion weight", self.w_repulsion),
+            ("hydrophobic weight", self.w_hydrophobic),
+            ("hydrogen-bond weight", self.w_hbond),
+            ("rotor normalization weight", self.w_rot),
+            ("gauss1 offset", self.gauss1_offset),
+            ("gauss1 width", self.gauss1_width),
+            ("gauss2 offset", self.gauss2_offset),
+            ("gauss2 width", self.gauss2_width),
+            ("hydrophobic onset", self.hydrophobic_onset),
+            ("hydrophobic offset", self.hydrophobic_offset),
+            ("hydrogen-bond onset", self.hbond_onset),
+            ("hydrogen-bond offset", self.hbond_offset),
+        ] {
+            require_finite(name, value)?;
+        }
+        if self.gauss1_width <= 0.0 {
+            return Err("gauss1 width must be positive".into());
+        }
+        if self.gauss2_width <= 0.0 {
+            return Err("gauss2 width must be positive".into());
+        }
+        if self.hydrophobic_offset <= self.hydrophobic_onset {
+            return Err("hydrophobic ramp offset must be greater than onset".into());
+        }
+        if self.hbond_offset <= self.hbond_onset {
+            return Err("hydrogen-bond ramp offset must be greater than onset".into());
+        }
+        if self.w_rot < 0.0 {
+            return Err("rotor normalization weight must be non-negative".into());
+        }
+        self.radii.validate()
+    }
+
+    /// Denominator used by Vina's `num_tors_div` conformation-independent term.
+    pub fn torsion_factor(&self, num_tors: f64) -> Result<f64, String> {
+        if !num_tors.is_finite() || num_tors < 0.0 {
+            return Err("effective rotor count must be finite and non-negative".into());
+        }
+        let factor = 1.0 + self.w_rot * num_tors;
+        if !factor.is_finite() || factor <= 0.0 {
+            return Err("torsion normalization denominator must be finite and positive".into());
+        }
+        Ok(factor)
+    }
+}
+
+/// Classic Vina model and official v1.2.7 XS radii.
 pub const VINA_1_1: VinaParams = VinaParams {
+    model_id: "vina",
+    model_name: "AutoDock Vina",
     w_gauss1: -0.035579,
     w_gauss2: -0.005156,
     w_repulsion: 0.840245,
@@ -103,28 +185,27 @@ pub const VINA_1_1: VinaParams = VinaParams {
     hydrophobic_onset: 0.5,
     hydrophobic_offset: 1.5,
     hbond_onset: -0.7,
+    hbond_offset: 0.0,
     radii: SurfaceRadii {
         c: 1.9,
-        a: 1.9,
         n: 1.8,
-        na: 1.8,
         o: 1.7,
-        oa: 1.7,
-        s: 1.9,
-        sa: 1.9,
-        p: 2.0,
-        f: 1.1,
-        cl: 1.98,
-        br: 2.22,
-        i: 2.35,
-        h: 1.2,
-        metal: 0.65,
+        s: 2.0,
+        p: 2.1,
+        f: 1.5,
+        cl: 1.8,
+        br: 2.0,
+        i: 2.2,
+        si: 2.2,
+        at: 2.3,
+        metal: 1.2,
     },
 };
 
-/// The Vinardo reparametrization (Quiroga & Villarreal 2016): one gaussian,
-/// widened hydrophobic reach, and adjusted radii.
+/// Vinardo model and official v1.2.7 XS radii.
 pub const VINARDO: VinaParams = VinaParams {
+    model_id: "vinardo",
+    model_name: "Vinardo",
     w_gauss1: -0.045,
     w_gauss2: 0.0,
     w_repulsion: 0.8,
@@ -138,27 +219,24 @@ pub const VINARDO: VinaParams = VinaParams {
     hydrophobic_onset: 0.0,
     hydrophobic_offset: 2.5,
     hbond_onset: -0.6,
+    hbond_offset: 0.0,
     radii: SurfaceRadii {
         c: 2.0,
-        a: 1.9,
         n: 1.7,
-        na: 1.7,
         o: 1.6,
-        oa: 1.6,
-        s: 1.9,
-        sa: 1.9,
-        p: 2.0,
-        f: 1.1,
-        cl: 1.98,
-        br: 2.22,
-        i: 2.35,
-        h: 1.2,
-        metal: 0.65,
+        s: 2.0,
+        p: 2.1,
+        f: 1.5,
+        cl: 1.8,
+        br: 2.0,
+        i: 2.2,
+        si: 2.2,
+        at: 2.3,
+        metal: 1.2,
     },
 };
 
-/// Unweighted per-term energy of one atom pair; each field is already
-/// multiplied by its weight so summing fields gives the pair energy.
+/// Weighted per-term energy of one atom pair.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PairBreakdown {
     pub gauss1: f64,
@@ -182,26 +260,30 @@ impl PairBreakdown {
     }
 }
 
-/// Evaluate one atom pair at distance `distance`.
+/// Evaluate one ordinary XS atom pair at center-to-center `distance`.
 ///
-/// `polar_carbon` flags carbons excluded from hydrophobic interactions; the
-/// hydrogen-bond term fires between a donor heavy atom and an acceptor. Hydrogen
-/// atoms are omitted from every Vina pair term.
+/// This remains a pure function. Invalid or absent XS identities, explicit H,
+/// glue, water, non-finite distances, and pairs at or beyond the cutoff score
+/// zero rather than gaining fallback chemistry.
 pub fn pair_energy(
     first: &DockAtom,
     second: &DockAtom,
     distance: f64,
     params: &VinaParams,
 ) -> PairBreakdown {
-    if distance >= INTER_CUTOFF
-        || first.element == crate::docking::prep::atom_type::Element::H
-        || second.element == crate::docking::prep::atom_type::Element::H
-        || first.ad_type == AtomType::Unknown
-        || second.ad_type == AtomType::Unknown
-    {
+    if !distance.is_finite() || distance < 0.0 || distance >= INTER_CUTOFF {
         return PairBreakdown::default();
     }
-    let surface = distance - params.radii.of(first.ad_type) - params.radii.of(second.ad_type);
+    let (Some(first_type), Some(second_type)) = (first.xs_type, second.xs_type) else {
+        return PairBreakdown::default();
+    };
+    let (Some(first_radius), Some(second_radius)) =
+        (params.radii.of(first_type), params.radii.of(second_type))
+    else {
+        return PairBreakdown::default();
+    };
+
+    let surface = distance - first_radius - second_radius;
     let gauss1 =
         params.w_gauss1 * (-((surface - params.gauss1_offset) / params.gauss1_width).powi(2)).exp();
     let gauss2 =
@@ -211,16 +293,16 @@ pub fn pair_energy(
     } else {
         0.0
     };
-    let hydrophobic = if first.is_hydrophobic() && second.is_hydrophobic() {
+    let hydrophobic = if first_type.is_hydrophobic() && second_type.is_hydrophobic() {
         params.w_hydrophobic
             * linear_ramp(surface, params.hydrophobic_onset, params.hydrophobic_offset)
     } else {
         0.0
     };
-    let donor_acceptor = (first.hbond_donor && second.ad_type.is_acceptor())
-        || (second.hbond_donor && first.ad_type.is_acceptor());
+    let donor_acceptor = (first_type.is_donor() && second_type.is_acceptor())
+        || (second_type.is_donor() && first_type.is_acceptor());
     let hbond = if donor_acceptor {
-        params.w_hbond * linear_ramp(surface, params.hbond_onset, 0.0)
+        params.w_hbond * linear_ramp(surface, params.hbond_onset, params.hbond_offset)
     } else {
         0.0
     };
@@ -231,6 +313,133 @@ pub fn pair_energy(
         hydrophobic,
         hbond,
     }
+}
+
+/// AutoDock Vina's factor-32 fast lookup over squared center distance.
+///
+/// The reference implementation samples the analytic potential at
+/// `sqrt(index / 32)` and stores the average of adjacent samples. Search and
+/// score-only evaluations consume this fast table; the public [`pair_energy`]
+/// remains the analytic-vector reference.
+fn pair_energy_fast_r2(
+    first: &DockAtom,
+    second: &DockAtom,
+    distance_squared: f64,
+    params: &VinaParams,
+) -> PairBreakdown {
+    const FACTOR: f64 = 32.0;
+    if !distance_squared.is_finite()
+        || distance_squared < 0.0
+        || distance_squared >= INTER_CUTOFF * INTER_CUTOFF
+    {
+        return PairBreakdown::default();
+    }
+    let index = (FACTOR * distance_squared).floor();
+    let first_distance = (index / FACTOR).sqrt();
+    let second_distance = ((index + 1.0) / FACTOR).sqrt();
+    average_breakdown(
+        pair_energy(first, second, first_distance, params),
+        pair_energy(first, second, second_distance, params),
+    )
+}
+
+fn average_breakdown(first: PairBreakdown, second: PairBreakdown) -> PairBreakdown {
+    PairBreakdown {
+        gauss1: (first.gauss1 + second.gauss1) / 2.0,
+        gauss2: (first.gauss2 + second.gauss2) / 2.0,
+        repulsion: (first.repulsion + second.repulsion) / 2.0,
+        hydrophobic: (first.hydrophobic + second.hydrophobic) / 2.0,
+        hbond: (first.hbond + second.hbond) / 2.0,
+    }
+}
+
+fn soft_curl(mut terms: PairBreakdown, cap: f64) -> PairBreakdown {
+    let energy = terms.total();
+    if energy > 0.0 && cap.is_finite() {
+        let scale = if cap <= f64::EPSILON {
+            0.0
+        } else {
+            cap / (cap + energy)
+        };
+        terms.gauss1 *= scale;
+        terms.gauss2 *= scale;
+        terms.repulsion *= scale;
+        terms.hydrophobic *= scale;
+        terms.hbond *= scale;
+    }
+    terms
+}
+
+/// Sum intermolecular pair energies between receptor and ligand positions.
+pub fn evaluate_inter(
+    receptor: &PreparedReceptor,
+    ligand: &PreparedLigand,
+    ligand_positions: &[[f64; 3]],
+    params: &VinaParams,
+) -> Result<PairBreakdown, String> {
+    validate_positions(ligand, ligand_positions)?;
+    let mut total = PairBreakdown::default();
+    for (ligand_atom, position) in ligand.atoms.iter().zip(ligand_positions) {
+        let mut atom_terms = PairBreakdown::default();
+        for receptor_atom in &receptor.atoms {
+            atom_terms.absorb(pair_energy_fast_r2(
+                receptor_atom,
+                ligand_atom,
+                dist_sq(receptor_atom.position, *position),
+                params,
+            ));
+        }
+        total.absorb(soft_curl(atom_terms, 1000.0));
+    }
+    Ok(total)
+}
+
+/// Sum variable-distance intramolecular pair energies of the ligand.
+pub fn evaluate_intra(
+    ligand: &PreparedLigand,
+    ligand_positions: &[[f64; 3]],
+    params: &VinaParams,
+) -> Result<PairBreakdown, String> {
+    validate_positions(ligand, ligand_positions)?;
+    let mut total = PairBreakdown::default();
+    for i in 0..ligand.atoms.len() {
+        for j in (i + 1)..ligand.atoms.len() {
+            if !ligand.is_intra_eligible(i, j) {
+                continue;
+            }
+            total.absorb(soft_curl(
+                pair_energy_fast_r2(
+                    &ligand.atoms[i],
+                    &ligand.atoms[j],
+                    dist_sq(ligand_positions[i], ligand_positions[j]),
+                    params,
+                ),
+                1000.0,
+            ));
+        }
+    }
+    Ok(total)
+}
+
+fn validate_positions(
+    ligand: &PreparedLigand,
+    ligand_positions: &[[f64; 3]],
+) -> Result<(), String> {
+    if ligand_positions.len() != ligand.atoms.len() {
+        return Err(format!(
+            "ligand position count {} does not match scored atom count {}",
+            ligand_positions.len(),
+            ligand.atoms.len()
+        ));
+    }
+    if ligand_positions
+        .iter()
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err("ligand positions contain a non-finite coordinate".into());
+    }
+    Ok(())
 }
 
 /// 1 below `onset`, 0 at and beyond `offset`, linear between.
@@ -244,70 +453,35 @@ fn linear_ramp(x: f64, onset: f64, offset: f64) -> f64 {
     }
 }
 
-/// Sum intermolecular pair energies between receptor and ligand positions.
-pub fn evaluate_inter(
-    receptor: &PreparedReceptor,
-    ligand: &PreparedLigand,
-    ligand_positions: &[[f64; 3]],
-    params: &VinaParams,
-) -> PairBreakdown {
-    let mut total = PairBreakdown::default();
-    for receptor_atom in &receptor.atoms {
-        for (index, ligand_atom) in ligand.atoms.iter().enumerate() {
-            let distance = dist(receptor_atom.position, ligand_positions[index]);
-            total.absorb(pair_energy(receptor_atom, ligand_atom, distance, params));
-        }
+fn require_finite(name: &str, value: f64) -> Result<(), String> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(format!("{name} must be finite"))
     }
-    total
 }
 
-/// Sum intramolecular pair energies of the ligand, skipping pairs within two
-/// bonds of each other.
-pub fn evaluate_intra(
-    ligand: &PreparedLigand,
-    ligand_positions: &[[f64; 3]],
-    params: &VinaParams,
-) -> PairBreakdown {
-    let excluded: std::collections::HashSet<(usize, usize)> =
-        ligand.intra_excluded.iter().copied().collect();
-    let mut total = PairBreakdown::default();
-    for i in 0..ligand.atoms.len() {
-        for j in (i + 1)..ligand.atoms.len() {
-            if excluded.contains(&(i, j)) {
-                continue;
-            }
-            let distance = dist(ligand_positions[i], ligand_positions[j]);
-            total.absorb(pair_energy(
-                &ligand.atoms[i],
-                &ligand.atoms[j],
-                distance,
-                params,
-            ));
-        }
-    }
-    total
-}
-
-fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
+fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
+    dx * dx + dy * dy + dz * dz
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::docking::prep::atom_type::Element;
+    use crate::docking::prep::atom_type::{AdType, Element};
+    use crate::docking::prep::{prepare_ligand_pdbqt, LigandBranch, PreparedLigand, RigidFragment};
 
-    fn atom(ad_type: AtomType, position: [f64; 3]) -> DockAtom {
+    fn atom(xs_type: Option<XsType>, position: [f64; 3]) -> DockAtom {
         DockAtom {
+            source_index: 0,
             serial: 1,
             name: "X".into(),
             element: Element::Other,
-            ad_type,
-            hbond_donor: false,
-            polar_carbon: false,
+            wire_ad_type: None,
+            xs_type,
             position,
             charge: 0.0,
             residue_name: "LIG".into(),
@@ -318,126 +492,276 @@ mod tests {
         }
     }
 
-    #[test]
-    fn vina_pair_values_match_the_published_parameters() {
-        // Two hydrophobic carbons exactly at surface contact (d = 0):
-        // r = 1.9 + 1.9 = 3.8 A.
-        let pair = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [3.8, 0.0, 0.0]),
-            3.8,
-            &VINA_1_1,
-        );
-        assert!((pair.gauss1 - (-0.035579)).abs() < 1e-12); // exp(0)
-        assert!((pair.gauss2 - (-0.005156 * (-2.25f64).exp())).abs() < 1e-12); // exp(-((0-3)/2)^2)
-        assert_eq!(pair.repulsion, 0.0);
-        assert!((pair.hydrophobic - (-0.035069)).abs() < 1e-12); // full below 0.5
-        assert_eq!(pair.hbond, 0.0);
-        assert_eq!(pair.total(), pair.gauss1 + pair.gauss2 + pair.hydrophobic);
+    fn empty_ligand(atoms: Vec<DockAtom>) -> PreparedLigand {
+        let count = atoms.len();
+        PreparedLigand {
+            source_atoms: atoms.clone(),
+            atoms,
+            source_to_scored: (0..count).map(Some).collect(),
+            scored_to_source: (0..count).collect(),
+            source_bonds: Vec::new(),
+            bonds: Vec::new(),
+            rigid_fragments: vec![RigidFragment {
+                branch: None,
+                parent: None,
+                source_atoms: (0..count).collect(),
+            }],
+            branches: Vec::<LigandBranch>::new(),
+            rotatable: Vec::new(),
+            num_tors: 0.0,
+            torsdof: 0,
+            intra_excluded: Vec::new(),
+            distance_variable_pairs: Vec::new(),
+        }
     }
 
     #[test]
-    fn overlapping_atoms_repel_quadratically() {
-        // Carbons 0.4 A inside contact: d = -0.4.
-        let pair = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [3.4, 0.0, 0.0]),
-            3.4,
-            &VINA_1_1,
-        );
-        assert!((pair.repulsion - 0.840245 * 0.16).abs() < 1e-12);
-        assert!(pair.repulsion > 0.0);
+    fn official_vina_and_vinardo_radii_cover_every_ordinary_xs_class() {
+        let ordinary = [
+            (XsType::C_H, 1.9, 2.0),
+            (XsType::C_P, 1.9, 2.0),
+            (XsType::N_P, 1.8, 1.7),
+            (XsType::N_D, 1.8, 1.7),
+            (XsType::N_A, 1.8, 1.7),
+            (XsType::N_DA, 1.8, 1.7),
+            (XsType::O_P, 1.7, 1.6),
+            (XsType::O_D, 1.7, 1.6),
+            (XsType::O_A, 1.7, 1.6),
+            (XsType::O_DA, 1.7, 1.6),
+            (XsType::S_P, 2.0, 2.0),
+            (XsType::P_P, 2.1, 2.1),
+            (XsType::F_H, 1.5, 1.5),
+            (XsType::Cl_H, 1.8, 1.8),
+            (XsType::Br_H, 2.0, 2.0),
+            (XsType::I_H, 2.2, 2.2),
+            (XsType::Si, 2.2, 2.2),
+            (XsType::At, 2.3, 2.3),
+            (XsType::Met_D, 1.2, 1.2),
+        ];
+        for (xs_type, vina, vinardo) in ordinary {
+            assert_eq!(VINA_1_1.radii.of(xs_type), Some(vina));
+            assert_eq!(VINARDO.radii.of(xs_type), Some(vinardo));
+        }
+        for xs_type in [XsType::G0, XsType::G1, XsType::G2, XsType::G3] {
+            assert_eq!(VINA_1_1.radii.of(xs_type), None);
+            assert_eq!(VINARDO.radii.of(xs_type), None);
+        }
     }
 
     #[test]
-    fn hydrogen_bond_uses_the_donor_heavy_atom_and_omits_hydrogens() {
-        let mut donor = atom(AtomType::N, [0.0; 3]);
-        donor.element = Element::N;
-        donor.hbond_donor = true;
-        let mut acceptor = atom(AtomType::Oa, [3.0, 0.0, 0.0]);
-        acceptor.element = Element::O;
-        // N/O radii sum to 3.5 A, so d = -0.5 and the ramp is 5/7.
-        let pair = pair_energy(&donor, &acceptor, 3.0, &VINA_1_1);
-        assert!((pair.hbond - (-0.587439 * 5.0 / 7.0)).abs() < 1e-12);
+    fn vina_and_vinardo_pair_vectors_match_their_parameters() {
+        let carbon = atom(Some(XsType::C_H), [0.0; 3]);
+        let vina = pair_energy(&carbon, &carbon, 3.8, &VINA_1_1);
+        let expected_vina = PairBreakdown {
+            gauss1: -0.035579,
+            gauss2: -0.005156 * (-2.25f64).exp(),
+            repulsion: 0.0,
+            hydrophobic: -0.035069,
+            hbond: 0.0,
+        };
+        assert_breakdown_close(vina, expected_vina);
 
-        let mut hydrogen = atom(AtomType::H, [1.0, 0.0, 0.0]);
-        hydrogen.element = Element::H;
-        let omitted = pair_energy(&hydrogen, &acceptor, 2.0, &VINA_1_1);
-        assert_eq!(omitted, PairBreakdown::default());
-
-        donor.hbond_donor = false;
-        assert_eq!(pair_energy(&donor, &acceptor, 3.0, &VINA_1_1).hbond, 0.0);
+        let vinardo = pair_energy(&carbon, &carbon, 4.0, &VINARDO);
+        let expected_vinardo = PairBreakdown {
+            gauss1: -0.045,
+            gauss2: 0.0,
+            repulsion: 0.0,
+            hydrophobic: -0.035,
+            hbond: 0.0,
+        };
+        assert_breakdown_close(vinardo, expected_vinardo);
     }
 
     #[test]
-    fn polar_carbons_do_not_score_as_hydrophobic() {
-        let mut polar = atom(AtomType::C, [0.0; 3]);
-        polar.polar_carbon = true;
-        let pair = pair_energy(&polar, &atom(AtomType::C, [3.8, 0.0, 0.0]), 3.8, &VINA_1_1);
-        assert_eq!(pair.hydrophobic, 0.0);
-        let plain = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [3.8, 0.0, 0.0]),
-            3.8,
-            &VINA_1_1,
+    fn halogens_are_hydrophobic_and_polar_carbon_is_not() {
+        let halogen = atom(Some(XsType::Cl_H), [0.0; 3]);
+        let hydrophobic_carbon = atom(Some(XsType::C_H), [0.0; 3]);
+        let polar_carbon = atom(Some(XsType::C_P), [0.0; 3]);
+        assert!(pair_energy(&halogen, &hydrophobic_carbon, 3.7, &VINA_1_1).hydrophobic < 0.0);
+        assert_eq!(
+            pair_energy(&halogen, &polar_carbon, 3.7, &VINA_1_1).hydrophobic,
+            0.0
         );
-        assert!(plain.hydrophobic < 0.0);
     }
 
     #[test]
-    fn pairs_beyond_the_cutoff_do_not_interact() {
-        let far = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [8.0, 0.0, 0.0]),
-            8.0,
-            &VINA_1_1,
-        );
-        assert_eq!(far.total(), 0.0);
-        let near = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [7.99, 0.0, 0.0]),
-            7.99,
-            &VINA_1_1,
-        );
-        assert!(near.gauss2 < 0.0); // long-range gaussian still reaches
+    fn metal_is_donor_only_and_hydrogen_bonds_to_an_acceptor() {
+        let metal = atom(Some(XsType::Met_D), [0.0; 3]);
+        let acceptor = atom(Some(XsType::O_A), [0.0; 3]);
+        let donor = atom(Some(XsType::N_D), [0.0; 3]);
+        assert!(pair_energy(&metal, &acceptor, 2.5, &VINA_1_1).hbond < 0.0);
+        assert_eq!(pair_energy(&metal, &donor, 2.5, &VINA_1_1).hbond, 0.0);
     }
 
     #[test]
-    fn vinardo_uses_its_own_radii_and_single_gaussian() {
-        // Carbons at 4.0 A: vina surface 0.2, vinardo surface 0.0.
-        let vina = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [4.0, 0.0, 0.0]),
-            4.0,
-            &VINA_1_1,
+    fn explicit_hydrogen_and_glue_water_are_omitted() {
+        let explicit_h = DockAtom {
+            element: Element::H,
+            wire_ad_type: Some(AdType::Hd),
+            xs_type: None,
+            ..atom(None, [0.0; 3])
+        };
+        let carbon = atom(Some(XsType::C_H), [0.0; 3]);
+        assert_eq!(
+            pair_energy(&explicit_h, &carbon, 2.0, &VINA_1_1),
+            PairBreakdown::default()
         );
-        let vinardo = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::C, [4.0, 0.0, 0.0]),
-            4.0,
-            &VINARDO,
-        );
-        assert!((vinardo.gauss1 - (-0.045)).abs() < 1e-12);
-        assert_eq!(vinardo.gauss2, 0.0);
-        assert!((vinardo.hydrophobic - (-0.035)).abs() < 1e-12); // onset 0.0
-                                                                 // Same geometry scores differently under the two parameter sets.
-        assert!((vina.total() - vinardo.total()).abs() > 1e-6);
+        for xs_type in [XsType::G0, XsType::G1, XsType::G2, XsType::G3] {
+            assert_eq!(
+                pair_energy(&atom(Some(xs_type), [0.0; 3]), &carbon, 2.0, &VINA_1_1),
+                PairBreakdown::default()
+            );
+        }
     }
 
     #[test]
-    fn pair_energy_is_symmetric() {
-        let one = pair_energy(
-            &atom(AtomType::C, [0.0; 3]),
-            &atom(AtomType::Na, [3.7, 0.0, 0.0]),
-            3.7,
+    fn donor_and_acceptor_semantics_come_only_from_xs_type() {
+        let donor = atom(Some(XsType::N_D), [0.0; 3]);
+        let acceptor = atom(Some(XsType::O_A), [0.0; 3]);
+        let plain_nitrogen = atom(Some(XsType::N_P), [0.0; 3]);
+        assert!(pair_energy(&donor, &acceptor, 3.0, &VINA_1_1).hbond < 0.0);
+        assert_eq!(
+            pair_energy(&plain_nitrogen, &acceptor, 3.0, &VINA_1_1).hbond,
+            0.0
+        );
+    }
+
+    #[test]
+    fn positive_energies_use_vina_soft_curl_at_the_reference_aggregation_granularity() {
+        let positive = PairBreakdown {
+            repulsion: 20.0,
+            gauss1: -5.0,
+            ..PairBreakdown::default()
+        };
+        let curled = soft_curl(positive, 1000.0);
+        let scale = 1000.0 / 1015.0;
+        assert!((curled.repulsion - 20.0 * scale).abs() < 1e-12);
+        assert!((curled.gauss1 - (-5.0 * scale)).abs() < 1e-12);
+        assert_eq!(
+            soft_curl(
+                PairBreakdown {
+                    gauss1: -1.0,
+                    ..PairBreakdown::default()
+                },
+                1000.0
+            )
+            .gauss1,
+            -1.0
+        );
+
+        let ligand = empty_ligand(vec![atom(Some(XsType::C_H), [0.0; 3])]);
+        let receptor_atom = atom(Some(XsType::C_H), [0.0; 3]);
+        let receptor = PreparedReceptor {
+            atoms: vec![receptor_atom.clone(), receptor_atom],
+            bonds: Vec::new(),
+        };
+        let pair = pair_energy_fast_r2(&receptor.atoms[0], &ligand.atoms[0], 0.0, &VINA_1_1);
+        let expected = soft_curl(
+            PairBreakdown {
+                gauss1: pair.gauss1 * 2.0,
+                gauss2: pair.gauss2 * 2.0,
+                repulsion: pair.repulsion * 2.0,
+                hydrophobic: pair.hydrophobic * 2.0,
+                hbond: pair.hbond * 2.0,
+            },
+            1000.0,
+        );
+        let actual = evaluate_inter(&receptor, &ligand, &[[0.0; 3]], &VINA_1_1).unwrap();
+        assert_breakdown_close(actual, expected);
+    }
+
+    #[test]
+    fn fast_lookup_uses_original_squared_distance_at_bucket_boundaries() {
+        let carbon = atom(Some(XsType::C_H), [0.0; 3]);
+        let exact_r2 = 3.0 / 32.0;
+        let exact = pair_energy_fast_r2(&carbon, &carbon, exact_r2, &VINA_1_1);
+        let expected = average_breakdown(
+            pair_energy(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy(&carbon, &carbon, (4.0_f64 / 32.0).sqrt(), &VINA_1_1),
+        );
+        assert_breakdown_close(exact, expected);
+
+        let below_r2 = f64::from_bits(exact_r2.to_bits() - 1);
+        let below = pair_energy_fast_r2(&carbon, &carbon, below_r2, &VINA_1_1);
+        let below_expected = average_breakdown(
+            pair_energy(&carbon, &carbon, (2.0_f64 / 32.0).sqrt(), &VINA_1_1),
+            pair_energy(&carbon, &carbon, (3.0_f64 / 32.0).sqrt(), &VINA_1_1),
+        );
+        assert_breakdown_close(below, below_expected);
+
+        let above_r2 = f64::from_bits(exact_r2.to_bits() + 1);
+        assert_breakdown_close(
+            pair_energy_fast_r2(&carbon, &carbon, above_r2, &VINA_1_1),
+            expected,
+        );
+    }
+
+    #[test]
+    fn intra_uses_only_authoritative_variable_pairs() {
+        let mut ligand = empty_ligand(vec![
+            atom(Some(XsType::C_H), [0.0, 0.0, 0.0]),
+            atom(Some(XsType::C_H), [3.8, 0.0, 0.0]),
+            atom(Some(XsType::C_H), [0.0, 3.8, 0.0]),
+        ]);
+        ligand.distance_variable_pairs = vec![(0, 1), (0, 2)];
+        ligand.intra_excluded = vec![(0, 2)];
+        let positions = ligand
+            .atoms
+            .iter()
+            .map(|atom| atom.position)
+            .collect::<Vec<_>>();
+        let intra = evaluate_intra(&ligand, &positions, &VINA_1_1).unwrap();
+        let expected = pair_energy_fast_r2(
+            &ligand.atoms[0],
+            &ligand.atoms[1],
+            3.8_f64.powi(2),
             &VINA_1_1,
         );
-        let two = pair_energy(
-            &atom(AtomType::Na, [0.0; 3]),
-            &atom(AtomType::C, [3.7, 0.0, 0.0]),
-            3.7,
-            &VINA_1_1,
-        );
-        assert!((one.total() - two.total()).abs() < 1e-12);
+        assert_breakdown_close(intra, expected);
+    }
+
+    #[test]
+    fn evaluation_rejects_wrong_length_and_non_finite_positions() {
+        let ligand = empty_ligand(vec![atom(Some(XsType::C_H), [0.0; 3])]);
+        let receptor = PreparedReceptor {
+            atoms: Vec::new(),
+            bonds: Vec::new(),
+        };
+        assert!(evaluate_inter(&receptor, &ligand, &[], &VINA_1_1)
+            .unwrap_err()
+            .contains("position count"));
+        assert!(evaluate_intra(&ligand, &[[f64::NAN, 0.0, 0.0]], &VINA_1_1)
+            .unwrap_err()
+            .contains("non-finite"));
+    }
+
+    #[test]
+    fn prepared_explicit_hd_is_absent_from_scored_atoms() {
+        let n = pdbqt_atom_line(1, 0.0, AdType::Na);
+        let hd = pdbqt_atom_line(2, 1.0, AdType::Hd);
+        let c = pdbqt_atom_line(3, -1.45, AdType::C);
+        let ligand =
+            prepare_ligand_pdbqt(&format!("ROOT\n{n}\n{hd}\n{c}\nENDROOT\nTORSDOF 0\n")).unwrap();
+        assert_eq!(ligand.source_atoms[1].xs_type, None);
+        assert_eq!(ligand.atoms.len(), 2);
+        assert!(ligand.atoms.iter().all(|atom| atom.xs_type.is_some()));
+    }
+
+    fn pdbqt_atom_line(serial: i32, x: f64, ad_type: AdType) -> String {
+        format!(
+            "HETATM{serial:5} X{serial:<3} LIG L   1    {x:8.3}{y:8.3}{z:8.3}  1.00  0.00  {charge:8.3} {kind:<2}",
+            y = 0.0,
+            z = 0.0,
+            charge = 0.0,
+            kind = ad_type.pdbqt_symbol(),
+        )
+    }
+
+    fn assert_breakdown_close(actual: PairBreakdown, expected: PairBreakdown) {
+        assert!((actual.gauss1 - expected.gauss1).abs() < 1e-12);
+        assert!((actual.gauss2 - expected.gauss2).abs() < 1e-12);
+        assert!((actual.repulsion - expected.repulsion).abs() < 1e-12);
+        assert!((actual.hydrophobic - expected.hydrophobic).abs() < 1e-12);
+        assert!((actual.hbond - expected.hbond).abs() < 1e-12);
     }
 }

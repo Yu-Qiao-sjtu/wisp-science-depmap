@@ -4,9 +4,8 @@
 //! in Rust inside this crate, so docking never requires an external binary
 //! at runtime:
 //!
-//! * [`prep`] — structure preparation: PDB/PDBQT parsing, AutoDock atom
-//!   typing, Gasteiger charges, bond/ring/aromaticity perception, and the
-//!   united-atom merge.
+//! * [`prep`] — strict PDBQT preparation and parser-only/explicitly approximate
+//!   PDB compatibility helpers. Validated Vina scoring requires prepared PDBQT.
 //! * [`scoring`] — the pairwise scoring functions. The Vina and Vinardo
 //!   parameter sets are ported from AutoDock Vina (Apache-2.0) and the
 //!   Vinardo paper; see the module docs for the parameter provenance.
@@ -25,8 +24,11 @@ pub mod prep;
 pub mod scoring;
 
 pub use engine::{DockingEngine, ScoreTerms, ScoredPose, SearchOptions, VinaEngine};
+pub use prep::atom_type::{AdType, XsType};
 pub use prep::{
-    prepare_ligand_pdb, prepare_ligand_pdbqt, prepare_receptor, PreparedLigand, PreparedReceptor,
+    prepare_ligand_pdb, prepare_ligand_pdbqt, prepare_receptor, prepare_receptor_pdb_approximate,
+    prepare_receptor_pdbqt, ApproximatePreparedReceptor, DockAtom, LigandBranch, PreparedLigand,
+    PreparedReceptor, RigidFragment,
 };
 pub use scoring::{
     evaluate_inter, evaluate_intra, pair_energy, PairBreakdown, SurfaceRadii, VinaParams, VINARDO,

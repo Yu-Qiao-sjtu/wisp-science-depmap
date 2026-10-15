@@ -25,3 +25,4 @@ wisp-tools = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+sha1 = "0.11"
