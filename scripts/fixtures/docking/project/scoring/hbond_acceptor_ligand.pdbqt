@@ -1,0 +1,5 @@
+REMARK Project-authored donor/acceptor scoring micro-fixture; N-O distance is 3.000 A.
+ROOT
+ATOM      1  O1  LIG L   1       3.000   0.000   0.000  1.00  0.00    -0.200 OA
+ENDROOT
+TORSDOF 0

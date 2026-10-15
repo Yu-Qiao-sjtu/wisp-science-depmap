@@ -1,0 +1,7 @@
+REMARK Project-authored parser fixture containing distinct nonpolar H and donor HD wire identities.
+ROOT
+ATOM      1  N1  MIC A   1       0.000   0.000   0.000  1.00  0.00    -0.200 N 
+ATOM      2  H1  MIC A   1       0.900   0.000   0.000  1.00  0.00     0.100 H 
+ATOM      3  H2  MIC A   1      -0.900   0.000   0.000  1.00  0.00     0.100 HD
+ENDROOT
+TORSDOF 0

@@ -1,0 +1,116 @@
+{
+  "$schema": "../manifest.schema.json#/$defs/oracleOutput",
+  "schema_version": 1,
+  "case_id": "carbon-contact-vina",
+  "oracle": {
+    "name": "AutoDock Vina",
+    "version": "1.2.7",
+    "source_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+    "method": "vina.Vina.score()"
+  },
+  "scoring": "vina",
+  "configuration": {
+    "box_center": [
+      3.8,
+      0,
+      0
+    ],
+    "box_size": [
+      8,
+      8,
+      8
+    ],
+    "spacing": 0.375,
+    "seed": 1,
+    "cpu": 1,
+    "no_refine": false,
+    "force_even_voxels": false
+  },
+  "weights": [
+    -0.035579,
+    -0.005156,
+    0.840245,
+    -0.035069,
+    -0.587439,
+    50.0,
+    0.05846
+  ],
+  "packages": {
+    "vina": {
+      "distribution_version": "1.2.7",
+      "module_version": "1.2.7",
+      "wheel_filename": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "wheel_sha256": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d",
+      "installation_provenance": {
+        "method": "direct_url_archive_hash",
+        "wheel_filename": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d"
+      }
+    },
+    "numpy": {
+      "distribution_version": "1.26.4",
+      "module_version": "1.26.4",
+      "wheel_filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "wheel_sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed",
+      "installation_provenance": {
+        "method": "direct_url_archive_hash",
+        "wheel_filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+      }
+    }
+  },
+  "runtime": {
+    "python_implementation": "CPython",
+    "python_version": "3.12.3"
+  },
+  "fixtures": {
+    "receptor": {
+      "id": "carbon-contact-receptor",
+      "sha256": "708e6881a3077fe2bf8746381778c0f404b9edbe43c2ccd9f45095cdda51d0a6"
+    },
+    "ligand": {
+      "id": "carbon-contact-ligand",
+      "sha256": "a08d33a21cc28a582b057a27ffb15d69524d0a742009d94dff0c6781aef6976d"
+    }
+  },
+  "api_result": {
+    "raw_vector_columns": [
+      "total",
+      "lig_inter",
+      "flex_inter",
+      "other_inter",
+      "flex_intra",
+      "lig_intra",
+      "torsions",
+      "lig_intra_best_pose"
+    ],
+    "raw_vector_kcal_mol": [
+      -0.071,
+      -0.071,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "expected_mapping": {
+    "estimated_free_energy_of_binding_kcal_mol": "total",
+    "final_intermolecular_energy_kcal_mol": "lig_inter + flex_inter",
+    "ligand_receptor_energy_kcal_mol": "lig_inter",
+    "final_total_internal_energy_kcal_mol": "other_inter + flex_intra + lig_intra",
+    "ligand_internal_energy_kcal_mol": "lig_intra",
+    "torsional_free_energy_kcal_mol": "torsions",
+    "unbound_system_energy_kcal_mol": "lig_intra_best_pose"
+  },
+  "expected": {
+    "estimated_free_energy_of_binding_kcal_mol": -0.071,
+    "final_intermolecular_energy_kcal_mol": -0.071,
+    "ligand_receptor_energy_kcal_mol": -0.071,
+    "final_total_internal_energy_kcal_mol": 0.0,
+    "ligand_internal_energy_kcal_mol": 0.0,
+    "torsional_free_energy_kcal_mol": 0.0,
+    "unbound_system_energy_kcal_mol": 0.0
+  }
+}

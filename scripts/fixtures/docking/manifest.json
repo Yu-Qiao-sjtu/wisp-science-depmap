@@ -1,0 +1,869 @@
+{
+  "$schema": "./manifest.schema.json",
+  "schema_version": 1,
+  "oracle": {
+    "name": "AutoDock Vina",
+    "version": "1.2.7",
+    "git_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+    "tag_url": "https://github.com/ccsb-scripps/AutoDock-Vina/releases/tag/v1.2.7",
+    "source_url": "https://github.com/ccsb-scripps/AutoDock-Vina/tree/8eb40404f4f45608acb3b01427587ac049f27c1f",
+    "license": "Apache-2.0",
+    "binary_policy": "The repository does not distribute or download Vina or NumPy packages. Oracle generation requires an explicit Python interpreter, exact wheel paths, and caller-supplied PyPI SHA256 digests; packages are never installed by the generator or required at verifier/CI runtime.",
+    "method": "vina.Vina.score()",
+    "numpy_version": "1.26.4",
+    "wheel_artifacts": {
+      "vina": {
+        "filename": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "version": "1.2.7",
+        "sha256": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d",
+        "digest_source": "PyPI published file digest"
+      },
+      "numpy": {
+        "filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "version": "1.26.4",
+        "sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed",
+        "digest_source": "PyPI published file digest"
+      }
+    }
+  },
+  "tolerances": {
+    "vina": {
+      "affinity_kcal_mol_abs": 0.001,
+      "component_kcal_mol_abs": 0.001
+    },
+    "vinardo": {
+      "affinity_kcal_mol_abs": 0.001,
+      "component_kcal_mol_abs": 0.001
+    }
+  },
+  "citations": {
+    "autodock-vina-original": {
+      "text": "Trott O, Olson AJ. AutoDock Vina: improving the speed and accuracy of docking with a new scoring function, efficient optimization, and multithreading. J Comput Chem. 2010;31(2):455-461.",
+      "url": "https://doi.org/10.1002/jcc.21334"
+    },
+    "autodock-vina-1.2": {
+      "text": "Eberhardt J, Santos-Martins D, Tillack AF, Forli S. AutoDock Vina 1.2.0: New Docking Methods, Expanded Force Field, and Python Bindings. J Chem Inf Model. 2021;61(8):3891-3898.",
+      "url": "https://doi.org/10.1021/acs.jcim.1c00203"
+    },
+    "vinardo": {
+      "text": "Quiroga R, Villarreal MA. Vinardo: A Scoring Function Based on AutoDock Vina Improves Scoring, Docking, and Virtual Screening. PLOS ONE. 2016;11(5):e0155183.",
+      "url": "https://doi.org/10.1371/journal.pone.0155183"
+    },
+    "pdb-1iep": {
+      "text": "Nagar B, Bornmann W, Pellicena P, et al. Crystal structures of the kinase domain of c-Abl in complex with the small molecule inhibitors PD173955 and imatinib (STI-571). Cancer Res. 2002;62:4236-4243. PDB 1IEP.",
+      "url": "https://doi.org/10.2210/pdb1IEP/pdb"
+    }
+  },
+  "fixtures": [
+    {
+      "id": "license-autodock-vina",
+      "path": "LICENSE-AutoDock-Vina-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358,
+      "kind": "license_text",
+      "origin": "official_upstream",
+      "source": {
+        "description": "Verbatim AutoDock Vina repository license at v1.2.7.",
+        "url": "https://raw.githubusercontent.com/ccsb-scripps/AutoDock-Vina/8eb40404f4f45608acb3b01427587ac049f27c1f/LICENSE",
+        "git_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+        "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7"
+      },
+      "license": "Apache-2.0",
+      "redistribution": "Verbatim redistribution permitted when Apache-2.0 conditions are followed.",
+      "citation_keys": [],
+      "expected": {
+        "title": "Apache License 2.0"
+      }
+    },
+    {
+      "id": "license-pdb-cc0",
+      "path": "LICENSE-PDB-CC0-1.0.txt",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "bytes": 7048,
+      "kind": "license_text",
+      "origin": "official_upstream",
+      "source": {
+        "description": "Verbatim Creative Commons CC0 1.0 Universal legal code.",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt"
+      },
+      "license": "CC0-1.0",
+      "redistribution": "License text is freely redistributable; PDB archive data are dedicated under CC0-1.0.",
+      "citation_keys": [],
+      "expected": {
+        "title": "CC0 1.0 Universal"
+      }
+    },
+    {
+      "id": "manifest-schema",
+      "path": "manifest.schema.json",
+      "sha256": "0cc595ac33711582b473531b03ad485c9ab2081b6b9a422e4e91a7de2f0d5b97",
+      "bytes": 22791,
+      "kind": "schema",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored JSON Schema for this manifest.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "json_schema_draft": "2020-12"
+      }
+    },
+    {
+      "id": "vina-1iep-ligand",
+      "path": "official/autodock-vina-v1.2.7/1iep_ligand.pdbqt",
+      "sha256": "15fb35648d8c18c70317842f3a0631b73a19429c710a037ab07310084d579bb8",
+      "bytes": 3841,
+      "kind": "ligand_pdbqt",
+      "origin": "official_upstream",
+      "source": {
+        "description": "Unmodified official AutoDock Vina basic-docking solution ligand.",
+        "url": "https://raw.githubusercontent.com/ccsb-scripps/AutoDock-Vina/8eb40404f4f45608acb3b01427587ac049f27c1f/example/basic_docking/solution/1iep_ligand.pdbqt",
+        "git_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+        "git_blob": "e3f73c0e6ed9a5c5ddda3e7df271b2351cfda0f3"
+      },
+      "license": "Apache-2.0 AND CC0-1.0",
+      "redistribution": "Unmodified repository example redistributed under Apache-2.0; underlying PDB structure data are CC0-1.0.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "pdb-1iep"
+      ],
+      "expected": {
+        "atom_records": 40,
+        "branches": 7,
+        "torsdof": 7
+      }
+    },
+    {
+      "id": "vina-1iep-receptor",
+      "path": "official/autodock-vina-v1.2.7/1iep_receptor.pdbqt",
+      "sha256": "f13cf3b36f61d87c3b58983e0b8ecf1c3456a685eb86dfe9ccfb139c7bdc2586",
+      "bytes": 216160,
+      "kind": "receptor_pdbqt",
+      "origin": "official_upstream",
+      "source": {
+        "description": "Unmodified official AutoDock Vina basic-docking rigid receptor.",
+        "url": "https://raw.githubusercontent.com/ccsb-scripps/AutoDock-Vina/8eb40404f4f45608acb3b01427587ac049f27c1f/example/basic_docking/solution/1iep_receptor.pdbqt",
+        "git_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+        "git_blob": "aa63f0da2ab4ca2772dc011241e451ded256d2d2"
+      },
+      "license": "Apache-2.0 AND CC0-1.0",
+      "redistribution": "Unmodified repository example redistributed under Apache-2.0; underlying PDB structure data are CC0-1.0.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "pdb-1iep"
+      ],
+      "expected": {
+        "atom_records": 2702,
+        "branches": 0
+      }
+    },
+    {
+      "id": "vina-1iep-receptor-pdb",
+      "path": "official/autodock-vina-v1.2.7/1iep_receptorH.pdb",
+      "sha256": "5f6aee6029f9a2a2c2be32d4eb948ae70808690573e1b69a0850cdffd7048ca7",
+      "bytes": 357444,
+      "kind": "parser_pdb",
+      "origin": "official_upstream",
+      "source": {
+        "description": "Unmodified official hydrogenated PDB input; parser-only fixture, not a score oracle.",
+        "url": "https://raw.githubusercontent.com/ccsb-scripps/AutoDock-Vina/8eb40404f4f45608acb3b01427587ac049f27c1f/example/basic_docking/data/1iep_receptorH.pdb",
+        "git_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+        "git_blob": "a8b87d87db3973b0ce7dfab45078b40d695f076b"
+      },
+      "license": "Apache-2.0 AND CC0-1.0",
+      "redistribution": "Unmodified repository example redistributed under Apache-2.0; underlying PDB structure data are CC0-1.0.",
+      "citation_keys": [
+        "pdb-1iep"
+      ],
+      "expected": {
+        "atom_records": 4412,
+        "parser_only": true
+      }
+    },
+    {
+      "id": "branch-order-nested",
+      "path": "project/parser/branch_order_nested.pdbqt",
+      "sha256": "7c11c1e4ee97336e05a178814ab3740785af37400429bc1743ba47b5f752d90a",
+      "bytes": 628,
+      "kind": "parser_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_serial_order": [
+          10,
+          30,
+          20,
+          25,
+          40
+        ],
+        "branch_parents": [
+          null,
+          0
+        ],
+        "torsdof": 2
+      }
+    },
+    {
+      "id": "h-hd-aliases",
+      "path": "project/parser/h_hd_aliases.pdbqt",
+      "sha256": "648f057523c365a4b28f68915abf46334927f37b569a59f21080c5397f993f02",
+      "bytes": 363,
+      "kind": "parser_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_type_tokens": [
+          "N",
+          "H",
+          "HD"
+        ],
+        "H_is_nonpolar_and_only_HD_confers_donor_identity": true
+      }
+    },
+    {
+      "id": "malformed-unclosed-branch",
+      "path": "project/parser/malformed_unclosed_branch.pdbqt",
+      "sha256": "c6a61150ffde7556d7f909160d8ed7b6415843a35c3bf0f233b2d825ab2c247e",
+      "bytes": 266,
+      "kind": "malformed_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "parse_error_contains": "unclosed BRANCH"
+      }
+    },
+    {
+      "id": "carbon-contact-receptor",
+      "path": "project/scoring/carbon_contact_receptor.pdbqt",
+      "sha256": "708e6881a3077fe2bf8746381778c0f404b9edbe43c2ccd9f45095cdda51d0a6",
+      "bytes": 136,
+      "kind": "receptor_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 1
+      }
+    },
+    {
+      "id": "carbon-contact-ligand",
+      "path": "project/scoring/carbon_contact_ligand.pdbqt",
+      "sha256": "a08d33a21cc28a582b057a27ffb15d69524d0a742009d94dff0c6781aef6976d",
+      "bytes": 184,
+      "kind": "ligand_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 1,
+        "torsdof": 0,
+        "pair_distance_angstrom": 3.8
+      }
+    },
+    {
+      "id": "hbond-hd-receptor",
+      "path": "project/scoring/hbond_hd_receptor.pdbqt",
+      "sha256": "e8f79a9857efc4a789166c67222dc6994b3b6a29734a26179d8aabf248a556d0",
+      "bytes": 232,
+      "kind": "receptor_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 2,
+        "contains_atom_type": "HD"
+      }
+    },
+    {
+      "id": "hbond-acceptor-ligand",
+      "path": "project/scoring/hbond_acceptor_ligand.pdbqt",
+      "sha256": "387b2b5e405124abf96fbee6fbfd2c6831d08936aeed78157b2921b0376cb1cb",
+      "bytes": 190,
+      "kind": "ligand_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored minimal regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 1,
+        "torsdof": 0,
+        "donor_acceptor_distance_angstrom": 3.0
+      }
+    },
+    {
+      "id": "provenance-md",
+      "path": "PROVENANCE.md",
+      "sha256": "1d33f997bd4112bda31f2817b88ca50ccd287f67495bde7cefa3f3622b8d9855",
+      "bytes": 6437,
+      "kind": "schema",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored docking fixture support file.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "document": "docking fixture provenance"
+      }
+    },
+    {
+      "id": "verify-py",
+      "path": "verify.py",
+      "sha256": "6bfebd3f4edf2843a8a4625561d975e23bbc0c16a8696eedc67339ffc9fc918c",
+      "bytes": 31902,
+      "kind": "schema",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored docking fixture support file.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "role": "offline manifest and checksum verifier"
+      }
+    },
+    {
+      "id": "verify-manifest-test-py",
+      "path": "verify_manifest_test.py",
+      "sha256": "7d54051560e621470db8d07c67d7e27a3c58ddeac5eb6175acb032a410f4aa95",
+      "bytes": 13697,
+      "kind": "schema",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored docking fixture support file.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "role": "standard-library verifier regression tests"
+      }
+    },
+    {
+      "id": "oracle-carbon-contact-vina",
+      "path": "oracles/carbon-contact-vina.json",
+      "sha256": "e72e90c32fb943198fb7ac113f2d0a197087530533fc3fe75dd36f9e2d9e6001",
+      "bytes": 3356,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original"
+      ],
+      "expected": {
+        "case_id": "carbon-contact-vina",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-carbon-contact-vinardo",
+      "path": "oracles/carbon-contact-vinardo.json",
+      "sha256": "2ee3f703f6aa57bafe2f8ac6596fc1f9837372cba2bdbfc51866ea1e4ec79d72",
+      "bytes": 3331,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "vinardo"
+      ],
+      "expected": {
+        "case_id": "carbon-contact-vinardo",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-hbond-hd-vina",
+      "path": "oracles/hbond-hd-vina.json",
+      "sha256": "7aa8ea6ebd3af26ac6067055fb4a4de9861cfba05f79dc0c906c0e9614cb59c7",
+      "bytes": 3342,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original"
+      ],
+      "expected": {
+        "case_id": "hbond-hd-vina",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-hbond-hd-vinardo",
+      "path": "oracles/hbond-hd-vinardo.json",
+      "sha256": "75b85950fcb90a16eddb4c9d550640a70efc26e65c4112442c46d95f1e3042c1",
+      "bytes": 3317,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "vinardo"
+      ],
+      "expected": {
+        "case_id": "hbond-hd-vinardo",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-1iep-vina",
+      "path": "oracles/1iep-vina.json",
+      "sha256": "c5dc8b25ad4f628666e554f07622baa24b095299e72e2ee4c02642b91c1c8ebc",
+      "bytes": 3376,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "pdb-1iep"
+      ],
+      "expected": {
+        "case_id": "1iep-vina",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-1iep-vinardo",
+      "path": "oracles/1iep-vinardo.json",
+      "sha256": "a8758569c7d14de3555135fdc0695c837c3f669eedd331df39e2f6b115e19960",
+      "bytes": 3347,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "vinardo",
+        "pdb-1iep"
+      ],
+      "expected": {
+        "case_id": "1iep-vinardo",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "clash-receptor",
+      "path": "project/scoring/clash_receptor.pdbqt",
+      "sha256": "03b46c26cb575b8abf52414bfe1804125c14aadfa6d18ddaeea33682518e6d6d",
+      "bytes": 152,
+      "kind": "receptor_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored positive soft-curl clash regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 1,
+        "coincident_pair_position_angstrom": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "clash-ligand",
+      "path": "project/scoring/clash_ligand.pdbqt",
+      "sha256": "f69d52a6be7ebe18dc77aeaca63224e31c4f1e14e3d3717512fbf039ec9ea2ba",
+      "bytes": 173,
+      "kind": "ligand_pdbqt",
+      "origin": "project_authored",
+      "source": {
+        "description": "Project-authored positive soft-curl clash regression fixture.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [],
+      "expected": {
+        "atom_records": 1,
+        "torsdof": 0,
+        "coincident_pair_position_angstrom": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "oracle-clash-vina",
+      "path": "oracles/clash-vina.json",
+      "sha256": "4e7f3eb81b95f3cde9d9d4ff5c96904156d1cf4b92136663bfe65a991b622f16",
+      "bytes": 3327,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original"
+      ],
+      "expected": {
+        "case_id": "clash-vina",
+        "raw_vector_length": 8
+      }
+    },
+    {
+      "id": "oracle-clash-vinardo",
+      "path": "oracles/clash-vinardo.json",
+      "sha256": "16c50bf1b762762162c4647e0fd855f541addc3f6758053a3951b1ff496e7330",
+      "bytes": 3302,
+      "kind": "oracle_json",
+      "origin": "project_generated",
+      "source": {
+        "description": "Generated by scripts/generate_docking_scoring_fixtures.py with the hash-authenticated AutoDock Vina 1.2.7 Python API.",
+        "url": null
+      },
+      "license": "AGPL-3.0-only",
+      "redistribution": "Redistributed with this project under its license.",
+      "citation_keys": [
+        "autodock-vina-1.2",
+        "autodock-vina-original",
+        "vinardo"
+      ],
+      "expected": {
+        "case_id": "clash-vinardo",
+        "raw_vector_length": 8
+      }
+    }
+  ],
+  "scoring_cases": [
+    {
+      "id": "carbon-contact-vina",
+      "receptor_fixture": "carbon-contact-receptor",
+      "ligand_fixture": "carbon-contact-ligand",
+      "scoring": "vina",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/carbon-contact-vina.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -0.071,
+        "final_intermolecular_energy_kcal_mol": -0.071,
+        "ligand_receptor_energy_kcal_mol": -0.071,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        3.8,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "carbon-contact-vinardo",
+      "receptor_fixture": "carbon-contact-receptor",
+      "ligand_fixture": "carbon-contact-ligand",
+      "scoring": "vinardo",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/carbon-contact-vinardo.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -0.046,
+        "final_intermolecular_energy_kcal_mol": -0.046,
+        "ligand_receptor_energy_kcal_mol": -0.046,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        3.8,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "hbond-hd-vina",
+      "receptor_fixture": "hbond-hd-receptor",
+      "ligand_fixture": "hbond-acceptor-ligand",
+      "scoring": "vina",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/hbond-hd-vina.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -0.223,
+        "final_intermolecular_energy_kcal_mol": -0.223,
+        "ligand_receptor_energy_kcal_mol": -0.223,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        3,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "hbond-hd-vinardo",
+      "receptor_fixture": "hbond-hd-receptor",
+      "ligand_fixture": "hbond-acceptor-ligand",
+      "scoring": "vinardo",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/hbond-hd-vinardo.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -0.266,
+        "final_intermolecular_energy_kcal_mol": -0.266,
+        "ligand_receptor_energy_kcal_mol": -0.266,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        3,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "1iep-vina",
+      "receptor_fixture": "vina-1iep-receptor",
+      "ligand_fixture": "vina-1iep-ligand",
+      "scoring": "vina",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/1iep-vina.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -12.513,
+        "final_intermolecular_energy_kcal_mol": -17.634,
+        "ligand_receptor_energy_kcal_mol": -17.634,
+        "final_total_internal_energy_kcal_mol": -0.485,
+        "ligand_internal_energy_kcal_mol": -0.485,
+        "torsional_free_energy_kcal_mol": 5.121,
+        "unbound_system_energy_kcal_mol": -0.485
+      },
+      "box_center": [
+        15.19,
+        53.9025,
+        16.917
+      ],
+      "box_size": [
+        20,
+        28,
+        24
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "1iep-vinardo",
+      "receptor_fixture": "vina-1iep-receptor",
+      "ligand_fixture": "vina-1iep-ligand",
+      "scoring": "vinardo",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/1iep-vinardo.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": -9.18,
+        "final_intermolecular_energy_kcal_mol": -12.936,
+        "ligand_receptor_energy_kcal_mol": -12.936,
+        "final_total_internal_energy_kcal_mol": -0.457,
+        "ligand_internal_energy_kcal_mol": -0.457,
+        "torsional_free_energy_kcal_mol": 3.756,
+        "unbound_system_energy_kcal_mol": -0.457
+      },
+      "box_center": [
+        15.19,
+        53.9025,
+        16.917
+      ],
+      "box_size": [
+        20,
+        28,
+        24
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "clash-vina",
+      "receptor_fixture": "clash-receptor",
+      "ligand_fixture": "clash-ligand",
+      "scoring": "vina",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/clash-vina.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": 11.415,
+        "final_intermolecular_energy_kcal_mol": 11.415,
+        "ligand_receptor_energy_kcal_mol": 11.415,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        0,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    },
+    {
+      "id": "clash-vinardo",
+      "receptor_fixture": "clash-receptor",
+      "ligand_fixture": "clash-ligand",
+      "scoring": "vinardo",
+      "oracle_status": "generated",
+      "oracle_output_path": "oracles/clash-vinardo.json",
+      "expected": {
+        "estimated_free_energy_of_binding_kcal_mol": 12.064,
+        "final_intermolecular_energy_kcal_mol": 12.064,
+        "ligand_receptor_energy_kcal_mol": 12.064,
+        "final_total_internal_energy_kcal_mol": 0.0,
+        "ligand_internal_energy_kcal_mol": 0.0,
+        "torsional_free_energy_kcal_mol": 0.0,
+        "unbound_system_energy_kcal_mol": 0.0
+      },
+      "box_center": [
+        0,
+        0,
+        0
+      ],
+      "box_size": [
+        8,
+        8,
+        8
+      ],
+      "spacing": 0.375,
+      "seed": 1,
+      "oracle_method": "vina.Vina.score()",
+      "oracle_version": "1.2.7"
+    }
+  ]
+}

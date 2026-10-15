@@ -1,0 +1,13 @@
+REMARK Project-authored nested torsion tree; serial order is intentionally 10,30,20,25,40, with outer-body atom 40 after the nested child.
+ROOT
+ATOM     10  C1  MIC A   1       0.000   0.000   0.000  1.00  0.00     0.000 C 
+ENDROOT
+BRANCH  10  30
+ATOM     30  C2  MIC A   1       1.500   0.000   0.000  1.00  0.00     0.000 C 
+BRANCH  30  20
+ATOM     20  O1  MIC A   1       3.000   0.000   0.000  1.00  0.00    -0.200 OA
+ATOM     25  C3  MIC A   1       4.500   0.000   0.000  1.00  0.00     0.000 C 
+ENDBRANCH  30  20
+ATOM     40  N1  MIC A   1       1.500   1.400   0.000  1.00  0.00     0.200 N 
+ENDBRANCH  10  30
+TORSDOF 2

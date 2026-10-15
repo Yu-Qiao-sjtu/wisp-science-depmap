@@ -1,0 +1,3 @@
+REMARK Project-authored donor-heavy-atom plus HD scoring micro-fixture.
+ATOM      1  N1  REC A   1       0.000   0.000   0.000  1.00  0.00    -0.200 N 
+ATOM      2  H1  REC A   1       1.000   0.000   0.000  1.00  0.00     0.200 HD

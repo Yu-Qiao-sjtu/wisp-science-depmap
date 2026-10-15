@@ -1,0 +1,711 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wisp.science/schemas/docking-fixture-manifest-v1.json",
+  "title": "Wisp docking fixture manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "oracle",
+    "tolerances",
+    "citations",
+    "fixtures",
+    "scoring_cases"
+  ],
+  "properties": {
+    "$schema": { "const": "./manifest.schema.json" },
+    "schema_version": { "const": 1 },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "git_commit",
+        "method",
+        "numpy_version",
+        "wheel_artifacts",
+        "tag_url",
+        "source_url",
+        "license",
+        "binary_policy"
+      ],
+      "properties": {
+        "name": { "const": "AutoDock Vina" },
+        "version": { "const": "1.2.7" },
+        "git_commit": {
+          "const": "8eb40404f4f45608acb3b01427587ac049f27c1f"
+        },
+        "method": { "const": "vina.Vina.score()" },
+        "numpy_version": { "const": "1.26.4" },
+        "wheel_artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vina", "numpy"],
+          "properties": {
+            "vina": {
+              "allOf": [
+                { "$ref": "#/$defs/wheelArtifact" },
+                {
+                  "properties": {
+                    "filename": {
+                      "const": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                    },
+                    "version": { "const": "1.2.7" },
+                    "sha256": {
+                      "const": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d"
+                    }
+                  }
+                }
+              ]
+            },
+            "numpy": {
+              "allOf": [
+                { "$ref": "#/$defs/wheelArtifact" },
+                {
+                  "properties": {
+                    "filename": {
+                      "const": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                    },
+                    "version": { "const": "1.26.4" },
+                    "sha256": {
+                      "const": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "tag_url": { "type": "string", "format": "uri" },
+        "source_url": { "type": "string", "format": "uri" },
+        "license": { "const": "Apache-2.0" },
+        "binary_policy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vina", "vinardo"],
+      "properties": {
+        "vina": { "$ref": "#/$defs/tolerance" },
+        "vinardo": { "$ref": "#/$defs/tolerance" }
+      }
+    },
+    "citations": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/citation" },
+      "minProperties": 1
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/fixture" }
+    },
+    "scoring_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scoringCase" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "positiveVector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number", "exclusiveMinimum": 0 }
+    },
+    "microBoxSize": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 8 },
+        { "const": 8 },
+        { "const": 8 }
+      ],
+      "items": false
+    },
+    "originCenter": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 0 },
+        { "const": 0 },
+        { "const": 0 }
+      ],
+      "items": false
+    },
+    "carbonContactCenter": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 3.8 },
+        { "const": 0 },
+        { "const": 0 }
+      ],
+      "items": false
+    },
+    "hbondCenter": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 3 },
+        { "const": 0 },
+        { "const": 0 }
+      ],
+      "items": false
+    },
+    "oneIepCenter": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 15.19 },
+        { "const": 53.9025 },
+        { "const": 16.917 }
+      ],
+      "items": false
+    },
+    "oneIepBoxSize": {
+      "type": "array",
+      "prefixItems": [
+        { "const": 20 },
+        { "const": 28 },
+        { "const": 24 }
+      ],
+      "items": false
+    },
+    "wheelArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "version", "sha256", "digest_source"],
+      "properties": {
+        "filename": { "type": "string", "pattern": "^[^/\\\\]+\\.whl$" },
+        "version": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "digest_source": { "const": "PyPI published file digest" }
+      }
+    },
+    "tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["affinity_kcal_mol_abs", "component_kcal_mol_abs"],
+      "properties": {
+        "affinity_kcal_mol_abs": { "type": "number", "exclusiveMinimum": 0 },
+        "component_kcal_mol_abs": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "url"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "sha256",
+        "bytes",
+        "kind",
+        "origin",
+        "source",
+        "license",
+        "redistribution",
+        "citation_keys",
+        "expected"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "kind": {
+          "enum": [
+            "ligand_pdbqt",
+            "receptor_pdbqt",
+            "parser_pdb",
+            "parser_pdbqt",
+            "malformed_pdbqt",
+            "license_text",
+            "schema",
+            "oracle_json"
+          ]
+        },
+        "origin": {
+          "enum": ["official_upstream", "project_authored", "project_generated"]
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "license": { "type": "string", "minLength": 1 },
+        "redistribution": { "type": "string", "minLength": 1 },
+        "citation_keys": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "expected": { "type": "object" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "url"],
+      "properties": {
+        "description": { "type": "string", "minLength": 1 },
+        "url": { "type": ["string", "null"] },
+        "git_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "git_blob": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "scoreMappingSemantics": {
+      "description": "Derived from Vina/Vinardo raw columns: final_inter = lig_inter + flex_inter; final_total_internal = other_inter + flex_intra + lig_intra.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["final_intermolecular", "final_total_internal"],
+      "properties": {
+        "final_intermolecular": { "const": "lig_inter + flex_inter" },
+        "final_total_internal": { "const": "other_inter + flex_intra + lig_intra" }
+      }
+    },
+    "scoringExpected": {
+      "description": "Seven compatibility fields mapped according to #/$defs/scoreMappingSemantics.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "estimated_free_energy_of_binding_kcal_mol",
+        "final_intermolecular_energy_kcal_mol",
+        "ligand_receptor_energy_kcal_mol",
+        "final_total_internal_energy_kcal_mol",
+        "ligand_internal_energy_kcal_mol",
+        "torsional_free_energy_kcal_mol",
+        "unbound_system_energy_kcal_mol"
+      ],
+      "properties": {
+        "estimated_free_energy_of_binding_kcal_mol": { "type": "number" },
+        "final_intermolecular_energy_kcal_mol": { "type": "number" },
+        "ligand_receptor_energy_kcal_mol": { "type": "number" },
+        "final_total_internal_energy_kcal_mol": { "type": "number" },
+        "ligand_internal_energy_kcal_mol": { "type": "number" },
+        "torsional_free_energy_kcal_mol": { "type": "number" },
+        "unbound_system_energy_kcal_mol": { "type": "number" }
+      }
+    },
+    "scoringCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "receptor_fixture",
+        "ligand_fixture",
+        "scoring",
+        "box_center",
+        "box_size",
+        "spacing",
+        "seed",
+        "oracle_method",
+        "oracle_version",
+        "oracle_status",
+        "oracle_output_path",
+        "expected"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "receptor_fixture": { "type": "string", "minLength": 1 },
+        "ligand_fixture": { "type": "string", "minLength": 1 },
+        "scoring": { "enum": ["vina", "vinardo"] },
+        "box_center": { "$ref": "#/$defs/vector3" },
+        "box_size": { "$ref": "#/$defs/positiveVector3" },
+        "spacing": { "const": 0.375 },
+        "seed": { "const": 1 },
+        "oracle_method": { "const": "vina.Vina.score()" },
+        "oracle_version": { "const": "1.2.7" },
+        "oracle_status": { "enum": ["not_generated", "generated"] },
+        "oracle_output_path": {
+          "type": "string",
+          "pattern": "^oracles/[a-z0-9][a-z0-9._-]*\\.json$"
+        },
+        "expected": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/scoringExpected" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "oracle_status": { "const": "generated" } },
+            "required": ["oracle_status"]
+          },
+          "then": {
+            "properties": { "expected": { "$ref": "#/$defs/scoringExpected" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "oracle_status": { "const": "not_generated" } },
+            "required": ["oracle_status"]
+          },
+          "then": { "properties": { "expected": { "type": "null" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": { "enum": ["clash-vina", "clash-vinardo"] }
+            },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "box_center": { "$ref": "#/$defs/originCenter" },
+              "box_size": { "$ref": "#/$defs/microBoxSize" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": { "enum": ["carbon-contact-vina", "carbon-contact-vinardo"] }
+            },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "box_center": { "$ref": "#/$defs/carbonContactCenter" },
+              "box_size": { "$ref": "#/$defs/microBoxSize" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": { "enum": ["hbond-hd-vina", "hbond-hd-vinardo"] }
+            },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "box_center": { "$ref": "#/$defs/hbondCenter" },
+              "box_size": { "$ref": "#/$defs/microBoxSize" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "id": { "enum": ["1iep-vina", "1iep-vinardo"] } },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "box_center": { "$ref": "#/$defs/oneIepCenter" },
+              "box_size": { "$ref": "#/$defs/oneIepBoxSize" }
+            }
+          }
+        }
+      ]
+    },
+    "installationProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "wheel_filename", "sha256"],
+      "properties": {
+        "method": { "const": "direct_url_archive_hash" },
+        "wheel_filename": { "type": "string", "pattern": "^[^/\\\\]+\\.whl$" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "packageRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "distribution_version",
+        "module_version",
+        "wheel_filename",
+        "wheel_sha256",
+        "installation_provenance"
+      ],
+      "properties": {
+        "distribution_version": { "type": "string", "minLength": 1 },
+        "module_version": { "type": "string", "minLength": 1 },
+        "wheel_filename": { "type": "string", "pattern": "^[^/\\\\]+\\.whl$" },
+        "wheel_sha256": { "$ref": "#/$defs/sha256" },
+        "installation_provenance": {
+          "$ref": "#/$defs/installationProvenance"
+        }
+      }
+    },
+    "fixtureIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "oracleOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "$schema",
+        "schema_version",
+        "case_id",
+        "oracle",
+        "scoring",
+        "configuration",
+        "weights",
+        "packages",
+        "runtime",
+        "fixtures",
+        "api_result",
+        "expected_mapping",
+        "expected"
+      ],
+      "properties": {
+        "$schema": { "const": "../manifest.schema.json#/$defs/oracleOutput" },
+        "schema_version": { "const": 1 },
+        "case_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "oracle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "source_commit", "method"],
+          "properties": {
+            "name": { "const": "AutoDock Vina" },
+            "version": { "const": "1.2.7" },
+            "source_commit": {
+              "const": "8eb40404f4f45608acb3b01427587ac049f27c1f"
+            },
+            "method": { "const": "vina.Vina.score()" }
+          }
+        },
+        "scoring": { "enum": ["vina", "vinardo"] },
+        "configuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "box_center",
+            "box_size",
+            "spacing",
+            "seed",
+            "cpu",
+            "no_refine",
+            "force_even_voxels"
+          ],
+          "properties": {
+            "box_center": { "$ref": "#/$defs/vector3" },
+            "box_size": { "$ref": "#/$defs/positiveVector3" },
+            "spacing": { "const": 0.375 },
+            "seed": { "const": 1 },
+            "cpu": { "const": 1 },
+            "no_refine": { "const": false },
+            "force_even_voxels": { "const": false }
+          }
+        },
+        "weights": {
+          "type": "array",
+          "items": { "type": "number" }
+        },
+        "packages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vina", "numpy"],
+          "properties": {
+            "vina": {
+              "allOf": [
+                { "$ref": "#/$defs/packageRecord" },
+                {
+                  "properties": {
+                    "distribution_version": { "const": "1.2.7" },
+                    "module_version": { "const": "1.2.7" },
+                    "wheel_filename": {
+                      "const": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                    },
+                    "wheel_sha256": {
+                      "const": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d"
+                    },
+                    "installation_provenance": {
+                      "allOf": [
+                        { "$ref": "#/$defs/installationProvenance" },
+                        {
+                          "properties": {
+                            "wheel_filename": {
+                              "const": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                            },
+                            "sha256": {
+                              "const": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "numpy": {
+              "allOf": [
+                { "$ref": "#/$defs/packageRecord" },
+                {
+                  "properties": {
+                    "distribution_version": { "const": "1.26.4" },
+                    "module_version": { "const": "1.26.4" },
+                    "wheel_filename": {
+                      "const": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                    },
+                    "wheel_sha256": {
+                      "const": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+                    },
+                    "installation_provenance": {
+                      "allOf": [
+                        { "$ref": "#/$defs/installationProvenance" },
+                        {
+                          "properties": {
+                            "wheel_filename": {
+                              "const": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                            },
+                            "sha256": {
+                              "const": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["python_implementation", "python_version"],
+          "properties": {
+            "python_implementation": { "type": "string", "minLength": 1 },
+            "python_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        "fixtures": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["receptor", "ligand"],
+          "properties": {
+            "receptor": { "$ref": "#/$defs/fixtureIdentity" },
+            "ligand": { "$ref": "#/$defs/fixtureIdentity" }
+          }
+        },
+        "api_result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["raw_vector_columns", "raw_vector_kcal_mol"],
+          "properties": {
+            "raw_vector_columns": {
+              "type": "array",
+              "prefixItems": [
+                { "const": "total" },
+                { "const": "lig_inter" },
+                { "const": "flex_inter" },
+                { "const": "other_inter" },
+                { "const": "flex_intra" },
+                { "const": "lig_intra" },
+                { "const": "torsions" },
+                { "const": "lig_intra_best_pose" }
+              ],
+              "items": false
+            },
+            "raw_vector_kcal_mol": {
+              "type": "array",
+              "minItems": 8,
+              "maxItems": 8,
+              "items": { "type": "number" }
+            }
+          }
+        },
+        "expected_mapping": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "estimated_free_energy_of_binding_kcal_mol",
+            "final_intermolecular_energy_kcal_mol",
+            "ligand_receptor_energy_kcal_mol",
+            "final_total_internal_energy_kcal_mol",
+            "ligand_internal_energy_kcal_mol",
+            "torsional_free_energy_kcal_mol",
+            "unbound_system_energy_kcal_mol"
+          ],
+          "properties": {
+            "estimated_free_energy_of_binding_kcal_mol": { "const": "total" },
+            "final_intermolecular_energy_kcal_mol": { "const": "lig_inter + flex_inter" },
+            "ligand_receptor_energy_kcal_mol": { "const": "lig_inter" },
+            "final_total_internal_energy_kcal_mol": { "const": "other_inter + flex_intra + lig_intra" },
+            "ligand_internal_energy_kcal_mol": { "const": "lig_intra" },
+            "torsional_free_energy_kcal_mol": { "const": "torsions" },
+            "unbound_system_energy_kcal_mol": { "const": "lig_intra_best_pose" }
+          }
+        },
+        "expected": { "$ref": "#/$defs/scoringExpected" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "scoring": { "const": "vina" } },
+            "required": ["scoring"]
+          },
+          "then": {
+            "properties": {
+              "weights": {
+                "prefixItems": [
+                  { "const": -0.035579 },
+                  { "const": -0.005156 },
+                  { "const": 0.840245 },
+                  { "const": -0.035069 },
+                  { "const": -0.587439 },
+                  { "const": 50 },
+                  { "const": 0.05846 }
+                ],
+                "items": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "scoring": { "const": "vinardo" } },
+            "required": ["scoring"]
+          },
+          "then": {
+            "properties": {
+              "weights": {
+                "prefixItems": [
+                  { "const": -0.045 },
+                  { "const": 0.8 },
+                  { "const": -0.035 },
+                  { "const": -0.6 },
+                  { "const": 50 },
+                  { "const": 0.05846 }
+                ],
+                "items": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
