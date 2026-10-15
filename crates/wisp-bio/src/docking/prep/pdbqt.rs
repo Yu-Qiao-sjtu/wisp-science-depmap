@@ -804,14 +804,15 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> Result<String, String> {
     if atom.raw.residue_seq.to_string().len() > 4 {
         return Err("residue sequence does not fit the PDBQT field".into());
     }
-    if !atom.raw.name.is_ascii() || atom.raw.name.len() > 4 {
-        return Err("atom name must be at most four ASCII bytes".into());
+    if !is_printable_ascii(&atom.raw.name) || atom.raw.name.len() > 4 {
+        return Err("atom name must be at most four printable ASCII bytes".into());
     }
-    if !atom.raw.residue_name.is_ascii() || atom.raw.residue_name.len() > 3 {
-        return Err("residue name must be at most three ASCII bytes".into());
+    if !is_printable_ascii(&atom.raw.residue_name) || atom.raw.residue_name.len() > 3 {
+        return Err("residue name must be at most three printable ASCII bytes".into());
     }
-    if !atom.raw.chain.is_ascii() || !atom.raw.insertion_code.is_ascii() {
-        return Err("chain and insertion code must be ASCII".into());
+    if !is_printable_ascii_char(atom.raw.chain) || !is_printable_ascii_char(atom.raw.insertion_code)
+    {
+        return Err("chain and insertion code must be printable ASCII".into());
     }
     if atom.raw.element != atom.ad_type.element() {
         return Err("atom element does not match its AD type".into());
@@ -837,6 +838,14 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> Result<String, String> {
         bfactor = "0.00",
         ad_type = atom.ad_type.pdbqt_symbol(),
     ))
+}
+
+fn is_printable_ascii(text: &str) -> bool {
+    text.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+fn is_printable_ascii_char(value: char) -> bool {
+    value.is_ascii() && !value.is_ascii_control()
 }
 
 fn fixed_decimal(
@@ -956,6 +965,55 @@ mod tests {
         assert!(parse_receptor_pdbqt("CONECT 1 2\n")
             .unwrap_err()
             .contains("unsupported rigid receptor"));
+    }
+
+    #[test]
+    fn atom_writer_rejects_control_characters_in_fixed_text_fields() {
+        let base = PdbqtAtom {
+            raw: RawAtom {
+                serial: 1,
+                name: "C".into(),
+                element: Element::C,
+                position: [0.0; 3],
+                residue_name: "LIG".into(),
+                chain: 'A',
+                residue_seq: 1,
+                insertion_code: ' ',
+                is_hetero: true,
+            },
+            charge: 0.0,
+            ad_type: AdType::C,
+        };
+
+        let mut invalid = base.clone();
+        invalid.raw.name = "C\n".into();
+        assert!(format_atom_line(&invalid)
+            .unwrap_err()
+            .contains("printable ASCII"));
+
+        let mut invalid = base.clone();
+        invalid.raw.residue_name = "L\rG".into();
+        assert!(format_atom_line(&invalid)
+            .unwrap_err()
+            .contains("printable ASCII"));
+
+        let mut invalid = base.clone();
+        invalid.raw.chain = '\t';
+        assert!(format_atom_line(&invalid)
+            .unwrap_err()
+            .contains("printable ASCII"));
+
+        let mut invalid = base.clone();
+        invalid.raw.insertion_code = '\0';
+        assert!(format_atom_line(&invalid)
+            .unwrap_err()
+            .contains("printable ASCII"));
+
+        let mut blank_fields = base;
+        blank_fields.raw.name = "    ".into();
+        blank_fields.raw.residue_name = "   ".into();
+        blank_fields.raw.chain = ' ';
+        assert!(format_atom_line(&blank_fields).is_ok());
     }
 
     #[test]
