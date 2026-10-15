@@ -312,12 +312,17 @@ fn prepare_parsed_ligand(parsed: PdbqtLigand) -> Result<PreparedLigand, String> 
     let bonds = project_bonds(&source_bonds, &source_to_scored);
     let intra_excluded = bonds::bonded_exclusions(atoms.len(), &bonds);
     let rigid_fragments = build_rigid_fragments(&parsed);
-    let branches = parsed
-        .branches
+    let active_branch_indices = (0..parsed.branches.len())
+        .filter(|index| pdbqt::branch_is_active(&parsed, *index))
+        .collect::<Vec<_>>();
+    let mut original_to_active = vec![None; parsed.branches.len()];
+    for (active_index, &original_index) in active_branch_indices.iter().enumerate() {
+        original_to_active[original_index] = Some(active_index);
+    }
+    let branches = active_branch_indices
         .iter()
-        .enumerate()
-        .filter(|(index, _)| pdbqt::branch_is_active(&parsed, *index))
-        .map(|(index, branch)| {
+        .map(|&index| {
+            let branch = &parsed.branches[index];
             let parent_source_index = serial_to_source[&branch.parent_serial];
             let child_source_index = serial_to_source[&branch.child_serial];
             LigandBranch {
@@ -334,7 +339,8 @@ fn prepare_parsed_ligand(parsed: PdbqtLigand) -> Result<PreparedLigand, String> 
                 child_fragment: index + 1,
                 parent_branch: branch
                     .parent
-                    .and_then(|parent| effective_active_branch(&parsed, parent)),
+                    .and_then(|parent| effective_active_branch(&parsed, parent))
+                    .and_then(|original_parent| original_to_active[original_parent]),
             }
         })
         .collect::<Vec<_>>();
@@ -708,6 +714,24 @@ mod tests {
         assert_eq!(ligand.rigid_fragments[0].source_atoms, vec![0, 1]);
         assert_eq!(ligand.rigid_fragments[1].source_atoms, vec![2, 3]);
         assert_eq!(ligand.rigid_fragments[2].source_atoms, vec![4]);
+    }
+
+    #[test]
+    fn active_branch_parent_indices_are_remapped_after_inactive_wire_branches() {
+        let root_one = atom_line(1, 0.0, AdType::C, 0.0);
+        let root_two = atom_line(10, 4.0, AdType::C, 0.0);
+        let inactive_axis = atom_line(2, 1.5, AdType::C, 0.0);
+        let parent_axis = atom_line(11, 5.5, AdType::C, 0.0);
+        let parent_body = atom_line(12, 7.0, AdType::C, 0.0);
+        let child_axis = atom_line(13, 8.5, AdType::C, 0.0);
+        let child_body = atom_line(14, 10.0, AdType::C, 0.0);
+        let ligand = prepare_ligand_pdbqt(&format!(
+            "ROOT\n{root_one}\n{root_two}\nENDROOT\nBRANCH 1 2\n{inactive_axis}\nENDBRANCH 1 2\nBRANCH 10 11\n{parent_axis}\n{parent_body}\nBRANCH 12 13\n{child_axis}\n{child_body}\nENDBRANCH 12 13\nENDBRANCH 10 11\nTORSDOF 3\n"
+        ))
+        .unwrap();
+        assert_eq!(ligand.branches.len(), 2);
+        assert_eq!(ligand.branches[0].parent_branch, None);
+        assert_eq!(ligand.branches[1].parent_branch, Some(0));
     }
 
     #[test]
