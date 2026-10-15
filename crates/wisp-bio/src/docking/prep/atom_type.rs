@@ -329,6 +329,49 @@ impl AdType {
                 | AdType::Ni
         )
     }
+
+    pub fn is_compatible_with_xs(self, xs_type: XsType) -> bool {
+        match self {
+            AdType::C | AdType::A => matches!(xs_type, XsType::C_H | XsType::C_P),
+            AdType::N => matches!(xs_type, XsType::N_P | XsType::N_D),
+            AdType::Na => matches!(xs_type, XsType::N_A | XsType::N_DA),
+            AdType::O => matches!(xs_type, XsType::O_P | XsType::O_D),
+            AdType::Oa => matches!(xs_type, XsType::O_A | XsType::O_DA),
+            AdType::S | AdType::Sa | AdType::Se => xs_type == XsType::S_P,
+            AdType::P => xs_type == XsType::P_P,
+            AdType::F => xs_type == XsType::F_H,
+            AdType::Cl => xs_type == XsType::Cl_H,
+            AdType::Br => xs_type == XsType::Br_H,
+            AdType::I => xs_type == XsType::I_H,
+            AdType::Si => xs_type == XsType::Si,
+            AdType::At => xs_type == XsType::At,
+            ad_type if ad_type.is_metal() => xs_type == XsType::Met_D,
+            AdType::G0 => xs_type == XsType::G0,
+            AdType::G1 => xs_type == XsType::G1,
+            AdType::G2 => xs_type == XsType::G2,
+            AdType::G3 => xs_type == XsType::G3,
+            AdType::H
+            | AdType::Hd
+            | AdType::Cg0
+            | AdType::Cg1
+            | AdType::Cg2
+            | AdType::Cg3
+            | AdType::W => false,
+            AdType::Mg
+            | AdType::Mn
+            | AdType::Zn
+            | AdType::Ca
+            | AdType::Fe
+            | AdType::Cu
+            | AdType::Sodium
+            | AdType::K
+            | AdType::Hg
+            | AdType::Co
+            | AdType::U
+            | AdType::Cd
+            | AdType::Ni => unreachable!("metal guard handles all docking metals"),
+        }
+    }
 }
 
 /// Vina XS scoring identity.
@@ -384,6 +427,24 @@ impl XsType {
             self,
             XsType::N_A | XsType::N_DA | XsType::O_A | XsType::O_DA
         )
+    }
+
+    pub fn is_compatible_with(self, element: Element) -> bool {
+        match self {
+            XsType::C_H | XsType::C_P => element == Element::C,
+            XsType::N_P | XsType::N_D | XsType::N_A | XsType::N_DA => element == Element::N,
+            XsType::O_P | XsType::O_D | XsType::O_A | XsType::O_DA => element == Element::O,
+            XsType::S_P => element == Element::S,
+            XsType::P_P => element == Element::P,
+            XsType::F_H => element == Element::F,
+            XsType::Cl_H => element == Element::Cl,
+            XsType::Br_H => element == Element::Br,
+            XsType::I_H => element == Element::I,
+            XsType::Si => element == Element::Si,
+            XsType::At => element == Element::At,
+            XsType::Met_D => element.is_metal(),
+            XsType::G0 | XsType::G1 | XsType::G2 | XsType::G3 => element == Element::Other,
+        }
     }
 }
 

@@ -169,9 +169,10 @@ impl DockingEngine for VinaEngine {
         ligand: &PreparedLigand,
         ligand_positions: &[[f64; 3]],
     ) -> Result<ScoreTerms, String> {
+        let num_tors = ligand.validated_num_tors()?;
         let inter_terms = evaluate_inter(receptor, ligand, ligand_positions, &self.params)?;
         let intra_terms = evaluate_intra(ligand, ligand_positions, &self.params)?;
-        ScoreTerms::from_breakdowns(inter_terms, intra_terms, ligand.num_tors, &self.params)
+        ScoreTerms::from_breakdowns(inter_terms, intra_terms, num_tors, &self.params)
     }
 
     fn search(
@@ -255,6 +256,26 @@ mod tests {
             .unwrap();
         assert_eq!(terms.num_tors, 1.0);
         assert!((terms.torsion_factor - (1.0 + VINA_1_1.w_rot)).abs() < 1e-12);
+
+        let mut malformed = ligand.clone();
+        malformed.num_tors = 0.0;
+        assert!(VinaEngine::classic()
+            .score(&receptor, &malformed, &ligand_positions(&malformed))
+            .unwrap_err()
+            .contains("does not match topology-derived value"));
+
+        let mut missing_topology = ligand.clone();
+        missing_topology.branches.clear();
+        missing_topology.rotatable.clear();
+        missing_topology.num_tors = 0.0;
+        assert!(VinaEngine::classic()
+            .score(
+                &receptor,
+                &missing_topology,
+                &ligand_positions(&missing_topology),
+            )
+            .unwrap_err()
+            .contains("active branches do not match"));
     }
 
     #[test]
@@ -373,6 +394,20 @@ mod tests {
         let mut params = VINA_1_1;
         params.hydrophobic_offset = params.hydrophobic_onset;
         assert!(VinaEngine::new(params).unwrap_err().contains("ramp"));
+
+        let mut params = VINA_1_1;
+        params.hydrophobic_onset = -f64::MAX;
+        params.hydrophobic_offset = f64::MAX;
+        assert!(VinaEngine::new(params)
+            .unwrap_err()
+            .contains("hydrophobic ramp span must be finite"));
+
+        let mut params = VINA_1_1;
+        params.hbond_onset = -f64::MAX;
+        params.hbond_offset = f64::MAX;
+        assert!(VinaEngine::new(params)
+            .unwrap_err()
+            .contains("hydrogen-bond ramp span must be finite"));
 
         let mut params = VINA_1_1;
         params.radii.metal = 0.0;

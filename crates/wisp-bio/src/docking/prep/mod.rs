@@ -55,6 +55,45 @@ impl DockAtom {
     pub fn is_acceptor(&self) -> bool {
         self.xs_type.is_some_and(XsType::is_acceptor)
     }
+
+    pub(crate) fn validate_scoring_identity(&self, context: &str) -> Result<(), String> {
+        if let Some(ad_type) = self.wire_ad_type {
+            if ad_type.element() != self.element {
+                return Err(format!(
+                    "{context} AD type {} is incompatible with element {}",
+                    ad_type.pdbqt_symbol(),
+                    self.element.symbol()
+                ));
+            }
+            if ad_type.is_explicit_hydrogen() && self.xs_type.is_some() {
+                return Err(format!(
+                    "{context} explicit hydrogen must not have an XS scoring type"
+                ));
+            }
+        }
+        if self.element == Element::H && self.xs_type.is_some() {
+            return Err(format!(
+                "{context} explicit hydrogen must not have an XS scoring type"
+            ));
+        }
+        if let Some(xs_type) = self.xs_type {
+            if !xs_type.is_compatible_with(self.element) {
+                return Err(format!(
+                    "{context} XS type {xs_type:?} is incompatible with element {}",
+                    self.element.symbol()
+                ));
+            }
+            if let Some(ad_type) = self.wire_ad_type {
+                if !ad_type.is_compatible_with_xs(xs_type) {
+                    return Err(format!(
+                        "{context} AD type {} is incompatible with XS type {xs_type:?}",
+                        ad_type.pdbqt_symbol()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One rigid fragment induced by ROOT or a BRANCH body.
@@ -85,37 +124,89 @@ pub struct LigandBranch {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedLigand {
     /// Every parsed PDBQT atom, including explicit H and glue/water identities.
-    pub source_atoms: Vec<DockAtom>,
+    pub(crate) source_atoms: Vec<DockAtom>,
     /// Heavy/scorable atoms only, in source order.
-    pub atoms: Vec<DockAtom>,
+    pub(crate) atoms: Vec<DockAtom>,
     /// Source-index to scored-index mapping. Explicit H and non-scoring glue
     /// atoms map to `None`.
-    pub source_to_scored: Vec<Option<usize>>,
+    pub(crate) source_to_scored: Vec<Option<usize>>,
     /// Scored-index to source-index mapping.
-    pub scored_to_source: Vec<usize>,
+    pub(crate) scored_to_source: Vec<usize>,
     /// Perceived source-atom connectivity, augmented with authoritative branch
     /// axis edges when geometry alone does not recover them.
-    pub source_bonds: Vec<Bond>,
+    pub(crate) source_bonds: Vec<Bond>,
     /// Scored-heavy-atom projection of `source_bonds`.
-    pub bonds: Vec<Bond>,
-    pub rigid_fragments: Vec<RigidFragment>,
-    pub branches: Vec<LigandBranch>,
+    pub(crate) bonds: Vec<Bond>,
+    pub(crate) rigid_fragments: Vec<RigidFragment>,
+    pub(crate) branches: Vec<LigandBranch>,
     /// Compatibility projection of authoritative branch axes onto scored atoms.
-    pub rotatable: Vec<Bond>,
+    pub(crate) rotatable: Vec<Bond>,
     /// Vina's effective heavy-atom rotor count derived from authoritative
     /// branch axes. Each axis endpoint contributes 0.5 when the opposite
     /// endpoint has more than one bonded heavy atom.
-    pub num_tors: f64,
+    pub(crate) num_tors: f64,
     /// Independent TORSDOF declared by the file.
-    pub torsdof: u32,
+    pub(crate) torsdof: u32,
     /// Scored atom pairs separated by at most three bonds (1-2/1-3/1-4).
-    pub intra_excluded: Vec<(usize, usize)>,
+    pub(crate) intra_excluded: Vec<(usize, usize)>,
     /// Non-excluded scored pairs whose distance can vary across at least one
     /// authoritative branch. Same-rigid-fragment pairs are absent.
-    pub distance_variable_pairs: Vec<(usize, usize)>,
+    pub(crate) distance_variable_pairs: Vec<(usize, usize)>,
 }
 
 impl PreparedLigand {
+    pub fn source_atoms(&self) -> &[DockAtom] {
+        &self.source_atoms
+    }
+
+    pub fn atoms(&self) -> &[DockAtom] {
+        &self.atoms
+    }
+
+    pub fn source_to_scored(&self) -> &[Option<usize>] {
+        &self.source_to_scored
+    }
+
+    pub fn scored_to_source(&self) -> &[usize] {
+        &self.scored_to_source
+    }
+
+    pub fn source_bonds(&self) -> &[Bond] {
+        &self.source_bonds
+    }
+
+    pub fn bonds(&self) -> &[Bond] {
+        &self.bonds
+    }
+
+    pub fn rigid_fragments(&self) -> &[RigidFragment] {
+        &self.rigid_fragments
+    }
+
+    pub fn branches(&self) -> &[LigandBranch] {
+        &self.branches
+    }
+
+    pub fn rotatable(&self) -> &[Bond] {
+        &self.rotatable
+    }
+
+    pub fn num_tors(&self) -> f64 {
+        self.num_tors
+    }
+
+    pub fn torsdof(&self) -> u32 {
+        self.torsdof
+    }
+
+    pub fn intra_excluded(&self) -> &[(usize, usize)] {
+        &self.intra_excluded
+    }
+
+    pub fn distance_variable_pairs(&self) -> &[(usize, usize)] {
+        &self.distance_variable_pairs
+    }
+
     pub fn is_intra_excluded(&self, first: usize, second: usize) -> bool {
         contains_pair(&self.intra_excluded, first, second)
     }
@@ -129,21 +220,373 @@ impl PreparedLigand {
     pub fn is_intra_eligible(&self, first: usize, second: usize) -> bool {
         self.is_distance_variable_pair(first, second) && !self.is_intra_excluded(first, second)
     }
+
+    pub(crate) fn validate_scored_mapping(&self) -> Result<(), String> {
+        if self.source_to_scored.len() != self.source_atoms.len() {
+            return Err(
+                "ligand source-to-scored mapping length does not match source atoms".into(),
+            );
+        }
+        if self.scored_to_source.len() != self.atoms.len() {
+            return Err(
+                "ligand scored-to-source mapping length does not match scored atoms".into(),
+            );
+        }
+
+        if self
+            .scored_to_source
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            return Err("ligand scored-to-source mapping must preserve source order".into());
+        }
+
+        let mut source_serials = HashSet::new();
+        let mut seen_scored = vec![false; self.atoms.len()];
+        for (source_index, source_atom) in self.source_atoms.iter().enumerate() {
+            if source_atom.source_index != source_index {
+                return Err(format!(
+                    "ligand source atom {source_index} carries mismatched source index {}",
+                    source_atom.source_index
+                ));
+            }
+            if !source_serials.insert(source_atom.serial) {
+                return Err(format!(
+                    "ligand has duplicate source atom serial {}",
+                    source_atom.serial
+                ));
+            }
+            source_atom.validate_scoring_identity(&format!("ligand source atom {source_index}"))?;
+            match self.source_to_scored[source_index] {
+                Some(scored_index) => {
+                    let scored_atom = self.atoms.get(scored_index).ok_or_else(|| {
+                        format!(
+                            "ligand source atom {source_index} maps to missing scored atom {scored_index}"
+                        )
+                    })?;
+                    if seen_scored[scored_index] {
+                        return Err(format!(
+                            "ligand scored atom {scored_index} is mapped from more than one source atom"
+                        ));
+                    }
+                    seen_scored[scored_index] = true;
+                    if self.scored_to_source[scored_index] != source_index {
+                        return Err(format!(
+                            "ligand source/scored mappings disagree at scored atom {scored_index}"
+                        ));
+                    }
+                    if source_atom.element == Element::H || source_atom.xs_type.is_none() {
+                        return Err(format!(
+                            "ligand non-scoring source atom {source_index} maps to scored atom {scored_index}"
+                        ));
+                    }
+                    scored_atom
+                        .validate_scoring_identity(&format!("ligand scored atom {scored_index}"))?;
+                    if !same_scoring_identity(source_atom, scored_atom)
+                        || scored_atom.source_index != source_index
+                    {
+                        return Err(format!(
+                            "ligand scored atom {scored_index} identity does not match source atom {source_index}"
+                        ));
+                    }
+                }
+                None => {
+                    if source_atom.element != Element::H && source_atom.xs_type.is_some() {
+                        return Err(format!(
+                            "ligand scorable source atom {source_index} is missing from scored atoms"
+                        ));
+                    }
+                }
+            }
+        }
+        if seen_scored.iter().any(|seen| !seen) {
+            return Err("ligand scored atom is absent from source-to-scored mapping".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_pair_tables(&self) -> Result<(), String> {
+        validate_pair_table("intra-exclusion", &self.intra_excluded, self.atoms.len())?;
+        validate_pair_table(
+            "distance-variable",
+            &self.distance_variable_pairs,
+            self.atoms.len(),
+        )?;
+        if self
+            .distance_variable_pairs
+            .iter()
+            .any(|pair| self.intra_excluded.binary_search(pair).is_ok())
+        {
+            return Err(
+                "distance-variable and intra-exclusion pair tables must not overlap".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validated_num_tors(&self) -> Result<f64, String> {
+        self.validate_scored_mapping()?;
+        self.validate_pair_tables()?;
+        if !self.num_tors.is_finite() || self.num_tors < 0.0 {
+            return Err("ligand effective rotor count must be finite and non-negative".into());
+        }
+        let source_count = self.source_atoms.len();
+        if source_count == 0 {
+            return Err("ligand has no source atoms for torsion validation".into());
+        }
+        let mut source_bonds = HashSet::new();
+        for bond in &self.source_bonds {
+            if bond.a >= source_count || bond.b >= source_count {
+                return Err(format!(
+                    "ligand source bond ({}, {}) is out of bounds for {source_count} atoms",
+                    bond.a, bond.b
+                ));
+            }
+            if bond.a == bond.b {
+                return Err(format!(
+                    "ligand source bond ({}, {}) must connect distinct atoms",
+                    bond.a, bond.b
+                ));
+            }
+            if !source_bonds.insert(bond.canonical()) {
+                return Err(format!(
+                    "ligand source bond ({}, {}) is duplicated",
+                    bond.a, bond.b
+                ));
+            }
+        }
+
+        let expected_bonds = project_bonds(&self.source_bonds, &self.source_to_scored);
+        if self.bonds != expected_bonds {
+            return Err("ligand scored bonds do not match the source-bond projection".into());
+        }
+        let expected_excluded = bonds::bonded_exclusions(self.atoms.len(), &self.bonds);
+        if self.intra_excluded != expected_excluded {
+            return Err("ligand intra-exclusion pairs do not match scored bonds".into());
+        }
+
+        if self.rigid_fragments.is_empty() {
+            return Err("ligand has no ROOT rigid fragment".into());
+        }
+        if self.rigid_fragments[0].branch.is_some() || self.rigid_fragments[0].parent.is_some() {
+            return Err("ligand ROOT rigid fragment has invalid metadata".into());
+        }
+        let mut fragment_membership = vec![None; source_count];
+        let mut wire_branch_ids = HashSet::new();
+        for (fragment_index, fragment) in self.rigid_fragments.iter().enumerate() {
+            if fragment_index > 0 {
+                let branch_index = fragment.branch.ok_or_else(|| {
+                    format!("ligand rigid fragment {fragment_index} has no branch identity")
+                })?;
+                if !wire_branch_ids.insert(branch_index) {
+                    return Err(format!(
+                        "ligand rigid fragments reuse wire branch identity {branch_index}"
+                    ));
+                }
+                let parent = fragment.parent.ok_or_else(|| {
+                    format!("ligand rigid fragment {fragment_index} has no parent")
+                })?;
+                if parent >= fragment_index {
+                    return Err(format!(
+                        "ligand rigid fragment {fragment_index} has invalid parent {parent}"
+                    ));
+                }
+            }
+            for &source_index in &fragment.source_atoms {
+                if source_index >= source_count {
+                    return Err(format!(
+                        "ligand rigid fragment {fragment_index} references missing source atom {source_index}"
+                    ));
+                }
+                if fragment_membership[source_index]
+                    .replace(fragment_index)
+                    .is_some()
+                {
+                    return Err(format!(
+                        "ligand source atom {source_index} appears in multiple rigid fragments"
+                    ));
+                }
+            }
+        }
+        if fragment_membership.iter().any(Option::is_none) {
+            return Err("ligand rigid fragments do not cover every source atom".into());
+        }
+
+        let expected_active_fragments = self
+            .rigid_fragments
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter_map(|(index, fragment)| (!fragment.source_atoms.is_empty()).then_some(index))
+            .collect::<HashSet<_>>();
+        let mut actual_active_fragments = HashSet::new();
+        let mut expected_rotatable = Vec::new();
+        for (index, branch) in self.branches.iter().enumerate() {
+            if branch.parent_source_index >= source_count
+                || branch.child_source_index >= source_count
+                || branch.parent_source_index == branch.child_source_index
+            {
+                return Err(format!(
+                    "ligand branch {index} has invalid source atom endpoints"
+                ));
+            }
+            if self.source_atoms[branch.parent_source_index].serial != branch.parent_serial
+                || self.source_atoms[branch.child_source_index].serial != branch.child_serial
+            {
+                return Err(format!(
+                    "ligand branch {index} serials do not match its source atom endpoints"
+                ));
+            }
+            if branch.parent_fragment >= self.rigid_fragments.len()
+                || branch.child_fragment >= self.rigid_fragments.len()
+                || branch.child_fragment == 0
+                || branch.parent_fragment == branch.child_fragment
+            {
+                return Err(format!(
+                    "ligand branch {index} has invalid rigid-fragment endpoints"
+                ));
+            }
+            if !actual_active_fragments.insert(branch.child_fragment) {
+                return Err(format!(
+                    "ligand branch {index} reuses active child fragment {}",
+                    branch.child_fragment
+                ));
+            }
+            let child_axis_fragment = fragment_membership[branch.child_source_index]
+                .ok_or_else(|| format!("ligand branch {index} child axis has no rigid fragment"))?;
+            if child_axis_fragment != branch.parent_fragment {
+                return Err(format!(
+                    "ligand branch {index} child axis is not rigid with its parent fragment"
+                ));
+            }
+            if self.rigid_fragments[branch.child_fragment]
+                .source_atoms
+                .is_empty()
+            {
+                return Err(format!("ligand branch {index} has no movable child body"));
+            }
+            match branch.parent_branch {
+                Some(parent) if parent >= index => {
+                    return Err(format!(
+                        "ligand branch {index} has an invalid parent branch"
+                    ));
+                }
+                Some(parent) => {
+                    if self.branches[parent].child_fragment != branch.parent_fragment {
+                        return Err(format!(
+                            "ligand branch {index} parent branch does not own its parent fragment"
+                        ));
+                    }
+                }
+                None => {
+                    if branch.parent_fragment != 0 {
+                        return Err(format!(
+                            "ligand branch {index} without a parent branch must grow from ROOT"
+                        ));
+                    }
+                }
+            }
+            let axis = Bond {
+                a: branch.parent_source_index,
+                b: branch.child_source_index,
+            }
+            .canonical();
+            if !source_bonds.contains(&axis) {
+                return Err(format!(
+                    "ligand branch {index} axis is absent from source bonds"
+                ));
+            }
+            if let (Some(parent), Some(child)) = (
+                self.source_to_scored[branch.parent_source_index],
+                self.source_to_scored[branch.child_source_index],
+            ) {
+                expected_rotatable.push(Bond {
+                    a: parent,
+                    b: child,
+                });
+            }
+        }
+        if actual_active_fragments != expected_active_fragments {
+            return Err(
+                "ligand active branches do not match non-empty child rigid fragments".into(),
+            );
+        }
+        if self.rotatable != expected_rotatable {
+            return Err("ligand rotatable bonds do not match active branch axes".into());
+        }
+
+        let mut mobility = SourceMobility::new(source_count);
+        for fragment in &self.rigid_fragments {
+            mobility.mark_group(&fragment.source_atoms);
+        }
+        for branch in &self.branches {
+            mobility.mark_non_variable(branch.parent_source_index, branch.child_source_index);
+            for &source_index in &self.rigid_fragments[branch.child_fragment].source_atoms {
+                mobility.mark_non_variable(branch.parent_source_index, source_index);
+                mobility.mark_non_variable(branch.child_source_index, source_index);
+            }
+        }
+        let expected_variable_pairs = distance_variable_pairs(
+            self.atoms.len(),
+            &self.scored_to_source,
+            &mobility,
+            &self.intra_excluded,
+        );
+        if self.distance_variable_pairs != expected_variable_pairs {
+            return Err(
+                "ligand variable-distance pairs do not match rigid-fragment mobility".into(),
+            );
+        }
+
+        let elements = self
+            .source_atoms
+            .iter()
+            .map(|atom| atom.element)
+            .collect::<Vec<_>>();
+        let expected = vina_effective_num_tors(&self.branches, &self.source_bonds, &elements);
+        if self.num_tors != expected {
+            return Err(format!(
+                "ligand effective rotor count {} does not match topology-derived value {expected}",
+                self.num_tors
+            ));
+        }
+        Ok(expected)
+    }
 }
 
 /// A validated rigid receptor prepared from authoritative PDBQT input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedReceptor {
-    pub atoms: Vec<DockAtom>,
-    pub bonds: Vec<Bond>,
+    pub(crate) atoms: Vec<DockAtom>,
+    pub(crate) bonds: Vec<Bond>,
+}
+
+impl PreparedReceptor {
+    pub fn atoms(&self) -> &[DockAtom] {
+        &self.atoms
+    }
+
+    pub fn bonds(&self) -> &[Bond] {
+        &self.bonds
+    }
 }
 
 /// Geometry-derived PDB receptor used only by explicitly approximate workflows.
 /// This type cannot be passed to [`crate::docking::engine::DockingEngine`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApproximatePreparedReceptor {
-    pub atoms: Vec<DockAtom>,
-    pub bonds: Vec<Bond>,
+    pub(crate) atoms: Vec<DockAtom>,
+    pub(crate) bonds: Vec<Bond>,
+}
+
+impl ApproximatePreparedReceptor {
+    pub fn atoms(&self) -> &[DockAtom] {
+        &self.atoms
+    }
+
+    pub fn bonds(&self) -> &[Bond] {
+        &self.bonds
+    }
 }
 
 /// Plain PDB does not carry authoritative Vina atom types or charges.
@@ -611,6 +1054,47 @@ fn canonical_pair(first: usize, second: usize) -> (usize, usize) {
     }
 }
 
+fn same_scoring_identity(source: &DockAtom, scored: &DockAtom) -> bool {
+    source.serial == scored.serial
+        && source.name == scored.name
+        && source.element == scored.element
+        && source.wire_ad_type == scored.wire_ad_type
+        && source.xs_type == scored.xs_type
+        && source.charge.to_bits() == scored.charge.to_bits()
+        && source.residue_name == scored.residue_name
+        && source.chain == scored.chain
+        && source.residue_seq == scored.residue_seq
+        && source.insertion_code == scored.insertion_code
+        && source.is_hetero == scored.is_hetero
+}
+
+fn validate_pair_table(
+    label: &str,
+    pairs: &[(usize, usize)],
+    atom_count: usize,
+) -> Result<(), String> {
+    let mut previous = None;
+    for &(first, second) in pairs {
+        if first >= second {
+            return Err(format!(
+                "{label} pair ({first}, {second}) must be canonical with first < second"
+            ));
+        }
+        if second >= atom_count {
+            return Err(format!(
+                "{label} pair ({first}, {second}) is out of bounds for {atom_count} scored atoms"
+            ));
+        }
+        if previous.is_some_and(|candidate| candidate >= (first, second)) {
+            return Err(format!(
+                "{label} pairs must be sorted and unique; ({first}, {second}) is out of order"
+            ));
+        }
+        previous = Some((first, second));
+    }
+    Ok(())
+}
+
 fn contains_pair(pairs: &[(usize, usize)], first: usize, second: usize) -> bool {
     if first == second {
         return false;
@@ -620,7 +1104,7 @@ fn contains_pair(pairs: &[(usize, usize)], first: usize, second: usize) -> bool 
     } else {
         (second, first)
     };
-    pairs.binary_search(&pair).is_ok()
+    pairs.contains(&pair)
 }
 
 #[cfg(test)]
@@ -827,5 +1311,10 @@ mod tests {
         };
         assert!(ligand.is_intra_excluded(3, 1));
         assert!(ligand.is_distance_variable_pair(2, 0));
+
+        let mut unsorted = ligand.clone();
+        unsorted.intra_excluded = vec![(1, 3), (0, 2)];
+        assert!(unsorted.is_intra_excluded(1, 3));
+        assert!(unsorted.is_intra_excluded(2, 0));
     }
 }

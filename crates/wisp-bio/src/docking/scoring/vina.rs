@@ -146,9 +146,17 @@ impl VinaParams {
         if self.hydrophobic_offset <= self.hydrophobic_onset {
             return Err("hydrophobic ramp offset must be greater than onset".into());
         }
+        require_finite(
+            "hydrophobic ramp span",
+            self.hydrophobic_offset - self.hydrophobic_onset,
+        )?;
         if self.hbond_offset <= self.hbond_onset {
             return Err("hydrogen-bond ramp offset must be greater than onset".into());
         }
+        require_finite(
+            "hydrogen-bond ramp span",
+            self.hbond_offset - self.hbond_onset,
+        )?;
         if self.w_rot < 0.0 {
             return Err("rotor normalization weight must be non-negative".into());
         }
@@ -289,6 +297,8 @@ pub fn pair_energy(
     params: &VinaParams,
 ) -> Result<PairBreakdown, String> {
     params.validate()?;
+    first.validate_scoring_identity("first pair atom")?;
+    second.validate_scoring_identity("second pair atom")?;
     if !distance.is_finite() || distance < 0.0 {
         return Err("pair distance must be finite and non-negative".into());
     }
@@ -383,21 +393,21 @@ fn average_breakdown(first: PairBreakdown, second: PairBreakdown) -> PairBreakdo
     }
 }
 
-fn soft_curl(mut terms: PairBreakdown, cap: f64) -> PairBreakdown {
+fn soft_curl(mut terms: PairBreakdown, cap: f64) -> Result<PairBreakdown, String> {
+    terms = terms.require_finite("pre-curl energy")?;
+    if !cap.is_finite() || cap <= 0.0 {
+        return Err("soft-curl cap must be finite and positive".into());
+    }
     let energy = terms.total();
-    if energy > 0.0 && cap.is_finite() {
-        let scale = if cap <= f64::EPSILON {
-            0.0
-        } else {
-            cap / (cap + energy)
-        };
+    if energy > 0.0 {
+        let scale = cap / (cap + energy);
         terms.gauss1 *= scale;
         terms.gauss2 *= scale;
         terms.repulsion *= scale;
         terms.hydrophobic *= scale;
         terms.hbond *= scale;
     }
-    terms
+    terms.require_finite("post-curl energy")
 }
 
 /// Sum intermolecular pair energies between receptor and ligand positions.
@@ -409,6 +419,7 @@ pub fn evaluate_inter(
 ) -> Result<PairBreakdown, String> {
     params.validate()?;
     validate_receptor(receptor)?;
+    ligand.validate_scored_mapping()?;
     validate_positions(ligand, ligand_positions)?;
     let mut total = PairBreakdown::default();
     for (ligand_atom, position) in ligand.atoms.iter().zip(ligand_positions) {
@@ -417,11 +428,11 @@ pub fn evaluate_inter(
             atom_terms.absorb(pair_energy_fast_r2(
                 receptor_atom,
                 ligand_atom,
-                dist_sq(receptor_atom.position, *position),
+                dist_sq(receptor_atom.position, *position)?,
                 params,
             ));
         }
-        total.absorb(soft_curl(atom_terms, 1000.0));
+        total.absorb(soft_curl(atom_terms, 1000.0)?);
     }
     total.require_finite("intermolecular energy")
 }
@@ -433,7 +444,9 @@ pub fn evaluate_intra(
     params: &VinaParams,
 ) -> Result<PairBreakdown, String> {
     params.validate()?;
+    ligand.validate_scored_mapping()?;
     validate_positions(ligand, ligand_positions)?;
+    ligand.validate_pair_tables()?;
     let mut total = PairBreakdown::default();
     for i in 0..ligand.atoms.len() {
         for j in (i + 1)..ligand.atoms.len() {
@@ -444,11 +457,11 @@ pub fn evaluate_intra(
                 pair_energy_fast_r2(
                     &ligand.atoms[i],
                     &ligand.atoms[j],
-                    dist_sq(ligand_positions[i], ligand_positions[j]),
+                    dist_sq(ligand_positions[i], ligand_positions[j])?,
                     params,
                 ),
                 1000.0,
-            ));
+            )?);
         }
     }
     total.require_finite("intramolecular energy")
@@ -460,6 +473,9 @@ fn validate_receptor(receptor: &PreparedReceptor) -> Result<(), String> {
     }
     if receptor.atoms.iter().any(|atom| atom.xs_type.is_none()) {
         return Err("receptor contains an atom without an XS scoring type".into());
+    }
+    for (index, atom) in receptor.atoms.iter().enumerate() {
+        atom.validate_scoring_identity(&format!("receptor atom {index}"))?;
     }
     if receptor
         .atoms
@@ -481,6 +497,9 @@ fn validate_positions(
     }
     if ligand.atoms.iter().any(|atom| atom.xs_type.is_none()) {
         return Err("ligand contains an atom without an XS scoring type".into());
+    }
+    for (index, atom) in ligand.atoms.iter().enumerate() {
+        atom.validate_scoring_identity(&format!("ligand atom {index}"))?;
     }
     if ligand_positions.len() != ligand.atoms.len() {
         return Err(format!(
@@ -518,11 +537,24 @@ fn require_finite(name: &str, value: f64) -> Result<(), String> {
     }
 }
 
-fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    dx * dx + dy * dy + dz * dz
+fn dist_sq(a: [f64; 3], b: [f64; 3]) -> Result<f64, String> {
+    let delta = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    if delta.iter().any(|value| !value.is_finite()) {
+        return Err("pair coordinate difference must be finite".into());
+    }
+    let squared = [
+        delta[0] * delta[0],
+        delta[1] * delta[1],
+        delta[2] * delta[2],
+    ];
+    if squared.iter().any(|value| !value.is_finite()) {
+        return Err("pair squared coordinate difference must be finite".into());
+    }
+    let distance_squared = squared[0] + squared[1] + squared[2];
+    if !distance_squared.is_finite() {
+        return Err("pair squared distance must be finite".into());
+    }
+    Ok(distance_squared)
 }
 
 #[cfg(test)]
@@ -532,11 +564,26 @@ mod tests {
     use crate::docking::prep::{prepare_ligand_pdbqt, LigandBranch, PreparedLigand, RigidFragment};
 
     fn atom(xs_type: Option<XsType>, position: [f64; 3]) -> DockAtom {
+        let element = match xs_type {
+            Some(XsType::C_H | XsType::C_P) => Element::C,
+            Some(XsType::N_P | XsType::N_D | XsType::N_A | XsType::N_DA) => Element::N,
+            Some(XsType::O_P | XsType::O_D | XsType::O_A | XsType::O_DA) => Element::O,
+            Some(XsType::S_P) => Element::S,
+            Some(XsType::P_P) => Element::P,
+            Some(XsType::F_H) => Element::F,
+            Some(XsType::Cl_H) => Element::Cl,
+            Some(XsType::Br_H) => Element::Br,
+            Some(XsType::I_H) => Element::I,
+            Some(XsType::Si) => Element::Si,
+            Some(XsType::At) => Element::At,
+            Some(XsType::Met_D) => Element::Zn,
+            Some(XsType::G0 | XsType::G1 | XsType::G2 | XsType::G3) | None => Element::Other,
+        };
         DockAtom {
             source_index: 0,
             serial: 1,
             name: "X".into(),
-            element: Element::Other,
+            element,
             wire_ad_type: None,
             xs_type,
             position,
@@ -549,7 +596,11 @@ mod tests {
         }
     }
 
-    fn empty_ligand(atoms: Vec<DockAtom>) -> PreparedLigand {
+    fn empty_ligand(mut atoms: Vec<DockAtom>) -> PreparedLigand {
+        for (index, atom) in atoms.iter_mut().enumerate() {
+            atom.source_index = index;
+            atom.serial = index as i32 + 1;
+        }
         let count = atoms.len();
         PreparedLigand {
             source_atoms: atoms.clone(),
@@ -695,7 +746,7 @@ mod tests {
             gauss1: -5.0,
             ..PairBreakdown::default()
         };
-        let curled = soft_curl(positive, 1000.0);
+        let curled = soft_curl(positive, 1000.0).unwrap();
         let scale = 1000.0 / 1015.0;
         assert!((curled.repulsion - 20.0 * scale).abs() < 1e-12);
         assert!((curled.gauss1 - (-5.0 * scale)).abs() < 1e-12);
@@ -707,6 +758,7 @@ mod tests {
                 },
                 1000.0
             )
+            .unwrap()
             .gauss1,
             -1.0
         );
@@ -727,9 +779,60 @@ mod tests {
                 hbond: pair.hbond * 2.0,
             },
             1000.0,
-        );
+        )
+        .unwrap();
         let actual = evaluate_inter(&receptor, &ligand, &[[0.0; 3]], &VINA_1_1).unwrap();
         assert_breakdown_close(actual, expected);
+    }
+
+    #[test]
+    fn aggregate_overflow_is_rejected_before_soft_curl() {
+        let large = 0.4 * f64::MAX;
+        assert!(soft_curl(
+            PairBreakdown {
+                gauss1: large,
+                gauss2: large,
+                hydrophobic: large,
+                ..PairBreakdown::default()
+            },
+            1000.0,
+        )
+        .unwrap_err()
+        .contains("pre-curl energy total must be finite"));
+
+        let mut params = VINA_1_1;
+        params.w_gauss1 = large;
+        params.w_gauss2 = large;
+        params.w_hydrophobic = large;
+        params.gauss1_offset = 0.0;
+        params.gauss2_offset = 0.0;
+
+        let ligand = empty_ligand(vec![atom(Some(XsType::C_H), [3.8, 0.0, 0.0])]);
+        let receptor = PreparedReceptor {
+            atoms: vec![atom(Some(XsType::C_H), [0.0; 3])],
+            bonds: Vec::new(),
+        };
+        assert!(
+            pair_energy(&receptor.atoms[0], &ligand.atoms[0], 3.8, &params)
+                .unwrap_err()
+                .contains("pair energy total must be finite")
+        );
+        assert!(
+            evaluate_inter(&receptor, &ligand, &[[3.8, 0.0, 0.0]], &params)
+                .unwrap_err()
+                .contains("pre-curl energy total must be finite")
+        );
+
+        let mut intra_ligand = empty_ligand(vec![
+            atom(Some(XsType::C_H), [0.0; 3]),
+            atom(Some(XsType::C_H), [3.8, 0.0, 0.0]),
+        ]);
+        intra_ligand.distance_variable_pairs = vec![(0, 1)];
+        assert!(
+            evaluate_intra(&intra_ligand, &[[0.0; 3], [3.8, 0.0, 0.0]], &params,)
+                .unwrap_err()
+                .contains("pre-curl energy total must be finite")
+        );
     }
 
     #[test]
@@ -765,7 +868,7 @@ mod tests {
             atom(Some(XsType::C_H), [3.8, 0.0, 0.0]),
             atom(Some(XsType::C_H), [0.0, 3.8, 0.0]),
         ]);
-        ligand.distance_variable_pairs = vec![(0, 1), (0, 2)];
+        ligand.distance_variable_pairs = vec![(0, 1)];
         ligand.intra_excluded = vec![(0, 2)];
         let positions = ligand
             .atoms
@@ -783,6 +886,39 @@ mod tests {
     }
 
     #[test]
+    fn public_intra_evaluation_validates_pair_table_invariants() {
+        let positions = [[0.0; 3], [3.8, 0.0, 0.0], [0.0, 3.8, 0.0]];
+        let mut ligand = empty_ligand(vec![
+            atom(Some(XsType::C_H), positions[0]),
+            atom(Some(XsType::C_H), positions[1]),
+            atom(Some(XsType::C_H), positions[2]),
+        ]);
+
+        for (pairs, expected) in [
+            (vec![(1, 0)], "canonical"),
+            (vec![(0, 2), (0, 1)], "sorted and unique"),
+            (vec![(0, 1), (0, 1)], "sorted and unique"),
+            (vec![(0, 3)], "out of bounds"),
+        ] {
+            ligand.distance_variable_pairs = pairs;
+            assert!(evaluate_intra(&ligand, &positions, &VINA_1_1)
+                .unwrap_err()
+                .contains(expected));
+        }
+
+        ligand.distance_variable_pairs = vec![(0, 1)];
+        ligand.intra_excluded = vec![(1, 0)];
+        assert!(evaluate_intra(&ligand, &positions, &VINA_1_1)
+            .unwrap_err()
+            .contains("intra-exclusion pair"));
+
+        ligand.intra_excluded = vec![(0, 1)];
+        assert!(evaluate_intra(&ligand, &positions, &VINA_1_1)
+            .unwrap_err()
+            .contains("must not overlap"));
+    }
+
+    #[test]
     fn public_evaluation_rejects_invalid_models_positions_and_empty_inputs() {
         let ligand = empty_ligand(vec![atom(Some(XsType::C_H), [0.0; 3])]);
         let receptor = PreparedReceptor {
@@ -795,6 +931,43 @@ mod tests {
         assert!(evaluate_intra(&ligand, &[[f64::NAN, 0.0, 0.0]], &VINA_1_1)
             .unwrap_err()
             .contains("non-finite"));
+
+        for (receptor_position, ligand_position, expected) in [
+            (
+                [f64::MAX, 0.0, 0.0],
+                [-f64::MAX, 0.0, 0.0],
+                "coordinate difference",
+            ),
+            (
+                [f64::MAX, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                "squared coordinate difference",
+            ),
+            ([1.0e154, 1.0e154, 0.0], [0.0, 0.0, 0.0], "squared distance"),
+        ] {
+            let extreme_receptor = PreparedReceptor {
+                atoms: vec![atom(Some(XsType::C_H), receptor_position)],
+                bonds: Vec::new(),
+            };
+            assert!(
+                evaluate_inter(&extreme_receptor, &ligand, &[ligand_position], &VINA_1_1)
+                    .unwrap_err()
+                    .contains(expected)
+            );
+        }
+
+        let mut extreme_ligand = empty_ligand(vec![
+            atom(Some(XsType::C_H), [0.0; 3]),
+            atom(Some(XsType::C_H), [0.0; 3]),
+        ]);
+        extreme_ligand.distance_variable_pairs = vec![(0, 1)];
+        assert!(evaluate_intra(
+            &extreme_ligand,
+            &[[f64::MAX, 0.0, 0.0], [-f64::MAX, 0.0, 0.0]],
+            &VINA_1_1,
+        )
+        .unwrap_err()
+        .contains("coordinate difference"));
 
         let empty_receptor = PreparedReceptor {
             atoms: Vec::new(),
@@ -816,6 +989,40 @@ mod tests {
             evaluate_inter(&untyped_receptor, &ligand, &[[0.0; 3]], &VINA_1_1)
                 .unwrap_err()
                 .contains("without an XS scoring type")
+        );
+
+        let mut inconsistent_receptor = receptor.clone();
+        inconsistent_receptor.atoms[0].element = Element::H;
+        inconsistent_receptor.atoms[0].wire_ad_type = Some(AdType::Hd);
+        inconsistent_receptor.atoms[0].xs_type = Some(XsType::C_H);
+        assert!(
+            evaluate_inter(&inconsistent_receptor, &ligand, &[[0.0; 3]], &VINA_1_1)
+                .unwrap_err()
+                .contains("explicit hydrogen")
+        );
+        assert!(pair_energy(
+            &inconsistent_receptor.atoms[0],
+            &ligand.atoms[0],
+            3.8,
+            &VINA_1_1,
+        )
+        .unwrap_err()
+        .contains("explicit hydrogen"));
+
+        let mut inconsistent_ligand = ligand.clone();
+        inconsistent_ligand.atoms[0].wire_ad_type = Some(AdType::Oa);
+        assert!(evaluate_intra(&inconsistent_ligand, &[[0.0; 3]], &VINA_1_1)
+            .unwrap_err()
+            .contains("AD type OA is incompatible with element C"));
+
+        let mut source_disagreement = ligand.clone();
+        source_disagreement.atoms[0].element = Element::O;
+        source_disagreement.atoms[0].wire_ad_type = Some(AdType::Oa);
+        source_disagreement.atoms[0].xs_type = Some(XsType::O_A);
+        assert!(
+            evaluate_inter(&receptor, &source_disagreement, &[[0.0; 3]], &VINA_1_1,)
+                .unwrap_err()
+                .contains("identity does not match source atom")
         );
 
         let mut invalid_params = VINA_1_1;
@@ -852,7 +1059,7 @@ mod tests {
         assert!(
             evaluate_inter(&receptor, &ligand, &[[0.0; 3]], &overflowing_params,)
                 .unwrap_err()
-                .contains("intermolecular energy")
+                .contains("pre-curl energy repulsion must be finite")
         );
 
         let mut intra_ligand = empty_ligand(vec![
@@ -863,7 +1070,7 @@ mod tests {
         assert!(
             evaluate_intra(&intra_ligand, &[[0.0; 3], [0.0; 3]], &overflowing_params,)
                 .unwrap_err()
-                .contains("intramolecular energy")
+                .contains("pre-curl energy repulsion must be finite")
         );
     }
 

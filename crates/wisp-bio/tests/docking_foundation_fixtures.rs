@@ -114,14 +114,14 @@ fn official_vina_ligand_round_trip_preserves_wire_identity_and_topology() {
     assert_eq!(reparsed, parsed);
 
     let prepared = prepare_ligand_pdbqt(&input).unwrap();
-    assert_eq!(prepared.source_atoms.len(), 40);
-    assert_eq!(prepared.atoms.len(), 37);
-    assert_eq!(prepared.branches.len(), 7);
-    assert_eq!(prepared.num_tors, 7.0);
-    assert_eq!(prepared.torsdof, 7);
+    assert_eq!(prepared.source_atoms().len(), 40);
+    assert_eq!(prepared.atoms().len(), 37);
+    assert_eq!(prepared.branches().len(), 7);
+    assert_eq!(prepared.num_tors(), 7.0);
+    assert_eq!(prepared.torsdof(), 7);
     assert_eq!(
         prepared
-            .source_to_scored
+            .source_to_scored()
             .iter()
             .filter(|slot| slot.is_none())
             .count(),
@@ -144,10 +144,10 @@ fn official_vina_rigid_receptor_uses_strict_pdbqt_types() {
     );
 
     let prepared = prepare_receptor_pdbqt(&input).unwrap();
-    assert_eq!(prepared.atoms.len(), 2229);
-    assert!(prepared.atoms.iter().all(|atom| atom.xs_type.is_some()));
+    assert_eq!(prepared.atoms().len(), 2229);
+    assert!(prepared.atoms().iter().all(|atom| atom.xs_type.is_some()));
     assert!(prepared
-        .atoms
+        .atoms()
         .iter()
         .all(|atom| atom.element != wisp_bio::docking::prep::atom_type::Element::H));
 }
@@ -169,9 +169,9 @@ fn project_parser_fixtures_lock_order_hydrogen_identity_and_failures() {
     assert_eq!(parsed.atoms[1].ad_type.pdbqt_symbol(), "H");
     assert_eq!(parsed.atoms[2].ad_type.pdbqt_symbol(), "HD");
     let prepared = prepare_ligand_pdbqt(&hydrogens).unwrap();
-    assert_eq!(prepared.source_atoms[1].xs_type, None);
-    assert_eq!(prepared.source_atoms[2].xs_type, None);
-    assert!(prepared.atoms[0].is_donor());
+    assert_eq!(prepared.source_atoms()[1].xs_type, None);
+    assert_eq!(prepared.source_atoms()[2].xs_type, None);
+    assert!(prepared.atoms()[0].is_donor());
 
     let malformed = fixture("project/parser/malformed_unclosed_branch.pdbqt");
     assert!(parse_pdbqt(&malformed)
@@ -210,7 +210,7 @@ fn all_generated_scoring_cases_match_the_vina_1_2_7_oracle() {
         let receptor = prepare_receptor_pdbqt(&fixture(receptor_path)).unwrap();
         let ligand = prepare_ligand_pdbqt(&fixture(ligand_path)).unwrap();
         let positions = ligand
-            .atoms
+            .atoms()
             .iter()
             .map(|atom| atom.position)
             .collect::<Vec<_>>();
