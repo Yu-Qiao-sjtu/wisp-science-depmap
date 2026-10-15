@@ -258,13 +258,29 @@ impl PairBreakdown {
         self.hydrophobic += other.hydrophobic;
         self.hbond += other.hbond;
     }
+
+    pub(crate) fn require_finite(self, context: &str) -> Result<PairBreakdown, String> {
+        for (name, value) in [
+            ("gauss1", self.gauss1),
+            ("gauss2", self.gauss2),
+            ("repulsion", self.repulsion),
+            ("hydrophobic", self.hydrophobic),
+            ("hydrogen-bond", self.hbond),
+            ("total", self.total()),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("{context} {name} must be finite"));
+            }
+        }
+        Ok(self)
+    }
 }
 
 /// Evaluate one ordinary XS atom pair at center-to-center `distance`.
 ///
-/// This remains a pure function. Invalid or absent XS identities, explicit H,
-/// glue, water, non-finite distances, and pairs at or beyond the cutoff score
-/// zero rather than gaining fallback chemistry.
+/// Invalid parameters, distances, or non-finite outputs return an error. Absent
+/// XS identities, explicit H, glue, water, and pairs at or beyond the cutoff
+/// score zero rather than gaining fallback chemistry.
 pub fn pair_energy(
     first: &DockAtom,
     second: &DockAtom,
@@ -275,7 +291,7 @@ pub fn pair_energy(
     if !distance.is_finite() || distance < 0.0 {
         return Err("pair distance must be finite and non-negative".into());
     }
-    Ok(pair_energy_unchecked(first, second, distance, params))
+    pair_energy_unchecked(first, second, distance, params).require_finite("pair energy")
 }
 
 fn pair_energy_unchecked(
@@ -406,7 +422,7 @@ pub fn evaluate_inter(
         }
         total.absorb(soft_curl(atom_terms, 1000.0));
     }
-    Ok(total)
+    total.require_finite("intermolecular energy")
 }
 
 /// Sum variable-distance intramolecular pair energies of the ligand.
@@ -434,7 +450,7 @@ pub fn evaluate_intra(
             ));
         }
     }
-    Ok(total)
+    total.require_finite("intramolecular energy")
 }
 
 fn validate_receptor(receptor: &PreparedReceptor) -> Result<(), String> {
@@ -788,8 +804,8 @@ mod tests {
                 .unwrap_err()
                 .contains("no scorable atoms")
         );
-        let empty_ligand = empty_ligand(Vec::new());
-        assert!(evaluate_intra(&empty_ligand, &[], &VINA_1_1)
+        let ligand_without_atoms = empty_ligand(Vec::new());
+        assert!(evaluate_intra(&ligand_without_atoms, &[], &VINA_1_1)
             .unwrap_err()
             .contains("no scorable atoms"));
 
@@ -820,6 +836,33 @@ mod tests {
             pair_energy(&receptor.atoms[0], &ligand.atoms[0], f64::NAN, &VINA_1_1,)
                 .unwrap_err()
                 .contains("finite and non-negative")
+        );
+
+        let mut overflowing_params = VINA_1_1;
+        overflowing_params.w_repulsion = f64::MAX;
+        assert!(pair_energy(
+            &receptor.atoms[0],
+            &ligand.atoms[0],
+            0.0,
+            &overflowing_params,
+        )
+        .unwrap_err()
+        .contains("pair energy repulsion must be finite"));
+        assert!(
+            evaluate_inter(&receptor, &ligand, &[[0.0; 3]], &overflowing_params,)
+                .unwrap_err()
+                .contains("intermolecular energy")
+        );
+
+        let mut intra_ligand = empty_ligand(vec![
+            atom(Some(XsType::C_H), [0.0; 3]),
+            atom(Some(XsType::C_H), [0.0; 3]),
+        ]);
+        intra_ligand.distance_variable_pairs = vec![(0, 1)];
+        assert!(
+            evaluate_intra(&intra_ligand, &[[0.0; 3], [0.0; 3]], &overflowing_params,)
+                .unwrap_err()
+                .contains("intramolecular energy")
         );
     }
 

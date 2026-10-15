@@ -35,6 +35,8 @@ impl ScoreTerms {
         num_tors: f64,
         params: &VinaParams,
     ) -> Result<ScoreTerms, String> {
+        inter_terms.require_finite("intermolecular terms")?;
+        intra_terms.require_finite("intramolecular terms")?;
         let raw_inter = inter_terms.total();
         let raw_intra = intra_terms.total();
         let search_energy = raw_inter + raw_intra;
@@ -212,6 +214,34 @@ mod tests {
         assert_eq!(terms.num_tors, 2.0);
         assert!((terms.torsion_factor - (1.0 + 2.0 * VINA_1_1.w_rot)).abs() < 1e-12);
         assert!((terms.reported_affinity - (-6.0 / terms.torsion_factor)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn score_terms_reject_non_finite_components_before_aggregation() {
+        let error = ScoreTerms::from_breakdowns(
+            PairBreakdown {
+                repulsion: f64::INFINITY,
+                ..PairBreakdown::default()
+            },
+            PairBreakdown::default(),
+            0.0,
+            &VINA_1_1,
+        )
+        .unwrap_err();
+        assert!(error.contains("intermolecular terms repulsion must be finite"));
+
+        let error = ScoreTerms::from_breakdowns(
+            PairBreakdown {
+                gauss1: f64::MAX,
+                gauss2: f64::MAX,
+                ..PairBreakdown::default()
+            },
+            PairBreakdown::default(),
+            0.0,
+            &VINA_1_1,
+        )
+        .unwrap_err();
+        assert!(error.contains("intermolecular terms total must be finite"));
     }
 
     #[test]
