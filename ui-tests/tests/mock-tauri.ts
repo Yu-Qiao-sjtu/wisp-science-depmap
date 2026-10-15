@@ -555,7 +555,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
   let projectHooks: { path: string; hooks: typeof commandHooks; sha256: string; trusted: boolean; error: string | null } | null = null;
   (window as any).__setMockProjectHooks = (value: typeof projectHooks) => { projectHooks = value; };
   const lastMessageBySession: Record<string, string> = {};
-  const sessionDelegationEnabled: Record<string, boolean> = {};
   const sessionPlanMode: Record<string, boolean> = {};
   const sessionFullPermission: Record<string, boolean> = {};
   const sessionAgentCompletion: Record<string, { policy: "inline" | "background"; auto_resume: boolean }> = {};
@@ -1135,7 +1134,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       },
       steps: [],
       attempts: [],
-      delegation_enabled: sessionDelegationEnabled[lastDelegationSessionId] ?? false,
+      delegation_enabled: true,
       approval_policy: proposal.approval_policy,
       dynamic: {
         schema_version: 2,
@@ -1201,7 +1200,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
       nested.workflow.parent_attempt_id = "attempt-parent";
       nested.workflow.depth = 1;
       nested.workflow.status = "failed";
-      nested.delegation_enabled = false;
       nested.dynamic.tasks[0].result = dynamicResult(nested.dynamic.tasks[0], "failed");
       mockAgentWorkflows = [nested, root, ...mockAgentWorkflows];
       return root.workflow.id;
@@ -3654,7 +3652,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const source = input.sourcePath ? ` from \`${String(input.sourcePath)}\`` : "";
             const displayMessage = `Run Quick Action “${action.name}” for the selected passage${source}:\n\n> ${selection}`;
             quickActionSessions[sessionId] = displayMessage;
-            sessionDelegationEnabled[sessionId] = true;
             sessionModels[sessionId] = activeHttpModelId();
             lastDelegationSessionId = sessionId;
             const snapshot = dynamicWorkflowSnapshot({
@@ -3670,7 +3667,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             snapshot.workflow.status = "approved";
             snapshot.workflow.requires_confirmation = false;
             snapshot.workflow.version += 1;
-            snapshot.delegation_enabled = true;
             mockAgentWorkflows = [snapshot, ...mockAgentWorkflows];
             mockSessions.unshift({
               id: sessionId,
@@ -3728,7 +3724,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "approve_agent_workflow": {
             const snapshot = mockAgentWorkflows.find((item) => item.workflow.id === arg("workflowId"));
             if (!snapshot) throw new Error("Agent workflow does not exist");
-            if (!snapshot.delegation_enabled) throw new Error("Sub-Agent delegation is off for this conversation.");
             snapshot.workflow.status = "approved";
             snapshot.workflow.version += 1;
             if (snapshot.workflow.mode === "automatic") {
@@ -3739,7 +3734,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "run_agent_workflow": {
             const snapshot = mockAgentWorkflows.find((item) => item.workflow.id === arg("workflowId"));
             if (!snapshot) throw new Error("Agent workflow does not exist");
-            if (!snapshot.delegation_enabled) throw new Error("Sub-Agent delegation is off for this conversation.");
             return executeMockDynamicWorkflow(snapshot);
           }
           case "cancel_agent_workflow": {
@@ -3755,7 +3749,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
           case "retry_agent_workflow": {
             const snapshot = mockAgentWorkflows.find((item) => item.workflow.id === arg("workflowId"));
             if (!snapshot) throw new Error("Agent workflow does not exist");
-            if (!snapshot.delegation_enabled) throw new Error("Sub-Agent delegation is off for this conversation.");
             snapshot.workflow.status = "approved";
             snapshot.workflow.version += 1;
             const overrides = arg("budgetOverrides") ?? {};
@@ -5669,19 +5662,6 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
             const sessionId = String(arg("sessionId") ?? "");
             sessionAutoReviewEnabled[sessionId] = Boolean(arg("enabled"));
             return sessionAutoReviewEnabled[sessionId];
-          }
-          case "get_session_delegation_enabled":
-            return sessionDelegationEnabled[String(arg("sessionId") ?? "")] ?? false;
-          case "set_session_delegation_enabled": {
-            const sessionId = String(arg("sessionId") ?? "");
-            lastDelegationSessionId = sessionId;
-            sessionDelegationEnabled[sessionId] = Boolean(arg("enabled"));
-            for (const snapshot of mockAgentWorkflows) {
-              if (snapshot.workflow.frame_id === sessionId) {
-                snapshot.delegation_enabled = sessionDelegationEnabled[sessionId];
-              }
-            }
-            return sessionDelegationEnabled[sessionId];
           }
           case "get_session_plan_mode": {
             const sessionId = String(arg("sessionId") ?? "");
