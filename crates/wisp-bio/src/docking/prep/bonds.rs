@@ -262,8 +262,8 @@ pub fn rotatable_bonds(
         .collect()
 }
 
-/// Atom pairs closer than three bonds apart; excluded from the
-/// intramolecular score just like in the reference engine.
+/// Atom pairs separated by at most three bonds (1-2, 1-3, and 1-4 pairs);
+/// excluded from the intramolecular score just like in the reference engine.
 pub fn bonded_exclusions(count: usize, bonds: &[Bond]) -> Vec<(usize, usize)> {
     let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); count];
     for bond in bonds {
@@ -275,7 +275,7 @@ pub fn bonded_exclusions(count: usize, bonds: &[Bond]) -> Vec<(usize, usize)> {
         let mut visited = vec![false; count];
         visited[start] = true;
         let mut frontier = vec![start];
-        for _ in 0..2 {
+        for _ in 0..3 {
             let mut next = Vec::new();
             for &current in &frontier {
                 for &neighbor in &neighbors[current] {
@@ -396,14 +396,17 @@ mod tests {
     }
 
     #[test]
-    fn exclusions_cover_one_two_and_one_three_pairs() {
-        // Linear chain C-C-C-C: exclusions are (0,1),(1,2),(2,3),(0,2),(1,3).
+    fn exclusions_cover_one_two_one_three_and_one_four_pairs() {
+        // Linear chain C-C-C-C: every pair is at most three bonds apart.
         let bonds = vec![
             Bond { a: 0, b: 1 },
             Bond { a: 1, b: 2 },
             Bond { a: 2, b: 3 },
         ];
         let excluded = bonded_exclusions(4, &bonds);
-        assert_eq!(excluded, vec![(0, 1), (0, 2), (1, 2), (1, 3), (2, 3)]);
+        assert_eq!(
+            excluded,
+            vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        );
     }
 }

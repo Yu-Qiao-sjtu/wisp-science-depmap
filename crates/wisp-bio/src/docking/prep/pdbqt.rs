@@ -23,6 +23,10 @@ pub struct PdbqtLigand {
     pub atoms: Vec<PdbqtAtom>,
     /// Serial pairs from BRANCH records, in file order.
     pub branches: Vec<(i32, i32)>,
+    /// Parent branch index for each branch (`None` means directly under ROOT).
+    pub branch_parents: Vec<Option<usize>>,
+    /// Enclosing branch index for each atom (`None` means the atom is in ROOT).
+    pub atom_branches: Vec<Option<usize>>,
     pub torsdof: u32,
 }
 
@@ -36,43 +40,9 @@ pub fn parse_pdbqt(text: &str) -> Result<PdbqtLigand, String> {
 }
 
 /// Parse every MODEL block; a file without MODEL records is one model.
-/// Torsion-tree records (`BRANCH`, `TORSDOF`) are shared by all models,
-/// matching the multi-pose files the reference engine writes.
+/// Each model retains the nesting and atom membership of its torsion tree.
 pub fn parse_pdbqt_models(text: &str) -> Result<Vec<PdbqtLigand>, String> {
-    let mut models = split_on_model_records(text)?;
-    let mut branches: Vec<(i32, i32)> = Vec::new();
-    let mut torsdof: u32 = 0;
-    for (number, line) in text.lines().enumerate() {
-        let report = |message: &str| format!("line {}: {}", number + 1, message);
-        match record_keyword(line) {
-            "BRANCH" => {
-                let mut parts = line.split_whitespace();
-                let _ = parts.next();
-                let a: i32 = parts
-                    .next()
-                    .and_then(|token| token.parse().ok())
-                    .ok_or_else(|| report("bad BRANCH serial"))?;
-                let b: i32 = parts
-                    .next()
-                    .and_then(|token| token.parse().ok())
-                    .ok_or_else(|| report("bad BRANCH serial"))?;
-                branches.push((a, b));
-            }
-            "TORSDOF" => {
-                torsdof = line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|token| token.parse().ok())
-                    .ok_or_else(|| report("bad TORSDOF value"))?;
-            }
-            _ => {}
-        }
-    }
-    for model in &mut models {
-        model.branches = branches.clone();
-        model.torsdof = torsdof;
-    }
-    Ok(models)
+    split_on_model_records(text)
 }
 
 /// The leading record keyword of a PDBQT line ("BRANCH", "TORSDOF", ...).
@@ -82,39 +52,77 @@ fn record_keyword(line: &str) -> &str {
 
 /// Re-parse keeping MODEL boundaries: atoms between MODEL/ENDMDL pairs.
 fn split_on_model_records(text: &str) -> Result<Vec<PdbqtLigand>, String> {
+    let empty_model = || PdbqtLigand {
+        atoms: Vec::new(),
+        branches: Vec::new(),
+        branch_parents: Vec::new(),
+        atom_branches: Vec::new(),
+        torsdof: 0,
+    };
     let mut models = Vec::new();
     let mut current: Option<PdbqtLigand> = None;
+    let mut branch_stack: Vec<usize> = Vec::new();
     for (number, line) in text.lines().enumerate() {
+        let report = |message: &str| format!("line {}: {}", number + 1, message);
         match record_keyword(line) {
             "MODEL" => {
                 if current.is_some() {
-                    return Err(format!("line {}: nested MODEL record", number + 1));
+                    return Err(report("nested MODEL record"));
                 }
-                current = Some(PdbqtLigand {
-                    atoms: Vec::new(),
-                    branches: Vec::new(),
-                    torsdof: 0,
-                });
+                branch_stack.clear();
+                current = Some(empty_model());
             }
             "ENDMDL" => {
+                if !branch_stack.is_empty() {
+                    return Err(report("unclosed BRANCH before ENDMDL"));
+                }
                 if let Some(model) = current.take() {
                     if !model.atoms.is_empty() {
                         models.push(model);
                     }
                 }
             }
+            "BRANCH" => {
+                let mut parts = line.split_whitespace();
+                let _ = parts.next();
+                let a = parts
+                    .next()
+                    .and_then(|token| token.parse().ok())
+                    .ok_or_else(|| report("bad BRANCH serial"))?;
+                let b = parts
+                    .next()
+                    .and_then(|token| token.parse().ok())
+                    .ok_or_else(|| report("bad BRANCH serial"))?;
+                let model = current.get_or_insert_with(&empty_model);
+                let branch = model.branches.len();
+                model.branches.push((a, b));
+                model.branch_parents.push(branch_stack.last().copied());
+                branch_stack.push(branch);
+            }
+            "ENDBRANCH" => {
+                branch_stack
+                    .pop()
+                    .ok_or_else(|| report("ENDBRANCH without BRANCH"))?;
+            }
+            "TORSDOF" => {
+                let value = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|token| token.parse().ok())
+                    .ok_or_else(|| report("bad TORSDOF value"))?;
+                current.get_or_insert_with(&empty_model).torsdof = value;
+            }
             "ATOM" | "HETATM" => {
-                let atom = parse_atom_line(line)
-                    .map_err(|message| format!("line {}: {}", number + 1, message))?;
-                let model = current.get_or_insert_with(|| PdbqtLigand {
-                    atoms: Vec::new(),
-                    branches: Vec::new(),
-                    torsdof: 0,
-                });
+                let atom = parse_atom_line(line).map_err(|message| report(&message))?;
+                let model = current.get_or_insert_with(&empty_model);
                 model.atoms.push(atom);
+                model.atom_branches.push(branch_stack.last().copied());
             }
             _ => {}
         }
+    }
+    if !branch_stack.is_empty() {
+        return Err("unclosed BRANCH at end of PDBQT".into());
     }
     if let Some(model) = current {
         if !model.atoms.is_empty() {
@@ -231,15 +239,40 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> String {
 
 /// Serialize a ligand as a single-model PDBQT body.
 pub fn write_pdbqt(ligand: &PdbqtLigand) -> String {
+    fn write_branch(body: &mut String, ligand: &PdbqtLigand, branch: usize) {
+        let (a, b) = ligand.branches[branch];
+        body.push_str(&format!("BRANCH {a:4}{b:4}\n"));
+        for (index, atom) in ligand.atoms.iter().enumerate() {
+            if ligand.atom_branches.get(index).copied().flatten() == Some(branch) {
+                body.push_str(&format_atom_line(atom));
+                body.push('\n');
+            }
+        }
+        for child in 0..ligand.branches.len() {
+            if ligand.branch_parents.get(child).copied().flatten() == Some(branch) {
+                write_branch(body, ligand, child);
+            }
+        }
+        body.push_str(&format!("ENDBRANCH {a:4}{b:4}\n"));
+    }
+
+    let has_topology = ligand.atom_branches.len() == ligand.atoms.len()
+        && ligand.branch_parents.len() == ligand.branches.len();
     let mut body = String::new();
     body.push_str("ROOT\n");
-    for atom in &ligand.atoms {
-        body.push_str(&format_atom_line(atom));
-        body.push('\n');
+    for (index, atom) in ligand.atoms.iter().enumerate() {
+        if !has_topology || ligand.atom_branches[index].is_none() {
+            body.push_str(&format_atom_line(atom));
+            body.push('\n');
+        }
     }
     body.push_str("ENDROOT\n");
-    for (a, b) in &ligand.branches {
-        body.push_str(&format!("BRANCH {a:4}{b:4}\nENDBRANCH {a:4}{b:4}\n"));
+    if has_topology {
+        for branch in 0..ligand.branches.len() {
+            if ligand.branch_parents[branch].is_none() {
+                write_branch(&mut body, ligand, branch);
+            }
+        }
     }
     body.push_str(&format!("TORSDOF {}\n", ligand.torsdof));
     body
@@ -305,6 +338,52 @@ mod tests {
         let parsed = parse_pdbqt(&text).unwrap();
         assert_eq!(parsed.branches, vec![(1, 3)]);
         assert_eq!(parsed.torsdof, 1);
+    }
+
+    #[test]
+    fn nested_branch_atoms_round_trip_inside_their_blocks() {
+        let root = ligand_line([0.0, 0.0, 0.0], 0.0, AtomType::C);
+        let mut child = ligand_line([1.5, 0.0, 0.0], 0.0, AtomType::C);
+        child.replace_range(6..11, "    2");
+        let mut grandchild = ligand_line([3.0, 0.0, 0.0], 0.0, AtomType::Oa);
+        grandchild.replace_range(6..11, "    3");
+        let text = format!(
+            "ROOT\n{root}\nENDROOT\nBRANCH   1   2\n{child}\nBRANCH   2   3\n{grandchild}\nENDBRANCH   2   3\nENDBRANCH   1   2\nTORSDOF 2\n"
+        );
+        let parsed = parse_pdbqt(&text).unwrap();
+        assert_eq!(parsed.branch_parents, vec![None, Some(0)]);
+        assert_eq!(parsed.atom_branches, vec![None, Some(0), Some(1)]);
+
+        let written = write_pdbqt(&parsed);
+        let lines: Vec<&str> = written.lines().collect();
+        let branch = lines
+            .iter()
+            .position(|line| line.starts_with("BRANCH") && line.ends_with("   2"))
+            .unwrap();
+        let child_atom = lines
+            .iter()
+            .position(|line| line.starts_with("HETATM    2"))
+            .unwrap();
+        let nested = lines
+            .iter()
+            .position(|line| line.starts_with("BRANCH") && line.ends_with("   3"))
+            .unwrap();
+        let grandchild_atom = lines
+            .iter()
+            .position(|line| line.starts_with("HETATM    3"))
+            .unwrap();
+        let nested_end = lines
+            .iter()
+            .position(|line| line.starts_with("ENDBRANCH") && line.ends_with("   3"))
+            .unwrap();
+        let branch_end = lines
+            .iter()
+            .position(|line| line.starts_with("ENDBRANCH") && line.ends_with("   2"))
+            .unwrap();
+        assert!(branch < child_atom && child_atom < nested);
+        assert!(nested < grandchild_atom && grandchild_atom < nested_end);
+        assert!(nested_end < branch_end);
+        assert_eq!(parse_pdbqt(&written).unwrap(), parsed);
     }
 
     #[test]

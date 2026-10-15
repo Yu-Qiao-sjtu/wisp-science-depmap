@@ -30,6 +30,8 @@ pub struct DockAtom {
     pub name: String,
     pub element: Element,
     pub ad_type: AtomType,
+    /// Heavy atom bearing a polar hydrogen; Vina scores this atom as the donor.
+    pub hbond_donor: bool,
     pub polar_carbon: bool,
     pub position: [f64; 3],
     pub charge: f64,
@@ -54,7 +56,7 @@ pub struct PreparedLigand {
     pub bonds: Vec<Bond>,
     pub rotatable: Vec<Bond>,
     pub torsdof: u32,
-    /// Atom pairs within two bonds; excluded from the intramolecular score.
+    /// Atom pairs within three bonds; excluded from the intramolecular score.
     pub intra_excluded: Vec<(usize, usize)>,
 }
 
@@ -227,12 +229,17 @@ fn merge_nonpolar_hydrogens(
         }
         let polar_carbon = matches!(types[index], AtomType::C | AtomType::A)
             && neighbors[index].iter().any(|&other| hetero_neighbor[other]);
+        let hbond_donor = atom.element != Element::H
+            && neighbors[index]
+                .iter()
+                .any(|&other| types[other] == AtomType::H);
         remap[index] = Some(atoms.len());
         atoms.push(DockAtom {
             serial: atom.serial,
             name: atom.name,
             element: atom.element,
             ad_type: types[index],
+            hbond_donor,
             polar_carbon,
             position: atom.position,
             charge: merged_charge[index],
@@ -358,7 +365,7 @@ mod tests {
         assert_eq!(ligand.rotatable.len(), 1);
         assert!(ligand.intra_excluded.contains(&(0, 1)));
         assert!(ligand.intra_excluded.contains(&(0, 2)));
-        assert!(!ligand.intra_excluded.contains(&(0, 3)));
+        assert!(ligand.intra_excluded.contains(&(0, 3)));
     }
 
     #[test]

@@ -13,8 +13,10 @@ use crate::docking::scoring::{
 
 /// Per-term energy decomposition of one pose.
 ///
-/// The five pair terms sum to `inter + intra`; `torsion` is the rotatable
-/// bond penalty; `total = inter + intra + torsion`.
+/// The five pair terms retain the raw `inter + intra` decomposition for pose
+/// explainability. `torsion` is the dimensionless `w_rot * N_rot` factor, and
+/// the reported Vina-family affinity is `total = inter / (1 + torsion)`;
+/// intramolecular energy is not part of the reported single-pose affinity.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ScoreTerms {
     pub gauss1: f64,
@@ -42,7 +44,7 @@ impl ScoreTerms {
             torsion,
             inter: inter_total,
             intra: intra_total,
-            total: inter_total + intra_total + torsion,
+            total: inter_total / (1.0 + torsion),
         }
     }
 }
@@ -183,9 +185,25 @@ mod tests {
         assert!((terms.inter - (-9.5)).abs() < 1e-12);
         assert!((terms.intra - (-2.375)).abs() < 1e-12);
         assert!((terms.torsion - 0.5).abs() < 1e-12);
-        assert!((terms.total - (terms.inter + terms.intra + terms.torsion)).abs() < 1e-12);
+        assert!((terms.total - terms.inter / (1.0 + terms.torsion)).abs() < 1e-12);
         assert!((terms.gauss1 - (-1.25)).abs() < 1e-12);
         assert!((terms.hbond - (-5.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn affinity_uses_torsional_normalization_and_ignores_intra_energy() {
+        let inter = PairBreakdown {
+            gauss1: -6.0,
+            ..PairBreakdown::default()
+        };
+        let intra = PairBreakdown {
+            repulsion: 100.0,
+            ..PairBreakdown::default()
+        };
+        let terms = ScoreTerms::from_breakdowns(inter, intra, 0.5);
+        assert_eq!(terms.inter, -6.0);
+        assert_eq!(terms.intra, 100.0);
+        assert_eq!(terms.total, -4.0);
     }
 
     #[test]
@@ -216,6 +234,7 @@ mod tests {
             name: "C".into(),
             element: Element::C,
             ad_type: AtomType::C,
+            hbond_donor: false,
             polar_carbon: false,
             position: [0.0; 3],
             charge: 0.0,

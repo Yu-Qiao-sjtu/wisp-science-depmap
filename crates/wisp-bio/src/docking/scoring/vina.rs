@@ -9,8 +9,8 @@
 //! * gauss2  w2 * exp(-((d - o2)/s2)^2)         long-range attraction (vina only)
 //! * repulsion  w3 * d^2 when d < 0             steric clash
 //! * hydrophobic  linear ramp, both atoms hydrophobic
-//! * hbond  linear ramp, donor-hydrogen to acceptor
-//! * rot  w6 * N_rotatable_bonds                conformational penalty
+//! * hbond  linear ramp, donor heavy atom to acceptor
+//! * rot  normalizes the intermolecular score by `1 + w6 * N_rotatable_bonds`
 //!
 //! Atom pairs beyond 8 A do not interact. Every term decomposes into the
 //! [`PairBreakdown`] so results can report per-term contributions.
@@ -185,7 +185,8 @@ impl PairBreakdown {
 /// Evaluate one atom pair at distance `distance`.
 ///
 /// `polar_carbon` flags carbons excluded from hydrophobic interactions; the
-/// hydrogen-bond term fires between a donor hydrogen and an acceptor.
+/// hydrogen-bond term fires between a donor heavy atom and an acceptor. Hydrogen
+/// atoms are omitted from every Vina pair term.
 pub fn pair_energy(
     first: &DockAtom,
     second: &DockAtom,
@@ -193,6 +194,8 @@ pub fn pair_energy(
     params: &VinaParams,
 ) -> PairBreakdown {
     if distance >= INTER_CUTOFF
+        || first.element == crate::docking::prep::atom_type::Element::H
+        || second.element == crate::docking::prep::atom_type::Element::H
         || first.ad_type == AtomType::Unknown
         || second.ad_type == AtomType::Unknown
     {
@@ -214,8 +217,8 @@ pub fn pair_energy(
     } else {
         0.0
     };
-    let donor_acceptor = (first.ad_type.is_donor_hydrogen() && second.ad_type.is_acceptor())
-        || (second.ad_type.is_donor_hydrogen() && first.ad_type.is_acceptor());
+    let donor_acceptor = (first.hbond_donor && second.ad_type.is_acceptor())
+        || (second.hbond_donor && first.ad_type.is_acceptor());
     let hbond = if donor_acceptor {
         params.w_hbond * linear_ramp(surface, params.hbond_onset, 0.0)
     } else {
@@ -303,6 +306,7 @@ mod tests {
             name: "X".into(),
             element: Element::Other,
             ad_type,
+            hbond_donor: false,
             polar_carbon: false,
             position,
             charge: 0.0,
@@ -346,38 +350,23 @@ mod tests {
     }
 
     #[test]
-    fn hydrogen_bond_full_below_onset_and_ramps_to_zero() {
-        // Donor H (r=1.2) to acceptor OA (r=1.7): sum 2.9.
-        let full = pair_energy(
-            &atom(AtomType::H, [0.0; 3]),
-            &atom(AtomType::Oa, [2.0, 0.0, 0.0]),
-            2.0,
-            &VINA_1_1,
-        );
-        assert!((full.hbond - (-0.587439)).abs() < 1e-12); // d = -0.9 <= -0.7
-        let ramp = pair_energy(
-            &atom(AtomType::H, [0.0; 3]),
-            &atom(AtomType::Oa, [2.5, 0.0, 0.0]),
-            2.5,
-            &VINA_1_1,
-        );
-        // d = -0.4 -> ramp (0 - (-0.4)) / 0.7 = 0.571428...
-        assert!((ramp.hbond - (-0.587439 * 4.0 / 7.0)).abs() < 1e-12);
-        let none = pair_energy(
-            &atom(AtomType::H, [0.0; 3]),
-            &atom(AtomType::Oa, [3.0, 0.0, 0.0]),
-            3.0,
-            &VINA_1_1,
-        );
-        assert_eq!(none.hbond, 0.0);
-        // Two donors or two acceptors never hydrogen-bond.
-        let wrong = pair_energy(
-            &atom(AtomType::Oa, [0.0; 3]),
-            &atom(AtomType::Oa, [2.0, 0.0, 0.0]),
-            2.0,
-            &VINA_1_1,
-        );
-        assert_eq!(wrong.hbond, 0.0);
+    fn hydrogen_bond_uses_the_donor_heavy_atom_and_omits_hydrogens() {
+        let mut donor = atom(AtomType::N, [0.0; 3]);
+        donor.element = Element::N;
+        donor.hbond_donor = true;
+        let mut acceptor = atom(AtomType::Oa, [3.0, 0.0, 0.0]);
+        acceptor.element = Element::O;
+        // N/O radii sum to 3.5 A, so d = -0.5 and the ramp is 5/7.
+        let pair = pair_energy(&donor, &acceptor, 3.0, &VINA_1_1);
+        assert!((pair.hbond - (-0.587439 * 5.0 / 7.0)).abs() < 1e-12);
+
+        let mut hydrogen = atom(AtomType::H, [1.0, 0.0, 0.0]);
+        hydrogen.element = Element::H;
+        let omitted = pair_energy(&hydrogen, &acceptor, 2.0, &VINA_1_1);
+        assert_eq!(omitted, PairBreakdown::default());
+
+        donor.hbond_donor = false;
+        assert_eq!(pair_energy(&donor, &acceptor, 3.0, &VINA_1_1).hbond, 0.0);
     }
 
     #[test]
@@ -438,15 +427,15 @@ mod tests {
     #[test]
     fn pair_energy_is_symmetric() {
         let one = pair_energy(
-            &atom(AtomType::H, [0.0; 3]),
-            &atom(AtomType::Na, [2.2, 0.0, 0.0]),
-            2.2,
+            &atom(AtomType::C, [0.0; 3]),
+            &atom(AtomType::Na, [3.7, 0.0, 0.0]),
+            3.7,
             &VINA_1_1,
         );
         let two = pair_energy(
             &atom(AtomType::Na, [0.0; 3]),
-            &atom(AtomType::H, [2.2, 0.0, 0.0]),
-            2.2,
+            &atom(AtomType::C, [3.7, 0.0, 0.0]),
+            3.7,
             &VINA_1_1,
         );
         assert!((one.total() - two.total()).abs() < 1e-12);
