@@ -13,6 +13,8 @@ struct ConversationView: View {
     @State private var attentionFrames: [String: CGRect] = [:]
     @State private var viewportHeight: CGFloat = 0
     @State private var scrollTarget: String?
+    /// Per device, for every conversation; never sent to the host.
+    @AppStorage(RemoteTranscript.DetailLevel.storageKey) private var detailLevel = RemoteTranscript.DetailLevel.default
     @FocusState private var composing: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -46,11 +48,19 @@ struct ConversationView: View {
                             Button("加载更早的消息") { Task { await model.earlier() } }
                                 .disabled(model.loadingEarlier).frame(maxWidth: .infinity)
                         }
-                        ForEach(RemoteTranscript.groups(model.history.older + (snapshot?.items ?? []),
-                            running: snapshot?.running == true, indexOffset: -model.history.older.count)) { group in
-                            TranscriptGroupView(group: group, model: model, route: route)
+                        ForEach(RemoteTranscript.rows(model.history.older + (snapshot?.items ?? []), level: detailLevel,
+                            running: snapshot?.running == true, indexOffset: -model.history.older.count)) { row in
+                            switch row {
+                            case .item(let index, let item):
+                                MessageView(item: item, model: model, route: route, index: index, expanded: detailLevel == .full)
+                            case .process(let group):
+                                TranscriptGroupView(group: group, model: model, route: route)
+                            case .failures(let group):
+                                FailureHintView(group: group, model: model, route: route)
+                            }
                         }
-                        .id("\(snapshot?.epoch ?? ""):\(snapshot?.before.display ?? "")")
+                        // A new level starts every fold from that level's default.
+                        .id("\(snapshot?.epoch ?? ""):\(snapshot?.before.display ?? ""):\(detailLevel.rawValue)")
                         if let runs = snapshot?.value["run_cards"].array, !runs.isEmpty {
                             RunHistoryView(runs: runs)
                         }
@@ -187,6 +197,13 @@ struct ConversationView: View {
                 WispToolbarButton(title: "文件", icon: .folder) { model.sheet = .files(route, ".", true) }
                 .disabled(connection.state == .online && !connection.supports("native_conversation_panel_file_directory"))
                 .accessibilityIdentifier("conversation-files")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                WispToolbarButton(title: "信息详细程度", icon: .adjustments, value: detailLevel.label) {
+                    model.sheet = .transcriptDetail
+                }
+                .accessibilityIdentifier("transcript-detail")
+                .accessibilityHint("选择对话中显示多少执行过程，适用于本机所有对话")
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
@@ -333,28 +350,113 @@ private struct TranscriptGroupView: View {
         return parts.joined(separator: " · ")
     }
     var body: some View {
-        if group.isProcess {
-            DisclosureGroup {
-                ForEach(Array(group.items.enumerated()), id: \.offset) { offset, item in
-                    MessageView(item: item, model: model, route: route, index: group.id + offset)
-                }
-            } label: {
-                let layout = typeSize.isAccessibilitySize
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-                    : AnyLayout(HStackLayout(spacing: 8))
-                layout {
-                    Text(summary).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if group.failureCount > 0 {
-                        Text("\(group.failureCount) 项失败").font(.caption.weight(.medium))
-                            .foregroundStyle(WispStyle.failure).fixedSize()
-                    }
-                }
-            }.disclosureGroupStyle(WispDisclosureStyle(identifier: "process-group-\(group.id)"))
-        } else {
+        DisclosureGroup {
             ForEach(Array(group.items.enumerated()), id: \.offset) { offset, item in
                 MessageView(item: item, model: model, route: route, index: group.id + offset)
+            }
+        } label: {
+            let layout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+                : AnyLayout(HStackLayout(spacing: 8))
+            layout {
+                Text(summary).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if group.failureCount > 0 {
+                    Text("\(group.failureCount) 项失败").font(.caption.weight(.medium))
+                        .foregroundStyle(WispStyle.failure).fixedSize()
+                }
+            }
+        }.disclosureGroupStyle(WispDisclosureStyle(identifier: "process-group-\(group.id)"))
+    }
+}
+
+extension RemoteTranscript.DetailLevel {
+    /// Per device, for every conversation; never sent to the host.
+    static let storageKey = "transcriptDetailLevel"
+    var summary: String {
+        switch self {
+        case .minimal: return "隐藏工具调用，只提示失败"
+        case .standard: return "把中间步骤合并为「执行过程」"
+        case .full: return "逐条显示并展开每一步"
+        }
+    }
+}
+
+/// The 信息详细程度 choices, opened from the conversation toolbar as a
+/// workspace sheet so window-level Escape closes it. Picking one applies it.
+struct TranscriptDetailSheet: View {
+    @AppStorage(RemoteTranscript.DetailLevel.storageKey) private var selection = RemoteTranscript.DetailLevel.default
+    let done: () -> Void
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(RemoteTranscript.DetailLevel.allCases) { level in
+                        Button { selection = level; done() } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(level.label).foregroundStyle(.primary)
+                                    Text(level.summary).font(.caption).foregroundStyle(.secondary)
+                                }
+                                .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                                WispIcon(.check, size: 18).foregroundStyle(WispStyle.accent).opacity(selection == level ? 1 : 0)
+                            }
+                            .frame(minHeight: 44).contentShape(Rectangle())
+                        }
+                        .accessibilityLabel(level.label)
+                        .accessibilityHint(level.summary)
+                        .accessibilityAddTraits(selection == level ? .isSelected : [])
+                        .accessibilityIdentifier("transcript-detail-\(level.rawValue)")
+                    }
+                } footer: {
+                    Text("只改变本机的显示方式，适用于所有对话。")
+                }
+            }
+            .navigationTitle("信息详细程度").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成", action: done) } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// 简洁 level: a process fold that failed shrinks to a hint; tapping it shows the fold's items.
+private struct FailureHintView: View {
+    let group: RemoteTranscript.Group
+    @ObservedObject var model: RemoteWorkspace
+    let route: ConversationRoute
+    @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    WispIcon(.circleAlert, size: 16)
+                    Text("\(group.failureCount) 项失败").font(.subheadline.weight(.medium))
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                    WispIcon(.chevronRight, size: 13).rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .foregroundStyle(WispStyle.failure)
+                .padding(.trailing, 8).frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(WispRowButtonStyle())
+            .accessibilityIdentifier("failure-hint-\(group.id)")
+            .accessibilityLabel("\(group.failureCount) 项失败")
+            .accessibilityValue(expanded ? "已展开" : "已折叠")
+            .accessibilityHint(expanded ? "收起执行过程" : "查看失败所在的执行过程")
+            if expanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(group.items.enumerated()), id: \.offset) { offset, item in
+                        MessageView(item: item, model: model, route: route, index: group.id + offset)
+                    }
+                }
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(WispStyle.failure.opacity(0.35)).frame(width: 2).accessibilityHidden(true)
+                }
             }
         }
     }
@@ -365,6 +467,10 @@ struct MessageView: View {
     @ObservedObject var model: RemoteWorkspace
     let route: ConversationRoute
     let index: Int
+    /// 详细 level: tool and reasoning details start open; each can still be collapsed.
+    var expanded = false
+    /// Nil until the reader toggles this row's details.
+    @State private var detailsOpen: Bool?
     var body: some View {
         switch item["role"].string {
         case "user":
@@ -394,7 +500,7 @@ struct MessageView: View {
                 Text(item["text"].string).foregroundStyle(.secondary).textSelection(.enabled)
             }
         case "tool", "acp_tool", "reasoning":
-            DisclosureGroup {
+            DisclosureGroup(isExpanded: Binding(get: { detailsOpen ?? expanded }, set: { detailsOpen = $0 })) {
                 if !item["input"].string.isEmpty { CodeText(text: item["input"].string) }
                 CodeText(text: item["text"].string)
                 if item["tool_name"].string == "generate_image", item["ok"].bool,

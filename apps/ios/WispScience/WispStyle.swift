@@ -41,6 +41,7 @@ struct WispIcon: View {
         case list, notebook, camera, edit, book, check, square, checkSquare = "check-square"
         case image, calendar, researchTrail = "research-trail", arrowUp = "arrow-up"
         case chevronRight = "chevron-right", chevronDown = "chevron-down", chevronLeft = "chevron-left"
+        case adjustments
     }
     let kind: Kind
     @ScaledMetric private var size: CGFloat
@@ -61,10 +62,13 @@ struct WispToolbarButton: View {
     let title: String
     let icon: WispIcon.Kind
     var count: Int? = nil
+    /// A current setting VoiceOver reads after the title, such as a chosen level.
+    var value: String? = nil
     let action: () -> Void
     @Environment(\.isEnabled) private var enabled
 
     private var status: String {
+        if let value { return value }
         guard let count else { return "" }
         return count == 0 ? "暂无待处理事项" : "\(count) 项待处理"
     }
@@ -94,7 +98,7 @@ struct WispToolbarButton: View {
         .foregroundStyle(enabled ? WispStyle.navigationAction : Color.secondary)
         .accessibilityLabel(title).accessibilityValue(status)
         .accessibilityShowsLargeContentViewer {
-            Label { Text(status.isEmpty ? title : status) } icon: { WispIcon(icon) }
+            Label { Text(value.map { "\(title)：\($0)" } ?? (status.isEmpty ? title : status)) } icon: { WispIcon(icon) }
         }
     }
 }
