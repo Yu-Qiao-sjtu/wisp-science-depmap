@@ -53,7 +53,7 @@ test("GitHub Pages homepage describes current capabilities and ships a language 
   expect(index).not.toContain("数据不出机器");
   expect(index).toContain("Linux");
   expect(index).toContain("Python / R");
-  expect(index).not.toContain("30 个内置");
+  expect(index).not.toContain("29 个内置");
   expect(index).not.toContain("29 bundled");
   expect(index).not.toContain("暂未签名");
   expect(index).not.toContain("仅支持从源码构建");

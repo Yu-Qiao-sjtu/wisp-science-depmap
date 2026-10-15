@@ -24,8 +24,11 @@ technical terms kept in English. Use another language only if the user asks.
 3. **Interpret PAE as blocks, not as a single number.** Domain-internal and
    chain-pair blocks carry different meanings; the conclusion for a complex is
    driven by the inter-chain blocks, not the global mean.
-4. **Distinguish "model is unsure" from "biology is disordered".** Low pLDDT on a
-   linker is usually a real flexible/disordered region, not a failed prediction.
+4. **Low pLDDT is uncertainty, not a disorder call.** A region below 50 may be
+   unstructured in isolation, or structured only as part of a complex. Keep both
+   possibilities and ask for context (known disorder, a binding partner, or
+   experimental evidence) before choosing one. Do not tell the user the region
+   inherently has no fixed structure.
 5. **For multi-state proteins (e.g., multi-domain receptors), state explicitly that
    inter-domain orientation is one sampled conformation** unless the inter-domain
    PAE block is strong (< ~5 Å).
@@ -34,9 +37,10 @@ technical terms kept in English. Use another language only if the user asks.
 
 | 指标 | 回答的问题 | 判读阈值 |
 |---|---|---|
-| pLDDT (0–100) | 这个残基自己的局部结构画对了吗 | >90 高置信；70–90 主干对、侧链别抠；50–70 存疑；<50 视为无序/噪声 |
-| PAE (Å, 残基对矩阵) | 残基 A 与 B 的相对位置对吗（域间/链间取向） | <5 Å 可信；5–15 Å 存疑；>15 Å 该块取向是模型猜测 |
-| PDE / gpde (原子/侧链取向) | 侧链与配体间距离、朝向对吗 | 分析结合位点、氢键、盐桥时参考；gpde 越接近 1 越好 |
+| pLDDT (0–100) | 这个残基自己的局部结构画对了吗 | >90 高置信；70–90 主干对、侧链别抠；50–70 存疑；<50 模型不确定：可能无序，也可能只在复合物里才有结构 |
+| PAE (Å, 残基对矩阵) | 残基 A 与 B 的相对位置对吗（域间/链间取向） | 按链/结构域块读，不要用全矩阵非对角中位数代替界面；<5 Å 可信；5–15 Å 存疑；>15 Å 该块取向是模型猜测 |
+| PDE（Å；Boltz `complex_pde` / `complex_ipde`） | 距离预测误差有多大 | 单位是 Å，越低越可信。界面看 `complex_ipde`。不要按 gpDE 的 0–1、越高越好来读 |
+| gpDE（OpenFold3 `gpde`，0–1） | 归一化的全局距离误差置信度 | 越接近 1 越好。它不是原始 PDE，方向和单位都相反 |
 | pTM (0–1) | 整体折叠拓扑对吗 | >0.5 及格；单链折叠看这个 |
 | ipTM (0–1) | 链间界面质量（复合物核心指标） | >0.8 界面可信；0.6–0.8 换 seed 重跑验证；<0.6 复合物预测不可信 |
 | confidence_score (Boltz/Chai 排序分) | 多个 sample 里选哪个 | 用于排序 sample，不等价于 ipTM，不要单独当"对错"用 |
@@ -49,7 +53,7 @@ technical terms kept in English. Use another language only if the user asks.
   - **蓝色**：backbone 可当解析结构使用；
   - **青色**：总体可信，细节正常看待；
   - **黄/橙色**：可能对可能错，讨论构象时须谨慎措辞；
-  - **红色**：模型无约束，通常是内在无序区（IDR）——直接告诉用户"这里本来就没有固定结构"。
+  - **红色（<50）**：模型在这段几乎没有约束。它可能在生理条件下没有固定结构，也可能只在结合伴侣后才折叠。两种可能都要说，并请用户用已知无序区、相互作用或实验来区分；不要断言“这里本来就没有固定结构”。
 - **PAE 矩阵热图**：对角线上的方块 = 各链/结构域内部（通常低=好）；非对角块 =
   域间/链间相对取向（低=界面或连接可信；发黄发红=取向不可信）。
 - 在 ChimeraX 里复现着色：`color byattribute bfactor`（把 pLDDT 写入 B-factor 后），
@@ -83,15 +87,19 @@ technical terms kept in English. Use another language only if the user asks.
 
 > **结果解读**
 > - 整体折叠：pTM = 0.86（>0.5，拓扑可信）。
-> - 局部结构：pLDDT 中位数 92；N 端 1–34 与 linker 512–560 为橙色/红色，属柔性/无序区，不代表预测失败。
+> - 局部结构：pLDDT 中位数 92。N 端 1–34 与 linker 512–560 为橙色/红色：模型不确定。这段可能是柔性/无序区，也可能只在结合伴侣后才有结构；单凭 pLDDT 不能二选一。
 > - 界面/域间：ipTM = 0.83，链 A–B 的 PAE 交叉块中位 ~3.5 Å（<5 Å），结合模式可信。
 > - 结论：结构域内部与界面可以采信；全长链的域间相对取向（PAE 块 8–12 Å）仅为模型采样的一个构象，下生物学结论前需换 seed/多 sample 或实验验证。
 
 ## Plotting the PAE heatmap (helper script)
 
-Skill 目录内附带 `scripts/plot_confidence.py`：读 Boltz/OpenFold3 的 confidence
-JSON 或 AlphaFold Server 的 PAE 矩阵，输出 PAE 热图 PNG 并打印指标摘要。用 Wisp
-的 Python 内核或 `python skills/structure-confidence-interpretation/scripts/plot_confidence.py <files...>` 运行。
+Skill 目录内附带 `scripts/plot_confidence.py`：读 Boltz/OpenFold3/Chai 的 confidence
+JSON，以及 AlphaFold 的 PAE JSON 或 `predicted_aligned_error_*.npz`。它按
+`token_chain_ids`（或同类链 id）和结构域块分别报告内部与界面/域间 PAE，不用
+全矩阵非对角中位数冒充界面。热图色标固定为 0–31.75 Å，便于多样本比较。没有
+matplotlib 时仍打印指标和块摘要，并说明如何安装后再出图。用 Wisp 的 Python
+内核或 `python skills/structure-confidence-interpretation/scripts/plot_confidence.py <files...>` 运行。
+读 NPZ 需要 numpy。
 
 ## Common failure modes to flag proactively
 
