@@ -377,6 +377,7 @@ pub fn evaluate_inter(
     ligand_positions: &[[f64; 3]],
     params: &VinaParams,
 ) -> Result<PairBreakdown, String> {
+    validate_receptor(receptor)?;
     validate_positions(ligand, ligand_positions)?;
     let mut total = PairBreakdown::default();
     for (ligand_atom, position) in ligand.atoms.iter().zip(ligand_positions) {
@@ -419,6 +420,18 @@ pub fn evaluate_intra(
         }
     }
     Ok(total)
+}
+
+fn validate_receptor(receptor: &PreparedReceptor) -> Result<(), String> {
+    if receptor
+        .atoms
+        .iter()
+        .flat_map(|atom| atom.position)
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err("receptor contains a non-finite coordinate".into());
+    }
+    Ok(())
 }
 
 fn validate_positions(

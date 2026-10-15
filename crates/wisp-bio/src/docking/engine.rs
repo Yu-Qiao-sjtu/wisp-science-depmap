@@ -342,6 +342,15 @@ mod tests {
             .score(&receptor, &ligand, &[])
             .unwrap_err()
             .contains("position count"));
+
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let mut receptor = receptor.clone();
+            receptor.atoms[0].position[0] = invalid;
+            assert!(VinaEngine::classic()
+                .score(&receptor, &ligand, &ligand_positions(&ligand))
+                .unwrap_err()
+                .contains("receptor contains a non-finite coordinate"));
+        }
     }
 
     #[test]
