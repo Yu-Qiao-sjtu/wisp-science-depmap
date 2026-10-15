@@ -519,6 +519,22 @@ fn parse_raw_atom(line: &str) -> Result<RawAtom, String> {
     if altloc != ' ' && altloc != 'A' {
         return Err(format!("unsupported alternate location `{altloc}`"));
     }
+    let name = line
+        .get(12..16)
+        .ok_or_else(|| "short atom name field".to_string())?;
+    let residue_name = line
+        .get(17..20)
+        .ok_or_else(|| "short residue name field".to_string())?;
+    let chain = line
+        .get(21..22)
+        .and_then(|text| text.chars().next())
+        .ok_or_else(|| "short chain field".to_string())?;
+    let insertion_code = line
+        .get(26..27)
+        .and_then(|text| text.chars().next())
+        .ok_or_else(|| "short insertion-code field".to_string())?;
+    validate_fixed_text_fields(name, residue_name, chain, insertion_code)?;
+
     let position = [
         coordinate(line, 30, 38)?,
         coordinate(line, 38, 46)?,
@@ -529,19 +545,13 @@ fn parse_raw_atom(line: &str) -> Result<RawAtom, String> {
     }
     Ok(RawAtom {
         serial: column(line, 6, 11)?.parse().map_err(|_| "bad serial")?,
-        name: line.get(12..16).unwrap_or("    ").to_string(),
+        name: name.to_string(),
         element: Element::Other,
         position,
-        residue_name: line.get(17..20).unwrap_or("   ").trim().to_string(),
-        chain: line
-            .get(21..22)
-            .and_then(|text| text.chars().next())
-            .unwrap_or(' '),
+        residue_name: residue_name.trim().to_string(),
+        chain,
         residue_seq: column(line, 22, 26)?.parse().map_err(|_| "bad residue")?,
-        insertion_code: line
-            .get(26..27)
-            .and_then(|text| text.chars().next())
-            .unwrap_or(' '),
+        insertion_code,
         is_hetero: line.starts_with("HETATM"),
     })
 }
@@ -804,16 +814,12 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> Result<String, String> {
     if atom.raw.residue_seq.to_string().len() > 4 {
         return Err("residue sequence does not fit the PDBQT field".into());
     }
-    if !is_printable_ascii(&atom.raw.name) || atom.raw.name.len() > 4 {
-        return Err("atom name must be at most four printable ASCII bytes".into());
-    }
-    if !is_printable_ascii(&atom.raw.residue_name) || atom.raw.residue_name.len() > 3 {
-        return Err("residue name must be at most three printable ASCII bytes".into());
-    }
-    if !is_printable_ascii_char(atom.raw.chain) || !is_printable_ascii_char(atom.raw.insertion_code)
-    {
-        return Err("chain and insertion code must be printable ASCII".into());
-    }
+    validate_fixed_text_fields(
+        &atom.raw.name,
+        &atom.raw.residue_name,
+        atom.raw.chain,
+        atom.raw.insertion_code,
+    )?;
     if atom.raw.element != atom.ad_type.element() {
         return Err("atom element does not match its AD type".into());
     }
@@ -838,6 +844,24 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> Result<String, String> {
         bfactor = "0.00",
         ad_type = atom.ad_type.pdbqt_symbol(),
     ))
+}
+
+fn validate_fixed_text_fields(
+    name: &str,
+    residue_name: &str,
+    chain: char,
+    insertion_code: char,
+) -> Result<(), String> {
+    if !is_printable_ascii(name) || name.len() > 4 {
+        return Err("atom name must be at most four printable ASCII bytes".into());
+    }
+    if !is_printable_ascii(residue_name) || residue_name.len() > 3 {
+        return Err("residue name must be at most three printable ASCII bytes".into());
+    }
+    if !is_printable_ascii_char(chain) || !is_printable_ascii_char(insertion_code) {
+        return Err("chain and insertion code must be printable ASCII".into());
+    }
+    Ok(())
 }
 
 fn is_printable_ascii(text: &str) -> bool {
@@ -965,6 +989,24 @@ mod tests {
         assert!(parse_receptor_pdbqt("CONECT 1 2\n")
             .unwrap_err()
             .contains("unsupported rigid receptor"));
+    }
+
+    #[test]
+    fn atom_parser_rejects_control_characters_in_fixed_text_fields() {
+        let line = atom_line(1, [0.0; 3], 0.0, AdType::C);
+        for (offset, byte) in [(12, b'\t'), (18, 0), (21, b'\r'), (26, b'\t')] {
+            let mut bytes = line.as_bytes().to_vec();
+            bytes[offset] = byte;
+            let invalid = String::from_utf8(bytes).unwrap();
+            assert!(
+                parse_pdbqt(&format!("ROOT\n{invalid}\nENDROOT\nTORSDOF 0\n"))
+                    .unwrap_err()
+                    .contains("printable ASCII")
+            );
+            assert!(parse_receptor_pdbqt(&format!("{invalid}\n"))
+                .unwrap_err()
+                .contains("printable ASCII"));
+        }
     }
 
     #[test]
