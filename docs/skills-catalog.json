@@ -200,6 +200,14 @@
     "summary_en": "Inspect per-sample QC, discuss thresholds, ambient RNA, and doublets, then filter after user confirmation."
   },
   {
+    "group": "analysis",
+    "id": "structure-confidence-interpretation",
+    "title_zh": "解读结构置信度",
+    "title_en": "Structure confidence",
+    "summary_zh": "解读预测结构的 pLDDT、PAE、PDE 与 ipTM，按链和结构域块说明颜色、界面取向和能不能信。",
+    "summary_en": "Explain pLDDT, PAE, PDE, and ipTM for a predicted structure, including colors, chain and domain blocks, and whether the result can be trusted."
+  },
+  {
     "group": "extension",
     "id": "skill-creator",
     "title_zh": "创建与验证技能",
