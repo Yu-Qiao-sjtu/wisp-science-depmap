@@ -1,0 +1,116 @@
+{
+  "$schema": "../manifest.schema.json#/$defs/oracleOutput",
+  "schema_version": 1,
+  "case_id": "1iep-vina",
+  "oracle": {
+    "name": "AutoDock Vina",
+    "version": "1.2.7",
+    "source_commit": "8eb40404f4f45608acb3b01427587ac049f27c1f",
+    "method": "vina.Vina.score()"
+  },
+  "scoring": "vina",
+  "configuration": {
+    "box_center": [
+      15.19,
+      53.9025,
+      16.917
+    ],
+    "box_size": [
+      20,
+      28,
+      24
+    ],
+    "spacing": 0.375,
+    "seed": 1,
+    "cpu": 1,
+    "no_refine": false,
+    "force_even_voxels": false
+  },
+  "weights": [
+    -0.035579,
+    -0.005156,
+    0.840245,
+    -0.035069,
+    -0.587439,
+    50.0,
+    0.05846
+  ],
+  "packages": {
+    "vina": {
+      "distribution_version": "1.2.7",
+      "module_version": "1.2.7",
+      "wheel_filename": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "wheel_sha256": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d",
+      "installation_provenance": {
+        "method": "direct_url_archive_hash",
+        "wheel_filename": "vina-1.2.7-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "a6e46560e50e693fb29883b82be8d9a4d74207b4464cfedf2bd5235192f4eb3d"
+      }
+    },
+    "numpy": {
+      "distribution_version": "1.26.4",
+      "module_version": "1.26.4",
+      "wheel_filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "wheel_sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed",
+      "installation_provenance": {
+        "method": "direct_url_archive_hash",
+        "wheel_filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+      }
+    }
+  },
+  "runtime": {
+    "python_implementation": "CPython",
+    "python_version": "3.12.3"
+  },
+  "fixtures": {
+    "receptor": {
+      "id": "vina-1iep-receptor",
+      "sha256": "f13cf3b36f61d87c3b58983e0b8ecf1c3456a685eb86dfe9ccfb139c7bdc2586"
+    },
+    "ligand": {
+      "id": "vina-1iep-ligand",
+      "sha256": "15fb35648d8c18c70317842f3a0631b73a19429c710a037ab07310084d579bb8"
+    }
+  },
+  "api_result": {
+    "raw_vector_columns": [
+      "total",
+      "lig_inter",
+      "flex_inter",
+      "other_inter",
+      "flex_intra",
+      "lig_intra",
+      "torsions",
+      "lig_intra_best_pose"
+    ],
+    "raw_vector_kcal_mol": [
+      -12.513,
+      -17.634,
+      0.0,
+      0.0,
+      0.0,
+      -0.485,
+      5.121,
+      -0.485
+    ]
+  },
+  "expected_mapping": {
+    "estimated_free_energy_of_binding_kcal_mol": "total",
+    "final_intermolecular_energy_kcal_mol": "lig_inter + flex_inter",
+    "ligand_receptor_energy_kcal_mol": "lig_inter",
+    "final_total_internal_energy_kcal_mol": "other_inter + flex_intra + lig_intra",
+    "ligand_internal_energy_kcal_mol": "lig_intra",
+    "torsional_free_energy_kcal_mol": "torsions",
+    "unbound_system_energy_kcal_mol": "lig_intra_best_pose"
+  },
+  "expected": {
+    "estimated_free_energy_of_binding_kcal_mol": -12.513,
+    "final_intermolecular_energy_kcal_mol": -17.634,
+    "ligand_receptor_energy_kcal_mol": -17.634,
+    "final_total_internal_energy_kcal_mol": -0.485,
+    "ligand_internal_energy_kcal_mol": -0.485,
+    "torsional_free_energy_kcal_mol": 5.121,
+    "unbound_system_energy_kcal_mol": -0.485
+  }
+}

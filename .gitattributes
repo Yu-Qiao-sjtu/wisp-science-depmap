@@ -18,6 +18,10 @@
 *.bat   text eol=crlf
 *.svg   text eol=lf
 
+# Scientific fixed-column fixtures intentionally preserve trailing spaces.
+scripts/fixtures/docking/**/*.pdb   text eol=lf whitespace=-blank-at-eol
+scripts/fixtures/docking/**/*.pdbqt text eol=lf whitespace=-blank-at-eol
+
 # Binary assets — never normalize
 *.png   binary
 *.jpg   binary

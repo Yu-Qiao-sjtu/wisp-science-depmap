@@ -1,0 +1,5 @@
+REMARK Project-authored coincident carbon clash ligand micro-fixture.
+ROOT
+ATOM      1  C1  LIG L   1       0.000   0.000   0.000  1.00  0.00     0.000 C 
+ENDROOT
+TORSDOF 0

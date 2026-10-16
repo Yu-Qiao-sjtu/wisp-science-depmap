@@ -1,0 +1,5 @@
+REMARK Project-authored one-pair scoring micro-fixture; C-C distance is 3.800 A.
+ROOT
+ATOM      1  C1  LIG L   1       3.800   0.000   0.000  1.00  0.00     0.000 C 
+ENDROOT
+TORSDOF 0
