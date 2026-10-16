@@ -495,13 +495,8 @@ fn parse_atom_line(line: &str) -> Result<PdbqtAtom, String> {
     let charge = if charge_text.is_empty() {
         0.0
     } else {
-        charge_text
-            .parse::<f64>()
-            .map_err(|_| "bad charge column".to_string())?
+        parse_fixed_decimal_value(charge_text, 8, 3, "charge")?
     };
-    if !charge.is_finite() {
-        return Err("charge must be finite".into());
-    }
     let ad_type = AdType::from_pdbqt_symbol(type_text)?;
     raw.element = ad_type.element();
     Ok(PdbqtAtom {
@@ -536,13 +531,10 @@ fn parse_raw_atom(line: &str) -> Result<RawAtom, String> {
     validate_fixed_text_fields(name, residue_name, chain, insertion_code)?;
 
     let position = [
-        coordinate(line, 30, 38)?,
-        coordinate(line, 38, 46)?,
-        coordinate(line, 46, 54)?,
+        coordinate(line, 30, 38, "x coordinate")?,
+        coordinate(line, 38, 46, "y coordinate")?,
+        coordinate(line, 46, 54, "z coordinate")?,
     ];
-    if !position.iter().all(|value| value.is_finite()) {
-        return Err("coordinates must be finite".into());
-    }
     Ok(RawAtom {
         serial: column(line, 6, 11)?.parse().map_err(|_| "bad serial")?,
         name: name.to_string(),
@@ -562,10 +554,8 @@ fn column(line: &str, start: usize, end: usize) -> Result<&str, String> {
         .ok_or_else(|| "short atom record".to_string())
 }
 
-fn coordinate(line: &str, start: usize, end: usize) -> Result<f64, String> {
-    column(line, start, end)?
-        .parse()
-        .map_err(|_| "bad coordinate".to_string())
+fn coordinate(line: &str, start: usize, end: usize, label: &str) -> Result<f64, String> {
+    parse_fixed_decimal_value(column(line, start, end)?, end - start, 3, label)
 }
 
 fn validate_model_consistency(models: &[PdbqtLigand]) -> Result<(), String> {
@@ -631,17 +621,23 @@ pub fn validate_ligand(ligand: &PdbqtLigand) -> Result<(), String> {
         if serial_to_atom.insert(atom.raw.serial, index).is_some() {
             return Err(format!("duplicate atom serial {}", atom.raw.serial));
         }
-        if !atom.charge.is_finite() {
-            return Err(format!(
-                "atom serial {} has a non-finite charge",
-                atom.raw.serial
-            ));
-        }
-        if !atom.raw.position.iter().all(|value| value.is_finite()) {
-            return Err(format!(
-                "atom serial {} has non-finite coordinates",
-                atom.raw.serial
-            ));
+        validate_fixed_decimal_value(
+            atom.charge,
+            8,
+            3,
+            &format!("atom serial {} charge", atom.raw.serial),
+        )?;
+        for (label, coordinate) in [
+            ("x coordinate", atom.raw.position[0]),
+            ("y coordinate", atom.raw.position[1]),
+            ("z coordinate", atom.raw.position[2]),
+        ] {
+            validate_fixed_decimal_value(
+                coordinate,
+                8,
+                3,
+                &format!("atom serial {} {label}", atom.raw.serial),
+            )?;
         }
         if atom.raw.element != atom.ad_type.element() {
             return Err(format!(
@@ -823,6 +819,10 @@ pub fn format_atom_line(atom: &PdbqtAtom) -> Result<String, String> {
     if atom.raw.element != atom.ad_type.element() {
         return Err("atom element does not match its AD type".into());
     }
+    validate_fixed_decimal_value(atom.raw.position[0], 8, 3, "x coordinate")?;
+    validate_fixed_decimal_value(atom.raw.position[1], 8, 3, "y coordinate")?;
+    validate_fixed_decimal_value(atom.raw.position[2], 8, 3, "z coordinate")?;
+    validate_fixed_decimal_value(atom.charge, 8, 3, "charge")?;
     let x = fixed_decimal(atom.raw.position[0], 8, 3, "x coordinate")?;
     let y = fixed_decimal(atom.raw.position[1], 8, 3, "y coordinate")?;
     let z = fixed_decimal(atom.raw.position[2], 8, 3, "z coordinate")?;
@@ -870,6 +870,38 @@ fn is_printable_ascii(text: &str) -> bool {
 
 fn is_printable_ascii_char(value: char) -> bool {
     value.is_ascii() && !value.is_ascii_control()
+}
+
+fn parse_fixed_decimal_value(
+    text: &str,
+    width: usize,
+    precision: usize,
+    label: &str,
+) -> Result<f64, String> {
+    let value = text
+        .parse::<f64>()
+        .map_err(|_| format!("bad {label} field"))?;
+    validate_fixed_decimal_value(value, width, precision, label)?;
+    Ok(value)
+}
+
+fn validate_fixed_decimal_value(
+    value: f64,
+    width: usize,
+    precision: usize,
+    label: &str,
+) -> Result<(), String> {
+    let rendered = fixed_decimal(value, width, precision, label)?;
+    let reparsed = rendered
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| format!("{label} canonical rendering is invalid"))?;
+    if reparsed.to_bits() != value.to_bits() {
+        return Err(format!(
+            "{label} is not exactly representable in its PDBQT field"
+        ));
+    }
+    Ok(())
 }
 
 fn fixed_decimal(
@@ -1056,6 +1088,48 @@ mod tests {
         blank_fields.raw.residue_name = "   ".into();
         blank_fields.raw.chain = ' ';
         assert!(format_atom_line(&blank_fields).is_ok());
+    }
+
+    #[test]
+    fn atom_numeric_fields_must_be_losslessly_representable_as_f8_3() {
+        let line = atom_line(1, [1.234, 0.0, 0.0], -0.246, AdType::C);
+        for (range, replacement) in [
+            (30..38, "1.234567"),
+            (30..38, "   1e100"),
+            (68..76, "0.123456"),
+            (68..76, "   1e100"),
+        ] {
+            let mut invalid = line.clone();
+            invalid.replace_range(range, replacement);
+            assert!(
+                parse_pdbqt(&format!("ROOT\n{invalid}\nENDROOT\nTORSDOF 0\n"))
+                    .unwrap_err()
+                    .contains("PDBQT field")
+            );
+            assert!(parse_receptor_pdbqt(&format!("{invalid}\n"))
+                .unwrap_err()
+                .contains("PDBQT field"));
+        }
+
+        let mut scientific = line.clone();
+        scientific.replace_range(30..38, "    1e-3");
+        let parsed = parse_pdbqt(&format!("ROOT\n{scientific}\nENDROOT\nTORSDOF 0\n")).unwrap();
+        assert_eq!(parsed.atoms[0].raw.position[0], 0.001);
+        assert_eq!(parse_pdbqt(&write_pdbqt(&parsed).unwrap()).unwrap(), parsed);
+
+        let mut constructed = parse_pdbqt(&format!("ROOT\n{line}\nENDROOT\nTORSDOF 0\n")).unwrap();
+        constructed.atoms[0].raw.position[0] = 1.234567;
+        assert!(validate_ligand(&constructed)
+            .unwrap_err()
+            .contains("PDBQT field"));
+        assert!(write_pdbqt(&constructed)
+            .unwrap_err()
+            .contains("PDBQT field"));
+        constructed.atoms[0].raw.position[0] = 1.234;
+        constructed.atoms[0].charge = 0.123456;
+        assert!(validate_ligand(&constructed)
+            .unwrap_err()
+            .contains("PDBQT field"));
     }
 
     #[test]
