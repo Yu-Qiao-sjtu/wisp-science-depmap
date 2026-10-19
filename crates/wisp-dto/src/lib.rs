@@ -29,6 +29,9 @@ pub use mcp_app_child::*;
 pub mod replicate_consensus;
 pub use replicate_consensus::*;
 
+pub mod scientific_benchmark;
+pub use scientific_benchmark::*;
+
 pub mod hypothesis_population;
 pub use hypothesis_population::*;
 
