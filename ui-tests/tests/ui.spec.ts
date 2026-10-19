@@ -2806,6 +2806,46 @@ test("composer picker follows manual caret insertions and ignores pasted text", 
   await expect(page.locator(".mention-menu")).toHaveCount(0);
 });
 
+test("composer # finds archived sessions by keyword and says when nothing matches", async ({ page }) => {
+  await enterApp(page);
+  const composerInput = composer(page);
+  const menu = page.locator(".mention-menu");
+
+  // The recent list (empty query) never shows a shelved session, and the
+  // hint tells the user that typing filters the list.
+  await composerInput.press("#");
+  await expect(menu).toContainText("Current analysis");
+  await expect(menu).not.toContainText("Archived genome assembly notes");
+  await expect(menu.locator(".mention-menu-hint")).toContainText("Type to search");
+  await expect.poll(() => lastInvokeArgs(page, "search_sessions")).toMatchObject({
+    query: "",
+    limit: 40,
+    preferredProjectId: "default",
+    includeShelved: true,
+  });
+
+  await composerInput.pressSequentially("genome");
+  const archived = menu.locator(".mention-item").filter({ hasText: "Archived genome assembly notes" });
+  await expect(archived).toBeVisible();
+  await expect(archived.locator(".mention-item-sub")).toHaveText("wisp-science · Archived");
+  await expect.poll(() => lastInvokeArgs(page, "search_sessions")).toMatchObject({
+    query: "genome",
+    preferredProjectId: "default",
+    includeShelved: true,
+  });
+  await archived.click();
+  await expect(composerInput).toHaveValue("");
+  await expect(page.locator(".composer-reference-chips")).toContainText("Archived genome assembly notes");
+
+  // No hits: a plain row explains it, and Enter neither selects nor sends.
+  await composerInput.pressSequentially("#zzzz");
+  await expect(menu.locator(".mention-empty")).toHaveText("No matching sessions");
+  await expect(menu.locator(".mention-item")).toHaveCount(0);
+  await composerInput.press("Enter");
+  await expect(menu).toBeVisible();
+  await expect(composerInput).toHaveValue("#zzzz");
+});
+
 test("Ctrl+K opens the unified command palette and Shift+Enter attaches", async ({ page }) => {
   await enterApp(page);
   await page.keyboard.press("Control+k");
@@ -7276,6 +7316,12 @@ test("method-search Run reviews the frozen contract before start and exposes con
     .toMatchObject({ runId: "method-search-001" });
   await expect(details.getByTestId("method-search-resume")).toBeVisible();
   await expectPrimaryButton(details.getByTestId("method-search-resume"));
+  // The status change makes the next list refresh rebuild every run card;
+  // the contract under review must stay open with its controls instead of
+  // collapsing (it raced the one-second poll before).
+  await page.locator(".control-head-actions").getByRole("button", { name: "Refresh runs" }).click();
+  await expect(card).toContainText("paused");
+  await expect(details.getByTestId("method-search-resume")).toBeVisible();
   await details.getByTestId("method-search-resume").click();
   await expect.poll(() => lastInvokeArgs(page, "resume_method_search"))
     .toMatchObject({ runId: "method-search-001" });
