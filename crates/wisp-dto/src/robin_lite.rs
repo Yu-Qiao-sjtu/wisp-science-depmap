@@ -91,7 +91,7 @@ pub fn review_case(case: &DiscoveryCase) -> Result<(), String> {
         return Err("approval must precede analysis".into());
     }
     for claim in &case.claims {
-        if claim.id.is_empty() || claim.version.is_empty() {
+        if claim.id.trim().is_empty() || claim.version.trim().is_empty() {
             return Err(format!("{} is missing an id or version", claim.id));
         }
         if claim.kind == ClaimKind::Hypothesis
@@ -167,5 +167,10 @@ mod tests {
         let mut collapsed = ready("fixed", false);
         collapsed.claims.push(claim(ClaimKind::Finding, "h-1"));
         assert!(review_case(&collapsed).is_err());
+
+        let mut blank = ready("fixed", false);
+        blank.claims[0].id = " ".into();
+        blank.claims[0].version = "\t".into();
+        assert!(review_case(&blank).is_err());
     }
 }
