@@ -32,6 +32,9 @@ pub use replicate_consensus::*;
 pub mod scientific_benchmark;
 pub use scientific_benchmark::*;
 
+pub mod workflow_promotion;
+pub use workflow_promotion::*;
+
 /// Identifies a stopped ACP turn in persisted errors and invoke rejections.
 /// The UI must not offer native HTTP transcript recovery for these errors.
 pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
