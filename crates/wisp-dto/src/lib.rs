@@ -44,6 +44,9 @@ pub use scientific_cycle::*;
 pub mod hypothesis_ranking;
 pub use hypothesis_ranking::*;
 
+pub mod robin_lite;
+pub use robin_lite::*;
+
 pub mod empirical_search;
 pub use empirical_search::*;
 
