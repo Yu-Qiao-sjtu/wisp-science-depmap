@@ -221,11 +221,13 @@ pub fn validate_scientific_node(node: &ScientificNode) -> Result<(), String> {
         return Err("a hypothesis cannot be marked measured".into());
     }
     if node.kind.is_hypothesis() {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&node.payload_json) {
-            if value.get("measured_value").is_some() {
-                return Err("a hypothesis payload cannot carry a measured value".into());
-            }
+        let value = serde_json::from_str::<serde_json::Value>(&node.payload_json)
+            .map_err(|_| "scientific payload must be JSON".to_string())?;
+        if value.get("measured_value").is_some() {
+            return Err("a hypothesis payload cannot carry a measured value".into());
         }
+    } else if serde_json::from_str::<serde_json::Value>(&node.payload_json).is_err() {
+        return Err("scientific payload must be JSON".into());
     }
     if node.kind == ScientificNodeKind::Observation {
         let grounded = node.refs.iter().any(|reference| {
@@ -302,4 +304,31 @@ fn has_directed_cycle(edges: &[(&str, &str)]) -> bool {
     nodes
         .iter()
         .any(|node| visit(node, &nodes, edges, &mut color))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hypothesis(payload: &str) -> ScientificNode {
+        ScientificNode {
+            id: "h".into(),
+            cycle_id: "c".into(),
+            project_id: "p".into(),
+            frame_id: "f".into(),
+            kind: ScientificNodeKind::HypothesisCandidate,
+            status: ScientificNodeStatus::Proposed,
+            payload_json: payload.into(),
+            refs: vec![],
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn a_malformed_payload_is_rejected() {
+        assert!(validate_scientific_node(&hypothesis("{")).is_err());
+        assert!(validate_scientific_node(&hypothesis(r#"{"measured_value":1}"#)).is_err());
+        assert!(validate_scientific_node(&hypothesis("{}")).is_ok());
+    }
 }

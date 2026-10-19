@@ -75,44 +75,35 @@ impl Store {
             ..current
         };
         validate_scientific_node(&next).map_err(|error| anyhow::anyhow!(error))?;
-        sqlx::query("UPDATE scientific_cycle_nodes SET status=?, updated_at=? WHERE id=?")
-            .bind(status.as_str())
-            .bind(updated_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let updated = sqlx::query(
+            "UPDATE scientific_cycle_nodes SET status=?, updated_at=? WHERE id=? AND status=?",
+        )
+        .bind(status.as_str())
+        .bind(updated_at)
+        .bind(id)
+        .bind(current.status.as_str())
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() != 1 {
+            bail!("scientific status changed before the update was stored");
+        }
         Ok(next)
     }
 
     pub async fn insert_scientific_edge(&self, edge: &ScientificEdge) -> Result<()> {
-        let from = self
-            .get_scientific_node(&edge.from_id)
-            .await?
-            .context("scientific edge source is missing")?;
-        let to = self
-            .get_scientific_node(&edge.to_id)
-            .await?
-            .context("scientific edge target is missing")?;
-        if from.cycle_id != edge.cycle_id || to.cycle_id != edge.cycle_id {
-            bail!("scientific edge endpoints must belong to the same cycle");
-        }
-        let mut edges = self.list_scientific_edges(&edge.cycle_id).await?;
-        edges.push(edge.clone());
-        validate_scientific_edges(&edges).map_err(|error| anyhow::anyhow!(error))?;
-        sqlx::query(
-            "INSERT INTO scientific_cycle_edges(id,cycle_id,from_id,to_id,kind,created_at) \
-             VALUES(?,?,?,?,?,?)",
-        )
-        .bind(&edge.id)
-        .bind(&edge.cycle_id)
-        .bind(&edge.from_id)
-        .bind(&edge.to_id)
-        .bind(edge.kind.as_str())
-        .bind(edge.created_at)
-        .execute(&self.pool)
-        .await
-        .context("insert scientific cycle edge")?;
-        Ok(())
+        let mut conn = self.pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .context("begin scientific edge write")?;
+        let result = insert_scientific_edge_locked(&mut conn, edge).await;
+        let finish = if result.is_ok() {
+            sqlx::query("COMMIT").execute(&mut *conn).await
+        } else {
+            sqlx::query("ROLLBACK").execute(&mut *conn).await
+        };
+        finish.context("finish scientific edge write")?;
+        result
     }
 
     pub async fn list_scientific_edges(&self, cycle_id: &str) -> Result<Vec<ScientificEdge>> {
@@ -138,6 +129,62 @@ impl Store {
             })
             .collect()
     }
+}
+
+async fn insert_scientific_edge_locked(
+    conn: &mut sqlx::SqliteConnection,
+    edge: &ScientificEdge,
+) -> Result<()> {
+    let from = sqlx::query("SELECT cycle_id FROM scientific_cycle_nodes WHERE id=?")
+        .bind(&edge.from_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .context("scientific edge source is missing")?;
+    let to = sqlx::query("SELECT cycle_id FROM scientific_cycle_nodes WHERE id=?")
+        .bind(&edge.to_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .context("scientific edge target is missing")?;
+    let from_cycle: String = from.get(0);
+    let to_cycle: String = to.get(0);
+    if from_cycle != edge.cycle_id || to_cycle != edge.cycle_id {
+        bail!("scientific edge endpoints must belong to the same cycle");
+    }
+    let rows = sqlx::query(
+        "SELECT id,cycle_id,from_id,to_id,kind,created_at FROM scientific_cycle_edges WHERE cycle_id=?",
+    )
+    .bind(&edge.cycle_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut edges = Vec::new();
+    for row in rows {
+        let kind = ScientificEdgeKind::parse(row.get::<String, _>(4).as_str())
+            .context("unknown scientific edge kind")?;
+        edges.push(ScientificEdge {
+            id: row.get(0),
+            cycle_id: row.get(1),
+            from_id: row.get(2),
+            to_id: row.get(3),
+            kind,
+            created_at: row.get(5),
+        });
+    }
+    edges.push(edge.clone());
+    validate_scientific_edges(&edges).map_err(|error| anyhow::anyhow!(error))?;
+    sqlx::query(
+        "INSERT INTO scientific_cycle_edges(id,cycle_id,from_id,to_id,kind,created_at) \
+         VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&edge.id)
+    .bind(&edge.cycle_id)
+    .bind(&edge.from_id)
+    .bind(&edge.to_id)
+    .bind(edge.kind.as_str())
+    .bind(edge.created_at)
+    .execute(&mut *conn)
+    .await
+    .context("insert scientific cycle edge")?;
+    Ok(())
 }
 
 fn node_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ScientificNode> {
