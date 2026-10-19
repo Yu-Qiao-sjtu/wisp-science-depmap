@@ -908,6 +908,12 @@ async fn copy_publication_children(
     if attached_table_exists(tx, "research_recaps").await? {
         sqlx::query("INSERT INTO research_recaps(id,project_id,day_start,status,recap_json,created_at,updated_at) SELECT id,project_id,day_start,status,recap_json,created_at,updated_at FROM transfer.research_recaps WHERE project_id=?").bind(project_id).execute(&mut **tx).await?;
     }
+    if attached_table_exists(tx, "scientific_cycle_nodes").await? {
+        sqlx::query("INSERT INTO scientific_cycle_nodes SELECT * FROM transfer.scientific_cycle_nodes WHERE project_id=?").bind(project_id).execute(&mut **tx).await?;
+        if attached_table_exists(tx, "scientific_cycle_edges").await? {
+            sqlx::query("INSERT INTO scientific_cycle_edges SELECT edge.* FROM transfer.scientific_cycle_edges edge WHERE edge.cycle_id IN (SELECT cycle_id FROM transfer.scientific_cycle_nodes WHERE project_id=?)").bind(project_id).execute(&mut **tx).await?;
+        }
+    }
     Ok(())
 }
 
@@ -991,6 +997,8 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM research_nodes WHERE project_id=?",
         "DELETE FROM research_journal_entries WHERE project_id=?",
         "DELETE FROM research_recaps WHERE project_id=?",
+        "DELETE FROM scientific_cycle_edges WHERE cycle_id IN (SELECT cycle_id FROM scientific_cycle_nodes WHERE project_id=?)",
+        "DELETE FROM scientific_cycle_nodes WHERE project_id=?",
         "DELETE FROM artifacts WHERE project_id=?",
         "DELETE FROM external_resources WHERE project_id=?",
         "DELETE FROM runs WHERE project_id=?",
@@ -1455,6 +1463,8 @@ impl Store {
             ("research_archives", "*", "id"),
             ("research_archive_continuations", "*", "frame_id"),
             ("research_recaps", "*", "id"),
+            ("scientific_cycle_nodes", "*", "id"),
+            ("scientific_cycle_edges", "*", "id"),
         ];
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database.display()))?
             .read_only(true);
@@ -1472,7 +1482,10 @@ impl Store {
             .await?;
             // Tables added after this format shipped count only once they hold
             // rows, so an upgrade alone never changes a published fingerprint.
-            let late = *table == "research_recaps";
+            let late = matches!(
+                *table,
+                "research_recaps" | "scientific_cycle_nodes" | "scientific_cycle_edges"
+            );
             if !exists
                 || (late
                     && !sqlx::query_scalar::<_, bool>(&format!(

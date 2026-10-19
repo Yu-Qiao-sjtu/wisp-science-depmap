@@ -43,6 +43,7 @@ mod research_journey;
 mod resources;
 mod runs;
 mod schedules;
+mod scientific_cycle;
 mod scientific_evidence;
 pub mod secrets;
 mod session_artifacts;
@@ -216,6 +217,9 @@ pub(crate) const CONTEXT_EPOCH_IDENTITY_MIGRATION: &str = "0063_context_epoch_id
 const ACP_AGENT_SELECTION_MIGRATION: &str = "0064_acp_agent_selection";
 const SESSION_SHELVED_MIGRATION: &str = "0065_session_shelved";
 const SESSION_FILE_OPERATIONS_MIGRATION: &str = "0066_session_file_operations";
+const SCIENTIFIC_CYCLE_MIGRATION: &str = "0067_scientific_cycle";
+const SCIENTIFIC_CYCLE_MIGRATION_SQL: &str =
+    include_str!("../migrations/0067_scientific_cycle.sql");
 
 #[derive(Clone)]
 pub struct Store {
@@ -889,6 +893,10 @@ impl Store {
         if !Self::migration_applied(pool, CLAIM_RECORDS_MIGRATION).await? {
             Self::execute_sql_script(pool, CLAIM_RECORDS_MIGRATION_SQL).await?;
             Self::record_migration(pool, CLAIM_RECORDS_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, SCIENTIFIC_CYCLE_MIGRATION).await? {
+            Self::execute_sql_script(pool, SCIENTIFIC_CYCLE_MIGRATION_SQL).await?;
+            Self::record_migration(pool, SCIENTIFIC_CYCLE_MIGRATION).await?;
         }
         if !Self::migration_applied(pool, ACP_AGENT_SELECTION_MIGRATION).await? {
             Self::add_columns_if_missing(pool, "frames", &[("acp_agent_selection", "TEXT")])
