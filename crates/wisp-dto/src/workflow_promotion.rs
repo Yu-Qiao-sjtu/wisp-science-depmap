@@ -32,6 +32,7 @@ pub struct WorkflowDraftTask {
     pub id: String,
     pub kind: WorkflowTaskKind,
     pub tool: String,
+    pub instruction: String,
     pub depends_on: Vec<String>,
 }
 
@@ -49,25 +50,43 @@ pub fn promote_trace(trajectory_id: &str, steps: &[TraceStep]) -> WorkflowPromot
     let mut tasks = Vec::new();
     let mut unsupported = Vec::new();
     let mut lossy = Vec::new();
+    let kept: Vec<&TraceStep> = steps
+        .iter()
+        .filter(|step| step.kind != TraceStepKind::Unsupported)
+        .collect();
+    let kept_ids: Vec<&str> = kept.iter().map(|step| step.id.as_str()).collect();
     for step in steps {
-        if contains_secret(&step.text) || contains_host_path(&step.text) {
+        if step.kind == TraceStepKind::Unsupported {
+            unsupported.push(step.id.clone());
+            continue;
+        }
+        let instruction = sanitize_instruction(&step.text);
+        if instruction != step.text {
             lossy.push(step.id.clone());
         }
-        match step.kind {
-            TraceStepKind::Reasoning => tasks.push(WorkflowDraftTask {
-                id: step.id.clone(),
-                kind: WorkflowTaskKind::Agent,
-                tool: String::new(),
-                depends_on: step.depends_on.clone(),
-            }),
-            TraceStepKind::Retrieval | TraceStepKind::Run => tasks.push(WorkflowDraftTask {
-                id: step.id.clone(),
-                kind: WorkflowTaskKind::Fixed,
-                tool: step.tool.clone(),
-                depends_on: step.depends_on.clone(),
-            }),
-            TraceStepKind::Unsupported => unsupported.push(step.id.clone()),
-        }
+        let depends_on = step
+            .depends_on
+            .iter()
+            .filter(|id| kept_ids.contains(&id.as_str()))
+            .cloned()
+            .collect();
+        let kind = if step.kind == TraceStepKind::Reasoning {
+            WorkflowTaskKind::Agent
+        } else {
+            WorkflowTaskKind::Fixed
+        };
+        let tool = if step.kind == TraceStepKind::Reasoning {
+            String::new()
+        } else {
+            step.tool.clone()
+        };
+        tasks.push(WorkflowDraftTask {
+            id: step.id.clone(),
+            kind,
+            tool,
+            instruction,
+            depends_on,
+        });
     }
     let body = serde_json::to_string(&tasks).unwrap_or_default();
     WorkflowPromotion {
@@ -80,13 +99,28 @@ pub fn promote_trace(trajectory_id: &str, steps: &[TraceStep]) -> WorkflowPromot
     }
 }
 
+fn sanitize_instruction(text: &str) -> String {
+    if contains_secret(text) || contains_host_path(text) {
+        String::new()
+    } else {
+        text.to_string()
+    }
+}
+
 fn contains_secret(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("api_key") || lower.contains("token") || lower.contains("password")
 }
 
 fn contains_host_path(text: &str) -> bool {
-    text.contains(":\\") || text.contains("/home/") || text.contains("/Users/")
+    text.contains("/home/")
+        || text.contains("/Users/")
+        || text.contains("\\\\")
+        || text.as_bytes().windows(3).any(|window| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && (window[2] == b'\\' || window[2] == b'/')
+        })
 }
 
 fn fnv64(bytes: &[u8]) -> String {
@@ -137,6 +171,8 @@ mod tests {
                 WorkflowTaskKind::Fixed
             ]
         );
+        assert_eq!(first.tasks[1].instruction, "query");
+        assert!(first.lossy.is_empty());
     }
 
     #[test]
@@ -170,6 +206,17 @@ mod tests {
         assert!(promotion
             .tasks
             .iter()
-            .all(|task| task.tool != "shell" || task.kind != WorkflowTaskKind::Fixed));
+            .all(|task| task.instruction.is_empty() || task.id == "unknown"));
+        let mut follow = step("run", TraceStepKind::Run, "run_in_context", "analyze");
+        follow.depends_on = vec!["unknown".into()];
+        let slash = step(
+            "slash",
+            TraceStepKind::Run,
+            "run_in_context",
+            "C:/Users/alice/data.csv",
+        );
+        let rewritten = promote_trace("traj-3", &[follow, slash]);
+        assert!(rewritten.tasks[0].depends_on.is_empty());
+        assert_eq!(rewritten.lossy, vec!["slash".to_string()]);
     }
 }
