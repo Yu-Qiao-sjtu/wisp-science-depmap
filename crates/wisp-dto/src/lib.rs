@@ -32,6 +32,9 @@ pub use replicate_consensus::*;
 pub mod scientific_benchmark;
 pub use scientific_benchmark::*;
 
+pub mod workflow_promotion;
+pub use workflow_promotion::*;
+
 pub mod hypothesis_ranking;
 pub use hypothesis_ranking::*;
 
