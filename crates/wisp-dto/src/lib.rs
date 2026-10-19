@@ -41,6 +41,9 @@ pub use hypothesis_population::*;
 pub mod scientific_cycle;
 pub use scientific_cycle::*;
 
+pub mod hypothesis_ranking;
+pub use hypothesis_ranking::*;
+
 /// Identifies a stopped ACP turn in persisted errors and invoke rejections.
 /// The UI must not offer native HTTP transcript recovery for these errors.
 pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
