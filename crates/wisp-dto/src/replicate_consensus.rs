@@ -95,6 +95,12 @@ pub fn reduce_replicates(
     if trajectories.len() as u32 != group.trajectory_count {
         return Err("trajectory count does not match the replicate group".into());
     }
+    let mut seen_ids = std::collections::BTreeSet::new();
+    for trajectory in trajectories {
+        if !seen_ids.insert(trajectory.id.as_str()) {
+            return Err("trajectory ids must be unique".into());
+        }
+    }
     let mut included = Vec::new();
     let mut excluded = Vec::new();
     let mut directions = Vec::new();
@@ -133,33 +139,46 @@ pub fn reduce_replicates(
                     ));
                     continue;
                 }
-                if trajectory.estimate.is_none()
-                    && trajectory.direction.as_deref().unwrap_or("").is_empty()
-                {
-                    excluded.push((trajectory.id.clone(), "null result".into()));
+                let direction = trajectory.direction.as_deref().unwrap_or("").trim();
+                if direction.is_empty() {
+                    let reason = if trajectory.estimate.is_none() {
+                        "null result"
+                    } else {
+                        "missing direction"
+                    };
+                    excluded.push((trajectory.id.clone(), reason.into()));
                     continue;
                 }
                 included.push(trajectory.id.clone());
-                directions.push(trajectory.direction.clone().unwrap_or_default());
+                directions.push(direction.to_string());
             }
         }
     }
     let comparable = included.len();
-    let distinct: Vec<&str> = {
-        let mut values: Vec<&str> = directions
-            .iter()
-            .map(String::as_str)
-            .filter(|v| !v.is_empty())
-            .collect();
-        values.sort_unstable();
-        values.dedup();
-        values
-    };
-    let majority = distinct.first().copied().unwrap_or("");
-    let majority_count = directions
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for direction in &directions {
+        if let Some(entry) = counts
+            .iter_mut()
+            .find(|(name, _)| *name == direction.as_str())
+        {
+            entry.1 += 1;
+        } else {
+            counts.push((direction.as_str(), 1));
+        }
+    }
+    counts.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
+    let top_count = counts.first().map(|(_, count)| *count).unwrap_or(0);
+    let tied = counts
         .iter()
-        .filter(|value| value.as_str() == majority && !majority.is_empty())
-        .count();
+        .filter(|(_, count)| *count == top_count)
+        .count()
+        > 1;
+    let majority = if tied {
+        ""
+    } else {
+        counts.first().map(|(name, _)| *name).unwrap_or("")
+    };
+    let majority_count = if majority.is_empty() { 0 } else { top_count };
     let agreement_rate = if comparable == 0 {
         0.0
     } else {
@@ -185,7 +204,12 @@ pub fn reduce_replicates(
         ConsensusState::Incompatible
     } else if comparable == 0 {
         ConsensusState::Failed
-    } else if distinct.len() > 1 {
+    } else if tied {
+        ConsensusState::Conflict
+    } else if group.policy == ConsensusPolicy::Majority && agreement_rate > 0.5 && counts.len() > 1
+    {
+        ConsensusState::Majority
+    } else if counts.len() > 1 {
         ConsensusState::Conflict
     } else if group.policy == ConsensusPolicy::Unanimous && comparable != trajectories.len() {
         ConsensusState::Partial
@@ -196,8 +220,13 @@ pub fn reduce_replicates(
     } else {
         ConsensusState::Agreement
     };
-    let dissent = if distinct.len() > 1 {
-        included.clone()
+    let dissent = if counts.len() > 1 {
+        included
+            .iter()
+            .zip(directions.iter())
+            .filter(|(_, direction)| direction.as_str() != majority)
+            .map(|(id, _)| id.clone())
+            .collect()
     } else {
         Vec::new()
     };
@@ -295,8 +324,30 @@ mod tests {
             &[done("a", "up"), done("b", "down"), done("c", "up")],
         )
         .unwrap();
-        assert_eq!(report.state, ConsensusState::Conflict);
-        assert_eq!(report.dissent.len(), 3);
+        assert_eq!(report.state, ConsensusState::Majority);
+        assert!((report.agreement_rate - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(report.dissent, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn estimate_only_results_are_not_unanimous_agreement() {
+        let mut rows = [done("a", "up"), done("b", "up"), done("c", "up")];
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.direction = None;
+            row.estimate = Some(index as f64);
+        }
+        let report = reduce_replicates(&group(ConsensusPolicy::Unanimous), &rows).unwrap();
+        assert_ne!(report.state, ConsensusState::Agreement);
+        assert!(report.included.is_empty());
+    }
+
+    #[test]
+    fn duplicate_trajectory_ids_are_rejected() {
+        let error = reduce_replicates(
+            &group(ConsensusPolicy::Unanimous),
+            &[done("a", "up"), done("a", "up"), done("c", "up")],
+        );
+        assert!(error.is_err());
     }
 
     #[test]
