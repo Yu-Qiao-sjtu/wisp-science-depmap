@@ -60,8 +60,11 @@ pub fn suite_digest(suite: &BenchmarkSuite) -> String {
 }
 
 pub fn evaluate_case(suite: &BenchmarkSuite, case: &BenchmarkCase) -> Result<(), String> {
-    if suite.stopping_rule.trim().is_empty() || suite.comparisons.is_empty() {
-        return Err("a benchmark must declare its comparisons and stopping rule".into());
+    if suite.fixture_digest.trim().is_empty()
+        || suite.stopping_rule.trim().is_empty()
+        || suite.comparisons.is_empty()
+    {
+        return Err("a benchmark must declare its fixture, comparisons, and stopping rule".into());
     }
     if suite.held_out_perturbation.trim().is_empty() || !case.held_out {
         return Err("a benchmark needs a held-out perturbation".into());
@@ -80,7 +83,23 @@ pub fn evaluate_case(suite: &BenchmarkSuite, case: &BenchmarkCase) -> Result<(),
     if case.live_model {
         return Err("this evaluator only accepts an offline fixture".into());
     }
+    if !measures_are_finite(&case.measures) {
+        return Err("benchmark measures must be finite".into());
+    }
     Ok(())
+}
+
+fn measures_are_finite(measures: &BenchmarkMeasures) -> bool {
+    [
+        measures.correctness,
+        measures.evidence_coverage,
+        measures.stability,
+        measures.disagreement,
+        measures.cost,
+        measures.expert_concordance,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
 }
 
 fn fnv64(bytes: &[u8]) -> String {
@@ -148,5 +167,17 @@ mod tests {
         changed.suite_digest = "fnv64:0".into();
         let error = evaluate_case(&suite, &changed).unwrap_err();
         assert!(error.contains("not comparable"));
+    }
+
+    #[test]
+    fn a_blank_fixture_and_a_non_finite_measure_are_rejected() {
+        let mut blank = suite();
+        blank.fixture_digest.clear();
+        let error = evaluate_case(&blank, &case(&blank, BenchmarkOutcome::Supported, false));
+        assert!(error.is_err());
+        let suite = suite();
+        let mut row = case(&suite, BenchmarkOutcome::Supported, false);
+        row.measures.cost = f64::NAN;
+        assert!(evaluate_case(&suite, &row).is_err());
     }
 }
