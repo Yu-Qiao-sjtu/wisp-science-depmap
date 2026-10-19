@@ -26,6 +26,9 @@ pub use session_artifacts::*;
 mod mcp_app_child;
 pub use mcp_app_child::*;
 
+pub mod scientific_cycle;
+pub use scientific_cycle::*;
+
 /// Identifies a stopped ACP turn in persisted errors and invoke rejections.
 /// The UI must not offer native HTTP transcript recovery for these errors.
 pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
