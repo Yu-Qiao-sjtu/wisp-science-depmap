@@ -36,7 +36,10 @@ fn unsupported_native_build_has_an_actionable_error() {
 #[test]
 fn child_exit_status_arguments_stdout_and_caller_directory_are_preserved() {
     use std::os::unix::fs::PermissionsExt;
-    let root = std::env::temp_dir().join(format!("wisp launcher test {}", std::process::id()));
+    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let root = base.join(format!("wisp-launcher-test-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     struct Cleanup(std::path::PathBuf);
     impl Drop for Cleanup {
@@ -45,7 +48,7 @@ fn child_exit_status_arguments_stdout_and_caller_directory_are_preserved() {
         }
     }
     let _cleanup = Cleanup(root.clone());
-    let fake = root.join("fake cargo");
+    let fake = root.join("fake-cargo");
     std::fs::write(&fake, "#!/bin/sh\npwd > cwd.txt\nprintf '%s\\n' \"$@\" > args.txt\nprintf 'jsonl output\\n'\nexit 37\n").unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_wisp-dev"))
