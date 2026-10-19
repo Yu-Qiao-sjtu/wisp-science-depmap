@@ -29,6 +29,7 @@ pub enum PairwiseOutcome {
 pub struct PairwiseComparison {
     pub left_id: String,
     pub right_id: String,
+    pub rubric_id: String,
     pub rubric_version: String,
     pub outcome: PairwiseOutcome,
     pub rationale: String,
@@ -61,8 +62,8 @@ pub fn rank_hypotheses(
     comparisons: &[PairwiseComparison],
     seed: u64,
 ) -> Result<RankingResult, String> {
-    if rubric.version.trim().is_empty() {
-        return Err("ranking rubric version is required".into());
+    if rubric.id.trim().is_empty() || rubric.version.trim().is_empty() {
+        return Err("ranking rubric id and version are required".into());
     }
     let mut excluded = Vec::new();
     let mut eligible = Vec::new();
@@ -77,11 +78,10 @@ pub fn rank_hypotheses(
     eligible.dedup();
     let eligible_set = eligible.clone();
     let mut wins = vec![0.0_f64; eligible.len()];
-    let mut played = vec![0_u32; eligible.len()];
     let mut minority = Vec::new();
     for comparison in comparisons {
-        if comparison.rubric_version != rubric.version {
-            return Err("comparison rubric version does not match".into());
+        if comparison.rubric_id != rubric.id || comparison.rubric_version != rubric.version {
+            return Err("comparison rubric does not match".into());
         }
         if comparison.judge_id.trim().is_empty() || comparison.evidence_refs.is_empty() {
             return Err("a comparison needs a judge and an evidence reference".into());
@@ -97,8 +97,6 @@ pub fn rank_hypotheses(
             ));
             continue;
         };
-        played[left] += 1;
-        played[right] += 1;
         match comparison.outcome {
             PairwiseOutcome::Left => wins[left] += 1.0,
             PairwiseOutcome::Right => wins[right] += 1.0,
@@ -130,14 +128,13 @@ pub fn rank_hypotheses(
             }
         }
     }
+    let strengths = bradley_terry(&wins, comparisons, &eligible);
     let mut scored: Vec<(String, f64)> = eligible
         .iter()
         .enumerate()
         .map(|(index, id)| {
-            let games = played[index].max(1) as f64;
-            let strength = wins[index] / games;
             let jitter = ((seed.wrapping_add(index as u64)) % 1000) as f64 / 1_000_000.0;
-            (id.clone(), strength + jitter)
+            (id.clone(), strengths[index] + jitter)
         })
         .collect();
     scored.sort_by(|left, right| {
@@ -156,6 +153,50 @@ pub fn rank_hypotheses(
         missing_pairs,
         minority,
     })
+}
+
+fn bradley_terry(
+    wins: &[f64],
+    comparisons: &[PairwiseComparison],
+    eligible: &[String],
+) -> Vec<f64> {
+    let mut strength = vec![1.0_f64; eligible.len()];
+    if eligible.len() < 2 || wins.iter().all(|win| *win == 0.0) {
+        return strength;
+    }
+    for _ in 0..32 {
+        let mut next = vec![0.0_f64; eligible.len()];
+        for (index, id) in eligible.iter().enumerate() {
+            let mut divisor = 0.0;
+            for comparison in comparisons {
+                let other = if comparison.left_id == *id {
+                    &comparison.right_id
+                } else if comparison.right_id == *id {
+                    &comparison.left_id
+                } else {
+                    continue;
+                };
+                let Some(other_index) = eligible.iter().position(|candidate| candidate == other)
+                else {
+                    continue;
+                };
+                divisor += 1.0 / (strength[index] + strength[other_index]);
+            }
+            next[index] = if divisor == 0.0 {
+                strength[index]
+            } else {
+                wins[index] / divisor
+            };
+        }
+        let mean = next.iter().sum::<f64>() / next.len() as f64;
+        if mean > 0.0 {
+            for value in &mut next {
+                *value /= mean;
+            }
+        }
+        strength = next;
+    }
+    strength
 }
 
 pub fn apply_ranking_override(
@@ -197,6 +238,7 @@ mod tests {
         PairwiseComparison {
             left_id: left.into(),
             right_id: right.into(),
+            rubric_id: "innovation".into(),
             rubric_version: "1".into(),
             outcome,
             rationale: "stronger evidence".into(),
@@ -221,6 +263,39 @@ mod tests {
     fn a_missing_pair_is_reported() {
         let result = rank_hypotheses(&rubric(), &candidates(), &[], 1).unwrap();
         assert_eq!(result.missing_pairs, vec![("a".into(), "b".into())]);
+    }
+
+    #[test]
+    fn opponent_adjusted_strength_outranks_raw_win_rate() {
+        let mut comparisons = Vec::new();
+        for _ in 0..11 {
+            comparisons.push(comparison("a", "b", PairwiseOutcome::Left));
+        }
+        for _ in 0..9 {
+            comparisons.push(comparison("a", "b", PairwiseOutcome::Right));
+        }
+        comparisons.push(comparison("a", "c", PairwiseOutcome::Tie));
+        comparisons.push(comparison("c", "a", PairwiseOutcome::Tie));
+        for _ in 0..16 {
+            comparisons.push(comparison("b", "c", PairwiseOutcome::Left));
+        }
+        for _ in 0..2 {
+            comparisons.push(comparison("b", "c", PairwiseOutcome::Right));
+        }
+        let mut people = candidates();
+        people[2].eligible = true;
+        let result = rank_hypotheses(&rubric(), &people, &comparisons, 1).unwrap();
+        let a = result.order.iter().position(|id| id == "a").unwrap();
+        let b = result.order.iter().position(|id| id == "b").unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn a_different_rubric_id_is_rejected() {
+        let mut row = comparison("a", "b", PairwiseOutcome::Left);
+        row.rubric_id = "feasibility".into();
+        let error = rank_hypotheses(&rubric(), &candidates(), &[row], 1);
+        assert!(error.is_err());
     }
 
     #[test]
