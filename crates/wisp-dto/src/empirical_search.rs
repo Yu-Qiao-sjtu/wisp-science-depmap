@@ -65,7 +65,7 @@ pub fn prefer<'a>(left: &'a CandidateNode, right: &'a CandidateNode) -> &'a Cand
     }
     let left_score = left.score.unwrap_or(i64::MIN);
     let right_score = right.score.unwrap_or(i64::MIN);
-    if (left_score - right_score).abs() <= 1 && left.runtime_ms != right.runtime_ms {
+    if left_score.abs_diff(right_score) <= 1 && left.runtime_ms != right.runtime_ms {
         return if left.runtime_ms < right.runtime_ms {
             left
         } else {
@@ -163,5 +163,17 @@ mod tests {
             seed: 3,
         };
         assert!(admit_score(&child, false, false).is_ok());
+        let missing = CandidateNode {
+            id: "missing".into(),
+            parents: vec!["root".into()],
+            diff: "none".into(),
+            split: SearchSplit::Train,
+            outcome: CandidateOutcome::Scored,
+            score: None,
+            runtime_ms: 1,
+            seed: 3,
+        };
+        let zero = node("zero", SearchSplit::Train, CandidateOutcome::Scored, 0, 5);
+        assert_eq!(prefer(&missing, &zero).id, "zero");
     }
 }
