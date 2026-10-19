@@ -26,6 +26,9 @@ pub use session_artifacts::*;
 mod mcp_app_child;
 pub use mcp_app_child::*;
 
+pub mod replicate_consensus;
+pub use replicate_consensus::*;
+
 pub mod hypothesis_ranking;
 pub use hypothesis_ranking::*;
 
