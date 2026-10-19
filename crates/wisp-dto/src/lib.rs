@@ -47,6 +47,9 @@ pub use hypothesis_ranking::*;
 pub mod robin_lite;
 pub use robin_lite::*;
 
+pub mod empirical_search;
+pub use empirical_search::*;
+
 /// Identifies a stopped ACP turn in persisted errors and invoke rejections.
 /// The UI must not offer native HTTP transcript recovery for these errors.
 pub const ACP_TURN_ERROR_PREFIX: &str = "ACP turn failed: ";
