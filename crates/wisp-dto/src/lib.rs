@@ -35,6 +35,9 @@ pub use scientific_benchmark::*;
 pub mod workflow_promotion;
 pub use workflow_promotion::*;
 
+pub mod hypothesis_population;
+pub use hypothesis_population::*;
+
 pub mod robin_lite;
 pub use robin_lite::*;
 
