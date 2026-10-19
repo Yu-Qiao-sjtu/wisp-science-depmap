@@ -30,6 +30,7 @@ pub struct Reflection {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "SimilarityEdgeUnchecked")]
 pub struct SimilarityEdge {
     pub left: String,
     pub right: String,
@@ -65,6 +66,7 @@ pub struct EvolvedCandidate {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "MetaReviewUnchecked")]
 pub struct MetaReview {
     pub critique: String,
     pub minority: bool,
@@ -103,7 +105,7 @@ pub fn similarity_edge(
     method: &str,
     version: &str,
 ) -> Result<SimilarityEdge, String> {
-    if method.is_empty() || version.is_empty() {
+    if method.trim().is_empty() || version.trim().is_empty() {
         return Err("similarity requires a method and version".into());
     }
     Ok(SimilarityEdge {
@@ -112,6 +114,49 @@ pub fn similarity_edge(
         method: method.into(),
         method_version: version.into(),
     })
+}
+
+#[derive(Deserialize)]
+struct SimilarityEdgeUnchecked {
+    left: String,
+    right: String,
+    method: String,
+    method_version: String,
+}
+
+impl TryFrom<SimilarityEdgeUnchecked> for SimilarityEdge {
+    type Error = String;
+
+    fn try_from(value: SimilarityEdgeUnchecked) -> Result<Self, Self::Error> {
+        similarity_edge(
+            &value.left,
+            &value.right,
+            &value.method,
+            &value.method_version,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct MetaReviewUnchecked {
+    critique: String,
+    minority: bool,
+    citeable_as_evidence: bool,
+}
+
+impl TryFrom<MetaReviewUnchecked> for MetaReview {
+    type Error = String;
+
+    fn try_from(value: MetaReviewUnchecked) -> Result<Self, Self::Error> {
+        if value.citeable_as_evidence {
+            return Err("a meta-review cannot be cited as measured evidence".into());
+        }
+        Ok(MetaReview {
+            critique: value.critique,
+            minority: value.minority,
+            citeable_as_evidence: false,
+        })
+    }
 }
 
 fn pair_key(seed: u64, left: &str, right: &str) -> u64 {
@@ -179,5 +224,13 @@ mod tests {
         assert!(!review.citeable_as_evidence);
         assert!(review.minority);
         assert_eq!(reflection.part, ReflectionPart::Objection);
+        assert!(serde_json::from_str::<SimilarityEdge>(
+            r#"{"left":"a","right":"b","method":"","method_version":"v"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<MetaReview>(
+            r#"{"critique":"x","minority":true,"citeable_as_evidence":true}"#
+        )
+        .is_err());
     }
 }
