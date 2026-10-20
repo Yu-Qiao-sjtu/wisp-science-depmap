@@ -71,6 +71,13 @@ pub fn prefer<'a>(left: &'a CandidateNode, right: &'a CandidateNode) -> &'a Cand
     if left_failed != right_failed {
         return if left_failed { right } else { left };
     }
+    if left_failed && right_failed {
+        let left_run = !left.run_id.trim().is_empty();
+        let right_run = !right.run_id.trim().is_empty();
+        if left_run != right_run {
+            return if left_run { left } else { right };
+        }
+    }
     let left_score = left.score.unwrap_or(i64::MIN);
     let right_score = right.score.unwrap_or(i64::MIN);
     if left_score.abs_diff(right_score) <= 1 && left.runtime_ms != right.runtime_ms {
