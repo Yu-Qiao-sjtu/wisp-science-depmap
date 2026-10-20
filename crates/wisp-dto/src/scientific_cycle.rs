@@ -266,9 +266,16 @@ pub fn record_mcp_observation(
     contract_version: &str,
     recorded_at: i64,
 ) -> Result<ScientificNode, String> {
-    if tool.trim().is_empty() || evidence_id.trim().is_empty() || contract_version.trim().is_empty()
+    if tool.trim().is_empty()
+        || evidence_id.trim().is_empty()
+        || contract_version.trim().is_empty()
+        || project_id.trim().is_empty()
+        || frame_id.trim().is_empty()
     {
-        return Err("an MCP observation needs a tool, evidence id, and contract version".into());
+        return Err(
+            "an MCP observation needs a project, frame, tool, evidence id, and contract version"
+                .into(),
+        );
     }
     let payload = serde_json::json!({
         "tool": tool.trim(),
@@ -382,6 +389,10 @@ mod tests {
         assert_eq!(node.refs[0].id, "ev-9");
         assert!(
             record_mcp_observation("c", "p", "f", "obs", "depmap_gene_evidence", " ", "13", 4)
+                .is_err()
+        );
+        assert!(
+            record_mcp_observation("c", " ", "f", "obs", "depmap_gene_evidence", "ev-9", "13", 4)
                 .is_err()
         );
     }
