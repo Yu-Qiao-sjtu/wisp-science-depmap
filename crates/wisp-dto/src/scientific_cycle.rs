@@ -254,6 +254,53 @@ pub fn validate_scientific_node(node: &ScientificNode) -> Result<(), String> {
     Ok(())
 }
 
+/// Record one already-returned MCP evidence identity. The observation stays
+/// proposed: this does not approve analysis or start another query.
+pub fn record_mcp_observation(
+    cycle_id: &str,
+    project_id: &str,
+    frame_id: &str,
+    node_id: &str,
+    tool: &str,
+    evidence_id: &str,
+    contract_version: &str,
+    recorded_at: i64,
+) -> Result<ScientificNode, String> {
+    if tool.trim().is_empty()
+        || evidence_id.trim().is_empty()
+        || contract_version.trim().is_empty()
+        || project_id.trim().is_empty()
+        || frame_id.trim().is_empty()
+    {
+        return Err(
+            "an MCP observation needs a project, frame, tool, evidence id, and contract version"
+                .into(),
+        );
+    }
+    let payload = serde_json::json!({
+        "tool": tool.trim(),
+        "awaiting_approval": true,
+    });
+    let node = ScientificNode {
+        id: node_id.trim().to_string(),
+        cycle_id: cycle_id.trim().to_string(),
+        project_id: project_id.trim().to_string(),
+        frame_id: frame_id.trim().to_string(),
+        kind: ScientificNodeKind::Observation,
+        status: ScientificNodeStatus::Proposed,
+        payload_json: payload.to_string(),
+        refs: vec![ScientificRef {
+            kind: ScientificRefKind::Evidence,
+            id: evidence_id.trim().to_string(),
+            version: contract_version.trim().to_string(),
+        }],
+        created_at: recorded_at,
+        updated_at: recorded_at,
+    };
+    validate_scientific_node(&node)?;
+    Ok(node)
+}
+
 pub fn validate_scientific_edges(edges: &[ScientificEdge]) -> Result<(), String> {
     let mut adjacency: Vec<(&str, &str)> = Vec::new();
     for edge in edges {
@@ -323,6 +370,31 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    #[test]
+    fn an_mcp_observation_stays_proposed_and_cites_evidence() {
+        let node = record_mcp_observation(
+            "c",
+            "p",
+            "f",
+            "obs",
+            "depmap_gene_evidence",
+            "ev-9",
+            "13",
+            4,
+        )
+        .unwrap();
+        assert_eq!(node.status, ScientificNodeStatus::Proposed);
+        assert_eq!(node.refs[0].id, "ev-9");
+        assert!(
+            record_mcp_observation("c", "p", "f", "obs", "depmap_gene_evidence", " ", "13", 4)
+                .is_err()
+        );
+        assert!(
+            record_mcp_observation("c", " ", "f", "obs", "depmap_gene_evidence", "ev-9", "13", 4)
+                .is_err()
+        );
     }
 
     #[test]
