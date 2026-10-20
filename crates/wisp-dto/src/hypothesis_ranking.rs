@@ -83,7 +83,12 @@ pub fn rank_hypotheses(
         if comparison.rubric_id != rubric.id || comparison.rubric_version != rubric.version {
             return Err("comparison rubric does not match".into());
         }
-        if comparison.judge_id.trim().is_empty() || comparison.evidence_refs.is_empty() {
+        if comparison.judge_id.trim().is_empty()
+            || !comparison
+                .evidence_refs
+                .iter()
+                .any(|reference| !reference.trim().is_empty())
+        {
             return Err("a comparison needs a judge and an evidence reference".into());
         }
         let left = eligible_set.iter().position(|id| id == &comparison.left_id);
@@ -296,6 +301,16 @@ mod tests {
         row.rubric_id = "feasibility".into();
         let error = rank_hypotheses(&rubric(), &candidates(), &[row], 1);
         assert!(error.is_err());
+    }
+
+    #[test]
+    fn a_blank_evidence_id_is_rejected() {
+        let mut row = comparison("a", "b", PairwiseOutcome::Left);
+        row.evidence_refs = vec![" ".into()];
+        assert!(rank_hypotheses(&rubric(), &candidates(), &[row], 1).is_err());
+        let mut mixed = comparison("a", "b", PairwiseOutcome::Left);
+        mixed.evidence_refs = vec!["ev-1".into(), " ".into()];
+        assert!(rank_hypotheses(&rubric(), &candidates(), &[mixed], 1).is_ok());
     }
 
     #[test]
