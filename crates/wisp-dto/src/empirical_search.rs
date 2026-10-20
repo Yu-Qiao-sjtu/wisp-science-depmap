@@ -64,8 +64,10 @@ pub fn admit_score(node: &CandidateNode, frozen: bool, approved: bool) -> Result
 }
 
 pub fn prefer<'a>(left: &'a CandidateNode, right: &'a CandidateNode) -> &'a CandidateNode {
-    let left_failed = left.outcome != CandidateOutcome::Scored;
-    let right_failed = right.outcome != CandidateOutcome::Scored;
+    let left_failed =
+        left.outcome != CandidateOutcome::Scored || left.run_id.trim().is_empty();
+    let right_failed =
+        right.outcome != CandidateOutcome::Scored || right.run_id.trim().is_empty();
     if left_failed != right_failed {
         return if left_failed { right } else { left };
     }
@@ -187,5 +189,13 @@ mod tests {
         let mut unscored_run = zero.clone();
         unscored_run.run_id.clear();
         assert!(admit_score(&unscored_run, true, true).is_err());
+        let timeout = node(
+            "slow",
+            SearchSplit::Train,
+            CandidateOutcome::Timeout,
+            0,
+            9_000,
+        );
+        assert_eq!(prefer(&unscored_run, &timeout).id, "slow");
     }
 }
