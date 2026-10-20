@@ -3284,6 +3284,7 @@ test("context usage keeps the running agent window until a model switch boundary
   // the old 128K Agent until Done.
   await expect.poll(() => trigger.evaluate((el) =>
     getComputedStyle(el).getPropertyValue("--context-gauge-angle").trim())).toBe("-34.2deg");
+  await page.evaluate(() => (window as any).__finishContextUsageRunning());
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({ timeout: 3_000 });
   await expect.poll(() => trigger.evaluate((el) =>
     getComputedStyle(el).getPropertyValue("--context-gauge-angle").trim())).toBe("-54.0deg");
@@ -5520,8 +5521,66 @@ test("workspace drag hover clears on cancellation and ignores text drags", async
   });
   await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
   await expect(page.locator('[data-reference-kind="file-path"]')).toHaveCount(0);
+  await expect(page.locator('[data-reference-kind="session"]')).toHaveCount(0);
   expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
   await data.dispose();
+});
+
+test("dragging a sidebar conversation or group onto the composer attaches them as context", async ({ page }) => {
+  await enterApp(page, "/?mockContextDrag=1");
+  const sidebar = page.locator(".sidebar");
+  const group = sidebar.locator('.side-folder[data-folder-name="Reviews"]');
+  // Scoped to the composer: a sent message renders its references with
+  // the same data-reference-kind.
+  const cards = page.locator('.composer-reference-chips [data-reference-kind="session"]');
+  const labels = cards.locator(".composer-attachment.ready");
+
+  // The project opens on its newest conversation, "QC review". Like `#`,
+  // the open conversation never references itself, so its group drops
+  // only the other member.
+  await expect(sidebar.locator('[data-session-id="drag-qc"]')).toHaveClass(/active/);
+  await group.dragTo(composer(page));
+  await expect(labels).toHaveText(["wisp-science / Alignment notes"]);
+  await cards.first().getByRole("button").click();
+  await expect(cards).toHaveCount(0);
+
+  // From a new conversation, every member of the group is a candidate.
+  await newSessionButton(page).click();
+  await expect(sidebar.locator('[data-session-id="drag-qc"]')).not.toHaveClass(/active/);
+  const loose = sidebar.locator('[data-session-id="drag-loose"]');
+  await expect(loose).toHaveAttribute("draggable", "true");
+  await composer(page).fill("Compare these");
+  await loose.dragTo(composer(page));
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toHaveAttribute("title", "wisp-science / Loose notes");
+  await expect(composer(page)).toHaveValue("Compare these");
+  await expect(composer(page)).toBeFocused();
+  await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
+
+  // The same conversation dropped again stays one chip.
+  await loose.dragTo(composer(page));
+  await expect(cards).toHaveCount(1);
+
+  // A group adds every conversation in it, after the chips already there,
+  // and moves nothing in the sidebar.
+  await group.dragTo(composer(page));
+  await expect(labels).toHaveText(["wisp-science / Loose notes", "wisp-science / QC review", "wisp-science / Alignment notes"]);
+  await group.dragTo(composer(page));
+  await expect(cards).toHaveCount(3);
+  expect(await page.evaluate(() =>
+    ((window as any).__sendInvokeLog ?? []).some((entry: any) => entry.cmd === "move_session"))).toBe(false);
+  await page.screenshot({ path: test.info().outputPath("sidebar-drag-context.png") });
+
+  // Removing one chip leaves the others; sending carries the rest as references.
+  await cards.nth(1).getByRole("button").click();
+  await expect(labels).toHaveText(["wisp-science / Loose notes", "wisp-science / Alignment notes"]);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+    references: [{ kind: "session", id: "drag-loose" }, { kind: "session", id: "drag-align" }],
+  });
+  await expect(cards).toHaveCount(0);
+  await expect(page.locator('.msg.user [data-reference-kind="session"]')).toHaveCount(2);
+  expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
 });
 
 test("workspace file context menu attaches its path to the composer", async ({ page }) => {

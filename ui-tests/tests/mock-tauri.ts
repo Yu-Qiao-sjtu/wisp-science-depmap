@@ -262,6 +262,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
         ts: 2000 - index,
         running: false,
       }))
+    : query.get("mockContextDrag") === "1"
+      ? [
+          { id: "drag-qc", title: "QC review", ts: 2100, running: false, folder_id: "drag-folder" },
+          { id: "drag-align", title: "Alignment notes", ts: 2090, running: false, folder_id: "drag-folder" },
+          { id: "drag-loose", title: "Loose notes", ts: 2080, running: false },
+        ]
     : mockLongSession
       ? [{ id: "long-session", title: "Long transcript", ts: 2000, running: false }]
       : mockMcpAppSession
@@ -432,6 +438,8 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
     ? [{ id: "subagent-folder", name: "Analysis" }]
     : query.get("mockNeedsYou") === "1"
     ? [{ id: "pending-folder", name: "Pending reports" }]
+    : query.get("mockContextDrag") === "1"
+    ? [{ id: "drag-folder", name: "Reviews" }]
     : [];
   let activeProjectId = "default";
   let terminalCounter = 0;
@@ -6430,10 +6438,12 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
                     max_context: 128_000,
                   });
                 }, 30);
-                setTimeout(() => {
+                // The turn ends only when the test says so: a fixed timer
+                // raced the model-switch clicks on slow runners.
+                (window as any).__finishContextUsageRunning = () => {
                   emit("agent", { kind: "Done", frame_id: fid });
                   resolve(fid);
-                }, 1_200);
+                };
               });
             }
             if (String(arg("message") ?? "").includes("CONTEXTUSAGEWARN")) {
