@@ -105,22 +105,27 @@ common-essential filter. Housekeeping and common-essential are distinct \
 annotations. If the selected result lacks a validated filter field, report that \
 bounded limitation and do not substitute `ranking=selective`, model memory, \
 gene-family labels, or an unfiltered list as though the request was fulfilled. \
-An explicit request to use the remote DepMap MCP must use its matching \
-`depmap_lineage_dependencies` tool rather than the native local \
-`depmap_query`. If a native query is configuration-blocked while an enabled \
-remote DepMap MCP is available, try the matching bounded remote MCP tool before \
-reporting the evidence backend unavailable. For a cancer-only request asking \
-for research directions or topics without naming a gene, call `depmap_query` \
-once with `mode=lineage_directions`, the canonical lineage, and a bounded limit. \
-Use only its returned topic candidates and separate family rankings; do not \
-replace this call with `lineage_dependency` or a sequence of guessed gene probes. \
-Never invent an anchor gene from \
-model memory. For a gene-in-cancer inventory, topic-ideation, or \
-research-direction request, call the fixed `depmap_evidence` tool first; it \
+An explicit request to use the remote DepMap MCP must stay on that enabled \
+connector and must not fall back to a local knowledge root, disk scan, or \
+`depmap-knowledge-query`. Use the matching remote tools, including \
+`depmap_lineage_dependencies`, `depmap_biomarker_model_evidence`, and \
+`depmap_mutation_anchor_evidence`, rather than the native local `depmap_query`. \
+Do not call shell, `run_in_context`, or filesystem search while that request \
+is still answerable by those tools. A failed `depmap_read_resource` on a \
+catalog root is a bad URI, not permission to leave the connector. If a native \
+query is configuration-blocked while an enabled remote DepMap MCP is available, \
+try the matching bounded remote MCP tool before reporting the evidence backend \
+unavailable. For a cancer-only request asking for research directions or topics \
+without naming a gene, call `depmap_query` once with `mode=lineage_directions`, \
+the canonical lineage, and a bounded limit. Use only its returned topic \
+candidates and separate family rankings; do not replace this call with \
+`lineage_dependency` or a sequence of guessed gene probes. Never invent an \
+anchor gene from model memory. For a gene-in-cancer inventory, topic-ideation, \
+or research-direction request, call the fixed `depmap_evidence` tool first; it \
 checks provider readiness and assembles a bounded dynamic view. Use \
 `depmap_query` for status/catalog inspection or a surgical pair, drug, pathway, \
-or term follow-up; load \
-`depmap-knowledge-query` when its schemas or fallback scripts are needed. \
+or term follow-up. Load `depmap-knowledge-query` only when the user did not ask \
+for the remote MCP and its schemas or fallback scripts are needed. \
 For a request asking which existing data support a proposed study, route it as \
 `study_support_mapping`, run the returned lineage-catalog query, and classify \
 every requested claim into exactly one of four buckets: direct precomputed \
@@ -808,6 +813,7 @@ mod tests {
         assert!(rubric.contains("must not be diverted to a Workflow"));
         assert!(rubric.contains("`depmap_evidence_history`"));
         assert!(!rubric.contains("call `start_workflow` before any evidence query"));
+        assert!(rubric.contains("must stay on that enabled"));
         assert!(rubric.contains("load `depmap-knowledge-query`"));
         assert!(rubric.contains("Load `depmap-coding-agent`"));
         assert!(rubric.contains("do not rerun an available analysis"));
