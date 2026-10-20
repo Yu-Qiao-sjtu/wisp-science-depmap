@@ -84,11 +84,10 @@ pub fn rank_hypotheses(
             return Err("comparison rubric does not match".into());
         }
         if comparison.judge_id.trim().is_empty()
-            || comparison.evidence_refs.is_empty()
-            || comparison
+            || !comparison
                 .evidence_refs
                 .iter()
-                .any(|reference| reference.trim().is_empty())
+                .any(|reference| !reference.trim().is_empty())
         {
             return Err("a comparison needs a judge and an evidence reference".into());
         }
@@ -309,6 +308,9 @@ mod tests {
         let mut row = comparison("a", "b", PairwiseOutcome::Left);
         row.evidence_refs = vec![" ".into()];
         assert!(rank_hypotheses(&rubric(), &candidates(), &[row], 1).is_err());
+        let mut mixed = comparison("a", "b", PairwiseOutcome::Left);
+        mixed.evidence_refs = vec!["ev-1".into(), " ".into()];
+        assert!(rank_hypotheses(&rubric(), &candidates(), &[mixed], 1).is_ok());
     }
 
     #[test]
