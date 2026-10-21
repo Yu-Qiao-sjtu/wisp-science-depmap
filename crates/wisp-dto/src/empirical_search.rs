@@ -32,6 +32,9 @@ pub struct CandidateNode {
     pub score: Option<i64>,
     pub runtime_ms: u64,
     pub seed: u64,
+    /// Local run that produced a scored outcome. Empty for records that have not been admitted.
+    #[serde(default)]
+    pub run_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,14 +57,26 @@ pub fn admit_score(node: &CandidateNode, frozen: bool, approved: bool) -> Result
     if node.diff.is_empty() {
         return Err("a candidate needs a reviewable diff".into());
     }
+    if node.outcome == CandidateOutcome::Scored && node.run_id.trim().is_empty() {
+        return Err("a scored candidate needs a local run id".into());
+    }
     Ok(())
 }
 
 pub fn prefer<'a>(left: &'a CandidateNode, right: &'a CandidateNode) -> &'a CandidateNode {
-    let left_failed = left.outcome != CandidateOutcome::Scored;
-    let right_failed = right.outcome != CandidateOutcome::Scored;
+    let left_failed =
+        left.outcome != CandidateOutcome::Scored || left.run_id.trim().is_empty();
+    let right_failed =
+        right.outcome != CandidateOutcome::Scored || right.run_id.trim().is_empty();
     if left_failed != right_failed {
         return if left_failed { right } else { left };
+    }
+    if left_failed && right_failed {
+        let left_run = !left.run_id.trim().is_empty();
+        let right_run = !right.run_id.trim().is_empty();
+        if left_run != right_run {
+            return if left_run { left } else { right };
+        }
     }
     let left_score = left.score.unwrap_or(i64::MIN);
     let right_score = right.score.unwrap_or(i64::MIN);
@@ -102,6 +117,7 @@ mod tests {
             score: Some(score),
             runtime_ms: runtime,
             seed: 3,
+            run_id: "run-1".into(),
         }
     }
 
@@ -161,6 +177,7 @@ mod tests {
             score: Some(12),
             runtime_ms: 50,
             seed: 3,
+            run_id: "run-mix".into(),
         };
         assert!(admit_score(&child, false, false).is_ok());
         let missing = CandidateNode {
@@ -172,8 +189,20 @@ mod tests {
             score: None,
             runtime_ms: 1,
             seed: 3,
+            run_id: "run-missing".into(),
         };
         let zero = node("zero", SearchSplit::Train, CandidateOutcome::Scored, 0, 5);
         assert_eq!(prefer(&missing, &zero).id, "zero");
+        let mut unscored_run = zero.clone();
+        unscored_run.run_id.clear();
+        assert!(admit_score(&unscored_run, true, true).is_err());
+        let timeout = node(
+            "slow",
+            SearchSplit::Train,
+            CandidateOutcome::Timeout,
+            0,
+            9_000,
+        );
+        assert_eq!(prefer(&unscored_run, &timeout).id, "slow");
     }
 }
