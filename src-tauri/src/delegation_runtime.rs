@@ -37,7 +37,7 @@ use wisp_store::{
 const RESULT_INSTRUCTIONS: &str = "Return one JSON object and no Markdown fence. Include summary (string), files_changed (array), diff_summary (string), artifacts (array), evidence (array), tests (array), and risks (array).";
 const DELEGATION_PROMPT_START: &str = "\n\n<delegation_capability>";
 const DELEGATION_PROMPT_END: &str = "</delegation_capability>";
-const DELEGATION_PROMPT_SECTION: &str = "\n\n<delegation_capability>\nControlled sub-Agent delegation is available in this conversation. When a task materially benefits from independent or parallel work, decompose it yourself and call delegate_tasks with the smallest useful temporary task DAG. Calls return ordered evidence to this turn by default; set background only for long work the user should not wait on, which returns a durable handle, delivers one completion later, and resumes you to synthesize it. Use capability IDs from the tool schema; omit specialist_id for generic temporary Agents. Do not delegate trivial work, do not poll a background batch, do not claim completion before its result arrives, and do not ask the user to visit the Agents panel merely to receive results.\n</delegation_capability>";
+const DELEGATION_PROMPT_SECTION: &str = "\n\n<delegation_capability>\nChoose delegation by the task's execution needs. When dispatch_subagent is available, prefer it for sustained exploration: inspect inputs, revise scripts, wait for compute Runs, review results, and send follow-up instructions as the work evolves. It creates a separate conversation and returns results or questions to you. For a bounded task graph with known dependencies and deliverables, call delegate_tasks with the smallest useful plan. Preserve an explicitly selected Workflow template and execute its graph through delegate_tasks, including single-node templates; task count alone does not choose the mechanism. Keep trivial work in this conversation. A delegate_tasks call returns ordered evidence to this turn by default; use background only after choosing a bounded workflow, when its result should arrive later. Background changes delivery timing, not the workflow's time or budget limits. It returns a durable handle, delivers one completion later, and resumes you to synthesize it. Use capability IDs from the tool schema; omit specialist_id for generic temporary Agents. Do not poll a background batch, do not claim completion before its result arrives, and do not ask the user to visit the Agents panel merely to receive results.\n</delegation_capability>";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct AgentWorkflowSnapshot {
@@ -49,6 +49,7 @@ pub(crate) struct AgentWorkflowSnapshot {
     delegation_enabled: bool,
     pub(crate) approval_policy: dynamic_workflow::AgentApprovalPolicy,
     pub(crate) dynamic: dynamic_workflow::DynamicAgentWorkflowSummary,
+    pub(crate) execution: Option<wisp_dto::AgentWorkflowExecutionSummary>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -536,7 +537,27 @@ async fn load_workflow_snapshot(
         .map_err(|error| error.to_string())?;
     let plan = stored_dynamic_plan(&workflow)?;
     let approval_policy = dynamic_workflow::AgentApprovalPolicy::from_mode(plan.mode);
-    let dynamic = dynamic_workflow::summarize(&plan, &attempts)?;
+    let visible_attempts = attempts
+        .iter()
+        .filter(|attempt| {
+            !matches!(
+                workflow.status,
+                AgentWorkflowStatus::Approved | AgentWorkflowStatus::Running
+            ) || attempt.execution_generation == workflow.execution_generation
+                || (attempt.status == AgentWorkflowAttemptStatus::Succeeded
+                    && !attempts.iter().any(|newer| {
+                        newer.step_id == attempt.step_id && newer.attempt > attempt.attempt
+                    }))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let dynamic = dynamic_workflow::summarize(&plan, &visible_attempts)?;
+    let execution = Some(
+        store
+            .agent_workflow_execution_summary(&workflow.id)
+            .await
+            .map_err(|error| error.to_string())?,
+    );
     Ok(AgentWorkflowSnapshot {
         workflow,
         steps,
@@ -544,6 +565,7 @@ async fn load_workflow_snapshot(
         delegation_enabled: true,
         approval_policy,
         dynamic,
+        execution,
     })
 }
 
@@ -1688,14 +1710,10 @@ async fn execute_agent_workflow_with_delegator_inner(
                 .await
         }
     };
-    if result.is_err() {
-        let _ = fail_owned_agent_workflow_execution(
-            store,
-            &observer,
-            workflow_id,
-            "Agent workflow execution stopped after a runtime or persistence error.",
-        )
-        .await;
+    if let Err(error) = &result {
+        let _ =
+            fail_owned_agent_workflow_execution(store, &observer, workflow_id, &error.to_string())
+                .await;
     }
     result.map_err(|error| error.to_string())
 }
@@ -4218,6 +4236,13 @@ impl DelegationExecutionObserver for StoreDelegationObserver {
         self.store.agent_workflow_cancel_requested(&plan.id).await
     }
 
+    async fn workflow_cancellation_reason(
+        &self,
+        plan: &DelegationPlan,
+    ) -> anyhow::Result<Option<String>> {
+        self.store.agent_workflow_stop_reason(&plan.id).await
+    }
+
     async fn workflow_finished(
         &self,
         plan: &DelegationPlan,
@@ -5527,10 +5552,14 @@ mod tests {
         sync_delegation_prompt(&mut prompt, true);
         assert_eq!(prompt.matches("<delegation_capability>").count(), 1);
         assert!(prompt.contains("call delegate_tasks"));
-        assert!(prompt.contains("set background only for long work"));
+        assert!(prompt.contains("When dispatch_subagent is available"));
+        assert!(prompt.contains("prefer it for sustained exploration"));
+        assert!(prompt.contains("Preserve an explicitly selected Workflow template"));
+        assert!(prompt.contains("including single-node templates"));
+        assert!(prompt.contains("use background only after choosing a bounded workflow"));
         assert!(prompt.contains("resumes you to synthesize it"));
         assert!(!prompt.contains("completion policy"));
-        assert!(prompt.contains("do not poll a background batch"));
+        assert!(prompt.contains("Do not poll a background batch"));
         assert!(prompt.contains("## Specialist\nKeep this section."));
         sync_delegation_prompt(&mut prompt, false);
         assert_eq!(prompt, "Base prompt\n\n## Specialist\nKeep this section.");
@@ -6006,6 +6035,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(retried.workflow.status, AgentWorkflowStatus::Approved);
+        let wire: wisp_dto::AgentWorkflowSnapshot =
+            serde_json::from_value(serde_json::to_value(&retried).unwrap()).unwrap();
+        let round = wire.execution.unwrap();
+        assert_eq!(round.generation, 1);
+        assert!(round.started_at.is_none());
+        assert!(round.stop_reason.is_none());
+        assert!(wire.dynamic.tasks.iter().all(|task| task.result.is_none()));
         let second = execute_agent_workflow_with_delegator(
             &store,
             "p",

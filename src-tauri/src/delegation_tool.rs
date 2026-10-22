@@ -253,9 +253,9 @@ fn build_delegate_tasks_schema(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let mut description = String::from("Run a bounded batch of temporary Wisp sub-Agents and return their results to this turn. Decompose the work yourself; independent tasks run in parallel, dependencies run after their prerequisites, and you must synthesize the returned evidence into your final answer. Use the smallest useful batch. Do not delegate trivial work. Nested delegation is available only when the advertised capability list explicitly includes delegation.");
+    let mut description = String::from("Execute a bounded task graph with known dependencies and deliverables, or an explicitly selected Workflow template, using temporary Wisp sub-Agents. Preserve selected templates, including single-node templates. Independent tasks run in parallel, dependencies run after their prerequisites, and you must synthesize the returned evidence into your final answer. When dispatch_subagent is available, prefer it for sustained exploration that revises scripts, waits for compute Runs, reviews results, and needs follow-up instructions. Use the smallest useful graph; task count alone does not choose the mechanism. Keep trivial work in the current conversation. Nested delegation is available only when the advertised capability list explicitly includes delegation.");
     if allow_background {
-        description.push_str(" Set background only for long work the user should not wait on: the call then returns a durable handle immediately, and you are resumed automatically with the result when the batch finishes. Do not wait, poll, or claim completion for a background batch.");
+        description.push_str(" After choosing a bounded workflow, set background if its result should arrive later: the call returns a durable handle immediately, and you are resumed automatically with the result when the batch finishes. Background changes delivery timing, not time or budget limits. Do not wait, poll, or claim completion for a background batch.");
     }
     let mut schema = ToolSchema::new(
         "delegate_tasks",
@@ -927,7 +927,7 @@ pub(crate) fn compact_execution_result(
         .collect::<Vec<_>>();
     let resumable = execution.status != wisp_core::DelegationExecutionStatus::Succeeded;
     let message = if resumable {
-        "This persisted workflow is resumable. Do not create a replacement delegate_tasks plan automatically: report the failure and workflow_id. Retry from the Agents activity card reruns only unsuccessful tasks, and its failed-task token budget can be adjusted there."
+        "Report the failure reason and workflow_id. After the previous execution has stopped, Retry from the Agents activity card starts a new execution with fresh time and budget allowances and reuses successful task results. Historical attempts and usage are retained. Failed or cancelled task budgets can be adjusted there. Inspect the cause before retrying; do not create a replacement delegate_tasks plan automatically."
     } else {
         "Synthesize these ordered delegated results into the final answer. Independent failures are partial evidence; do not hide them."
     };
@@ -1579,12 +1579,28 @@ mod tests {
             .unwrap()
             .contains(&json!("background")));
         assert!(parent.function.description.contains("background"));
+        assert!(parent
+            .function
+            .description
+            .contains("prefer it for sustained exploration"));
+        assert!(parent
+            .function
+            .description
+            .contains("including single-node templates"));
+        assert!(parent
+            .function
+            .description
+            .contains("not time or budget limits"));
 
         let child = build_delegate_tasks_schema(&registry, &host, &[], false);
         assert!(child.function.parameters["properties"]
             .get("background")
             .is_none());
         assert!(!child.function.description.contains("background"));
+        assert!(child
+            .function
+            .description
+            .contains("When dispatch_subagent is available"));
     }
 
     #[tokio::test]
