@@ -1887,6 +1887,7 @@ async fn unlimited_workflow_budgets_admit_work_after_large_usage_and_allow_deleg
         .await
         .unwrap());
     first.status = AgentWorkflowAttemptStatus::Succeeded;
+    first.response_json = Some(r#"{"status":"succeeded"}"#.into());
     first.input_tokens = 489_967;
     first.output_tokens = 7_709;
     first.tool_calls = 600;
@@ -1946,6 +1947,7 @@ async fn unlimited_root_dimensions_do_not_disable_explicit_finite_dimensions() {
         )
         .await;
         first.status = AgentWorkflowAttemptStatus::Succeeded;
+        first.response_json = Some(r#"{"status":"succeeded"}"#.into());
         first.input_tokens = 100;
         first.tool_calls = 2;
         first.cost_microunits = 2;
@@ -5786,6 +5788,7 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             SESSION_FILE_OPERATIONS_MIGRATION.to_string(),
             SESSION_TIMERS_MIGRATION.to_string(),
             SERVER_TURNS_MIGRATION.to_string(),
+            AGENT_WORKFLOW_EXECUTION_ROUNDS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();
@@ -6112,6 +6115,8 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
     store.create_project("p", "proj", "").await.unwrap();
     let mut run = RunRecord::new("r", "p", "local", "Run", "command");
     run.status = RunStatus::Succeeded;
+    run.exit_code = Some(0);
+    run.last_poll_error = Some("remote artifact registration failed: interrupted download".into());
     store.create_run(&run).await.unwrap();
 
     assert!(store
@@ -6122,7 +6127,11 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
         .harvested_at
         .is_none());
     assert!(store.mark_run_harvested("r").await.unwrap());
-    assert!(store.get_run("r").await.unwrap().unwrap().is_harvested());
+    let harvested = store.get_run("r").await.unwrap().unwrap();
+    assert!(harvested.is_harvested());
+    assert!(harvested.last_poll_error.is_none());
+    assert_eq!(harvested.status, RunStatus::Succeeded);
+    assert_eq!(harvested.exit_code, Some(0));
     let harvested_at = store
         .get_run("r")
         .await
@@ -6140,6 +6149,13 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
         reopened.get_run("r").await.unwrap().unwrap().harvested_at,
         Some(harvested_at)
     );
+    assert!(reopened
+        .get_run("r")
+        .await
+        .unwrap()
+        .unwrap()
+        .last_poll_error
+        .is_none());
     assert!(reopened
         .record_run_harvest_error("r", "remote artifact registration failed: boom")
         .await
