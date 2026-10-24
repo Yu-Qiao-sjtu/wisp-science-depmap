@@ -37,6 +37,9 @@ What you do:\n\
 - Report: `research_activity` reads what was recorded across projects (runs, outputs, notes, decisions, \
 conversations and daily recaps). State only what the records show; never invent results, numbers or causes. \
 Quiet days are simply quiet.\n\
+- Where a project stands: `project_status` reads its progress memory (goal, done, conclusions, open \
+questions, work in progress, next steps) and what was recorded after it. Read it first for progress \
+questions. It is model-written: say when an item is marked uncertain.\n\
 - Remember the plan: when the researcher says what they intend to do, save each item with `research_plan` \
 (add). Mark items done or dropped when told, or when the records clearly show it. Before planning or \
 reporting a day, list the plan — it also carries unfinished items forward.\n\
@@ -78,6 +81,9 @@ pub(crate) fn tools(app: &AppHandle, origin: crate::TurnOrigin, authorization: &
         store: store.clone(),
     }));
     tools.add(Box::new(ActivityTool {
+        store: store.clone(),
+    }));
+    tools.add(Box::new(StatusTool {
         store: store.clone(),
     }));
     tools.add(Box::new(ConversationsTool {
@@ -240,6 +246,41 @@ pub(crate) async fn visible_projects(
         .filter(|p| !hidden.contains(&p.0))
         .map(|p| (p.0, p.1, p.6, p.4))
         .collect())
+}
+
+const SCOPE_NOTE: &str = "The researcher selected this project in the sidebar: it is the project this message is about. Pass its project_id to project_status (where it stands), research_activity, project_conversations, research_plan and dispatch_to_project. None of its conversations were read for this message; when the records are not enough, find one with project_conversations and read it with project_session_result.";
+
+/// In the assistant's conversation a project reference is the sidebar
+/// selection: it names the project a message is about, not a request to read
+/// every conversation in it (#1589). Moves those ids out of `project_ids`
+/// into a scope note; other conversations keep `#project` for the Reader.
+pub(crate) async fn take_project_scope(
+    store: &Store,
+    frame: &str,
+    project_ids: &mut Vec<String>,
+) -> Result<Option<String>, String> {
+    if project_ids.is_empty()
+        || !store
+            .frame_project_id(frame)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some_and(|project| wisp_store::is_assistant_project_id(&project))
+    {
+        return Ok(None);
+    }
+    let visible = visible_projects(store).await?;
+    let mut lines = Vec::new();
+    for id in project_ids.drain(..) {
+        let (_, name, ..) = visible
+            .iter()
+            .find(|project| project.0 == id)
+            .ok_or_else(|| format!("No visible project has id '{id}'."))?;
+        lines.push(format!("- {name} (project_id: {id})"));
+    }
+    Ok(Some(format!(
+        "## Selected project\n{}\n{SCOPE_NOTE}",
+        lines.join("\n")
+    )))
 }
 
 /// The assistant's sidebars must resolve the authoritative privacy setting
@@ -476,6 +517,75 @@ impl Tool for ActivityTool {
         };
         let project = args.get("project_id").and_then(Value::as_str);
         match activity(&self.store, from, until, project).await {
+            Ok(text) => ToolResult::ok(text),
+            Err(error) => ToolResult::fail(error),
+        }
+    }
+}
+
+struct StatusTool {
+    store: Store,
+}
+
+/// A project's progress memory plus what was recorded after it.
+async fn project_status(store: &Store, project_id: &str) -> Result<String, String> {
+    let (_, name, ..) = visible_projects(store)
+        .await?
+        .into_iter()
+        .find(|p| p.0 == project_id)
+        .ok_or_else(|| format!("No visible project has id '{project_id}'."))?;
+    let Some(status) = crate::project_status::load(store, project_id).await? else {
+        return Ok(json!({
+            "project": name,
+            "memory": null,
+            "note": "No progress memory yet; the daily recap run builds it. Use research_activity for recent days.",
+        })
+        .to_string());
+    };
+    let since = crate::research_recap::day_digest(
+        store,
+        project_id,
+        status.through_at,
+        chrono::Utc::now().timestamp(),
+    )
+    .await?
+    .map(|(records, _)| records);
+    let text = json!({"project": name, "memory": status.for_model(), "since": since}).to_string();
+    Ok(if text.chars().count() > MAX_ACTIVITY_CHARS {
+        format!("{}\n(truncated)", clip(&text, MAX_ACTIVITY_CHARS))
+    } else {
+        text
+    })
+}
+
+#[async_trait]
+impl Tool for StatusTool {
+    fn name(&self) -> &str {
+        "project_status"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(
+            self.name(),
+            "Read a visible project's progress memory: goal, done, conclusions, open questions, work in progress and next steps, each item with its sources and whether it is uncertain, plus the records made after it (`since`). Use it first when asked where a project stands. It is model-written and can be stale or wrong; check a cited conversation with project_session_result when an answer depends on it.",
+            json!({
+                "type": "object",
+                "properties": {"project_id": {"type": "string"}},
+                "required": ["project_id"]
+            }),
+        )
+    }
+
+    fn read_only(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        args["project_id"].as_str().unwrap_or_default().into()
+    }
+
+    async fn run(&self, args: &Value, _env: &dyn ToolEnv) -> ToolResult {
+        match project_status(&self.store, args["project_id"].as_str().unwrap_or_default()).await {
             Ok(text) => ToolResult::ok(text),
             Err(error) => ToolResult::fail(error),
         }
@@ -1284,6 +1394,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_selected_project_scopes_the_assistant_without_reading_it() {
+        let f = Fixture::open().await;
+        ensure(&f.store, &f.dir).await.unwrap();
+        f.store.create_project("p1", "NK2R", "").await.unwrap();
+        f.store
+            .create_frame("ordinary", "p1", "OPERON", "m")
+            .await
+            .unwrap();
+        let mut ids = vec!["p1".to_string()];
+        let note = take_project_scope(&f.store, ASSISTANT_FRAME_ID, &mut ids)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ids.is_empty(), "nothing is left for the Reader");
+        assert!(note.contains("- NK2R (project_id: p1)"));
+        // A hand-written #project elsewhere stays an explicit Reader request.
+        let mut ids = vec!["p1".to_string()];
+        assert!(take_project_scope(&f.store, "ordinary", &mut ids)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(ids, ["p1"]);
+        let mut none = Vec::new();
+        assert!(take_project_scope(&f.store, ASSISTANT_FRAME_ID, &mut none)
+            .await
+            .unwrap()
+            .is_none());
+        // Visibility is checked again at send time.
+        crate::privacy_mode::save(&f.store, true, &["p1".into()])
+            .await
+            .unwrap();
+        for id in ["p1", "missing"] {
+            let mut ids = vec![id.to_string()];
+            assert!(take_project_scope(&f.store, ASSISTANT_FRAME_ID, &mut ids)
+                .await
+                .unwrap_err()
+                .contains("No visible project"));
+        }
+    }
+
+    #[tokio::test]
     async fn dispatch_opens_a_titled_project_conversation_and_plans_it() {
         let f = Fixture::open().await;
         f.store.create_project("p1", "RNA-seq", "").await.unwrap();
@@ -1463,5 +1614,53 @@ mod tests {
         assert!(activity(&f.store, today, today, Some("nope"))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn project_status_reads_the_page_and_what_was_recorded_after_it() {
+        use crate::project_status::{ProjectStatus, Sections, StatusItem};
+        let f = Fixture::open().await;
+        f.store.create_project("p1", "NK2R", "").await.unwrap();
+        let read = |text: String| serde_json::from_str::<Value>(&text).unwrap();
+        let empty = read(project_status(&f.store, "p1").await.unwrap());
+        assert!(empty["memory"].is_null());
+        let now = chrono::Utc::now().timestamp();
+        let page = ProjectStatus {
+            through_at: now - 3600,
+            sections: Sections {
+                goal: vec![StatusItem {
+                    text: "Bind NK2R".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        f.store
+            .save_project_status("p1", &serde_json::to_string(&page).unwrap())
+            .await
+            .unwrap();
+        f.store
+            .add_research_journal_entry(
+                &wisp_store::StateScope::mainline("p1"),
+                &wisp_dto::ResearchJournalInput {
+                    title: "Docking crashed".into(),
+                    body: String::new(),
+                    category: "progress".into(),
+                    occurred_at: now - 60,
+                },
+            )
+            .await
+            .unwrap();
+        let status = read(project_status(&f.store, "p1").await.unwrap());
+        assert_eq!(status["memory"]["goal"][0]["text"], "Bind NK2R");
+        assert!(status["since"].to_string().contains("Docking crashed"));
+        crate::privacy_mode::save(&f.store, true, &["p1".into()])
+            .await
+            .unwrap();
+        assert!(project_status(&f.store, "p1")
+            .await
+            .unwrap_err()
+            .contains("No visible project"));
     }
 }
