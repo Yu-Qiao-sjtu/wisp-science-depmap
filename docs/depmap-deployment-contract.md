@@ -47,21 +47,15 @@ probe calls only `depmap_status`. It writes a path-free attestation containing
 the observation time and structured status; it does not record the tunnel URL,
 credentials, host paths, or SSH details.
 
-The release workflow refuses to create or modify a GitHub Release unless that
-attestation is at most 72 hours old and all of these conditions hold:
+Creating a GitHub Release does not read `.github/depmap-live-contract.json`.
+The probe remains available for an operator who wants a path-free record of
+`depmap_status`, but a missing or stale file does not block the tag.
 
-- `query_contract_version` is inside the Rust client's inclusive minimum and
-  maximum;
-- `server_build_identity`, `capability_catalog_digest`, and
-  `catalog_build_identity` are present and non-empty;
-- the catalog identity is neither `catalog-missing` nor
-  `catalog-unreadable`.
-
-After a Provider contract change, deploy it through the documented service
-path, rebuild the query catalog, run the probe, inspect the generated JSON, and
-commit the fresh attestation in the release commit. A missing, stale, future,
-malformed, or incompatible attestation fails closed. The live result gates
-deployment and release, not ordinary pull-request review.
+`compare` still checks a captured status payload when you pass one. A usable
+payload has `query_contract_version` inside the Rust client's inclusive
+minimum and maximum, non-empty `server_build_identity`,
+`capability_catalog_digest`, and `catalog_build_identity`, and a catalog
+identity other than `catalog-missing` or `catalog-unreadable`.
 
 The offline comparator can also be run against a captured status payload:
 

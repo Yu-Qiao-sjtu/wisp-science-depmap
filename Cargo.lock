@@ -7210,7 +7210,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-acp"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "agent-client-protocol",
  "futures",
@@ -7223,7 +7223,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-app"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7242,7 +7242,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-bio"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7266,7 +7266,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-cli"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7295,7 +7295,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-core"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7318,11 +7318,11 @@ dependencies = [
 
 [[package]]
 name = "wisp-dev"
-version = "0.20.0"
+version = "0.21.0"
 
 [[package]]
 name = "wisp-dto"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7330,7 +7330,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-llm"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7349,7 +7349,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-mcp"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7371,11 +7371,11 @@ dependencies = [
 
 [[package]]
 name = "wisp-paths"
-version = "0.20.0"
+version = "0.21.0"
 
 [[package]]
 name = "wisp-runs"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7401,7 +7401,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-runtime"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7422,7 +7422,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-server"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7448,7 +7448,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-service"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -7461,7 +7461,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-skills"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -7483,7 +7483,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-store"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7508,7 +7508,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-sync"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7535,7 +7535,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tauri"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7606,7 +7606,7 @@ dependencies = [
 
 [[package]]
 name = "wisp-tools"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anydoc",
  "async-trait",

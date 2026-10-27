@@ -269,7 +269,7 @@ class DepMapContractGateTests(unittest.TestCase):
         )
         self.assertNotIn("private", json.dumps(projected))
 
-    def test_workflows_wire_offline_pr_and_fresh_release_gates(self):
+    def test_workflows_wire_offline_pr_gate_and_not_a_release_attestation(self):
         test_workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
@@ -283,10 +283,8 @@ class DepMapContractGateTests(unittest.TestCase):
         release_workflow = (
             ROOT / ".github" / "workflows" / "release-create.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("depmap_contract_gate.py compare", release_workflow)
-        self.assertIn(".github/depmap-live-contract.json", release_workflow)
-        self.assertIn("--require-attestation", release_workflow)
-        self.assertIn("--max-age-hours 72", release_workflow)
+        self.assertNotIn("depmap_contract_gate.py", release_workflow)
+        self.assertNotIn(".github/depmap-live-contract.json", release_workflow)
 
 
 if __name__ == "__main__":
