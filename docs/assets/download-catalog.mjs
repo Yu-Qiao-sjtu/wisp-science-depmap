@@ -23,7 +23,18 @@ export function validTag(tag) {
 }
 
 export function assetName(tag, pkg) {
-  return `wisp-depmap_${tag.slice(1)}_${pkg.suffix}`;
+  return `${pkg.prefix || "wisp-depmap"}_${tag.slice(1)}_${pkg.suffix}`;
+}
+
+// A package may still be building for the latest release. Its last published
+// version remains downloadable, with its own tag shown by the picker.
+export function compareTags(a, b) {
+  const left = a.slice(1).split(".").map(Number);
+  const right = b.slice(1).split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (left[i] !== right[i]) return left[i] - right[i];
+  }
+  return 0;
 }
 
 export function downloadKey(tag, name, sha256) {

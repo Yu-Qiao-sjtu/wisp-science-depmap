@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PACKAGES, RELEASES, assetName, compareTags, contentType, downloadKey, validTag, validateManifest } from "../assets/download-catalog.mjs";
 
-const repo = "xuzhougeng/wisp-science";
+const repo = "Yu-Qiao-sjtu/wisp-science-depmap";
 
 export function selectAssets(release, fallbackReleases = []) {
   if (!validTag(release.tagName) || release.isDraft || release.isPrerelease) throw new Error("Expected a stable published release");

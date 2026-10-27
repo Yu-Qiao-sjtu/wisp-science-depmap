@@ -48,14 +48,14 @@ test("APK downloads use the Android package type so the browser can open the ins
   const { env } = fixture();
   const response = await worker.fetch(request(`/downloads/${key.replace("x64.dmg", "android.apk")}`), env);
   assert.equal(response.headers.get("content-type"), "application/vnd.android.package-archive");
-  assert.match(response.headers.get("content-disposition"), /wisp-science_1.12.0_android.apk/);
+  assert.match(response.headers.get("content-disposition"), /wisp-depmap_1.12.0_android.apk/);
   assert.equal((await worker.fetch(request(`/downloads/${key}`), env)).headers.get("content-type"), "application/octet-stream");
 });
 
 test("SwiftUI and WinUI installers stream under their exact release filenames", async () => {
   const { env } = fixture();
   for (const name of ["Wisp-Science-SwiftUI_1.12.0_x86_64.dmg", "Wisp-Science-WinUI-Preview_1.12.0_x64-framework-dependent-setup.exe"]) {
-    const path = key.replace("wisp-science_1.12.0_x64.dmg", name);
+    const path = key.replace("wisp-depmap_1.12.0_x64.dmg", name);
     const response = await worker.fetch(request(`/downloads/${path}`), env);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-disposition"), `attachment; filename="${name}"`);
