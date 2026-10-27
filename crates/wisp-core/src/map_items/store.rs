@@ -13,7 +13,7 @@ use super::decide::{verdict, Thresholds, Verdict};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use wisp_llm::systemone::Question;
 
@@ -204,8 +204,33 @@ impl RunDir {
     pub fn append_row(&self, row: &Row) -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .read(true)
+            .write(true)
             .open(self.dir.join("rows.jsonl"))?;
+        // A crash can leave a partial last line. Loading skips it, but appending
+        // onto that fragment would glue the next result into invalid JSON.
+        let len = file.seek(SeekFrom::End(0))?;
+        if len > 0 {
+            file.seek(SeekFrom::End(-1))?;
+            let mut last = [0u8; 1];
+            file.read_exact(&mut last)?;
+            if last[0] != b'\n' {
+                let mut cut = 0u64;
+                let mut pos = len - 1;
+                let mut byte = [0u8; 1];
+                while pos > 0 {
+                    pos -= 1;
+                    file.seek(SeekFrom::Start(pos))?;
+                    file.read_exact(&mut byte)?;
+                    if byte[0] == b'\n' {
+                        cut = pos + 1;
+                        break;
+                    }
+                }
+                file.set_len(cut)?;
+            }
+        }
+        file.seek(SeekFrom::End(0))?;
         let mut line = serde_json::to_vec(row)?;
         line.push(b'\n');
         file.write_all(&line)
@@ -234,25 +259,30 @@ impl RunDir {
     }
 }
 
+/// Spreadsheet apps treat a leading `=`, `+`, `-`, `@`, tab, or CR as a formula.
+/// Item ids and worker field names are external text, so they get the same
+/// neutralization as model values. A plain number such as `-0.5` stays numeric.
 fn csv_cell(value: &str) -> String {
+    let formula =
+        value.starts_with(['=', '+', '-', '@', '\t', '\r']) && value.parse::<f64>().is_err();
+    let value = if formula {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    };
     if value.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
-        value.to_string()
+        value
     }
 }
 
-/// Text from a paper or a model can open in a spreadsheet: neutralize a leading
-/// formula character, but leave plain numbers alone.
 fn csv_value(value: &Value) -> String {
-    let text = match value {
+    match value {
         Value::Null => String::new(),
-        Value::String(s) => s.clone(),
-        other => return csv_cell(&other.to_string()),
-    };
-    let formula =
-        text.starts_with(['=', '+', '-', '@', '\t', '\r']) && text.parse::<f64>().is_err();
-    csv_cell(&if formula { format!("'{text}") } else { text })
+        Value::String(text) => csv_cell(text),
+        other => csv_cell(&other.to_string()),
+    }
 }
 
 /// One line per item in manifest order: item, status, verdict, the union of the
@@ -399,6 +429,69 @@ mod tests {
         file.write_all(b"{\"item\":\"b\",\"stat").unwrap();
         let rows = dir.load_rows();
         assert!(rows.contains_key("a") && !rows.contains_key("b"));
+        dir.append_row(&row("c")).unwrap();
+        let rows = dir.load_rows();
+        assert!(rows.contains_key("a") && rows.contains_key("c"));
+        assert!(!rows.contains_key("b"));
+        let text = std::fs::read_to_string(dir.dir.join("rows.jsonl")).unwrap();
+        assert!(text
+            .lines()
+            .all(|line| serde_json::from_str::<Row>(line).is_ok()));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn csv_defuses_formulas_in_item_ids_and_headers() {
+        let manifest = Manifest {
+            run_id: "run".into(),
+            created: String::new(),
+            status: RunStatus::Running,
+            note: String::new(),
+            items: vec![
+                Item {
+                    id: "=1+1".into(),
+                    payload: None,
+                },
+                Item {
+                    id: "ok".into(),
+                    payload: None,
+                },
+            ],
+            spec: Spec {
+                worker: None,
+                decide: None,
+                reduce: None,
+                concurrency: 1,
+                max_chars: 1000,
+                max_minutes: 1,
+                max_tokens: None,
+            },
+            jev_model: None,
+        };
+        let mut rows = HashMap::new();
+        rows.insert(
+            "ok".into(),
+            Row {
+                item: "ok".into(),
+                status: RowStatus::Ok,
+                data: Some(json!({ "=cmd": "x" })),
+                scores: BTreeMap::new(),
+                answers: BTreeMap::new(),
+                error: None,
+                chars: 0,
+                truncated: false,
+                tokens_in: 0,
+                tokens_out: 0,
+                ms: 0,
+                jev: None,
+                ts: String::new(),
+            },
+        );
+        let csv = results_csv(&manifest, &rows);
+        assert!(csv.starts_with("item,status,verdict,'=cmd,error\n"));
+        assert!(csv.contains("'=1+1,pending,"));
+        assert!(!csv
+            .lines()
+            .any(|line| line.starts_with("=1+1,") || line.contains(",=cmd,")));
     }
 }
