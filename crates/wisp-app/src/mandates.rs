@@ -836,7 +836,7 @@ impl Tool for RequestAssistanceTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": MANDATE_REQUEST_KINDS, "description": "login: sign in or confirm identity. materials: supply files, data or information. judgement: a decision that is theirs to make. payment: authorize a payment. release: publish, submit or merge prepared work."},
+                    "kind": {"type": "string", "enum": ["login", "materials", "judgement", "judgment", "Judgment", "payment", "release"], "description": "login: sign in or confirm identity. materials: supply files, data or information. judgement: a decision that is theirs to make (the US spelling judgment is accepted). payment: authorize a payment. release: publish, submit or merge prepared work."},
                     "what": {"type": "string", "description": "Exactly what they should do or provide, in one or two sentences they can act on without opening the conversation."},
                     "why": {"type": "string", "description": "Why the work cannot continue without it."},
                     "then": {"type": "string", "description": "How you will continue once it is done."}
