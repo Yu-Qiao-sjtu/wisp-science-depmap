@@ -6891,6 +6891,7 @@ mod tests {
     fn scoped_handshake(instance: &str, tabs: Value) -> String {
         json!({
             "type": "ext_ready",
+            "product": "wisp-depmap",
             "protocol_version": 2,
             "extension_version": "0.5.0",
             "capabilities": ["tab_scope", "managed_tabs"],
@@ -7391,7 +7392,7 @@ mod tests {
             .handle_text(
                 1,
                 &json!({
-                    "type": "ext_ready", "protocol_version": 2, "extension_version": "0.4.2",
+                    "type": "ext_ready", "product": "wisp-depmap", "protocol_version": 2, "extension_version": "0.4.2",
                     "capabilities": ["managed_tabs"],
                     "tabs": [user_tab(1, "https://mine.example", 5)]
                 })

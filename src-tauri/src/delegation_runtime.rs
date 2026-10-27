@@ -5709,7 +5709,10 @@ mod tests {
         .unwrap();
         let limits: AgentDelegationRootLimits =
             serde_json::from_str(&created.workflow.root_limits_json).unwrap();
-        assert_eq!(limits.max_tokens, 1_024_000);
+        // Root tokens are the host ceiling times the task cap. A separate
+        // four-times floor used to cover fan-in input; v1.22.0 keeps zero as
+        // unlimited and does not add that floor on top of a finite ceiling.
+        assert_eq!(limits.max_tokens, 256_000);
         let _ = std::fs::remove_dir_all(root);
     }
 
