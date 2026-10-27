@@ -191,6 +191,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "folder" => view! { <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/> }.into_view(),
         "plan" => view! { <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6l1 1 2-2"/><path d="M3 12l1 1 2-2"/><path d="M3 18l1 1 2-2"/> }.into_view(),
         "chat" => view! { <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 10h8"/><path d="M8 14h5"/> }.into_view(),
+        "swarm" => view! { <circle cx="12" cy="5" r="3"/><circle cx="5" cy="18" r="3"/><circle cx="19" cy="18" r="3"/><path d="m10.5 8-4 7m7-7 4 7M8 18h8"/> }.into_view(),
         "branch" => view! { <path d="M6 3v6a4 4 0 0 0 4 4h8"/><path d="M18 7v12"/><path d="M14 15l4 4 4-4"/><circle cx="6" cy="3" r="2"/> }.into_view(),
         "brain" => view! {
             <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
@@ -206,6 +207,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "flask" => view! { <path d="M10 2v7.3"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="m10 9.3-6.5 10.8a1 1 0 0 0 .9 1.5h15.2a1 1 0 0 0 .9-1.5L14 9.3"/><path d="M6.5 16h11"/> }.into_view(),
         "dna" => view! { <path d="M4 3c5 0 11 18 16 18"/><path d="M20 3C15 3 9 21 4 21"/><path d="M7 6h10"/><path d="M5 10h14"/><path d="M5 14h14"/><path d="M7 18h10"/> }.into_view(),
         "arrow-left" => view! { <path d="M19 12H5"/><path d="m12 19-7-7 7-7"/> }.into_view(),
+        "folder-move" => view! { <path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/> }.into_view(),
         "folder-plus" => view! { <path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/> }.into_view(),
         "book" => view! { <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/> }.into_view(),
         "gear" => view! { <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/> }.into_view(),
@@ -228,9 +230,11 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "sync" => view! { <path d="M20 7h-9"/><path d="m16 3 4 4-4 4"/><path d="M4 17h9"/><path d="m8 21-4-4 4-4"/> }.into_view(),
         "loader" => view! { <circle cx="12" cy="12" r="9" opacity="0.16"/><path d="M21 12a9 9 0 0 0-9-9"/><path d="M21 12a9 9 0 0 0-5.2-8.2" opacity="0.4"/> }.into_view(),
         "circle-alert" => view! { <circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/> }.into_view(),
+        "circle-help" => view! { <circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/> }.into_view(),
         "pin" => view! { <path d="M12 17v5"/><path d="M5 17h14"/><path d="m6 3 1 7-3 4h16l-3-4 1-7Z"/> }.into_view(),
         "link" => view! { <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/> }.into_view(),
         "bell" => view! { <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/> }.into_view(),
+        "inbox" => view! { <path d="m22 12-3.45-6.9A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2Z"/><path d="M2 12h6l2 3h4l2-3h6"/> }.into_view(),
         "close" => view! { <path d="M18 6 6 18"/><path d="m6 6 12 12"/> }.into_view(),
         "more" => view! { <circle cx="12" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/> }.into_view(),
         "arrow-right" => view! { <path d="M5 12h14m-6-6 6 6-6 6"/> }.into_view(),
@@ -252,6 +256,7 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "star" => view! { <path d="m12 2.7 2.85 5.77 6.37.93-4.61 4.49 1.09 6.34L12 17.23l-5.7 3 1.09-6.34L2.78 9.4l6.37-.93Z"/> }.into_view(),
         "star-filled" => view! { <path d="m12 2.7 2.85 5.77 6.37.93-4.61 4.49 1.09 6.34L12 17.23l-5.7 3 1.09-6.34L2.78 9.4l6.37-.93Z" fill="currentColor"/> }.into_view(),
         "edit" => view! { <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/> }.into_view(),
+        "square-pen" => view! { <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M16 3a2.1 2.1 0 0 1 3 3l-9 9-4 1 1-4Z"/> }.into_view(),
         "code" => view! { <path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/> }.into_view(),
         "doc" => view! { <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/> }.into_view(),
         "image" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/> }.into_view(),
@@ -269,6 +274,10 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "context-compact" => view! { <path d="M6 5h12"/><path d="M4 12h16"/><path d="M6 19h12"/> }.into_view(),
         "lock" => view! { <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/> }.into_view(),
         "archive" => view! { <rect x="3" y="3" width="18" height="4" rx="1"/><path d="M5 7v13h14V7M10 11h4"/> }.into_view(),
+        "archive-import" => view! { <path d="M12 3v10m-4-4 4 4 4-4"/><path d="M5 8H3v4h2v9h14v-9h2V8h-2M5 12h3m8 0h3M10 17h4"/> }.into_view(),
+        "archive-export" => view! { <path d="M12 13V3m-4 4 4-4 4 4"/><path d="M5 8H3v4h2v9h14v-9h2V8h-2M5 12h3m8 0h3M10 17h4"/> }.into_view(),
+        "conversation-import" => view! { <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5M3 12h13m-4-4 4 4-4 4"/> }.into_view(),
+        "conversation-move" => view! { <path d="M4 3h9a2 2 0 0 1 2 2v4M4 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1M8 13h14m-4-4 4 4-4 4"/> }.into_view(),
         "hand" => view! { <path d="M8 13V5a2 2 0 0 1 4 0v7"/><path d="M12 6a2 2 0 0 1 4 0v6"/><path d="M16 8a2 2 0 0 1 4 0v7a7 7 0 0 1-7 7h-1c-2 0-3.5-1-4.5-2.5L3 13a2 2 0 0 1 3-2l2 2"/> }.into_view(),
         "ban" => view! { <circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/> }.into_view(),
         "skill" => view! { <path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/> }.into_view(),
@@ -280,14 +289,20 @@ pub(crate) fn compose_icon(kind: &str) -> impl IntoView {
         "user" => view! { <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/> }.into_view(),
         "wrench" => view! { <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/> }.into_view(),
         "clock" => view! { <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/> }.into_view(),
+        "pause" => view! { <rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/> }.into_view(),
         "history" => view! { <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/> }.into_view(),
         "sort" => view! { <path d="m21 16-4 4-4-4"/><path d="M17 20V4"/><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/> }.into_view(),
         "search" => view! { <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/> }.into_view(),
+        "bot" => view! { <path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/> }.into_view(),
         "eye" => view! { <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/> }.into_view(),
         "eye-off" => view! { <path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5 0 9 5 9 8a12.4 12.4 0 0 1-2 3.7"/><path d="M6.6 6.6C4.4 8 3 10.2 3 12c0 3 4 8 9 8a10.4 10.4 0 0 0 4.2-.9"/> }.into_view(),
         "terminal" => view! { <path d="m4 17 6-5-6-5"/><path d="M12 19h8"/> }.into_view(),
         "grid" => view! { <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/> }.into_view(),
         "list" => view! { <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/> }.into_view(),
+        "notebook" => view! { <rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v18"/><path d="M2 7h4M2 12h4M2 17h4M12 8h4M12 12h4"/> }.into_view(),
+        "camera" => view! { <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/> }.into_view(),
+        "square" => view! { <rect x="3" y="3" width="18" height="18" rx="2"/> }.into_view(),
+        "check-square" => view! { <path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/> }.into_view(),
         "timeline" => view! { <path d="M22 12h-4l-3 9L9 3l-3 9H2"/> }.into_view(),
         "compact" => view! { <path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m14 10 7-7"/><path d="m3 21 7-7"/> }.into_view(),
         "fork" => view! { <circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.5 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/> }.into_view(),
@@ -819,13 +834,19 @@ pub(crate) fn UserMessage(
     busy: ReadSignal<bool>,
     can_modify: bool,
     can_branch: Signal<bool>,
+    /// Quoting turns into a new conversation is available for this row.
+    can_excerpt: Signal<bool>,
+    /// Transcript row where a quote range was started, if any.
+    excerpt_start: Signal<Option<usize>>,
     on_copy: Callback<String>,
     on_edit: Callback<usize>,
     on_branch: Callback<usize>,
+    on_excerpt: Callback<usize>,
     on_file: Callback<ModalArtifact>,
 ) -> impl IntoView {
     let locale = use_locale();
     let presentation = user_message_presentation(&text);
+    let brief_sender = presentation.brief_sender;
     let body = presentation.body;
     let (images, files): (Vec<_>, Vec<_>) = presentation
         .attachments
@@ -920,25 +941,64 @@ pub(crate) fn UserMessage(
         })
     })
     .collect_view();
+    let body_view = has_body.then(|| {
+        view! {
+            <div class="body">{move || match (&body_short, expanded.get()) {
+                (Some(short), false) => short.clone(),
+                _ => body.clone(),
+            }}</div>
+        }
+    });
+    let body_toggle = (has_body && is_long).then(|| view! {
+        <button
+            type="button"
+            class="msg-btn body-toggle"
+            on:click=move |_| set_expanded.update(|v| *v = !*v)
+        >{move || t(locale.get(), if expanded.get() { "msg.show_less" } else { "msg.show_all" })}</button>
+    });
+    // A turn another agent dispatched reads as a task card under its sender,
+    // not as something the researcher typed.
+    let text_view = match brief_sender {
+        Some(sender) => {
+            let (kind, icon, label_key, meta_key) = match sender {
+                BriefSender::ParentAgent => (
+                    "parent-agent",
+                    "bot",
+                    "msg.brief_parent_agent",
+                    "msg.brief_parent_agent_meta",
+                ),
+                BriefSender::ResearchAssistant => (
+                    "research-assistant",
+                    "sparkles",
+                    "msg.brief_research_assistant",
+                    "msg.brief_research_assistant_meta",
+                ),
+            };
+            view! {
+                <section class="user-brief" data-brief-sender=kind>
+                    <header class="user-brief-head">
+                        <span class="user-brief-icon">{compose_icon(icon)}</span>
+                        <span class="user-brief-copy">
+                            <span class="user-brief-label">{move || t(locale.get(), label_key)}</span>
+                            <span class="user-brief-meta">{move || t(locale.get(), meta_key)}</span>
+                        </span>
+                    </header>
+                    {body_view}
+                    {body_toggle}
+                </section>
+            }
+            .into_view()
+        }
+        None => view! { <>{body_view}{body_toggle}</> }.into_view(),
+    };
     view! {
         <div class="user-bubble"
+            class:excerpt-start=move || excerpt_start.get() == Some(ui_index)
             data-branch-ui-index=move || can_branch.get().then(|| ui_index.to_string())>
             {has_images.then(|| view! { <div class="user-attachment-images">{image_cards}</div> })}
             {has_files.then(|| view! { <div class="user-attachment-files">{file_cards}</div> })}
             {has_context.then(|| view! { <div class="user-context-cards">{context_cards}</div> })}
-            {has_body.then(|| view! {
-                <div class="body">{move || match (&body_short, expanded.get()) {
-                    (Some(short), false) => short.clone(),
-                    _ => body.clone(),
-                }}</div>
-            })}
-            {(has_body && is_long).then(|| view! {
-                <button
-                    type="button"
-                    class="msg-btn body-toggle"
-                    on:click=move |_| set_expanded.update(|v| *v = !*v)
-                >{move || t(locale.get(), if expanded.get() { "msg.show_less" } else { "msg.show_all" })}</button>
-            })}
+            {text_view}
             {timestamp.map(|timestamp| {
                 let compact = format_message_time(timestamp);
                 view! {
@@ -978,6 +1038,18 @@ pub(crate) fn UserMessage(
                         title=move || t(locale.get(), "msg.branch")
                         on:click=move |_| on_branch.call(ui_index)
                     >{move || t(locale.get(), "msg.branch")}</button>
+                })}
+                {move || can_excerpt.get().then(|| {
+                    let selecting = move || excerpt_start.get().is_some();
+                    view! {
+                        <button
+                            type="button"
+                            class="msg-btn msg-excerpt"
+                            data-testid="turn-excerpt"
+                            title=move || t(locale.get(), if selecting() { "msg.excerpt_end_hint" } else { "msg.excerpt_start_hint" })
+                            on:click=move |_| on_excerpt.call(ui_index)
+                        >{move || t(locale.get(), if selecting() { "msg.excerpt_end" } else { "msg.excerpt_start" })}</button>
+                    }
                 })}
             </div>
         </div>
@@ -1385,73 +1457,13 @@ pub(crate) fn ToolBlock(
     }
 }
 
-/// Parse a rendered plan checklist line
-/// (`[x] text` / `[~] text` / `[ ] text` / `[-] text`)
-/// into (status_class, text). Mirrors `update_plan`'s render in wisp-tools.
-pub(crate) fn plan_step_line(line: &str) -> Option<(&'static str, &str)> {
-    for (prefix, cls) in [
-        ("[x] ", "done"),
-        ("[~] ", "running"),
-        ("[ ] ", "pending"),
-        ("[-] ", "cancelled"),
-    ] {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            return Some((cls, rest));
-        }
-    }
-    None
-}
-
-fn plan_status_class(status: &str) -> &'static str {
-    match status {
-        "completed" | "done" => "done",
-        "in_progress" | "running" => "running",
-        "cancelled" => "cancelled",
-        _ => "pending",
-    }
-}
-
-/// New approvals carry structured steps so fenced code, blank lines, and
-/// task lists cannot be mistaken for top-level checklist rows. Old persisted
-/// approvals still parse the legacy marker format, including continuations.
+/// Shared with native hosts so accepted plans have identical step semantics.
 pub(crate) fn parse_plan_steps(preview: &str) -> Vec<(&'static str, String)> {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(preview) {
-        if value.get("v").and_then(serde_json::Value::as_u64) == Some(1) {
-            if let Some(steps) = value.get("steps").and_then(serde_json::Value::as_array) {
-                return steps
-                    .iter()
-                    .filter_map(|step| {
-                        let content = step.get("content")?.as_str()?.trim();
-                        (!content.is_empty()).then(|| {
-                            (
-                                plan_status_class(
-                                    step.get("status")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("pending"),
-                                ),
-                                content.to_string(),
-                            )
-                        })
-                    })
-                    .collect();
-            }
-        }
-    }
-
-    let mut steps: Vec<(&'static str, String)> = vec![];
-    for line in preview.lines() {
-        if let Some((class, text)) = plan_step_line(line) {
-            steps.push((class, text.to_string()));
-        } else if let Some((_, text)) = steps.last_mut() {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(line);
-        }
-    }
-    steps
+    wisp_dto::execution_plan::parse_plan_steps(preview)
+        .into_iter()
+        .map(|step| (step.status.as_str(), step.content))
+        .collect()
 }
-
 pub(crate) fn approval_allow_label_key(scope: &str) -> &'static str {
     match scope {
         "session" => "approval.allow_session",
@@ -1521,10 +1533,11 @@ pub(crate) fn ApprovalCard(
     };
     let sid_allow = session_id.clone();
     let sid_deny = session_id.clone();
+    let sid_full = session_id.clone();
     let sid_feedback = create_rw_signal(session_id);
     view! {
         <div class="approval-wrap">
-            <div class="approval-wait-line">{move || t(locale.get(), "approval.waiting_line")}</div>
+            <div class="approval-wait-line" data-testid="approval-wait-line">{compose_icon("circle-alert")}{move || t(locale.get(), "approval.waiting_line")}</div>
             <div class="approval-card" class:plan=is_plan>
                 <div class="approval-head">
                     <span class="approval-title">{title}</span>
@@ -1636,6 +1649,15 @@ pub(crate) fn ApprovalCard(
                             "confirm.deny"
                         })}
                     </button>
+                    {(!is_plan && !is_resource_conflict && !is_image_resize && !is_workflow).then(|| view! {
+                        // "full" is not a grant scope: the host opens the Full
+                        // Permission warning, and enabling it settles this card.
+                        <button type="button" data-testid="approval-full-permission"
+                            title=move || t(locale.get(), "full_permission.confirm_body")
+                            on:click=move |_| on_decide.call((sid_full.clone(), true, None, "full".into()))>
+                            {move || t(locale.get(), "composer.full_permission")}
+                        </button>
+                    })}
                     {is_plan.then(|| view! {
                         <button type="button" on:click=move |_| show_feedback.update(|open| *open = !*open)>
                             {move || t(locale.get(), "approval.plan_other")}

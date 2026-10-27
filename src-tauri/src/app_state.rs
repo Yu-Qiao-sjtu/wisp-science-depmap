@@ -27,6 +27,8 @@ pub(crate) struct SessionRuntime {
     /// Serializes an entire user workflow (primary turn + automatic review +
     /// correction), not merely one model turn.
     pub(crate) workflow: Arc<tokio::sync::Mutex<()>>,
+    /// Timer turns never consume human cut-ins; those run as ordinary turns.
+    pub(crate) timer_running: AtomicBool,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) deleted: AtomicBool,
     /// Last persisted message seq (`COALESCE(MAX(seq),0)`), not a message count.
@@ -70,9 +72,17 @@ pub(crate) struct QueuedItem {
     pub(crate) message: String,
     pub(crate) attachments: Vec<String>,
     pub(crate) references: Vec<ComposerReferenceArg>,
+    /// Queued over the remote web tunnel: it waits unattended, so its turn
+    /// keeps the forced Ask of the turn that would have been sent directly.
+    pub(crate) unattended: bool,
 }
 
 impl SessionRuntime {
+    /// A queued follow-up, or a cut-in the last turn never consumed, which the
+    /// queue driver will run next.
+    pub(crate) fn has_queued_turns(&self) -> bool {
+        !self.queued.lock().unwrap().is_empty() || !self.queued_cutins.lock().unwrap().is_empty()
+    }
     pub(crate) fn new() -> Self {
         Self {
             agent: tokio::sync::Mutex::new(None),
@@ -81,6 +91,7 @@ impl SessionRuntime {
             agent_config_generation: std::sync::atomic::AtomicU64::new(0),
             cached_agent_generation: std::sync::atomic::AtomicU64::new(0),
             workflow: Arc::new(tokio::sync::Mutex::new(())),
+            timer_running: AtomicBool::new(false),
             cancel: Arc::new(AtomicBool::new(false)),
             deleted: AtomicBool::new(false),
             last_seq: StdMutex::new(0),
@@ -621,18 +632,32 @@ pub(crate) struct AppState {
     /// grouped by project and plugin id so Settings can explain why an enabled
     /// plugin contributed no tools to a new session.
     pub(crate) plugin_runtime_errors: StdMutex<HashMap<String, HashMap<String, Vec<String>>>>,
+    pub(crate) swarm_progress: crate::swarm_progress::SwarmCache,
+    /// Frames with a manual Reader retry in flight; one per conversation.
+    pub(crate) swarm_retries: StdMutex<HashSet<String>>,
     /// Session ids with an in-flight manual or automatic review. Reviews in
     /// unrelated conversations remain independent.
     pub(crate) reviewing: Arc<StdMutex<HashSet<String>>>,
     /// Latest AfterTurn hook run per session; an older run's results are
     /// dropped instead of emitted (`turn_hooks::spawn_after_turn`).
     pub(crate) after_turn_generations: StdMutex<HashMap<String, u64>>,
+    /// `open_branch` calls made during each conversation's running turn,
+    /// realized when the turn ends (`branch_tool`). Shared with the tool.
+    pub(crate) branch_intents: Arc<branch_tool::BranchIntentRegistry>,
     /// Windows showing the research assistant → the project to restore on
     /// close (`None`: a blank window returns home).
     pub(crate) assistant_windows: std::sync::RwLock<HashMap<String, Option<String>>>,
 }
 
 impl AppState {
+    pub(crate) async fn session_runtime(&self, session: &str) -> Arc<SessionRuntime> {
+        self.sessions
+            .lock()
+            .await
+            .entry(session.into())
+            .or_insert_with(|| Arc::new(SessionRuntime::new()))
+            .clone()
+    }
     pub(crate) fn project_activity(&self, project_id: &str) -> Arc<tokio::sync::RwLock<()>> {
         self.project_activity.project(project_id)
     }
@@ -678,6 +703,10 @@ impl AppState {
     /// The frame this window is viewing (artifact upload target), if any.
     pub(crate) fn active_frame(&self, label: &str) -> Option<String> {
         self.active_frame.read().unwrap().get(label).cloned()
+    }
+    /// Snapshot of every window's viewed frame (`label -> frame id`).
+    pub(crate) fn viewed_frames(&self) -> HashMap<String, String> {
+        self.active_frame.read().unwrap().clone()
     }
     pub(crate) fn set_active_frame(&self, label: &str, frame: Option<String>) {
         let changed = self.active_frame(label) != frame;

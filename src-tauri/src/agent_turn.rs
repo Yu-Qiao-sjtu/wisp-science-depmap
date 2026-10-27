@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Recheck after acquiring the turn lock so a queued turn cannot recreate a
+/// deleted conversation's runtime. Artifact and Run lineage may keep its frame
+/// as a tombstone even after the conversation has moved or been deleted.
+pub(crate) async fn require_live_turn_frame(
+    store: &Store,
+    frame_id: &str,
+    runtime_deleted: bool,
+) -> Result<(), String> {
+    if runtime_deleted
+        || store
+            .live_frame_project_id(frame_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+    {
+        return Err("This session was deleted while the turn was queued.".into());
+    }
+    Ok(())
+}
+
 /// Where a user-visible turn originated. IM turns share the desktop approval
 /// UI but must not inherit an unattended Allow default for mutating tools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -16,26 +36,40 @@ pub(crate) enum TurnOrigin {
     #[default]
     Desktop,
     Im,
+    Timer,
     Queued(u64),
+    /// A queued turn that was parked over the remote web tunnel. It keeps its
+    /// queue id and the IM approval floor: waiting in the queue must not turn
+    /// a remote message into a desktop one.
+    QueuedUnattended(u64),
+    /// A subagent conversation's turn, sent by its parent conversation's agent
+    /// (#1061). `unattended` carries the parent's IM origin so a subagent
+    /// cannot run under a weaker approval floor than the turn that started it.
+    Subagent {
+        unattended: bool,
+    },
 }
 
 impl TurnOrigin {
     pub(crate) fn for_dispatch(self) -> Self {
-        if matches!(self, Self::Im) {
+        if self.force_ask_mutations() {
             Self::Im
         } else {
             Self::Desktop
         }
     }
 
-    fn force_ask_mutations(self) -> bool {
-        matches!(self, Self::Im)
+    pub(crate) fn force_ask_mutations(self) -> bool {
+        matches!(
+            self,
+            Self::Im | Self::QueuedUnattended(_) | Self::Subagent { unattended: true }
+        )
     }
 
     fn queue_id(self) -> Option<u64> {
         match self {
-            Self::Queued(id) => Some(id),
-            Self::Desktop | Self::Im => None,
+            Self::Queued(id) | Self::QueuedUnattended(id) => Some(id),
+            Self::Desktop | Self::Im | Self::Timer | Self::Subagent { .. } => None,
         }
     }
 }
@@ -155,7 +189,7 @@ pub(crate) async fn send_message(
         progress_observer_id,
         guide,
         replace,
-        workflow_guard,
+        workflow_guard.as_ref(),
         TurnOrigin::Desktop,
     )
     .await;
@@ -236,10 +270,10 @@ fn parse_manual_compact_command(message: &str) -> Option<ManualCompactCommand> {
     })
 }
 
-struct ReplacementReservation(Arc<SessionRuntime>);
+pub(crate) struct ReplacementReservation(Arc<SessionRuntime>);
 
 impl ReplacementReservation {
-    fn new(rt: Arc<SessionRuntime>) -> Self {
+    pub(crate) fn new(rt: Arc<SessionRuntime>) -> Self {
         rt.replacing.fetch_add(1, Ordering::SeqCst);
         Self(rt)
     }
@@ -307,14 +341,87 @@ pub(crate) async fn send_message_inner(
     // Guide (#410): roll the model context back to where the interrupted turn
     // started before running this message ("replace the current task").
     replace: Option<bool>,
-    mut workflow_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    workflow_guard: Option<&tokio::sync::OwnedMutexGuard<()>>,
     origin: TurnOrigin,
 ) -> Result<String, String> {
+    send_message_inner_with_continuation(
+        state,
+        app,
+        window_label,
+        session_id,
+        message,
+        attachments,
+        references,
+        resume,
+        acp_agent_id,
+        progress_observer_id,
+        guide,
+        replace,
+        workflow_guard,
+        origin,
+        None,
+    )
+    .await
+}
+
+/// Resume under the parent's existing workflow reservation, without inventing
+/// a human message. Follow-up dispatches retain the original user's authority.
+pub(crate) async fn resume_subagent_parent(
+    state: &AppState,
+    app: AppHandle,
+    parent: &str,
+    continuation: &crate::dispatch::ParentContinuation,
+    workflow_guard: &tokio::sync::OwnedMutexGuard<()>,
+) -> Result<String, String> {
+    if acp::session_agent_id(&state.store, parent).await?.is_some() {
+        return Err("The parent now uses an external agent; its subagent result remains in the conversation.".into());
+    }
+    send_message_inner_with_continuation(
+        state,
+        app,
+        "main",
+        Some(parent.into()),
+        String::new(),
+        None,
+        None,
+        Some(true),
+        None,
+        None,
+        None,
+        None,
+        Some(workflow_guard),
+        continuation.origin,
+        Some(continuation),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_message_inner_with_continuation(
+    state: &AppState,
+    app: AppHandle,
+    window_label: &str,
+    session_id: Option<String>,
+    message: String,
+    attachments: Option<Vec<String>>,
+    mut references: Option<Vec<ComposerReferenceArg>>,
+    resume: Option<bool>,
+    acp_agent_id: Option<String>,
+    progress_observer_id: Option<u64>,
+    guide: Option<bool>,
+    replace: Option<bool>,
+    workflow_guard: Option<&tokio::sync::OwnedMutexGuard<()>>,
+    origin: TurnOrigin,
+    continuation: Option<&crate::dispatch::ParentContinuation>,
+) -> Result<String, String> {
     let resume = resume.unwrap_or(false);
+    let authorization = continuation
+        .map(|context| context.authorization.as_str())
+        .unwrap_or(&message);
     // Automatic delegation resume carries an owned workflow guard and uses the
     // synthetic "main" route. It must preserve the window that launched the
     // parent task; every direct/queued user turn may claim its actual window.
-    let user_routed_turn = !resume || workflow_guard.is_none();
+    let user_routed_turn = origin != TurnOrigin::Timer && (!resume || workflow_guard.is_none());
     if !resume && message.trim().is_empty() {
         return Err("message is empty".into());
     }
@@ -326,6 +433,7 @@ pub(crate) async fn send_message_inner(
     // run the turn in the owner project — never error out on a mismatch or,
     // worse, run tools in a stranger's workspace (#182, #194).
     if let Some(id) = session_id.as_deref().filter(|id| !id.is_empty()) {
+        require_live_turn_frame(&state.store, id, false).await?;
         state
             .store
             .require_unarchived_session(id)
@@ -343,6 +451,7 @@ pub(crate) async fn send_message_inner(
                 "This conversation branch is frozen and cannot accept new messages.".into(),
             );
         }
+        subagent_tool::require_instruction_source(&state.store, id, origin, resume).await?;
         let (working_project, scope) =
             exploration_commands::working_project_for_frame(state, id).await?;
         ap = working_project;
@@ -425,10 +534,20 @@ pub(crate) async fn send_message_inner(
                 .or_insert_with(|| Arc::new(SessionRuntime::new()))
                 .clone()
         };
-        let _workflow = match workflow_guard.take() {
+        let owned_workflow;
+        let _workflow = match workflow_guard {
             Some(guard) => guard,
-            None => runtime.workflow.clone().lock_owned().await,
+            None => {
+                owned_workflow = runtime.workflow.clone().lock_owned().await;
+                &owned_workflow
+            }
         };
+        require_live_turn_frame(
+            &state.store,
+            &frame_id,
+            runtime.deleted.load(Ordering::SeqCst),
+        )
+        .await?;
         runtime.cancel.store(false, Ordering::SeqCst);
         let refs = references.as_deref().unwrap_or_default();
         let skills = active_skill_index(&state.store, &ap).await;
@@ -441,6 +560,14 @@ pub(crate) async fn send_message_inner(
         if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
             injected_context.push(memory);
         }
+        // ACP agents own their approvals and tools, so only the brief (and
+        // the researcher's answer to a waiting mandate) applies here.
+        let human_message = (!resume && origin != TurnOrigin::Timer).then_some(message.as_str());
+        if let Some(mandate) =
+            mandates::turn_context(&state.store, &ap.id, &frame_id, human_message).await
+        {
+            injected_context.push(mandate.brief);
+        }
         let archive_index = state
             .store
             .research_archive_index(&ap.id)
@@ -452,9 +579,15 @@ pub(crate) async fn send_message_inner(
         if let Some(context) = runtime.mcp_app_context_injection() {
             injected_context.push(context);
         }
-        if let Some(injection) =
-            resolve_reader_references(&state.store, refs, &frame_id, &message, &runtime.cancel)
-                .await?
+        if let Some(injection) = swarm_progress::read_references(
+            &app,
+            &state.store,
+            refs,
+            &frame_id,
+            &message,
+            &runtime.cancel,
+        )
+        .await?
         {
             injected_context.push(injection);
         }
@@ -624,23 +757,13 @@ pub(crate) async fn send_message_inner(
     }
     // Deliberately no set_active_frame here: see the `AppState::active_frame`
     // doc — a turn writing view state races the user's session/project switch.
-    // A workflow reference is itself an accepted capability request. Persist it
-    // before a Guide message can be consumed by the current loop; provider
-    // profile reads below still wait for the next workflow boundary.
-    if references.as_ref().is_some_and(|references| {
-        references
-            .iter()
-            .any(|reference| matches!(reference, ComposerReferenceArg::Workflow { .. }))
-    }) {
-        delegation_runtime::save_session_delegation_enabled(&state.store, &ap.id, &frame_id, true)
-            .await?;
-    }
-
     // Record this project's last session on accepted send. Desktop traffic
     // must not steal the Feishu/WeChat IM project.
-    channels::record_last_message_session(&state.store, &frame_id)
-        .await
-        .map_err(|error| format!("Failed to update the shared last-message route: {error}"))?;
+    if origin != TurnOrigin::Timer {
+        channels::record_last_message_session(&state.store, &frame_id)
+            .await
+            .map_err(|error| format!("Failed to update the shared last-message route: {error}"))?;
+    }
 
     // Get or create this session's runtime. The map mutex is dropped here —
     // the per-session `agent` mutex (not this map) is what the turn holds,
@@ -656,25 +779,38 @@ pub(crate) async fn send_message_inner(
     // the workflow lock. Exactly one side takes each entry: either the loop
     // drains it into the running turn, or this call reclaims it below after
     // the lock is acquired and runs a normal turn with it.
-    let guidance_id = if guide.unwrap_or(false) && !resume {
-        let running = state.running_turns.lock().await.contains(&frame_id);
-        running.then(|| {
-            let id = rt
-                .guidance_seq
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            rt.pending_guidance
-                .lock()
-                .unwrap()
-                .push((id, message.clone()));
-            id
-        })
-    } else {
-        None
-    };
-    let _workflow = match workflow_guard.take() {
+    let guidance_id =
+        if guide.unwrap_or(false) && !resume && !rt.timer_running.load(Ordering::SeqCst) {
+            let running = state.running_turns.lock().await.contains(&frame_id);
+            running.then(|| {
+                let id = rt
+                    .guidance_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                rt.pending_guidance
+                    .lock()
+                    .unwrap()
+                    .push((id, message.clone()));
+                id
+            })
+        } else {
+            None
+        };
+    let owned_workflow;
+    let _workflow = match workflow_guard {
         Some(guard) => guard,
-        None => rt.workflow.clone().lock_owned().await,
+        None => {
+            owned_workflow = rt.workflow.clone().lock_owned().await;
+            &owned_workflow
+        }
     };
+    if origin != TurnOrigin::Timer {
+        // Crash recovery: delimit an unfinished timer before human messages.
+        state
+            .store
+            .finish_session_timer_turn(&frame_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     rt.cancel.store(false, Ordering::SeqCst);
     if let Some(id) = guidance_id {
         let mut pending = rt.pending_guidance.lock().unwrap();
@@ -696,9 +832,7 @@ pub(crate) async fn send_message_inner(
     }
     let _progress_subscription =
         progress_observer_id.and_then(|id| channels::activate_progress_observer(id, &frame_id));
-    if rt.deleted.load(Ordering::SeqCst) {
-        return Err("This session was deleted while the turn was queued.".into());
-    }
+    require_live_turn_frame(&state.store, &frame_id, rt.deleted.load(Ordering::SeqCst)).await?;
     // Resolve all provider-dependent settings only after this workflow owns the
     // session. A queued follow-up may have been accepted before the previous
     // turn ended; reading its profile earlier would rebuild the invalidated
@@ -741,8 +875,12 @@ pub(crate) async fn send_message_inner(
     }
     .try_into()
     .unwrap_or(fallback_max_context);
+    // Delegation is an always-available capability of built-in conversations,
+    // like skills and MCP tools. The research assistant goes without it, and a
+    // workflow child delegates only through the nested capacity its runner
+    // hands it, never through the conversation-level grant.
     let delegation_enabled =
-        !assistant && delegation_runtime::session_delegation_enabled(&state.store, &frame_id).await;
+        !assistant && !delegation_tool::is_delegated_child_frame(&state.store, &frame_id).await;
     let plan_mode_enabled =
         !assistant && plan_mode::session_plan_mode(&state.store, &frame_id).await;
     let (
@@ -777,6 +915,7 @@ pub(crate) async fn send_message_inner(
         &session_header_name,
         Some(&frame_id),
     )?;
+    let model_route = cfg.proxy.clone();
     let primary_supports_vision = models::supports_vision(
         &state.store,
         specialist
@@ -821,9 +960,41 @@ pub(crate) async fn send_message_inner(
         .as_ref()
         .is_some_and(|agent| agent.tools.get("delegate_tasks").is_some() != delegation_enabled)
     {
-        // Delegation is a live per-session capability. Rebuild from persisted
-        // messages when the toggle changed so the next turn sees the exact
-        // tool set and prompt section selected by the user.
+        // The cached agent was built for the other kind of conversation
+        // (assistant vs. built-in). Rebuild from persisted messages so the
+        // next turn sees the exact tool set and prompt section.
+        *guard = None;
+    }
+    // A mandate's conversation carries its brief on every turn, whether a due
+    // round or the researcher started it, and can close a round.
+    let mandate_turn = if assistant {
+        None
+    } else {
+        let human_message = (!resume && origin != TurnOrigin::Timer).then_some(message.as_str());
+        mandates::turn_context(&state.store, &ap.id, &frame_id, human_message).await
+    };
+    if guard.as_ref().is_some_and(|agent| {
+        agent.tools.get(wisp_app::mandates::END_ROUND).is_some() != mandate_turn.is_some()
+    }) {
+        // The conversation became a mandate's, or its mandate closed.
+        *guard = None;
+    }
+    // Lab members' agents can write to each other (docs/wisp-lab.md). Not the
+    // assistant, which works across projects, and not a subagent, whose
+    // answers return to the conversation that started it.
+    let lab_member = !assistant
+        && channels::lab::is_member(&state.store).await
+        && state
+            .store
+            .session_dispatched_from(&frame_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none();
+    if guard
+        .as_ref()
+        .is_some_and(|agent| agent.tools.get(channels::lab_mail::LAB_SEND).is_some() != lab_member)
+    {
+        // This computer joined or left a lab since the agent was built.
         *guard = None;
     }
     let reused_agent = guard.is_some();
@@ -850,18 +1021,16 @@ pub(crate) async fn send_message_inner(
             std::fs::create_dir_all(ap.root.join("figures"))
                 .map_err(|error| format!("Failed to prepare figures directory: {error}"))?;
         }
-        add_configured_image_generation_tool(
-            &mut agent,
-            models::image_generation_config(&state.store).await,
-            llm_proxy(),
-            &frame_id,
-        );
-        add_configured_video_generation_tool(
-            &mut agent,
-            models::video_generation_config(&state.store).await,
-            llm_proxy(),
-            &frame_id,
-        );
+        let image_generation = models::image_generation_config(&state.store).await;
+        let image_route = image_generation
+            .as_ref()
+            .and_then(|(api_url, ..)| network::model_proxy("", api_url));
+        add_configured_image_generation_tool(&mut agent, image_generation, image_route, &frame_id);
+        let video_generation = models::video_generation_config(&state.store).await;
+        let video_route = video_generation
+            .as_ref()
+            .and_then(|(api_url, ..)| network::model_proxy("", api_url));
+        add_configured_video_generation_tool(&mut agent, video_generation, video_route, &frame_id);
         if !assistant {
             agent.add_tool(Box::new(viewer::PresentStructureTool::new(app.clone())));
             agent.add_tool(Box::new(viewer::DockLigandTool::new(app.clone())));
@@ -1018,9 +1187,66 @@ pub(crate) async fn send_message_inner(
             state.app_data.clone(),
             ap.id.clone(),
         )));
-        // Always registered, not just in plan mode: a fork during execution
-        // deserves a question as much as one during planning.
-        agent.add_tool(Box::new(wisp_tools::ask_user::AskUserTool));
+        let subagent = state
+            .store
+            .session_dispatched_from(&frame_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_some();
+        // A subagent (#1061) gets no ask_user: nobody answers in a watched
+        // conversation, so it ends its turn with the question, which returns
+        // to the conversation that started it.
+        if !subagent {
+            // Always registered, not just in plan mode: a fork during execution
+            // deserves a question as much as one during planning.
+            agent.add_tool(Box::new(wisp_tools::ask_user::AskUserTool));
+            // Batch map over many items; `decide` appears only with a decision model.
+            agent.add_tool(Box::new(
+                wisp_core::MapItemsTool::from_config(cfg.clone(), max_context)
+                    .with_decision(crate::decision_model::configured(&state.store).await),
+            ));
+            // One level only: a subagent starts no subagents of its own, and
+            // an exploration's work stays inside its isolated scope.
+            if matches!(frame_scope, wisp_store::StateScope::Mainline { .. }) {
+                for tool in subagent_tool::tools(&app, &ap.id, &frame_id, authorization) {
+                    agent.add_tool(tool);
+                }
+                // An agent-opened branch is a `/fork` of this conversation and
+                // keeps its limits: never from a branch, never inside an
+                // exploration (above), never from a subagent.
+                if state
+                    .store
+                    .session_branch_state(&frame_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .is_none()
+                {
+                    agent.add_tool(Box::new(branch_tool::OpenBranchTool::new(
+                        state.store.clone(),
+                        state.branch_intents.clone(),
+                        frame_id.clone(),
+                    )));
+                }
+            }
+        }
+        if lab_member {
+            agent.add_tool(Box::new(channels::lab_mail::LabMembersTool));
+            agent.add_tool(Box::new(channels::lab_mail::LabSendTool::new(
+                state.store.clone(),
+                frame_id.clone(),
+            )));
+        }
+        if let Some(mandate) = &mandate_turn {
+            agent.add_tool(Box::new(wisp_app::mandates::EndRoundTool::new(
+                state.store.clone(),
+                &mandate.mandate_id,
+            )));
+            agent.add_tool(Box::new(wisp_app::mandates::RequestAssistanceTool::new(
+                state.store.clone(),
+                &mandate.mandate_id,
+                Some(mandates::assistance_notifier(&app)),
+            )));
+        }
         if plan_mode_enabled {
             // Only while planning: outside plan mode there is nothing to approve,
             // and an always-present tool just invites plans nobody asked for.
@@ -1159,13 +1385,38 @@ pub(crate) async fn send_message_inner(
     // The singleton agent is reused by desktop and WeChat; dispatch policy must
     // follow this turn's origin, not whichever client first constructed it.
     if assistant {
-        agent.tools = research_assistant::tools(&app, origin, &message);
+        agent.tools = research_assistant::tools(&app, origin, authorization);
+    } else if agent.tools.get("dispatch_subagent").is_some() {
+        // Cached agents use the current user's request, or the host-captured
+        // original request during a child's automatic return. A generated
+        // continuation must never become fresh user authorization.
+        for tool in subagent_tool::tools(&app, &ap.id, &frame_id, authorization) {
+            agent.tools.replace(tool);
+        }
     }
     let (auto_continue, auto_continue_limit) = load_auto_continue_settings(&state.store).await;
+    // Only top-level built-in conversations may escalate. A cached agent
+    // receives a fresh budget on a new turn; resume keeps the existing one.
+    if !assistant
+        && agent.tools.get("dispatch_subagent").is_some()
+        && (!resume || agent.tools.get("consult_expert").is_none())
+    {
+        let experts = models::expert_profiles(&state.store).await;
+        if !experts.is_empty() || agent.tools.get("consult_expert").is_some() {
+            agent
+                .tools
+                .replace(Box::new(expert_tool::ConsultExpertTool::new(
+                    state.store.clone(),
+                    frame_id.clone(),
+                    experts,
+                )));
+        }
+    }
     apply_live_agent_settings(
         agent,
         max_iter,
         load_auto_compact_enabled(&state.store).await,
+        load_auto_compact_percent(&state.store).await,
         auto_continue,
         auto_continue_limit,
     );
@@ -1357,8 +1608,25 @@ pub(crate) async fn send_message_inner(
             agent.ctx.inject_user(archive_index);
         }
     }
-    if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
-        agent.ctx.inject_user(memory);
+    // A turn started by another lab member's mail is answered from this
+    // project alone: the user's global memory is not part of what the lab may
+    // ask about, and the answer is mailed back without anyone reading it.
+    let lab_turn = channels::lab_mail::turn_hop(&frame_id).is_some();
+    if !lab_turn {
+        if let Some(memory) = memory_commands::global_memory_runtime_injection(&state.store).await {
+            agent.ctx.inject_user(memory);
+        }
+    }
+    if lab_member {
+        agent
+            .ctx
+            .inject_user(channels::lab::turn_context(&state.store, lab_turn).await);
+    }
+    let mandate_reviews_mutations = mandate_turn
+        .as_ref()
+        .is_some_and(|mandate| mandate.review_mutations);
+    if let Some(mandate) = mandate_turn {
+        agent.ctx.inject_user(mandate.brief);
     }
     if let Some(injection) =
         exploration_commands::exploration_runtime_injection(&ap.root, &frame_scope)?
@@ -1370,10 +1638,19 @@ pub(crate) async fn send_message_inner(
             "An active isolated exploration has frozen project state for possible promotion. This separate mainline conversation remains available for normal discussion and read-only inspection, but project-mutating tools are unavailable. Do not attempt to write files, run commands or jobs, change project records, or call mutating external tools until the exploration round finishes.",
         );
     }
+    if let Some(continuation) = continuation {
+        // Runtime-only context is not persisted as a new user message, and is
+        // never used as the authority for reviewing another child's request.
+        agent.ctx.inject_user(continuation.prompt.clone());
+        if let Some(compute) = ssh_hosts::stored_compute_section(&state.store, &frame_id).await {
+            agent.ctx.inject_user(compute);
+        }
+    }
     if !resume {
         if assistant {
             agent.ctx.inject_user(research_assistant::now_note());
             agent.ctx.inject_user(research_assistant::DISPATCH_POLICY);
+            agent.ctx.inject_user(research_assistant::MANDATE_POLICY);
         }
         if let Some(context) = rt.mcp_app_context_injection() {
             agent.ctx.inject_user(context);
@@ -1389,8 +1666,15 @@ pub(crate) async fn send_message_inner(
         {
             agent.ctx.inject_user(injection);
         }
-        if let Some(injection) =
-            resolve_reader_references(&state.store, &refs, &frame_id, &message, &rt.cancel).await?
+        if let Some(injection) = swarm_progress::read_references(
+            &app,
+            &state.store,
+            &refs,
+            &frame_id,
+            &message,
+            &rt.cancel,
+        )
+        .await?
         {
             agent.ctx.inject_user(injection);
         }
@@ -1611,7 +1895,7 @@ pub(crate) async fn send_message_inner(
         model: model.clone(),
         project_id: ap.id.clone(),
         project_root: ap.root.clone(),
-        restrict_read_paths_to_project: exploration_isolation.is_some(),
+        restrict_read_paths_to_project: exploration_isolation.is_some() || lab_turn,
         exploration_isolation,
         store: state.store.clone(),
         resource_leases: state.resource_leases.clone(),
@@ -1643,6 +1927,8 @@ pub(crate) async fn send_message_inner(
             .with_session(&frame_id)
             .with_turn(&browser_turn_id),
         ),
+        mandate_reviews_mutations,
+        lab_turn,
         last_compaction_strategy: StdMutex::new(None),
     };
 
@@ -1662,10 +1948,13 @@ pub(crate) async fn send_message_inner(
     rt.effective_max_iter.store(max_iter, Ordering::SeqCst);
     rt.effective_max_iter_known.store(true, Ordering::SeqCst);
     state.running_turns.lock().await.insert(frame_id.clone());
+    // Even a Guide/cut-in racing the timer flag belongs to a subsequent human
+    // turn. Never let it enter the disposable timer's ownership range, nor a
+    // subagent turn, which only takes its parent conversation's instructions.
+    let guidance = (!matches!(origin, TurnOrigin::Timer | TurnOrigin::Subagent { .. }))
+        .then_some(&rt.pending_guidance);
     let mut result = if resume {
-        agent
-            .run_resume(&output, Some(&rt.cancel), Some(&rt.pending_guidance))
-            .await
+        agent.run_resume(&output, Some(&rt.cancel), guidance).await
     } else {
         agent
             .run_with_images(
@@ -1674,7 +1963,7 @@ pub(crate) async fn send_message_inner(
                 primary_supports_vision,
                 &output,
                 Some(&rt.cancel),
-                Some(&rt.pending_guidance),
+                guidance,
             )
             .await
     };
@@ -1727,13 +2016,15 @@ pub(crate) async fn send_message_inner(
     drop(output);
     // Drain the live coalescer before the direct Done/Error emit below so the
     // final buffered deltas cannot arrive after the turn boundary.
-    if tokio::time::timeout(std::time::Duration::from_secs(5), live_event_handle)
+    // A timed-out JoinHandle must be aborted and joined, not detached: a
+    // timer can replace this turn as soon as the workflow lock is released.
+    if wisp_store::join_or_abort_persist(live_event_handle, std::time::Duration::from_secs(5))
         .await
         .is_err()
     {
         tracing::warn!("live event coalescer did not finish cleanly");
     }
-    if tokio::time::timeout(std::time::Duration::from_secs(5), ui_event_handle)
+    if wisp_store::join_or_abort_persist(ui_event_handle, std::time::Duration::from_secs(5))
         .await
         .is_err()
     {
@@ -1748,7 +2039,8 @@ pub(crate) async fn send_message_inner(
     if let Err(error) = rt.sync_last_seq_from_store(&state.store, &frame_id).await {
         tracing::warn!("{error}");
     }
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), prov_handle).await;
+    let _ =
+        wisp_store::join_or_abort_persist(prov_handle, std::time::Duration::from_secs(10)).await;
     // The epoch must not open until the persist task has finished or been
     // aborted and joined — a late INSERT would land inside the new epoch's
     // seq range. Rows appended during this turn stay in the old epoch, where
@@ -1807,13 +2099,15 @@ pub(crate) async fn send_message_inner(
             )
             .await;
             emit_browser_tab_cleanup(state, &app, &browser_turn_id, &ap.id).await;
-            turn_hooks::spawn_after_turn(&app, &turn_end(outcome.stop_reason()));
+            if origin != TurnOrigin::Timer {
+                turn_hooks::spawn_after_turn(&app, &turn_end(outcome.stop_reason()));
+            }
             Ok(frame_id)
         }
         Err(e) => {
             let message = wisp_llm::annotate_transport_error(
                 &format!("{e}"),
-                llm_proxy().as_deref(),
+                model_route.as_deref(),
                 &wisp_llm::ambient_proxy_env(),
             );
             persist_and_emit_terminal_event(
@@ -1865,6 +2159,15 @@ pub(crate) fn client_turn_error(turn_started: bool, message: &str) -> String {
     }
 }
 
+/// Inverse of [`client_turn_error`]: whether the turn had started, and the
+/// plain message.
+pub(crate) fn split_turn_error(error: &str) -> (bool, &str) {
+    match error.strip_prefix("[turn-started] ") {
+        Some(message) => (true, message),
+        None => (false, error),
+    }
+}
+
 /// Queue (#433): reconcile cut-ins, then drain ordinary follow-ups FIFO. Each
 /// acquires the workflow lock and runs as a fresh turn with the item's
 /// *current* text, so edits made while it waited take effect. The
@@ -1892,10 +2195,21 @@ pub(crate) fn spawn_queue_driver(
     tauri::async_runtime::spawn(async move {
         loop {
             let guard = queued_workflow_guard(&rt).await;
-            let Some(item) = take_next_queued_turn(&rt) else {
-                break;
+            let item = match try_take_next_queued_turn(&rt) {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(()) => {
+                    drop(guard);
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    continue;
+                }
             };
             emit_queued_turn_state(&app, &session_id, item.id, "started");
+            let origin = if item.unattended {
+                TurnOrigin::QueuedUnattended(item.id)
+            } else {
+                TurnOrigin::Queued(item.id)
+            };
             let state = app.state::<AppState>();
             if let Err(error) = send_message_inner(
                 state.inner(),
@@ -1910,19 +2224,25 @@ pub(crate) fn spawn_queue_driver(
                 None,
                 None,
                 None,
-                Some(guard),
-                TurnOrigin::Queued(item.id),
+                Some(&guard),
+                origin,
             )
             .await
             {
                 emit_queued_turn_state(&app, &session_id, item.id, "failed");
                 tracing::warn!("queued turn failed: {error}");
+            } else {
+                emit_queued_turn_state(&app, &session_id, item.id, "completed");
             }
         }
     });
 }
 
-fn emit_queued_turn_state(app: &AppHandle, session_id: &str, id: u64, state: &str) {
+pub(crate) fn emit_queued_turn_state(app: &AppHandle, session_id: &str, id: u64, state: &str) {
+    if let Some(conversations) = app.try_state::<Arc<crate::native_conversations::Conversations>>()
+    {
+        conversations.queue_events.record(session_id, id, state);
+    }
     emit_to_session_surfaces(
         app,
         session_id,
@@ -1952,6 +2272,15 @@ pub(crate) async fn enqueue_turn(
     if session_id.is_empty() {
         return Err("queue requires a session id".into());
     }
+    // A queued item can be cut into the running turn, so it is checked here
+    // rather than only when the queue driver sends it.
+    subagent_tool::require_instruction_source(
+        &state.store,
+        &session_id,
+        TurnOrigin::Queued(id),
+        false,
+    )
+    .await?;
     let (project, scope) =
         exploration_commands::working_project_for_frame(&state, &session_id).await?;
     let _project_activity = state.begin_project_activity(&project.id)?;
@@ -1975,6 +2304,7 @@ pub(crate) async fn enqueue_turn(
             message,
             attachments: attachments.unwrap_or_default(),
             references: references.unwrap_or_default(),
+            unattended: false,
         });
         // Claim the driver slot atomically with the push: the driver only clears
         // `draining` while holding this same lock on an empty queue.
@@ -1993,9 +2323,22 @@ pub(crate) async fn enqueue_turn(
 /// - `cutin`  → offer it to the current loop, retaining its payload for a
 ///   priority handoff if that loop has already ended (or has not started yet).
 pub(crate) fn begin_queued_cutin(rt: &SessionRuntime, id: u64) -> Option<u64> {
-    // All transfers use the same lock order: queued → cut-ins → guidance.
     let mut queued = rt.queued.lock().unwrap();
     let index = queued.iter().position(|item| item.id == id)?;
+    cut_in_at(rt, &mut queued, index)
+}
+
+/// The caller holds `queued`. `None` while a timer turn runs: it takes no
+/// researcher guidance.
+pub(crate) fn cut_in_at(
+    rt: &SessionRuntime,
+    queued: &mut Vec<QueuedItem>,
+    index: usize,
+) -> Option<u64> {
+    if rt.timer_running.load(Ordering::SeqCst) {
+        return None;
+    }
+    // All transfers use the same lock order: queued → cut-ins → guidance.
     let item = queued.remove(index);
     let mut cutins = rt.queued_cutins.lock().unwrap();
     let guidance_id = rt
@@ -2025,16 +2368,23 @@ pub(crate) fn swap_queued_toward(q: &mut Vec<QueuedItem>, id: u64, up: bool) {
     }
 }
 
-/// Park exactly one user-authored follow-up. A second distinct draft is refused.
-/// Repeating the same id does not add another item. The queue driver drains
-/// this with `take_next_queued_turn` and stops when that returns nothing.
-pub(crate) fn queue_one_follow_up(
+const MAX_QUEUED_FOLLOW_UPS: usize = 64;
+
+/// Park a user-authored follow-up. Repeating the same id does not add another
+/// item. The queue driver drains this with `take_next_queued_turn` and stops
+/// when that returns nothing.
+pub(crate) fn queue_follow_up(
     turn_running: bool,
     rt: &SessionRuntime,
     id: u64,
     message: &str,
     attachments: &[String],
+    references: &[ComposerReferenceArg],
+    unattended: bool,
 ) -> Result<String, String> {
+    if references.len() > 64 {
+        return Err("Too many composer references".into());
+    }
     if !turn_running {
         return Err("Queue a follow-up only while a turn is running".into());
     }
@@ -2049,21 +2399,36 @@ pub(crate) fn queue_one_follow_up(
     }
     let mut queued = rt.queued.lock().unwrap();
     if let Some(existing) = queued.iter().find(|item| item.id == id) {
+        if existing.message != text
+            || existing.attachments != paths
+            || existing.references != references
+        {
+            return Err("Queued request ID was already used for another message".into());
+        }
         return Ok(existing.message.clone());
     }
-    if !queued.is_empty() {
-        return Err("Only one follow-up can wait".into());
-    }
     let cutins = rt.queued_cutins.lock().unwrap();
-    if !cutins.is_empty() {
-        return Err("Only one follow-up can wait".into());
+    if let Some((_, existing)) = cutins.iter().find(|(_, item)| item.id == id) {
+        if existing.message == text
+            && existing.attachments == paths
+            && existing.references == references
+        {
+            return Ok(existing.message.clone());
+        }
+        return Err("Queued request ID was already used for another message".into());
+    }
+    if queued.len() + cutins.len() >= MAX_QUEUED_FOLLOW_UPS {
+        return Err(format!(
+            "At most {MAX_QUEUED_FOLLOW_UPS} follow-ups can wait"
+        ));
     }
     drop(cutins);
     queued.push(QueuedItem {
         id,
         message: text.clone(),
         attachments: paths,
-        references: Vec::new(),
+        references: references.to_vec(),
+        unattended,
     });
     Ok(text)
 }
@@ -2071,8 +2436,19 @@ pub(crate) fn queue_one_follow_up(
 /// Called only by the workflow-lock owner, before it starts any queued turn.
 /// Reconcile offered guidance here, not in a later mutex waiter: the FIFO
 /// driver may already be ahead of the cut-in command in the lock's wait list.
+#[cfg(test)]
 pub(crate) fn take_next_queued_turn(rt: &SessionRuntime) -> Option<QueuedItem> {
+    try_take_next_queued_turn(rt).expect("no replacement reservation while draining")
+}
+
+fn try_take_next_queued_turn(rt: &SessionRuntime) -> Result<Option<QueuedItem>, ()> {
     let mut queued = rt.queued.lock().unwrap();
+    // A replacement can reserve priority after the driver acquired its workflow
+    // guard. Check again under the same lock used to reorder/remove the target:
+    // it must never start between validation and cancelling the previous turn.
+    if rt.replacing.load(Ordering::SeqCst) != 0 {
+        return Err(());
+    }
     let mut cutins = rt.queued_cutins.lock().unwrap();
     let mut pending = rt.pending_guidance.lock().unwrap();
     let mut unconsumed = Vec::new();
@@ -2085,9 +2461,9 @@ pub(crate) fn take_next_queued_turn(rt: &SessionRuntime) -> Option<QueuedItem> {
     queued.splice(0..0, unconsumed);
     if queued.is_empty() {
         rt.draining.store(false, Ordering::SeqCst);
-        None
+        Ok(None)
     } else {
-        Some(queued.remove(0))
+        Ok(Some(queued.remove(0)))
     }
 }
 
@@ -2273,24 +2649,27 @@ mod queue_tests {
     #[test]
     fn one_user_follow_up_is_sent_and_the_queue_stops() {
         let rt = SessionRuntime::new();
-        assert!(queue_one_follow_up(false, &rt, 1, "继续", &[]).is_err());
+        assert!(queue_follow_up(false, &rt, 1, "继续", &[], &[], false).is_err());
         assert!(take_next_queued_turn(&rt).is_none());
-        let parked = queue_one_follow_up(
+        let parked = queue_follow_up(
             true,
             &rt,
             7,
             "  继续检查对照  ",
             &["uploads/notes.csv".into()],
+            &[],
+            false,
         )
         .unwrap();
         assert_eq!(parked, "继续检查对照\n\nUploaded files: uploads/notes.csv");
-        assert!(queue_one_follow_up(true, &rt, 8, "另一条", &[]).is_err());
-        let replay = queue_one_follow_up(
+        let replay = queue_follow_up(
             true,
             &rt,
             7,
             "  继续检查对照  ",
             &["uploads/notes.csv".into()],
+            &[],
+            false,
         )
         .unwrap();
         assert_eq!(replay, parked);
@@ -2303,6 +2682,28 @@ mod queue_tests {
     }
 
     #[test]
+    fn follow_up_queue_is_capped() {
+        let rt = SessionRuntime::new();
+        for id in 0..MAX_QUEUED_FOLLOW_UPS as u64 {
+            queue_follow_up(true, &rt, id, "x", &[], &[], false).unwrap();
+        }
+        assert!(queue_follow_up(true, &rt, u64::MAX, "x", &[], &[], false).is_err());
+    }
+
+    #[test]
+    fn native_queued_references_survive_drain_and_reject_changed_request_ids() {
+        let rt = SessionRuntime::new();
+        let references = vec![ComposerReferenceArg::Skill {
+            name: "RNA-seq".into(),
+        }];
+        queue_follow_up(true, &rt, 42, "inspect", &[], &references, false).unwrap();
+        assert!(queue_follow_up(true, &rt, 42, "inspect", &[], &[], false).is_err());
+        let next = take_next_queued_turn(&rt).unwrap();
+        assert_eq!(next.references, references);
+        assert_eq!(next.message, "inspect");
+    }
+
+    #[test]
     fn replacement_only_supersedes_identical_payloads_including_cutins() {
         let rt = SessionRuntime::new();
         let item = QueuedItem {
@@ -2310,6 +2711,7 @@ mod queue_tests {
             message: "same".into(),
             attachments: vec![],
             references: vec![],
+            unattended: false,
         };
         let mut attachment = item.clone();
         attachment.id = 2;
@@ -2360,6 +2762,23 @@ mod queue_tests {
     }
 
     #[tokio::test]
+    async fn replacement_after_workflow_acquisition_still_blocks_queue_removal() {
+        let rt = Arc::new(SessionRuntime::new());
+        queue_follow_up(true, &rt, 41, "queued", &[], &[], false).unwrap();
+        rt.draining.store(true, Ordering::SeqCst);
+        let guard = queued_workflow_guard(&rt).await;
+        let reservation = ReplacementReservation::new(rt.clone());
+        assert!(try_take_next_queued_turn(&rt).is_err());
+        assert_eq!(rt.queued.lock().unwrap()[0].id, 41);
+        assert!(rt.draining.load(Ordering::SeqCst));
+        drop(reservation);
+        assert_eq!(try_take_next_queued_turn(&rt).unwrap().unwrap().id, 41);
+        assert!(try_take_next_queued_turn(&rt).unwrap().is_none());
+        assert!(!rt.draining.load(Ordering::SeqCst));
+        drop(guard);
+    }
+
+    #[tokio::test]
     async fn replacement_precedes_an_already_waiting_queue_driver() {
         let rt = Arc::new(SessionRuntime::new());
         let active = rt.workflow.clone().lock_owned().await;
@@ -2397,12 +2816,34 @@ mod queue_tests {
         assert!(!TurnOrigin::Desktop.for_dispatch().force_ask_mutations());
         assert_eq!(TurnOrigin::Queued(42).for_dispatch(), TurnOrigin::Desktop);
         assert_eq!(TurnOrigin::Im.for_dispatch().queue_id(), None);
+        // A follow-up queued from the remote page waits unattended: it still
+        // asks, and so does anything it dispatches.
+        let remote = TurnOrigin::QueuedUnattended(42);
+        assert!(remote.force_ask_mutations());
+        assert_eq!(remote.for_dispatch(), TurnOrigin::Im);
+        assert_eq!(remote.queue_id(), Some(42));
+    }
+
+    #[test]
+    fn a_remotely_queued_follow_up_stays_unattended_until_it_runs() {
+        let rt = SessionRuntime::new();
+        queue_follow_up(true, &rt, 1, "from the desk", &[], &[], false).unwrap();
+        queue_follow_up(true, &rt, 2, "from the phone", &[], &[], true).unwrap();
+        // Offered to the running turn and not consumed: it returns to the
+        // queue as the same item, flag included.
+        begin_queued_cutin(&rt, 2).unwrap();
+        let first = take_next_queued_turn(&rt).unwrap();
+        assert_eq!((first.id, first.unattended), (2, true));
+        let second = take_next_queued_turn(&rt).unwrap();
+        assert_eq!((second.id, second.unattended), (1, false));
     }
 
     #[test]
     fn queued_turn_origin_carries_the_backend_id() {
         assert_eq!(TurnOrigin::Queued(42).queue_id(), Some(42));
         assert_eq!(TurnOrigin::Desktop.queue_id(), None);
+        assert_eq!(TurnOrigin::Timer.queue_id(), None);
+        assert_eq!(TurnOrigin::Subagent { unattended: true }.queue_id(), None);
     }
 }
 
@@ -2798,6 +3239,95 @@ mod context_epoch_tests {
         assert!(!head
             .iter()
             .any(wisp_core::ContextManager::is_summary_checkpoint));
+    }
+
+    #[tokio::test]
+    async fn visual_turn_range_messages_reads_each_turn_from_its_anchor_epoch() {
+        let store = store_with_frame().await;
+        // Twelve long turns overflow a 10k window, so the compaction below
+        // folds the early turns into epoch 1 and copies only the kept tail.
+        let mut ctx = seeded_context(&store, long_turns(12), 10_000).await;
+        let mut event_seq = 1i64;
+        // system + (user, assistant) * 12 → user seqs 2,4,…,24
+        for index in 0..12 {
+            let seq = 2 + 2 * index as i64;
+            persist_visual_turn(&store, &mut event_seq, seq, &format!("q{index}")).await;
+        }
+        ctx.compact(
+            &SummaryProvider("Objective\nkeep going"),
+            &archive("excerpt.json"),
+        )
+        .await
+        .unwrap();
+        persist_compaction_epoch(&store, "f", &ctx, "manual", true)
+            .await
+            .unwrap();
+        assert_eq!(store.frame_head_epoch("f").await.unwrap(), 1);
+
+        let middle = crate::session_commands::visual_turn_range_messages(&store, "f", 1, 2)
+            .await
+            .unwrap();
+        let texts = middle
+            .iter()
+            .map(|m| {
+                m.content
+                    .as_text()
+                    .split_whitespace()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            vec!["question 1", "answer 1", "question 2", "answer 2"]
+        );
+        assert!(!middle
+            .iter()
+            .any(wisp_core::ContextManager::is_summary_checkpoint));
+
+        // The last turn runs to the end of its epoch; the kept-tail copies in
+        // the compacted epoch are not read twice.
+        let tail = crate::session_commands::visual_turn_range_messages(&store, "f", 11, 11)
+            .await
+            .unwrap();
+        assert_eq!(tail.len(), 2);
+        assert!(tail[0].content.as_text().starts_with("question 11"));
+
+        let error = crate::session_commands::visual_turn_range_messages(&store, "f", 11, 13)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "The selected turns are not available.");
+        assert_eq!(
+            crate::session_commands::visual_turn_range_messages(&store, "f", 2, 1)
+                .await
+                .unwrap_err(),
+            "Invalid excerpt range."
+        );
+    }
+
+    #[tokio::test]
+    async fn visual_turn_range_messages_falls_back_to_row_indexes_without_user_events() {
+        let store = store_with_frame().await;
+        let _ctx = seeded_context(&store, long_turns(3), 10_000).await;
+        let rows = crate::session_commands::visual_turn_range_messages(&store, "f", 1, 1)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].content.as_text().starts_with("question 1"));
+        assert!(rows[1].content.as_text().starts_with("answer 1"));
+        assert!(
+            crate::session_commands::visual_turn_range_messages(&store, "f", 1, 7)
+                .await
+                .is_err(),
+            "a valid start must not silently accept an unavailable end"
+        );
+        assert_eq!(
+            crate::session_commands::visual_turn_range_messages(&store, "f", 7, 8)
+                .await
+                .unwrap_err(),
+            "The selected turns are not available."
+        );
     }
 
     #[test]

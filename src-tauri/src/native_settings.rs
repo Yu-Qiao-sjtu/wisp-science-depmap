@@ -18,9 +18,36 @@ use wisp_dto::native_settings::{HostDescriptor, Request, Response, COMMANDS, SCH
 #[derive(Clone)]
 pub(crate) struct Broker {
     pub(crate) app: tauri::AppHandle,
-    token: String,
     pub(crate) conversations: Arc<crate::native_conversations::Conversations>,
     contexts: Arc<Mutex<HashMap<Option<String>, String>>>,
+    /// Stamped by the connection, never read from a request: true for the
+    /// remote tunnel, whose turns use the IM approval default.
+    pub(crate) remote: bool,
+}
+
+/// The one broker shared by the loopback native host and the remote tunnel,
+/// so both see the same conversation records and hidden command contexts.
+pub(crate) fn broker(app: &tauri::AppHandle) -> Broker {
+    if let Some(broker) = app.try_state::<Broker>() {
+        return broker.inner().clone();
+    }
+    let broker = Broker {
+        app: app.clone(),
+        conversations: Arc::new(crate::native_conversations::Conversations::default()),
+        contexts: Default::default(),
+        remote: false,
+    };
+    if app.manage(broker.clone()) {
+        app.manage(broker.conversations.clone());
+    }
+    app.state::<Broker>().inner().clone()
+}
+
+pub(crate) fn remote_broker(app: &tauri::AppHandle) -> Broker {
+    Broker {
+        remote: true,
+        ..broker(app)
+    }
 }
 
 pub(crate) fn requested(args: impl IntoIterator<Item = String>) -> bool {
@@ -78,16 +105,10 @@ pub(crate) fn start(app: &tauri::AppHandle) -> Result<(), String> {
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
     std::fs::rename(&staging, root.join("native-settings.json")).map_err(|e| e.to_string())?;
-    let broker = Broker {
-        app: app.clone(),
-        token,
-        conversations: Arc::new(crate::native_conversations::Conversations::default()),
-        contexts: Default::default(),
-    };
     let router = Router::new()
         .route("/invoke", post(invoke))
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
-        .with_state(broker);
+        .with_state((broker(app), Arc::<str>::from(token)));
     app.manage(descriptor);
     tauri::async_runtime::spawn(async move {
         if let Ok(listener) = tokio::net::TcpListener::from_std(listener) {
@@ -107,13 +128,21 @@ pub(crate) fn capabilities() -> Value {
         "project_schema": wisp_dto::native_projects::SCHEMA,
         "library": wisp_dto::native_library::COMMANDS,
         "library_schema": wisp_dto::native_library::SCHEMA,
+        "assistant": wisp_dto::native_assistant::COMMANDS,
+        "assistant_schema": wisp_dto::native_assistant::SCHEMA,
         "calendar": wisp_dto::native_calendar::COMMANDS,
         "calendar_schema": wisp_dto::native_calendar::SCHEMA,
+        "checklist": [wisp_dto::research_checklist::COMMAND],
+        "checklist_schema": wisp_dto::research_checklist::SCHEMA,
         "journey": wisp_dto::native_journey::COMMANDS,
         "journey_schema": wisp_dto::native_journey::SCHEMA,
         "publication": wisp_dto::native_publication::COMMANDS,
         "publication_schema": wisp_dto::native_publication::SCHEMA,
         "privacy": ["get_privacy_mode"],
+        "search": wisp_dto::native_search::COMMANDS,
+        "search_schema": wisp_dto::native_search::SCHEMA,
+        "session_import": wisp_dto::native_session_import::COMMANDS,
+        "session_import_schema": wisp_dto::native_session_import::SCHEMA,
     })
 }
 
@@ -127,11 +156,11 @@ fn authorize(headers: &HeaderMap, expected: &str) -> bool {
 }
 
 async fn invoke(
-    State(broker): State<Broker>,
+    State((broker, token)): State<(Broker, Arc<str>)>,
     headers: HeaderMap,
     Json(request): Json<Request>,
 ) -> Result<Json<Response>, StatusCode> {
-    if !authorize(&headers, &broker.token) {
+    if !authorize(&headers, &token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let result = dispatch(&broker, &request).await;
@@ -143,7 +172,7 @@ async fn invoke(
     }))
 }
 
-async fn dispatch(broker: &Broker, request: &Request) -> Result<Value, String> {
+pub(crate) async fn dispatch(broker: &Broker, request: &Request) -> Result<Value, String> {
     if request.schema != SCHEMA || request.id.trim().is_empty() || !request.args.is_object() {
         return Err("Invalid native settings request".into());
     }
@@ -180,16 +209,69 @@ async fn dispatch(broker: &Broker, request: &Request) -> Result<Value, String> {
                 .await?;
         return serde_json::to_value(mode).map_err(|error| error.to_string());
     }
+    if wisp_dto::native_assistant::COMMANDS.contains(&request.command.as_str()) {
+        return crate::native_assistant::execute(broker, request).await;
+    }
     if wisp_dto::native_calendar::COMMANDS.contains(&request.command.as_str()) {
         let state = broker.app.state::<crate::AppState>();
         return crate::native_calendar::execute(&state.store, request).await;
     }
+    if request.command == wisp_dto::research_checklist::COMMAND {
+        if request.project_id.is_some() {
+            return Err("The research checklist is a global plan".into());
+        }
+        let input: wisp_dto::research_checklist::SyncRequest =
+            serde_json::from_value(request.args.clone()).map_err(|error| error.to_string())?;
+        let state = broker.app.state::<crate::AppState>();
+        let visible = crate::research_assistant::visible_projects(&state.store)
+            .await?
+            .into_iter()
+            .map(|project| project.0)
+            .collect();
+        let result = state
+            .store
+            .sync_research_checklist(&input, &visible)
+            .await
+            .map_err(|error| error.to_string())?;
+        return serde_json::to_value(result).map_err(|error| error.to_string());
+    }
+    if wisp_dto::native_search::COMMANDS.contains(&request.command.as_str()) {
+        let state = broker.app.state::<crate::AppState>();
+        return crate::native_search::execute(&state.store, request).await;
+    }
+    if wisp_dto::native_session_import::COMMANDS.contains(&request.command.as_str()) {
+        let state = broker.app.state::<crate::AppState>();
+        if request.command.starts_with("native_external_session_") {
+            return crate::codex_import::execute_native(&state, request).await;
+        }
+        return crate::session_import::execute_native(&state, request).await;
+    }
     if wisp_dto::native_journey::COMMANDS.contains(&request.command.as_str()) {
         let state = broker.app.state::<crate::AppState>();
+        let _activity = if matches!(
+            request.command.as_str(),
+            "native_research_journey_add" | "native_research_journey_recap"
+        ) {
+            Some(
+                state.begin_project_activity(
+                    request
+                        .project_id
+                        .as_deref()
+                        .ok_or("A project id is required")?,
+                )?,
+            )
+        } else {
+            None
+        };
         return crate::native_journey::execute(&state.store, request).await;
     }
     if wisp_dto::native_publication::COMMANDS.contains(&request.command.as_str()) {
         let state = broker.app.state::<crate::AppState>();
+        let _activity = request
+            .project_id
+            .as_deref()
+            .map(|project| state.begin_project_activity(project))
+            .transpose()?;
         return crate::native_publication::execute(&state.store, request).await;
     }
     if wisp_dto::native_conversations::COMMANDS.contains(&request.command.as_str()) {
@@ -253,13 +335,12 @@ async fn dispatch(broker: &Broker, request: &Request) -> Result<Value, String> {
     .await
 }
 
-pub(crate) async fn invoke_command(
+/// Hidden per-project window whose label scopes commands to that project.
+pub(crate) async fn context_label(
     broker: &Broker,
     project_id: Option<String>,
-    command: &str,
-    args: Value,
-) -> Result<Value, String> {
-    let label = {
+) -> Result<String, String> {
+    Ok({
         let mut contexts = broker.contexts.lock().await;
         if let Some(label) = contexts.get(&project_id) {
             label.clone()
@@ -311,7 +392,16 @@ pub(crate) async fn invoke_command(
             contexts.insert(project_id.clone(), label.clone());
             label
         }
-    };
+    })
+}
+
+pub(crate) async fn invoke_command(
+    broker: &Broker,
+    project_id: Option<String>,
+    command: &str,
+    args: Value,
+) -> Result<Value, String> {
+    let label = context_label(broker, project_id).await?;
     let webview = broker
         .app
         .get_webview(&label)
@@ -417,6 +507,14 @@ mod tests {
         assert!(!COMMANDS.contains(&"get_privacy_mode"));
         assert!(!COMMANDS.contains(&"set_privacy_mode"));
         let advertised = capabilities();
+        assert_eq!(
+            advertised["checklist"][0],
+            wisp_dto::research_checklist::COMMAND
+        );
+        assert_eq!(
+            advertised["checklist_schema"],
+            wisp_dto::research_checklist::SCHEMA
+        );
         assert_eq!(advertised["projects"][0], "native_project_create");
         assert_eq!(
             advertised["project_schema"],
@@ -445,6 +543,16 @@ mod tests {
             wisp_dto::native_publication::SCHEMA
         );
         assert_eq!(advertised["privacy"][0], "get_privacy_mode");
+        assert_eq!(advertised["search"][0], "native_workspace_search");
+        assert_eq!(advertised["search_schema"], wisp_dto::native_search::SCHEMA);
+        assert_eq!(
+            advertised["session_import"][0],
+            "native_session_archive_preview"
+        );
+        assert_eq!(
+            advertised["session_import_schema"],
+            wisp_dto::native_session_import::SCHEMA
+        );
         assert!(advertised["conversations"]
             .as_array()
             .unwrap()
@@ -464,6 +572,7 @@ mod tests {
                     && command != "native_library_search"
                     && command != "native_library_delete"
                     && command != "native_research_calendar"
+                    && command != "native_workspace_search"
                     && command != "native_research_journey"
                     && command != "native_publication_workspace"
                     && command != "native_publication_create"

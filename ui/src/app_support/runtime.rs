@@ -4,7 +4,78 @@ const SSH_RETRY_STOPPED_MARKER: &str = "ssh automatic retry stopped";
 
 thread_local! {
     static RUN_REFRESH_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+    static RUN_REFRESH_IN_FLIGHT: Cell<bool> = const { Cell::new(false) };
     static SSH_RETRY_TOASTED_RUNS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static METHOD_SEARCH_PANELS: RefCell<HashMap<String, MethodSearchPanelMemory>> =
+        RefCell::new(HashMap::new());
+}
+
+/// What a method-search panel showed before the run list rebuilt its card.
+/// Run cards are re-created whenever the polled list changes (a status change
+/// included), so without this the contract a researcher was reviewing
+/// collapsed on every poll and its controls vanished mid-click.
+#[derive(Clone, Default)]
+struct MethodSearchPanelMemory {
+    expanded: bool,
+    details: Option<MethodSearchRunDetails>,
+}
+
+/// Whether remembered details lag behind the card's polled status, so an
+/// open panel must reload instead of showing controls for a stale state.
+fn method_search_memory_stale(memory: &MethodSearchPanelMemory, status: &str) -> bool {
+    memory.expanded
+        && memory
+            .details
+            .as_ref()
+            .is_none_or(|details| details.run.status != status)
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct RunRefreshState {
+    pub pending_since: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RunRefreshHealth(pub RwSignal<RunRefreshState>);
+
+// The one-second ticker and explicit refresh buttons share this guard. A slow
+// database read must not queue another read on every tick and exhaust the pool.
+struct RunRefreshGuard;
+
+impl RunRefreshGuard {
+    fn acquire() -> Option<Self> {
+        RUN_REFRESH_IN_FLIGHT.with(|pending| {
+            if pending.replace(true) {
+                None
+            } else {
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for RunRefreshGuard {
+    fn drop(&mut self) {
+        RUN_REFRESH_IN_FLIGHT.with(|pending| pending.set(false));
+    }
+}
+
+pub(crate) fn run_refresh_warning(
+    state: &RunRefreshState,
+    now: i64,
+    locale: Locale,
+) -> Option<String> {
+    if let Some(error) = &state.error {
+        Some(tf(locale, "runs.refresh_failed", &[("error", error)]))
+    } else if state
+        .pending_since
+        .is_some_and(|started| now.saturating_sub(started) >= 10)
+    {
+        Some(t(locale, "runs.refresh_delayed"))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn refresh_execution_contexts(into: RwSignal<Vec<ExecutionContext>>) {
@@ -169,10 +240,38 @@ pub(crate) fn refresh_runtime_environment_after_tool(
     });
 }
 
-pub(crate) fn refresh_runs(into: RwSignal<Vec<RunSummary>>, locale: RwSignal<Locale>) {
+pub(crate) fn refresh_runs(
+    into: RwSignal<Vec<RunSummary>>,
+    locale: RwSignal<Locale>,
+    health: Option<RunRefreshHealth>,
+) {
+    let Some(guard) = RunRefreshGuard::acquire() else {
+        return;
+    };
+    if let Some(health) = health {
+        health.0.try_update(|state| {
+            state.pending_since = Some(js_sys::Date::now() as i64 / 1000);
+        });
+    }
     spawn_local(async move {
-        let v = invoke("list_runs", JsValue::UNDEFINED).await;
-        if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<RunSummary>>(v) {
+        let _guard = guard;
+        let result = invoke_checked("list_runs", JsValue::UNDEFINED)
+            .await
+            .map_err(js_error_text)
+            .and_then(|value| {
+                serde_wasm_bindgen::from_value::<Vec<RunSummary>>(value)
+                    .map_err(|error| error.to_string())
+            });
+        if let Some(health) = health {
+            health.0.try_update(|state| {
+                state.pending_since = None;
+                state.error = result.as_ref().err().cloned();
+            });
+        }
+        if into.try_with_untracked(|_| ()).is_none() {
+            return;
+        }
+        if let Ok(list) = result {
             let initialized = RUN_REFRESH_INITIALIZED.with(Cell::get);
             let stopped_runs = list
                 .iter()
@@ -205,6 +304,12 @@ pub(crate) fn refresh_runs(into: RwSignal<Vec<RunSummary>>, locale: RwSignal<Loc
             if into.with_untracked(|current| !run_lists_render_eq(current, &list)) {
                 into.set(list);
                 schedule_run_output_follow();
+            } else {
+                // Keep the heartbeat itself current without notifying: the
+                // card's meta line re-reads it on its own clock tick. Dropping
+                // it here froze "Heartbeat … ago" at the last output change,
+                // so a quiet but healthy Run looked disconnected.
+                into.set_untracked(list);
             }
             RUN_REFRESH_INITIALIZED.with(|ready| ready.set(true));
             if should_toast {
@@ -216,8 +321,52 @@ pub(crate) fn refresh_runs(into: RwSignal<Vec<RunSummary>>, locale: RwSignal<Loc
 
 #[cfg(test)]
 mod run_refresh_guard_tests {
-    use super::run_lists_render_eq;
+    use super::{
+        method_search_memory_stale, run_lists_render_eq, run_refresh_warning,
+        MethodSearchPanelMemory, RunRefreshGuard, RunRefreshState,
+    };
     use crate::dto::RunSummary;
+    use crate::i18n::Locale;
+
+    #[test]
+    fn method_search_memory_reloads_only_an_open_panel_without_current_details() {
+        // A collapsed panel never fetches on rebuild; an open one whose load
+        // was interrupted by the rebuild fetches again.
+        assert!(!method_search_memory_stale(
+            &MethodSearchPanelMemory::default(),
+            "paused"
+        ));
+        let interrupted = MethodSearchPanelMemory {
+            expanded: true,
+            details: None,
+        };
+        assert!(method_search_memory_stale(&interrupted, "paused"));
+    }
+
+    #[test]
+    fn pending_refreshes_are_coalesced_and_release_the_guard() {
+        let guard = RunRefreshGuard::acquire().unwrap();
+        assert!(RunRefreshGuard::acquire().is_none());
+        drop(guard);
+        assert!(RunRefreshGuard::acquire().is_some());
+    }
+
+    #[test]
+    fn refresh_feedback_distinguishes_slow_reads_from_errors() {
+        let mut state = RunRefreshState {
+            pending_since: Some(100),
+            error: None,
+        };
+        assert!(run_refresh_warning(&state, 109, Locale::En).is_none());
+        assert!(run_refresh_warning(&state, 110, Locale::En)
+            .unwrap()
+            .contains("taking longer"));
+        state.error = Some("pool timed out".into());
+        assert!(run_refresh_warning(&state, 101, Locale::En)
+            .unwrap()
+            .contains("pool timed out"));
+        assert!(run_refresh_warning(&RunRefreshState::default(), 110, Locale::En).is_none());
+    }
 
     fn summary(last_polled_at: Option<i64>) -> RunSummary {
         RunSummary {
@@ -239,6 +388,7 @@ mod run_refresh_guard_tests {
             harvested_at: None,
             cleaned_at: None,
             cleanup_error: None,
+            background_requested_at: None,
             output_fingerprint: "fp".into(),
         }
     }
@@ -415,42 +565,7 @@ pub(crate) fn mention_compute_entries(
 }
 
 fn context_runtime_available(ctx: &ExecutionContext, language: &str) -> bool {
-    if ctx.kind == "local" && language == "python" {
-        return true;
-    }
-    let config = serde_json::from_str::<serde_json::Value>(&ctx.config_json).unwrap_or_default();
-    let capabilities =
-        serde_json::from_str::<serde_json::Value>(&ctx.capabilities_json).unwrap_or_default();
-    let has_value = |value: &serde_json::Value, key: &str| {
-        value
-            .get(key)
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty())
-    };
-    match language {
-        "python" => {
-            ["python_executable", "python_path"]
-                .iter()
-                .any(|key| has_value(&config, key))
-                || has_value(&capabilities, "python_executable")
-        }
-        "r" => {
-            if ["rscript_executable", "rscript_path"]
-                .iter()
-                .any(|key| has_value(&config, key))
-            {
-                return true;
-            }
-            if has_value(&capabilities, "rscript_executable") {
-                return capabilities
-                    .get("r_jsonlite")
-                    .and_then(|value| value.as_bool())
-                    != Some(false);
-            }
-            ctx.kind == "local" && ctx.last_probe_status.as_deref() != Some("ok")
-        }
-        _ => false,
-    }
+    crate::dto::native_conversations::runtime_reference_available(ctx, language)
 }
 
 #[cfg(test)]
@@ -2452,6 +2567,152 @@ mod run_artifact_link_tests {
     }
 }
 
+/// Statuses that mean a Run or transfer is still doing work. Shared by the
+/// right-pane Runs tab badge and its grouping so the two never disagree.
+pub(crate) fn is_active_run_status(status: &str) -> bool {
+    matches!(status, "submitted" | "running" | "cancelling" | "paused")
+}
+
+/// Runs of one conversation, split for the right-pane Runs tab.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct SessionRunGroups {
+    /// Still working, newest submission first.
+    pub active: Vec<RunSummary>,
+    /// Everything else (finished, cancelled, lost, drafts), most recently
+    /// ended first so the last thing that happened sits at the top.
+    pub completed: Vec<RunSummary>,
+}
+
+/// Group the polled run list for the conversation `frame_id`. Runs without a
+/// frame (older rows, Environment-launched work) belong to no session and are
+/// left out; transfers share `RunSummary`, so they are included.
+pub(crate) fn session_run_groups(runs: &[RunSummary], frame_id: &str) -> SessionRunGroups {
+    let mut groups = SessionRunGroups::default();
+    for run in runs {
+        if run.frame_id.as_deref() != Some(frame_id) {
+            continue;
+        }
+        if is_active_run_status(&run.status) {
+            groups.active.push(run.clone());
+        } else {
+            groups.completed.push(run.clone());
+        }
+    }
+    groups.active.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    groups.completed.sort_by(|a, b| {
+        let a_end = a.ended_at.unwrap_or(a.created_at);
+        let b_end = b.ended_at.unwrap_or(b.created_at);
+        b_end
+            .cmp(&a_end)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    groups
+}
+
+#[cfg(test)]
+mod session_run_group_tests {
+    use super::{is_active_run_status, session_run_groups};
+    use crate::dto::RunSummary;
+
+    fn run(
+        id: &str,
+        frame: Option<&str>,
+        status: &str,
+        created: i64,
+        ended: Option<i64>,
+    ) -> RunSummary {
+        RunSummary {
+            id: id.into(),
+            frame_id: frame.map(str::to_string),
+            context_id: "local".into(),
+            title: id.into(),
+            kind: if id.starts_with("xfer") {
+                "file_transfer".into()
+            } else {
+                "ssh_direct".into()
+            },
+            status: status.into(),
+            created_at: created,
+            started_at: Some(created),
+            ended_at: ended,
+            exit_code: ended.map(|_| 0),
+            remote_workdir: None,
+            timeout_secs: None,
+            last_polled_at: None,
+            last_poll_error: None,
+            progress_json: String::new(),
+            harvested_at: None,
+            cleaned_at: None,
+            cleanup_error: None,
+            background_requested_at: None,
+            output_fingerprint: String::new(),
+        }
+    }
+
+    fn ids(runs: &[RunSummary]) -> Vec<&str> {
+        runs.iter().map(|run| run.id.as_str()).collect()
+    }
+
+    #[test]
+    fn active_statuses_cover_every_working_lifecycle() {
+        for status in ["submitted", "running", "cancelling", "paused"] {
+            assert!(is_active_run_status(status), "{status}");
+        }
+        for status in [
+            "draft",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+            "lost",
+            "",
+        ] {
+            assert!(!is_active_run_status(status), "{status}");
+        }
+    }
+
+    #[test]
+    fn only_the_requested_frame_is_kept_and_transfers_count() {
+        let runs = vec![
+            run("a-run", Some("frame-a"), "running", 10, None),
+            run("b-run", Some("frame-b"), "running", 11, None),
+            run("xfer-a", Some("frame-a"), "submitted", 12, None),
+            run("orphan", None, "running", 13, None),
+            run("a-done", Some("frame-a"), "succeeded", 5, Some(9)),
+        ];
+        let groups = session_run_groups(&runs, "frame-a");
+        assert_eq!(ids(&groups.active), vec!["xfer-a", "a-run"]);
+        assert_eq!(ids(&groups.completed), vec!["a-done"]);
+        let other = session_run_groups(&runs, "frame-b");
+        assert_eq!(ids(&other.active), vec!["b-run"]);
+        assert!(other.completed.is_empty());
+        let none = session_run_groups(&runs, "frame-none");
+        assert!(none.active.is_empty() && none.completed.is_empty());
+    }
+
+    #[test]
+    fn completed_runs_sort_by_end_time_and_drafts_fall_in_the_lower_group() {
+        let runs = vec![
+            run("early", Some("f"), "succeeded", 1, Some(20)),
+            run("late", Some("f"), "failed", 2, Some(30)),
+            run("never-ended", Some("f"), "lost", 25, None),
+            run("draft", Some("f"), "draft", 40, None),
+            run("paused", Some("f"), "paused", 3, None),
+        ];
+        let groups = session_run_groups(&runs, "f");
+        assert_eq!(ids(&groups.active), vec!["paused"]);
+        assert_eq!(
+            ids(&groups.completed),
+            vec!["draft", "late", "never-ended", "early"]
+        );
+    }
+}
+
 pub(crate) fn run_title(run: &RunSummary) -> String {
     if !run.title.trim().is_empty() {
         run.title.clone()
@@ -2621,6 +2882,7 @@ pub(crate) fn run_status_label(locale: Locale, status: &str) -> String {
         "timed_out" => "runs.status.timed_out",
         "cancelled" => "runs.status.cancelled",
         "lost" => "runs.status.lost",
+        "unknown" => "runs.status.unknown",
         _ => return status.to_string(),
     };
     t(locale, key).to_string()
@@ -2752,14 +3014,31 @@ fn control_method_search(
 #[component]
 fn MethodSearchRunPanel(
     run_id: String,
+    status: String,
     locale: RwSignal<Locale>,
     modal: RwSignal<Option<(String, ContextModalKind)>>,
     modal_artifact: RwSignal<Option<ModalArtifact>>,
 ) -> impl IntoView {
-    let expanded = create_rw_signal(false);
+    let remembered = METHOD_SEARCH_PANELS
+        .with(|panels| panels.borrow().get(&run_id).cloned())
+        .unwrap_or_default();
+    let expanded = create_rw_signal(remembered.expanded);
     let loading = create_rw_signal(false);
-    let details = create_rw_signal(None::<MethodSearchRunDetails>);
+    let details = create_rw_signal(remembered.details.clone());
     let error = create_rw_signal(None::<String>);
+    let memory_id = run_id.clone();
+    create_effect(move |_| {
+        let memory = MethodSearchPanelMemory {
+            expanded: expanded.get(),
+            details: details.get(),
+        };
+        METHOD_SEARCH_PANELS.with(|panels| {
+            panels.borrow_mut().insert(memory_id.clone(), memory);
+        });
+    });
+    if method_search_memory_stale(&remembered, &status) {
+        load_method_search_details(run_id.clone(), details, loading, error);
+    }
     let inspect_run_id = run_id.clone();
     let refresh_run_id = run_id.clone();
     view! {
@@ -3111,6 +3390,7 @@ pub(crate) fn ContextDetailsOverlay(
     selection_popup: RwSignal<Option<(String, Option<String>, i32, i32)>>,
     on_use_in_publication: Callback<PublicationEvidenceSource>,
 ) -> impl IntoView {
+    let run_refresh_health = use_context::<RunRefreshHealth>();
     // Run→artifact links live on the graph's `produced` edges, so the Runs view
     // needs a fresh graph each time it opens.
     create_effect(move |_| {
@@ -3274,7 +3554,7 @@ pub(crate) fn ContextDetailsOverlay(
                                                         title=t(locale.get(), "runs.refresh")
                                                         aria-label=t(locale.get(), "runs.refresh")
                                                         on:click=move |_| {
-                                                            refresh_runs(runs, locale);
+                                                            refresh_runs(runs, locale, run_refresh_health);
                                                             crate::research::refresh_research_graph(research_graph);
                                                         }>{compose_icon("sync")}</button>
                                                 </div>
@@ -3316,6 +3596,7 @@ pub(crate) fn ContextDetailsOverlay(
                                                 .flatten();
                                             let method_progress = method_search_progress(&run);
                                             let method_run_id = run.id.clone();
+                                            let method_status = run.status.clone();
                                             let detail_run_id = run.id.clone();
                                             let meta = match run.exit_code {
                                                 Some(code) => format!("{} · {} · exit {code}", run.context_id, run.kind),
@@ -3356,7 +3637,7 @@ pub(crate) fn ContextDetailsOverlay(
                                                                             spawn_local(async move {
                                                                                 let arg = to_value(&serde_json::json!({ "runId": run_id })).unwrap();
                                                                                 let _ = invoke("cancel_run", arg).await;
-                                                                                refresh_runs(runs, locale);
+                                                                                refresh_runs(runs, locale, run_refresh_health);
                                                                             });
                                                                         }>{compose_icon("close")}</button>
                                                                 }
@@ -3392,7 +3673,7 @@ pub(crate) fn ContextDetailsOverlay(
                                                                                         &js_error_text(error),
                                                                                     )),
                                                                                 }
-                                                                                refresh_runs(runs, locale);
+                                                                                refresh_runs(runs, locale, run_refresh_health);
                                                                             });
                                                                         }>{compose_icon("trash")}</button>
                                                                 }
@@ -3418,6 +3699,7 @@ pub(crate) fn ContextDetailsOverlay(
                                                     {method_search.then(|| view! {
                                                         <MethodSearchRunPanel
                                                             run_id=method_run_id
+                                                            status=method_status
                                                             locale=locale
                                                             modal=modal
                                                             modal_artifact=modal_artifact

@@ -25,20 +25,7 @@ const OOXML_MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 const OOXML_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const OOXML_MAX_COMPRESSION_RATIO: u64 = 100;
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
-pub(super) struct DirEntry {
-    name: String,
-    is_dir: bool,
-    size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    modified_unix_millis: Option<u64>,
-}
-
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
-pub(super) struct DirectoryListing {
-    path: String,
-    entries: Vec<DirEntry>,
-}
+pub(super) use wisp_dto::{DirEntry, DirectoryListing};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteCommand {
@@ -100,27 +87,9 @@ impl RemoteRunner for ProcessRemoteRunner {
     }
 }
 
-#[derive(Serialize, Clone, Debug)]
-pub(super) struct FileContent {
-    path: String,
-    mime: String,
-    text: Option<String>,
-    /// Base64 payload for binary files (images, pdf, pdb, …).
-    base64: Option<String>,
-    /// True when only a leading prefix was returned (large text/log/CSV).
-    truncated: bool,
-    /// Full on-disk size when known (local metadata or remote `stat`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_bytes: Option<u64>,
-}
+pub(super) use wisp_dto::FileContent;
 
-#[derive(Serialize, Clone)]
-pub(super) struct FileSearchHit {
-    path: String,
-    name: String,
-    is_dir: bool,
-    size: u64,
-}
+pub(super) use wisp_dto::FileSearchHit;
 
 pub(super) use wisp_runs::mime::mime_for_path;
 
@@ -178,23 +147,31 @@ fn is_ooxml_path(path: &Path) -> bool {
 }
 
 fn validate_external_relationships(xml: &str, part_name: &str) -> Result<(), String> {
-    let relationship = regex::Regex::new(r"(?is)<Relationship\b[^>]*>")
-        .map_err(|error| format!("could not compile relationship validator: {error}"))?;
-    let external = regex::Regex::new(r#"(?i)\bTargetMode\s*=\s*["']External["']"#)
-        .map_err(|error| format!("could not compile relationship validator: {error}"))?;
-    let relationship_type = regex::Regex::new(r#"(?i)\bType\s*=\s*["']([^"']+)["']"#)
-        .map_err(|error| format!("could not compile relationship validator: {error}"))?;
-    let target = regex::Regex::new(r#"(?i)\bTarget\s*=\s*["']([^"']+)["']"#)
-        .map_err(|error| format!("could not compile relationship validator: {error}"))?;
+    // A real parser, not a regex: `>` inside an attribute value must not end
+    // the element early and hide `TargetMode="External"`. Parse errors fail
+    // closed because the previewer's own parser might still accept the part.
+    let doc = roxmltree::Document::parse_with_options(
+        xml,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: 100_000,
+            entity_resolver: None,
+        },
+    )
+    .map_err(|error| format!("OOXML relationship part is not well-formed XML: {error}"))?;
+    fn attr<'a>(node: roxmltree::Node<'a, 'a>, name: &str) -> Option<&'a str> {
+        node.attributes()
+            .find(|attribute| attribute.name().eq_ignore_ascii_case(name))
+            .map(|attribute| attribute.value())
+    }
 
-    for tag in relationship.find_iter(xml).map(|matched| matched.as_str()) {
-        if !external.is_match(tag) {
+    for node in doc.descendants().filter(|node| {
+        node.is_element() && node.tag_name().name().eq_ignore_ascii_case("Relationship")
+    }) {
+        if !attr(node, "TargetMode").is_some_and(|mode| mode.eq_ignore_ascii_case("External")) {
             continue;
         }
-        let kind = relationship_type
-            .captures(tag)
-            .and_then(|captures| captures.get(1))
-            .map(|value| value.as_str().to_ascii_lowercase());
+        let kind = attr(node, "Type").map(str::to_ascii_lowercase);
         // SheetJS displays stored cells/formulas without resolving external
         // workbook references. Templates commonly retain these links to old
         // files (including UNC paths); they are not external media to fetch.
@@ -215,10 +192,7 @@ fn validate_external_relationships(xml: &str, part_name: &str) -> Result<(), Str
         {
             return Err("OOXML archive contains an external media relationship".into());
         }
-        let destination = target
-            .captures(tag)
-            .and_then(|captures| captures.get(1))
-            .map(|value| value.as_str())
+        let destination = attr(node, "Target")
             .ok_or_else(|| "OOXML external hyperlink is missing its target".to_string())?;
         let scheme = destination
             .split_once(':')
@@ -435,6 +409,10 @@ fn collect_file_search_hits(
         if name.starts_with('.') {
             continue;
         }
+        // Do not recurse into symlink cycles or enumerate outside the project.
+        if ent.file_type().map_err(|e| e.to_string())?.is_symlink() {
+            continue;
+        }
         let meta = ent.metadata().map_err(|e| format!("{e}"))?;
         let is_dir = meta.is_dir();
         let rel = if rel_base == "." {
@@ -469,24 +447,33 @@ pub(super) async fn search_files(
     limit: Option<usize>,
 ) -> Result<Vec<FileSearchHit>, String> {
     let root = state.require_active(window.label())?.root;
-    tauri::async_runtime::spawn_blocking(move || {
-        let q = query.trim();
-        if q.is_empty() {
-            return Ok(vec![]);
-        }
-        let cap = limit.unwrap_or(200).clamp(1, 500);
-        let mut hits = Vec::new();
-        collect_file_search_hits(&root, ".", q, cap, &mut hits)?;
-        hits.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then(a.path.cmp(&b.path))
-        });
-        Ok(hits)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || search_files_at(&root, &query, limit))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Shared project-wide filename search for WebView and native session panels.
+pub(super) fn search_files_at(
+    root: &Path,
+    query: &str,
+    limit: Option<usize>,
+) -> Result<Vec<FileSearchHit>, String> {
+    let q = query.trim();
+    if q.len() > 512 {
+        return Err("File search query is too long".into());
+    }
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut hits = Vec::new();
+    collect_file_search_hits(root, ".", q, limit.unwrap_or(200).clamp(1, 500), &mut hits)?;
+    hits.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.path.cmp(&b.path))
+    });
+    Ok(hits)
 }
 
 #[tauri::command(async)]
@@ -612,6 +599,132 @@ pub(super) async fn create_file(
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn copy_upload_file(root: &Path, destination: &Path, source: &Path) -> Result<String, String> {
+    if !std::fs::metadata(source)
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err("Only regular files can be uploaded".into());
+    }
+    let mut input = std::fs::File::open(source).map_err(|error| error.to_string())?;
+    let name = source.file_name().ok_or("invalid filename")?;
+    let stem = source.file_stem().unwrap_or(name);
+    for index in 0..10_000 {
+        let candidate = if index == 0 {
+            name.to_os_string()
+        } else {
+            let mut candidate = stem.to_os_string();
+            candidate.push(format!("_{index}"));
+            if let Some(extension) = source.extension() {
+                candidate.push(".");
+                candidate.push(extension);
+            }
+            candidate
+        };
+        // Keep native filenames (including Unicode) intact on every platform.
+        let target = destination.join(candidate);
+        let mut output = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if let Err(error) = std::io::copy(&mut input, &mut output) {
+            drop(output);
+            let _ = std::fs::remove_file(&target);
+            return Err(error.to_string());
+        }
+        let relative = target
+            .strip_prefix(root)
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        #[cfg(windows)]
+        let relative = relative.replace('\\', "/");
+        return Ok(relative);
+    }
+    Err("Too many files with the same name in this folder".into())
+}
+
+pub(super) fn upload_local_files_at(
+    root: &Path,
+    destination_dir: &str,
+    sources: Vec<String>,
+) -> Result<Vec<wisp_dto::LocalFileUploadResult>, String> {
+    let root = wisp_tools::safety::resolve_under_root(root, ".")?;
+    let destination = wisp_tools::safety::resolve_under_root(&root, destination_dir)?;
+    if !destination.is_dir() {
+        return Err("Upload destination must be an existing directory".into());
+    }
+    Ok(sources
+        .into_iter()
+        .map(|source| {
+            let result = copy_upload_file(&root, &destination, Path::new(&source));
+            let (path, error) = match result {
+                Ok(path) => (Some(path), None),
+                Err(error) => (None, Some(error)),
+            };
+            wisp_dto::LocalFileUploadResult {
+                source,
+                path,
+                error,
+            }
+        })
+        .collect())
+}
+
+/// Copy selected or natively dropped files into the displayed workspace folder.
+#[tauri::command]
+pub(super) async fn upload_local_files(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    window: WorkspaceSurface,
+    destination_dir: String,
+    source_paths: Option<Vec<String>>,
+) -> Result<Vec<wisp_dto::LocalFileUploadResult>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    // Capture the writable workspace before the picker can change focus/session.
+    let (project, scope, activity) = writable_active_project(&state, window.label()).await?;
+    let sources = match source_paths {
+        Some(paths) => paths,
+        None => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            app.dialog().file().pick_files(move |picked| {
+                let _ = tx.send(picked);
+            });
+            rx.await
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| path.to_string())
+                .collect()
+        }
+    };
+    if sources.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (results, _activity) = tauri::async_runtime::spawn_blocking(move || {
+        (
+            upload_local_files_at(&project.root, &destination_dir, sources),
+            activity,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let results = results?;
+    if results.iter().any(|item| item.path.is_some()) {
+        state
+            .store
+            .bump_state_generation(&scope)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(results)
 }
 
 /// Byte ceiling for a user-driven editor save. The center editor refuses to
@@ -1164,6 +1277,64 @@ pub(super) async fn read_remote_file(
     .map_err(|e| format!("Remote file task failed: {e}"))?
 }
 
+/// Native renderers request the same bounded, approved remote bytes as WebView.
+/// Preserve legacy document extraction for callers that do not opt in.
+pub(super) async fn read_native_remote_preview(
+    state: State<'_, AppState>,
+    context_id: String,
+    path: String,
+    render_pdf: bool,
+    render_office: bool,
+) -> Result<FileContent, String> {
+    crate::run_context::remote_files::refuse_if_context_path_discarded(
+        &state.store,
+        &context_id,
+        &path,
+    )
+    .await?;
+    let context = state
+        .store
+        .get_execution_context(&context_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Execution context not found: {context_id}"))?;
+    tokio::task::spawn_blocking(move || {
+        let mut runner = ProcessRemoteRunner;
+        read_native_remote_preview_with_runner(
+            &context,
+            &path,
+            render_pdf,
+            render_office,
+            &mut runner,
+        )
+    })
+    .await
+    .map_err(|e| format!("Remote file task failed: {e}"))?
+}
+
+fn read_native_remote_preview_with_runner(
+    context: &wisp_store::ExecutionContext,
+    path: &str,
+    render_pdf: bool,
+    render_office: bool,
+    runner: &mut dyn RemoteRunner,
+) -> Result<FileContent, String> {
+    let mime = mime_for_path(Path::new(path));
+    if !(render_pdf && mime == "application/pdf" || render_office && is_ooxml_path(Path::new(path)))
+    {
+        return read_remote_file_with_runner(context, path, None, runner);
+    }
+    let bytes = read_remote_file_bytes_with_runner(context, path, Some(32 * 1024 * 1024), runner)?;
+    let total = bytes.len() as u64;
+    Ok(file_content_from_bytes(
+        path.into(),
+        mime,
+        bytes,
+        Some(total),
+        false,
+    ))
+}
+
 #[tauri::command]
 pub(super) async fn read_remote_file_bytes(
     state: State<'_, AppState>,
@@ -1279,6 +1450,30 @@ pub(super) fn read_file_bytes_at(
         bytes = transcode_ooxml_tiff_media(bytes);
     }
     Ok(bytes)
+}
+
+/// Opted-in native views render original PDF or validated Office document bytes.
+/// Keep legacy document extraction for clients without the Office capability.
+pub(super) fn read_native_preview_at(
+    root: &Path,
+    path: String,
+    render_pdf: bool,
+    render_office: bool,
+) -> Result<FileContent, String> {
+    let real = wisp_tools::safety::validate_file_path(root, &path)?;
+    let mime = mime_for_path(&real);
+    if !(render_pdf && mime == "application/pdf" || render_office && is_ooxml_path(&real)) {
+        return read_file_at(root, path, None);
+    }
+    let bytes = read_file_bytes_at(root, &path, Some(32 * 1024 * 1024))?;
+    let total = bytes.len() as u64;
+    Ok(file_content_from_bytes(
+        real.to_string_lossy().into_owned(),
+        mime,
+        bytes,
+        Some(total),
+        false,
+    ))
 }
 
 /// The shared text-vs-binary decision for previews, local or remote: named text
@@ -1711,6 +1906,20 @@ mod tests {
             br#"<Relationships><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.org/paper" TargetMode="External"/></Relationships>"#,
         )]);
         validate_ooxml_archive(&safe_link).unwrap();
+
+        // A '>' inside an attribute value must not hide TargetMode from the check.
+        let hidden_external = test_ooxml(&[(
+            "word/_rels/document.xml.rels",
+            br#"<Relationships><Relationship Id="a>b" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.invalid/pixel.png" TargetMode="External"/></Relationships>"#,
+        )]);
+        assert!(validate_ooxml_archive(&hidden_external)
+            .unwrap_err()
+            .contains("external media"));
+        let malformed = test_ooxml(&[(
+            "word/_rels/document.xml.rels",
+            b"<Relationships><Relationship Type=\"x\" TargetMode=\"External\"",
+        )]);
+        assert!(validate_ooxml_archive(&malformed).is_err());
     }
 
     #[test]
@@ -1867,6 +2076,57 @@ mod tests {
         assert_eq!(content.path, "~/analysis.py");
         assert!(!content.truncated);
         assert_eq!(content.total_bytes, Some(12));
+    }
+
+    #[test]
+    fn native_remote_pdf_keeps_page_bytes_and_the_existing_transfer_ceiling() {
+        let identity = test_identity_file();
+        let bytes = b"%PDF-1.7\nscoped native page bytes\n";
+        let mut stdout = b"WISP_REMOTE_FILE_V1\0".to_vec();
+        stdout.extend_from_slice(bytes);
+        let mut runner = FakeRemoteRunner::returning(RemoteOutput {
+            status: 0,
+            stdout,
+            stderr: String::new(),
+        });
+        let content = read_native_remote_preview_with_runner(
+            &ssh_context(&identity),
+            "~/paper.pdf",
+            true,
+            true,
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(content.mime, "application/pdf");
+        assert!(content.text.is_none());
+        assert_eq!(content.total_bytes, Some(bytes.len() as u64));
+        assert!(!content.truncated);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(content.base64.unwrap())
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(runner.commands.len(), 1);
+        assert!(runner.commands[0]
+            .args
+            .iter()
+            .any(|arg| arg.contains("33554432")));
+        let mut denied = FakeRemoteRunner::returning(RemoteOutput {
+            status: 67,
+            stdout: Vec::new(),
+            stderr: "Remote file exceeds 33554432 byte limit".into(),
+        });
+        assert!(read_native_remote_preview_with_runner(
+            &ssh_context(&identity),
+            "~/large.pdf",
+            true,
+            true,
+            &mut denied
+        )
+        .unwrap_err()
+        .contains("byte limit"));
+        let _ = std::fs::remove_file(identity);
     }
 
     #[test]
@@ -2040,6 +2300,91 @@ mod tests {
         assert_eq!(dto.modified_unix_millis, Some(modified));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_upload_copies_binary_files_to_current_directory_without_overwriting() {
+        let project = tempfile::tempdir().unwrap();
+        let sources = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("docs")).unwrap();
+        let source = sources.path().join("研究 数据.bin");
+        let bytes = [0, 255, 10, 128];
+        std::fs::write(&source, bytes).unwrap();
+        std::fs::write(project.path().join("docs/研究 数据.bin"), b"keep").unwrap();
+        let results = upload_local_files_at(
+            project.path(),
+            "docs",
+            vec![
+                source.to_string_lossy().into_owned(),
+                source.to_string_lossy().into_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(results[0].path.as_deref(), Some("docs/研究 数据_1.bin"));
+        assert_eq!(results[1].path.as_deref(), Some("docs/研究 数据_2.bin"));
+        for result in &results {
+            assert!(result.error.is_none());
+            assert_eq!(
+                std::fs::read(project.path().join(result.path.as_ref().unwrap())).unwrap(),
+                bytes
+            );
+        }
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(project.path().join("docs/研究 数据.bin")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn local_upload_reports_each_failure_and_confines_destination() {
+        let project = tempfile::tempdir().unwrap();
+        let sources = tempfile::tempdir().unwrap();
+        let source = sources.path().join("ok.txt");
+        std::fs::write(&source, b"ok").unwrap();
+        let paths = vec![
+            sources.path().to_string_lossy().into_owned(),
+            sources
+                .path()
+                .join("missing")
+                .to_string_lossy()
+                .into_owned(),
+            source.to_string_lossy().into_owned(),
+        ];
+        let results = upload_local_files_at(project.path(), ".", paths.clone()).unwrap();
+        assert!(results[0].error.is_some());
+        assert!(results[1].error.is_some());
+        assert_eq!(results[2].path.as_deref(), Some("ok.txt"));
+        assert!(upload_local_files_at(project.path(), "..", paths.clone()).is_err());
+        assert!(upload_local_files_at(project.path(), "ok.txt", paths.clone()).is_err());
+        assert!(upload_local_files_at(project.path(), "missing", paths).is_err());
+        assert!(upload_local_files_at(project.path(), ".", vec![])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_upload_rejects_symlink_escape_and_preserves_existing_links() {
+        use std::os::unix::fs::symlink;
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let source = outside.path().join("input.txt");
+        std::fs::write(&source, b"keep").unwrap();
+        symlink(outside.path(), project.path().join("escape")).unwrap();
+        symlink(&source, project.path().join("input.txt")).unwrap();
+        let paths = vec![source.to_string_lossy().into_owned()];
+        assert!(upload_local_files_at(project.path(), "escape", paths.clone()).is_err());
+        let results = upload_local_files_at(project.path(), ".", paths).unwrap();
+        assert_eq!(results[0].path.as_deref(), Some("input_1.txt"));
+        assert!(project
+            .path()
+            .join("input.txt")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(source).unwrap(), b"keep");
     }
 
     #[test]

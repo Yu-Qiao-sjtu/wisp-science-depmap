@@ -119,17 +119,130 @@ boundary.
 
 ## Inline temporary Agents
 
-1. Open the composer Agent menu and enable **Delegation** for the current
-   conversation. New conversations start with delegation off.
-2. Ask the main Agent for an outcome that materially benefits from independent
-   or parallel work. The main Agent decides whether delegation is useful and,
-   when it is, calls `delegate_tasks` itself.
+### Watching parallel exploration
+
+The WebView desktop shows an **Agent swarm** progress card above the composer
+for `map_items`, project/session Reader retrieval, and `explore`. Open **View
+assistants** to see the three stages: starting tasks, parallel execution, and
+summary. The compact card shares the input box's column and shows a phase badge,
+task counts, and a thin strip of observed task states. The full stage list stays
+inside the exploration window. Finished cards have a close button: hiding the
+card leaves its results available under **Agents → Parallel tasks**, which also
+shows the current live batch. Open that entry to inspect per-task progress and
+results, or use **Stop this turn** while it is running. This stops the whole
+conversation turn; individual chunks cannot be stopped on their own. Hiding
+applies to the current app window and survives switching conversations; a new
+batch shows a new card. The panel uses the existing latest batch snapshot, not
+a new history of all batches.
+
+### Retrying failed Reader tasks
+
+When a Reader batch finishes with gaps, the card, the **Agents** entry, and the
+exploration window offer **Retry failed tasks (N)**; a failed assistant's own
+page offers **Retry this task**. A retry continues the same batch in place: the
+chosen assistants go back to work, only their failed transcript chunks are
+re-read (an older snapshot without chunk bookkeeping re-reads the whole saved
+conversation), and the batch ends as complete or still partial depending on
+what remains. **Stop this turn** cancels a running retry. The recovered
+evidence is not sent to the model on its own; it is added, under a
+**Reader retry** heading, to the context of the next message in that
+conversation, whether or not that message references the project again. Only
+one retry runs per conversation at a time, and a retry is refused while a turn
+is running. `map_items` and `explore` batches are not retried from the panel:
+ask the assistant to resume the batch instead.
+
+The overview separates the task description from
+the total, working, completed, and failed counts; long paths wrap as body text.
+Partial results use an amber status badge, while failed tasks retain their red
+counts and strip segments. The animation follows actual execution events; it
+does not estimate completion time or invent a percentage. Select a task to read
+its instruction, recent tool/progress observations, and result preview. Reader groups transcript
+chunks by saved conversation and shows completed/total chunks for each one.
+An invalid or incomplete Reader JSON response triggers one retry with shorter
+output. Its progress entry stays on the same chunk; a recovered retry counts
+as one completed chunk, and a chunk is marked failed only if recovery fails.
+Each assistant with several chunks shows a thin bar of completed and failed
+chunks, and the six nodes of the overview illustration mirror the state of the
+first six assistants.
+Private model reasoning is not included. The selected assistant is highlighted
+and exposed as selected to assistive technology. Text follows the global UI font
+size setting on both desktop and narrow windows.
+
+Completed, failed, queued, paused, and stopped tasks have separate states.
+**Stop this turn** uses the existing conversation cancellation; closing the
+view only hides it. Escape returns from task detail to the overview, then
+closes the view on the next press. Reduced-motion preferences disable the
+animations. Task lists load in groups of 80; details retain the latest 12
+observations and an 8,000-character result preview. Full `map_items` results
+remain in its existing rows/CSV/reduce files.
+
+Switching conversations preserves the current batch view. Start and final
+snapshots are saved with the conversation; after an app restart an unfinished
+saved snapshot is shown as paused, never as a still-running animation. Reader
+progress is available live during preparation and its final snapshot is saved
+before the main turn. A resumed `map_items` call starts a new view with already
+finished items restored. This display does not change worker concurrency,
+Reader's search scope/time budget, or approval policy. Workflow delegation and
+watch-only child conversations retain their existing entries alongside the
+parallel batch in the Agents panel.
+
+中文：`map_items`、项目／会话 Reader 和 `explore` 共用“并行探索”视图。
+聊天输入框上方的紧凑卡片与输入框对齐，显示阶段标签、任务计数与按真实状态分段的
+细色条；完整三阶段导航保留在弹窗内。点击“查看助手”可查看每项任务的进展与结果。
+已结束的卡片可以关闭，结果仍保留在 **Agents → 并行任务**。该入口也显示当前正在
+运行的批次，可以打开详情或“停止本轮”；停止会取消整个会话轮次，不支持单独停止
+或重跑 Reader 分块。关闭状态在当前窗口切换会话后仍保留，新批次会重新显示卡片；
+Agents 展示当前会话最近一个批次的快照。
+弹窗总览把任务说明与状态统计分开，长路径按正文换行；部分失败显示琥珀色阶段标签，
+失败项的计数与色条保持红色。任务详情将说明、执行进展和结果分区展示。
+Reader 按历史会话分组显示扫描分块数。JSON 格式错误或内容不完整时，会在原分块
+内自动重试一次，并显示重试进展；恢复成功只计为一个完成分块，重试仍失败才记为
+失败。动画由实际事件驱动；失败、暂停与停止
+不会显示为全部完成。关闭视图不取消工作，“停止本轮”沿用现有停止行为。
+`map_items` 续跑时保留已经完成的项目，完整结果仍在原有输出文件中。
+
+Manual verification: run a small approved `map_items` batch with two concurrent
+items and a reduce step; open the card immediately, inspect a running task,
+press Escape twice, and reopen it during reduce. Repeat with one unreadable
+input and with Stop/resume. Attach a few saved sessions to verify Reader
+progress appears before the primary response. Check a narrow window, dark
+theme, reduced motion, a larger UI font size, and switching away/back while tasks
+are running. Select a worker and return to the overview; its selected state
+should clear without closing the window.
+Check a Reader batch with a long request and mixed results: the dock should align
+with the input box in both normal and split views, the description should wrap
+without widening the window, and failed counts must remain separate from
+completed counts. At narrow widths, the roster sits above the detail and the
+overview counts use two columns.
+Close a finished dock, switch away and back, then reopen the results from
+**Agents → Parallel tasks**. A new batch should restore the dock. For a running
+batch, confirm that the panel's stop action targets the current conversation
+and that one Escape closes only the overlaid exploration view.
+
+1. Delegation is always available to a built-in conversation, like Skills and
+   MCP tools: there is no per-conversation switch to enable first, and the
+   composer Agent menu has no delegation settings. The main Agent decides per
+   call whether a batch returns in the same turn or in the background (see
+   [Background completion](#background-completion)).
+2. Use `delegate_tasks` for a bounded graph with known dependencies and
+   deliverables. For sustained exploration that inspects inputs, revises
+   scripts, waits for compute Runs, reviews results, and needs follow-up
+   instructions, the Agent prefers `dispatch_subagent` when available. An
+   explicitly selected Workflow template still runs through `delegate_tasks`,
+   including a single-node template; task count alone does not select a tool.
+   Background delivery changes when a workflow returns, not its time or budget
+   limits. Small tasks stay in the current conversation.
 3. The call describes an overall goal, bounded shared context, and up to eight
    tasks. Each task has its own instruction, dependency IDs, capability IDs,
    optional Specialist, optional JSON output schema, optional isolation
    request, and optional per-task token/tool/cost budget. Budgets are an
    advanced tuning knob: tasks run unlimited by default, and an omitted or
-   zero dimension stays unlimited.
+   zero dimension stays unlimited. The local desktop host also leaves aggregate
+   token/tool/cost budgets and wall deadlines unlimited by default; it does not
+   add an implicit 256,000-token batch cap or a 600-second task deadline.
+   Explicit task limits and managed/nested host ceilings still apply. The
+   activity card renders a zero aggregate limit as **unlimited**, while continuing
+   to count usage normally.
 4. Wisp resolves every capability through host policy into an exact model,
    executor, tool set, project scope, workspace policy, budget, and timeout.
    The model cannot grant raw tools or permissions to a child.
@@ -164,12 +277,46 @@ fails, because review gates must not be satisfiable by unparseable output.
 Failed and cancelled workflows are resumable. **Retry** keeps the persisted
 workflow and every successful task result, reruns only failed/cancelled tasks
 and descendants that were blocked, then supplies the retained dependency
-results to those descendants. A failed task exposes its current token limit in
+results to those descendants. A failed or cancelled task exposes its current token limit in
 the activity card; changing **Retry max tokens** before retrying revises only
 that task's authorized budget on the same workflow (0 makes the task
 unlimited). A finite value is still checked against capability and host
 ceilings; a rejected budget names the triggered limit, the requested value,
 and the ceiling.
+
+Each root retry opens a fresh execution round after the previous attempts have
+stopped. The round's wall clock starts when execution actually begins, so draft
+review and approval wait do not consume it. Root time and budget allowances are
+scoped to that round across its descendants; old nested tasks, usage and
+cancellation flags cannot stop the retry. Previous attempts and their costs
+remain in history, and already successful task results are reused. The Agents
+card shows the current round's token/tool allowances alongside cumulative
+usage, and reports the actual stop cause (timeout, user cancellation or
+budget exhaustion). A failed Run harvest is recovered from the Run's outputs;
+retrying a workflow node may execute its code again.
+
+When retrying a workflow created with the old desktop defaults, Wisp refreshes
+the inherited 600-second task deadlines and the matching generated root limits
+in the same transaction that starts the new execution round. An explicitly
+requested timeout (including an explicit 600 seconds), task budget, or custom
+root limit is retained. Successful results and previous attempts are retained.
+Already approved snapshots keep their saved limits until retried. A retry still
+starts a new context for a failed Native task; it does not automatically resume
+that task's interrupted conversation or reclaim usage missing from old records.
+
+For newly executed Native tasks, usage from completed model requests survives a
+hard timeout and is saved with the failed attempt, together with its child
+conversation reference. An interrupted request that has not returned usage
+cannot be counted yet. HTTP 200 stream error envelopes containing recognized
+upstream EOF/connection-reset/timeout failures use the existing bounded model
+retry policy; authentication, billing, and invalid-request errors remain failures.
+
+Manual verification after building: retry a legacy failed desktop workflow with
+one successful task and one task using the old implicit deadline; confirm the
+successful result is reused, the new round shows unlimited default allowances,
+and an explicitly configured timeout/budget remains finite. With a mock model,
+interrupt a task after a completed tool round and confirm its nonzero usage and
+child conversation remain visible. Verify the Agents card in both languages.
 
 Omitting `specialist_id` creates a generic temporary Agent. Selecting a
 Specialist reuses its persona, model preference, and connector
@@ -205,15 +352,19 @@ still apply.
 
 ## Background completion
 
-The composer Agent menu has a per-conversation **Completion** setting. Inline
-is the default and preserves the same-turn behavior above. Background returns
-a workflow handle as soon as the approved batch is scheduled, allowing the
-parent turn and the rest of the app to continue. The main Agent must not poll
-that handle.
+`delegate_tasks` runs inline by default, with the same-turn behavior above.
+For long work the user should not wait on, the main Agent sets
+`background: true` on that call; there is no per-conversation setting. A
+background call returns a workflow handle as soon as the approved batch is
+scheduled, so the parent turn and the rest of the app can continue. The main
+Agent must not poll that handle. A delegated child Agent cannot start a
+background batch, because nothing would resume it: the nested tool schema does
+not offer `background`, and a nested call that sets it is refused before any
+workflow is created.
 
-Workflows started outside a parent model turn, such as Quick Actions, use the
-durable background delivery path. The conversation's auto-resume setting still
-decides whether their parent is automatically synthesized.
+Workflows started outside a parent model turn use the same durable background
+delivery path. These include Quick Actions and Workflow runs approved or
+retried from the Agents panel.
 
 Each background execution reserves a persisted generation before any child
 starts. When the workflow reaches succeeded, failed, or cancelled, Wisp stores
@@ -225,17 +376,16 @@ turn's incremental message sequence. Retrying a failed or cancelled workflow
 creates a new generation, so the retry can deliver once without redelivering
 the earlier result.
 
-When **Background** is selected, enable **Auto-resume parent** to let an idle
-parent Agent synthesize newly delivered results without another user message;
-the option is hidden for inline completion, where it does not apply. Several
-completions that become ready together may be combined into one synthesis
-turn, but each generation's resume claim is made only once. If the app stops
-after claiming that turn, the
-claim is recorded as interrupted instead of being silently replayed on restart.
-Without auto-resume, the completion card remains in the owning conversation
-and enters the Native parent's context on its next turn. ACP parents receive
-the same result as internal context on their next prompt because their own
-transcript is maintained by the external Agent.
+Every background generation resumes its parent: once the result is
+delivered and the parent Agent is idle, Wisp starts one synthesis turn without
+another user message. Several completions that become ready together may be
+combined into one synthesis turn, but each generation's resume claim is made
+only once. If the app stops after claiming that turn, the claim is recorded as
+interrupted instead of being silently replayed on restart. Generations
+recorded before resumption became automatic keep their original choice; their
+completion card enters the Native parent's context on its next turn. ACP
+parents receive the result as internal context on their next prompt because
+their own transcript is maintained by the external Agent.
 
 On startup, queued/running child attempts become explicit failed attempts, and
 a background generation reserved before its first child started becomes an
@@ -433,6 +583,209 @@ lookup survive application restart. Peer-to-peer sibling messaging is not part
 of this model; dependencies, persisted artifacts, and parent result rollup are
 the coordination paths.
 
+## Batch map over many items
+
+When the *same* task repeats over N items (screening 100 papers, extracting one
+table from 50 PDFs) use `map_items` instead of `delegate_tasks`: one approval,
+a frozen item list, bounded concurrency, resumable rows, and an optional
+decision-model pass/reject decision. See [map-items.md](map-items.md).
+
+## Subagent conversations
+
+Use a subagent conversation for evolving research work, such as checking
+candidate sequences, developing an analysis script on a selected server,
+reviewing its results, and revising it. The parent can answer questions and
+send further instructions to the same child. Computation still uses managed
+Runs, and a completed Run's outputs can be recovered without repeating the
+computation. A workflow remains appropriate when its task graph and expected
+deliverables are already defined or the user explicitly selected a template.
+
+For a bounded second opinion during a difficult turn, configure an
+[on-demand expert model](model-configuration.md#on-demand-senior-experts--按需求助高级模型).
+The `consult_expert` subagent returns advice directly to its parent and appears
+in the Agents pane. It has no tools and does not create a watch-only conversation.
+
+A conversation's Agent can also start a **subagent**: a conversation of its own
+for one focused task, such as "open a new conversation and do X there". Unlike
+the temporary sub-Agents above, a subagent is unbounded by a task plan, visible
+in the sidebar under the conversation that started it (marked with a robot icon), and
+watch-only for the researcher: opening it shows the live transcript, but the
+composer is locked and the backend refuses any message, queued follow-up,
+cut-in, timer, rewind or undo that does not come from the parent conversation.
+Each instruction from the parent appears in the transcript as a task card headed
+**From the parent conversation's agent**; the fixed subagent framing the model
+receives is hidden there, though **Copy** still copies the full text.
+Subagents inherit their parent's folder, and moving the parent moves its
+persisted subagent/branch subtree, including conversations outside the loaded
+sidebar page. Older subagents with mismatched folder metadata still nest under
+their visible parent.
+
+Deleting the parent asks what happens to its subagents, branches and
+explorations, nested ones included. **Also delete its subagents, branches and
+explorations** is checked by default; it discards the open exploration rounds
+they started and deletes those conversations with the parent. Unchecked,
+subagents and branches stay as standalone, writable conversations. An open
+exploration round cannot outlive its source conversation, so with one present
+the deletion requires the box to stay checked.
+
+**Also delete associated artifacts and files** follows that choice. With the
+children deleted too, the preview lists the parent's and every deleted
+subagent's and branch's artifacts, and toggling the children box refreshes it;
+unchecked, it previews the parent alone. Because the whole family goes, a
+reference from one of its conversations does not keep another one's file: a
+figure a subagent produced and the parent linked is deleted rather than kept as
+shared. Each conversation is checked against its own reviewed preview before
+any of them is deleted, then deleted deepest first with the files it reviewed,
+so a stale preview deletes nothing and asks for a fresh one. A subagent
+selected together with its parent is deleted, files included, as part of the
+parent's family. When the selection already holds every subagent and branch,
+for example after **Select all** in the sidebar, there is nothing left to keep
+and the children box is not shown, but the family is still previewed and
+deleted as one, from its top selected conversation, rather than conversation
+by conversation.
+
+Each dispatch binds the child to the parent's chat model, reasoning effort and
+service tier, so a subagent runs on the model its parent uses rather than the
+global default. Switching the parent's model takes effect at the next dispatch.
+
+Each initial dispatch and follow-up also synchronizes the parent's selected
+execution contexts and resolved default compute target to the child. A server
+selected in the parent, such as `ssh:CPU3`, is therefore available for explicit
+`run_in_context`, Python and R calls in the child. Parent context removals take
+effect on the next dispatch; unrelated child selections and the global default
+captured when the child was created are replaced. This copies context selection,
+not credentials or Full Permission. A follow-up refreshes an existing child's
+runtime wiring, so the parent can resolve missing context without asking the
+researcher to configure the watched child manually.
+
+The parent's model reviews subagent tool approvals against the originating
+user request and exact operation. Routine operations within that authorization
+can be approved once automatically. Missing details, ambiguous effects or an
+unavailable reviewer produce a confirmation card in the parent conversation;
+the original card remains actionable in the child. Decisions are bound to the
+exact approval ID, and resolving either card clears its counterpart.
+
+The child stays watch-only for messages, but its **Full Permission** control
+above the composer and in **Agent options** remains available. Enabling it
+requires the usual confirmation and applies only to that child until revoked
+or the app restarts; it also releases an already waiting ordinary approval.
+The confirmation keeps its target conversation if the user navigates while
+it is open. The parent's Full Permission does not grant it to the child.
+
+The parent conversation gets three tools:
+
+- `dispatch_subagent` starts a subagent with a self-contained instruction, or
+  sends a follow-up to an idle one it started (`session_id`). It returns once the
+  subagent accepts the instruction, after synchronizing the parent's model and
+  execution contexts.
+- `subagent_status` reports whether a subagent is running and its latest
+  answer; without `session_id` it lists this conversation's subagents.
+- `stop_subagent` cancels a subagent's running turn.
+
+The right-panel **Agents** view lists every subagent of the current
+conversation, whichever mechanism ran it: child conversations started with
+`dispatch_subagent`, `explore` runs (folded into one "Quick explorations"
+group once finished, since they take seconds), and `delegate_tasks` workflows
+below them. Rows split into in progress and completed. Opening a row shows the
+subagent's status, instruction and final answer in place; a child conversation
+can be stopped or opened in the chat from there, and an explore run names its
+archived trace file. Escape returns to the list. The pane never switches to
+itself when a subagent starts.
+
+When a dispatched turn ends, including when it ends with a question, a
+background callback reviews the result with the parent's model and appends a
+separate summary to the parent conversation; no polling is needed. After a
+normal child turn, the parent automatically continues under its conversation
+lock to handle the child's questions, missing resources and follow-up work.
+The parent uses available context and existing user authorization first, and
+asks the researcher in the parent conversation only when new information or
+authority is required. The continuation keeps the original user request
+separate from the child's result; it does not create a synthetic human message
+or treat the child's proposed actions as permission. It retains the original
+remote-message approval policy.
+
+Cancelled, failed or iteration-limited turns produce a report without an
+automatic restart. A cancelled parent, a deleted conversation, changed ownership,
+or a child that has already started newer work does not act on a delayed request. An
+archived parent keeps the report without resuming; automatic continuation also
+requires that the parent still uses the built-in Agent. A subagent has no
+`ask_user` and cannot start subagents; exploration conversations cannot start
+them either. A subagent dispatched from a WeChat-originated turn keeps that turn's approval floor for
+mutating tools. The parent link is stored on the conversation
+(`frames.dispatched_from`) and survives restart; a turn that was running at
+shutdown is not resumed.
+
+Subagents share their mechanism with the research assistant's
+`dispatch_to_project`: both implement `Dispatcher` in
+`src-tauri/src/dispatch.rs`, which owns the startup acknowledgement, turn
+observation and result delivery.
+
+Manual smoke steps (run only with user permission): select `ssh:CPU3` in a
+parent conversation and dispatch a child that uses that context explicitly.
+Verify the child inherits the selection. Have it return a missing-information
+request and verify the parent answers and sends the follow-up without a human
+message in the child. Remove or change the parent's context and verify the
+next follow-up picks up the change. Cancel a child or start a newer child turn
+while an earlier result is being reviewed; the older report must not restart
+the task. These steps require an already configured host; automated regressions
+use a temporary store and a fake tool, with no SSH connection or real model.
+
+## Agent-opened branches
+
+A conversation's Agent can also open a **branch** of its own conversation with
+the `open_branch` tool: the same kind of conversation branch `/fork` or
+**Branch** on a message creates, nested under the conversation in the sidebar,
+with **Merge back**, move and delete working as for any branch. The agent gives
+it a title and a brief. The branch is created when the turn that asked for it
+ends, from the conversation's history up to and including that turn's reply, so
+it already knows everything the parent knew when it was opened. The parent
+conversation gets a reply saying the branch was opened and quoting the brief,
+and opening the branch shows the brief in its composer as an unsent draft for
+the researcher to edit and send.
+
+The tool and `dispatch_subagent` solve different problems, and the difference
+is who continues the new conversation:
+
+| | `open_branch` | `dispatch_subagent` |
+| --- | --- | --- |
+| Starts with | the parent's history through this turn | nothing but the instruction |
+| Driven by | the researcher and the branch's own agent | the parent's agent (follow-ups, status, stop) |
+| Researcher can write | yes, as in any branch | no, watch-only |
+| Reports back | never; nothing wakes the parent | automatically, and the parent continues |
+| Permissions | the researcher's, copied like `/fork` | reviewed against the parent turn's captured request |
+
+Use `open_branch` for a line of work the researcher should own: an alternative
+approach, a tangent worth its own conversation, a long follow-up that needs
+this context to start from. Use `dispatch_subagent` when the agent must run the
+work itself and act on the result. The tool returns as soon as the request is
+recorded and tells the model not to wait or poll; the branch appears after the
+turn. A turn may ask for at most three branches.
+
+`open_branch` is offered only in ordinary conversations: not in branches
+(branches cannot be branched again), not in explorations or subagent
+conversations, not in the research assistant, and ACP conversations have no
+built-in tools. Asking from a conversation whose exploration round is frozen
+fails like `/fork` does. A cancelled or cut-off turn drops the request, since
+its checkpoint would not be a finished turn. If the branch cannot be created
+after the turn, the status line says so and the parent is unchanged.
+
+Limitations for now: the branch always starts with the full prefix
+(`context: "prefix"`; a hand-over summary or a fresh start are not offered),
+and the researcher sends the brief (`autostart: false`; the branch's agent
+does not start on its own). The composer draft is held in the window, like
+other unsent text, so it does not survive a restart; the brief quoted in the
+parent's notice does.
+
+Manual smoke steps (run only with user permission): in an ordinary
+conversation, ask the agent to "open a branch to try the other normalization
+and leave me a brief". After the turn ends, the sidebar shows the new branch
+under the conversation and the conversation ends with a reply naming it.
+Open the branch: the composer holds the brief, the history matches the parent
+through that turn, and sending the brief starts the branch's own agent. The
+parent does not react to anything done in the branch. **Merge back** on the
+branch works as for a `/fork` branch. Ask for a branch from inside a branch or
+an exploration: the agent has no such tool there.
+
 ## Persistence and safety
 
 - Wisp persists the resolved v2 plan before execution. Stored steps contain the
@@ -588,9 +941,10 @@ insufficient; these strict contracts are exempt from degraded-success delivery.
 The built-in Data-driven research design retains its eight-part synthesis and
 records upstream task evidence sources. It no longer binds mutable Skill packages.
 
-- Turning Delegation off prevents the main conversation and its MCP bridge from
-  listing or invoking delegation tools. It does not erase workflow history or
-  implicitly cancel a workflow that is already running.
+- The main conversation and its MCP bridge always list the delegation tools;
+  only the research assistant and subagent conversations go without them.
+  Workflow history is never erased, and cancelling a workflow is always
+  explicit.
 
 ## Dynamic Agents panel
 
@@ -613,9 +967,7 @@ does not offer a separate child-conversation takeover flow.
 Workflow Studio creates arbitrary task graphs instead of assembling a fixed
 team. Add bounded tasks, connect them with dependencies, and choose
 capabilities, Specialist persona, model, eligible executor, isolation,
-budgets, and output schemas there. Turning Delegation off disables approvals,
-runs, and retries while leaving supported dynamic history and cancellation
-available in the activity panel.
+budgets, and output schemas there.
 
 ### Editing a research workflow
 
@@ -662,15 +1014,15 @@ list them and workflow actions reject them before approval, retry, or execution.
 
 ## Manual smoke check
 
-Enable Delegation and ask the main Agent to compare two project files using two
-independent temporary Agents. Confirm in the Agents panel that the two root
+Ask the main Agent to compare two project files using two independent
+temporary Agents. Confirm in the Agents panel that the two root
 tasks overlap, their dependent synthesis task waits, and the final chat
-response contains one synthesized comparison. Switch **Completion** to
-**Background**, repeat the request, and verify the initial tool result is a
-running handle followed later by exactly one completion card in the same
-conversation. Enable **Auto-resume parent** and verify an idle conversation
-adds one synthesized assistant update; start another parent turn and verify a
-completion waits behind it. Then create an equivalent graph in
+response contains one synthesized comparison. Repeat the request and ask for
+it to run in the background. Verify the `delegate_tasks` call sets
+`background`, and its initial tool result is a running handle. The same
+conversation should later show exactly one completion card, followed by one
+synthesized assistant update once the conversation is idle. Start another
+parent turn and verify a completion waits behind it. Then create an equivalent graph in
 **Settings → Workflows**, attach it from the composer, and confirm the Agents
 panel shows the run without showing workflow editing fields. Repeat with a
 write capability: Wisp should show the exact resolved authority and start zero

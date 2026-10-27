@@ -83,7 +83,10 @@ incompatible, or more than 72 hours old.
    unchanged unless `overwrite_notes` is checked.
 2. **Platform workflows** (Windows, macOS, Linux) wait until that release
    exists, then attach installers. They do not set the release name or body.
-   macOS still merges `latest.json` for both architectures.
+   macOS still merges `latest.json` for both architectures. **Android Release**
+   attaches `wisp-science_<version>_android.apk` the same way once
+   `ANDROID_RELEASE_ENABLED` is set (see `apps/android/README.md`); the APK has
+   no in-app updater, and users install new versions over the old one.
 
 Manual reruns of a platform workflow require the release from step 1 to
 already exist.
@@ -112,26 +115,32 @@ The first updater-capable release must still be installed manually by users of
 an older build whose release feed has no updater manifest. Updates between later
 updater-capable releases use the in-app flow.
 
-## SwiftUI Preview alongside the macOS release
+<a id="swiftui-preview-alongside-the-macos-release"></a>
+
+## SwiftUI alongside the macOS release
 
 Starting with the next tag that includes this packaging change, **macOS Release**
-also attaches separate SwiftUI Preview installers and SHA-256 files:
+also attaches separate SwiftUI installers and SHA-256 files without the Preview label:
 
-- `Wisp-Science-SwiftUI-Preview_<version>_aarch64.dmg` for Apple Silicon.
-- `Wisp-Science-SwiftUI-Preview_<version>_x86_64.dmg` for Intel.
+- `Wisp-Science-SwiftUI_<version>_aarch64.dmg` for Apple Silicon.
+- `Wisp-Science-SwiftUI_<version>_x86_64.dmg` for Intel.
 - A matching `.dmg.sha256` file for each installer.
 
-The preview requires macOS 13 or later. Drag **Wisp Science Preview.app** to
+The SwiftUI app requires macOS 13 or later. Drag **Wisp Science SwiftUI.app** to
 Applications; its name allows it to coexist with **wisp-science.app**. The
-preview uses the existing desktop project database, settings and keyring by
+SwiftUI app uses the existing desktop project database, settings and keyring by
 default, so installing a separate app does **not** isolate user data. Use the
 documented QA build and isolated database for destructive testing.
 
-Preview updates are manual downloads from GitHub Releases. These installers do
+When upgrading from **Wisp Science Preview.app**, quit the old app, install
+**Wisp Science SwiftUI.app**, and remove the old app bundle to avoid duplicate
+launchers. The existing `science.wisp-science.native-preview` bundle identifier
+is retained to preserve preferences; no data migration is required.
+
+SwiftUI updates are manual downloads from GitHub Releases. These installers do
 not enter the stable Tauri `latest.json` feed, and the existing WebView installers
-and updater remain available. Preview publishing only attaches assets; it never
-rewrites the release title or notes. Mention SwiftUI Preview and its known
-limitations in the bilingual notes when cutting the next release.
+and updater remain available. SwiftUI publishing only attaches assets; it never
+rewrites the release title or notes.
 
 The release job builds optimized Swift and Rust executables for the same target,
 then validates the shell/helper versions, clean source stamp and all three
@@ -139,8 +148,8 @@ binary architectures. It reuses the existing Developer ID certificate and
 `APPLE_ID`, `APPLE_APP_PASSWORD`, and `APPLE_TEAM_ID` secrets. The service, embedded
 host and shell are signed inside out with hardened runtime; the app and DMG are
 notarized and stapled before upload. Any signing, notarization or validation
-failure stops preview upload. Notarization results are retained as Actions
-artifacts. The final verification job requires both preview installers and
+failure stops SwiftUI upload. Notarization results are retained as Actions
+artifacts. The final verification job requires both SwiftUI installers and
 checksums alongside the stable updater manifest.
 
 For a local optimized build (ad-hoc signed, not a distributable release):
@@ -150,21 +159,203 @@ bash scripts/build_native_macos.sh --release --target aarch64-apple-darwin
 # Or --target x86_64-apple-darwin, with that Rust target installed.
 ```
 
-The app is written to `target/native-macos-release/<target>/Wisp Science Preview.app`.
+The app is written to `target/native-macos-release/<target>/Wisp Science SwiftUI.app`.
 Omitting `--target` uses the host architecture and the parent output directory.
-Normal debug and `--qa` outputs keep their existing paths. The native-preview CI
+The debug app uses the same new name under `target/native-macos`; `--qa` keeps
+its existing app name and isolated identifier. The native-preview CI
 workflow uploads a separate, ad-hoc signed and **unnotarized** ZIP as an Actions
 artifact; that ZIP is not the GitHub Release installer. Rebuilding an older tag
-from the release workflow on `main` skips preview packaging when that tag lacks
-the packaging script.
+from the release workflow on `main` uses the tagged source's app and installer
+names (including Preview for older tags), and skips SwiftUI packaging when that
+tag lacks the packaging script.
 
-For the first published preview, verify each downloaded checksum, run
+For a published SwiftUI build, verify each downloaded checksum, run
 `codesign --verify --deep --strict` and `spctl --assess --type execute` on the
 installed app, and launch it from Finder on Apple Silicon and Intel. Confirm the
 embedded helper starts, projects and settings load, and the WebView app remains
-launchable. Actual Developer ID notarization and downloaded-app Gatekeeper
+launchable. Finder and the main window should show **Wisp Science SwiftUI**;
+the home footer should say **SwiftUI 原生版**. When upgrading from Preview,
+confirm the saved database selection and appearance preferences are retained.
+Actual Developer ID notarization and downloaded-app Gatekeeper
 behavior require this release CI/manual validation; local ad-hoc builds and
 mocked packaging tests do not establish them.
+
+## Windows code signing
+
+Windows Release and Windows WinUI Preview Release Authenticode-sign with an
+SSL.com Personal ID (IV) code signing certificate enrolled in eSigner. The
+credential id is `44eb788c-2a80-4f18-ae58-912d3298c053`. That id is not a secret;
+the values below exist only as GitHub Actions secrets:
+
+| Secret | Role |
+| --- | --- |
+| `ESIGNER_CREDENTIAL_ID` | eSigner credential id for the Personal ID (IV) certificate |
+| `ESIGNER_USERNAME` | SSL.com account username |
+| `ESIGNER_PASSWORD` | SSL.com account password |
+| `ESIGNER_TOTP_SECRET` | OAuth TOTP secret from eSigner enrollment |
+| `ESIGNER_PIN` | 4-digit PIN created during eSigner enrollment |
+
+CodeSignTool does not send `ESIGNER_PIN`. CI still requires the secret so the
+enrollment PIN is stored with the other signing credentials. SSL.com asks for
+that PIN before it shows the authenticator QR or TOTP secret again.
+
+Before the first signed build, enroll the certificate in eSigner, choose an
+authenticator app, create the PIN, and scan the QR code. Save the TOTP secret
+as `ESIGNER_TOTP_SECRET`. Signing fails until that enrollment is finished.
+CodeSignTool 1.3.2 then signs from GitHub-hosted Windows runners and timestamps
+with SSL.com's RFC 3161 server, `http://ts.ssl.com`. Each signature consumes one
+eSigner signing. The signer waits for a fresh TOTP between calls because eSigner
+rejects a reused one-time password. CodeSignTool's `main` discards picocli's
+exit code, so `java -jar` exits 0 on auth errors, invalid OTPs, and bad
+arguments. A sign counts as success only when the process exits 0, the
+captured output contains `Code signed successfully:`, and the signed file is
+present. An `Error:` line, an exception, a non-zero exit, or a missing file
+fails the job and prints sanitized stdout, stderr, and
+`logs/code_signing_tool.log`. An
+invalid OTP is retried up to four times into later TOTP windows even when the
+process exits 0. Windows Release (`WISP_SIGN_SLOT=windows`) and Windows WinUI
+Preview Release (`WISP_SIGN_SLOT=winui`) sign in parallel with the same
+credential, so the preview job waits one extra TOTP window before its first
+sign and on each OTP retry.
+
+Tauri's `signCommand` runs on the main `wisp-science.exe` after the bundler
+patches it and before that copy is packed, then on the MSI and the NSIS setup
+executable. The loose `target/release/wisp-science.exe` is unsigned again after
+packaging because Tauri restores the unpatched binary. NSIS plugin DLLs and WiX
+extension DLLs are left unsigned; the signed installer covers those build-tool
+binaries. The WinUI preview signs `Wisp.Science.Preview.exe`, `wisp-service.exe`,
+and `settings-host/wisp-tauri.exe` before NSIS packages them, then signs each
+setup executable. Microsoft runtime DLLs are not re-signed. The NSIS-generated
+preview uninstaller is unsigned.
+
+A tag push or a dispatch with `publish=true` fails the job when signing fails,
+and does not upload unsigned installers. `SKIP_WINDOWS_SIGNING` is no longer
+read. The manual **Windows Build** workflow stays unsigned; it does not publish
+a release. **Windows Test Signing** is a manual Authenticode check against the
+same production credential and does not publish.
+
+Signing dry-run (artifacts only, no release upload):
+
+```bash
+gh workflow run "Windows Release" --ref main -f tag=vX.Y.Z -f publish=false
+gh workflow run release-winui-preview.yml --ref main -f tag=vX.Y.Z -f publish=false
+```
+
+Publish after the GitHub Release exists:
+
+```bash
+gh workflow run "Windows Release" --ref main -f tag=vX.Y.Z -f publish=true
+gh workflow run release-winui-preview.yml --ref main -f tag=vX.Y.Z -f publish=true
+```
+
+SmartScreen reputation is built from download volume. An IV certificate does not
+skip that warning, and Microsoft no longer gives EV certificates an instant
+SmartScreen bypass either. Keep signing later releases with this same
+certificate so reputation can carry forward. A newly signed installer can still
+show SmartScreen until enough people have installed it.
+
+After a run, the job summary lists the Authenticode status and signer subject.
+On a downloaded installer:
+
+```powershell
+Get-AuthenticodeSignature .\wisp-science_1.21.0_x64_en-US.msi | Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+
+`Status` is `Valid` and `TimeStamperCertificate` is present when the RFC 3161
+timestamp verified.
+
+## WinUI 3 Preview alongside the Windows release
+
+**Windows WinUI Preview Release** (`release-winui-preview.yml`) builds a separate
+x64 preview on `v*` tag pushes. It attaches both installer variants to the existing release:
+
+- `Wisp-Science-WinUI-Preview_<version>_x64-framework-dependent-setup.exe`: lightweight; checks and installs missing runtimes.
+- `Wisp-Science-WinUI-Preview_<version>_x64-self-contained-setup.exe`: includes .NET and Windows App SDK runtimes.
+- A matching `.exe.sha256` checksum for each, calculated **after** signing.
+- A `.size.json` report for each, with compressed/installed bytes and the largest files.
+
+The NSIS installer uses a per-user location under
+`%LOCALAPPDATA%/Programs/Wisp Science WinUI Preview` and a distinct Start menu
+shortcut/uninstall entry. It can coexist with the stable Tauri application.
+Windows 10 1809+ x64 and the WebView2 Evergreen Runtime are required. Both variants
+include app-local MSVC DLLs and require no .NET SDK. The self-contained variant
+includes .NET 8 and Windows App SDK, so those runtimes need no download at install
+time. The lightweight variant checks compatible .NET 8 x64 and Windows App Runtime
+1.6 packages for the current user, including Main, Singleton and DDLM dependencies.
+Missing or outdated runtimes are downloaded from Microsoft; .NET uses the latest
+8.0 runtime metadata and SHA-512, and both downloads require a valid Microsoft
+Authenticode signature. .NET installation may prompt for administrator permission;
+Windows App Runtime registration keeps the installing user's identity. Network,
+signature, UAC or installer failures stop setup before removing an existing app.
+The installer rechecks dependencies after installation and preserves a reboot
+request. Shared runtimes remain installed when Wisp is uninstalled.
+
+The two variants share one installation directory and can replace each other;
+they are alternatives, not separate side-by-side apps. WebView2 is not bundled
+in either variant. This preview shares the existing desktop
+database/settings/keyring; its installation directory does not isolate user
+data. Uninstall removes packaged files and its shortcut/registration, preserving
+user data. Exit the preview and its helpers before installing an update.
+
+Updates are manual. The workflow only uploads assets, without creating releases,
+rewriting their title/notes or changing `latest.json`. It uses the same eSigner
+signing as [Windows code signing](#windows-code-signing). A signing failure
+blocks publication. SmartScreen can still warn until the certificate has
+download reputation.
+
+The build explicitly selects Release for both Rust helpers and .NET, x64,
+separate .NET/Windows App SDK deployment modes, and fresh publish directories.
+`-RuntimeMode Both` compiles Rust once and publishes both .NET variants. Rust uses
+`opt-level=s`, LTO, one codegen unit, stripped symbols and no debug information.
+.NET disables ReadyToRun and debug symbols. Trimming, single-file publishing
+and NativeAOT are not enabled because this WinUI/XAML/reflection application has
+not been validated for them. The installer uses solid LZMA compression, excludes
+symbol files/Python caches, and enforces separate ceilings:
+
+| Variant | Installer | Installed app payload |
+| --- | ---: | ---: |
+| Framework-dependent | 40 MiB | 150 MiB |
+| Self-contained | 100 MiB | 350 MiB |
+
+Shared runtime downloads/installations are additional to the lightweight package
+sizes. These are regression ceilings, not expected download sizes.
+Review the size report before changing the budgets. Both PR CI and release CI
+exercise the actual installer build and size gates.
+
+To rebuild an existing supported tag, dispatch the workflow **from main** as
+shown in [Windows code signing](#windows-code-signing). `publish=false` keeps
+the signed installers as Actions artifacts.
+
+The build locates the x64 MSVC CRT redistributable folder using Visual Studio's
+`vswhere`; a custom toolchain can pass `-VCRedistDirectory` to the build script.
+The small DLL set is copied beside both Rust executables, avoiding a separate
+VC++ runtime installer or administrator requirement.
+
+Older tags without `scripts/package_native_windows.py` are skipped. The workflow
+checks out the requested tag; it does not package current-main binaries under an
+older version. A local package requires Python 3.11+ and NSIS 3:
+
+```powershell
+pwsh -File scripts/build_native_windows.ps1 -Configuration Release -RuntimeMode Both
+python scripts/package_native_windows.py target/native-windows-release --variant self-contained --tag vX.Y.Z --makensis 'C:/Program Files (x86)/NSIS/makensis.exe'
+python scripts/package_native_windows.py target/native-windows-release-framework-dependent --variant framework-dependent --tag vX.Y.Z --makensis 'C:/Program Files (x86)/NSIS/makensis.exe'
+```
+
+The default build remains `SelfContained`; `-RuntimeMode FrameworkDependent`
+builds only the lightweight app. The runtime policy is checked against the pinned
+Windows App SDK NuGet version. Update `scripts/native_windows_runtimes.json` when
+upgrading that dependency, using Microsoft's [runtime download archive](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads-archive)
+and the NuGet `WindowsAppSDK-VersionInfo.h` version/package identities.
+
+Before shipping the first installer, test on a clean x64 Windows account with
+WebView2 but without .NET/Windows App SDK development tools: verify the downloaded
+SHA-256/signature, install, launch from Start, load projects/settings, open a rich
+preview, exit and switch between variants, then uninstall. For the lightweight
+variant also test already-installed runtimes, missing/old/x86-only runtimes,
+offline download failure and UAC cancellation; for the self-contained variant,
+test without .NET/Windows App Runtime installed. Confirm the stable app and user data
+remain available. Mocked packaging tests and successful NSIS compilation do not
+prove clean-machine launch or that eSigner accepted the installer.
 
 ## Manual smoke test
 

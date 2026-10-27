@@ -38,16 +38,19 @@ use wisp_store::{
 const RESULT_INSTRUCTIONS: &str = "Return one JSON object and no Markdown fence. Include summary (string), files_changed (array), diff_summary (string), artifacts (array), evidence (array), tests (array), and risks (array).";
 const DELEGATION_PROMPT_START: &str = "\n\n<delegation_capability>";
 const DELEGATION_PROMPT_END: &str = "</delegation_capability>";
-const DELEGATION_PROMPT_SECTION: &str = "\n\n<delegation_capability>\nThe user enabled controlled sub-Agent delegation for this conversation. When a task materially benefits from independent or parallel work, decompose it yourself and call delegate_tasks with the smallest useful temporary task DAG. Follow the tool's conversation completion policy: inline calls return ordered evidence to this turn, while background calls return a durable handle and deliver one completion later. Use capability IDs from the tool schema; omit specialist_id for generic temporary Agents. Do not delegate trivial work, do not poll a background batch, do not claim completion before its result arrives, and do not ask the user to visit the Agents panel merely to receive results.\n</delegation_capability>";
+const DELEGATION_PROMPT_SECTION: &str = "\n\n<delegation_capability>\nChoose delegation by the task's execution needs. When dispatch_subagent is available, prefer it for sustained exploration: inspect inputs, revise scripts, wait for compute Runs, review results, and send follow-up instructions as the work evolves. It creates a separate conversation and returns results or questions to you. For a bounded task graph with known dependencies and deliverables, call delegate_tasks with the smallest useful plan. Preserve an explicitly selected Workflow template and execute its graph through delegate_tasks, including single-node templates; task count alone does not choose the mechanism. Keep trivial work in this conversation. A delegate_tasks call returns ordered evidence to this turn by default; use background only after choosing a bounded workflow, when its result should arrive later. Background changes delivery timing, not the workflow's time or budget limits. It returns a durable handle, delivers one completion later, and resumes you to synthesize it. Use capability IDs from the tool schema; omit specialist_id for generic temporary Agents. Do not poll a background batch, do not claim completion before its result arrives, and do not ask the user to visit the Agents panel merely to receive results.\n</delegation_capability>";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct AgentWorkflowSnapshot {
     pub(crate) workflow: AgentWorkflow,
     pub(crate) steps: Vec<AgentWorkflowStep>,
     pub(crate) attempts: Vec<AgentWorkflowAttempt>,
+    /// Always true: delegation stopped being a per-conversation switch.
+    /// Kept on the wire for native clients that still read it.
     delegation_enabled: bool,
     pub(crate) approval_policy: dynamic_workflow::AgentApprovalPolicy,
     pub(crate) dynamic: dynamic_workflow::DynamicAgentWorkflowSummary,
+    pub(crate) execution: Option<wisp_dto::AgentWorkflowExecutionSummary>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -57,6 +60,45 @@ pub(crate) struct AgentWorkflowResultDetail {
     attempt: i64,
     status: String,
     response: Value,
+}
+
+pub(crate) async fn ensure_project_frame(
+    store: &Store,
+    project_id: &str,
+    frame_id: &str,
+) -> Result<(), String> {
+    match store
+        .frame_project_id(frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .as_deref()
+    {
+        Some(owner) if owner == project_id => Ok(()),
+        Some(_) => Err("Conversation does not belong to the active project.".into()),
+        None => Err("Conversation does not exist.".into()),
+    }
+}
+
+async fn require_workflow_delegation(
+    store: &Store,
+    workflow: &AgentWorkflow,
+) -> Result<(), String> {
+    if workflow.depth > 0 {
+        let root = store
+            .get_agent_workflow(&workflow.root_workflow_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Root Agent workflow does not exist.".to_string())?;
+        if root.project_id != workflow.project_id {
+            return Err("Nested Agent workflow does not belong to its root project.".into());
+        }
+        return Ok(());
+    }
+    let frame_id = workflow
+        .frame_id
+        .as_deref()
+        .ok_or_else(|| "Agent workflow has no owning conversation.".to_string())?;
+    ensure_project_frame(store, &workflow.project_id, frame_id).await
 }
 
 fn delegation_setting_key(frame_id: &str) -> String {
@@ -86,57 +128,6 @@ pub(crate) async fn save_session_delegation_enabled(
         .map_err(|error| error.to_string())
 }
 
-async fn ensure_project_frame(
-    store: &Store,
-    project_id: &str,
-    frame_id: &str,
-) -> Result<(), String> {
-    match store
-        .frame_project_id(frame_id)
-        .await
-        .map_err(|error| error.to_string())?
-        .as_deref()
-    {
-        Some(owner) if owner == project_id => Ok(()),
-        Some(_) => Err("Conversation does not belong to the active project.".into()),
-        None => Err("Conversation does not exist.".into()),
-    }
-}
-
-pub(crate) async fn require_session_delegation(
-    store: &Store,
-    project_id: &str,
-    frame_id: &str,
-) -> Result<(), String> {
-    ensure_project_frame(store, project_id, frame_id).await?;
-    if !session_delegation_enabled(store, frame_id).await {
-        return Err("Sub-Agent delegation is off for this conversation. Enable Delegation in the Agent menu first.".into());
-    }
-    Ok(())
-}
-
-async fn require_workflow_delegation(
-    store: &Store,
-    workflow: &AgentWorkflow,
-) -> Result<(), String> {
-    if workflow.depth > 0 {
-        let root = store
-            .get_agent_workflow(&workflow.root_workflow_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Root Agent workflow does not exist.".to_string())?;
-        if root.project_id != workflow.project_id {
-            return Err("Nested Agent workflow does not belong to its root project.".into());
-        }
-        return Ok(());
-    }
-    let frame_id = workflow
-        .frame_id
-        .as_deref()
-        .ok_or_else(|| "Agent workflow has no owning conversation.".to_string())?;
-    require_session_delegation(store, &workflow.project_id, frame_id).await
-}
-
 pub(crate) fn sync_delegation_prompt(prompt: &mut String, enabled: bool) {
     crate::sync_prompt_section(
         prompt,
@@ -145,38 +136,6 @@ pub(crate) fn sync_delegation_prompt(prompt: &mut String, enabled: bool) {
         DELEGATION_PROMPT_SECTION,
         enabled,
     );
-}
-
-#[tauri::command]
-pub(crate) async fn get_session_delegation_enabled(
-    state: State<'_, crate::AppState>,
-    window: crate::workspace_surface::WorkspaceSurface,
-    session_id: String,
-) -> Result<bool, String> {
-    let project = state.require_active(window.label())?;
-    ensure_project_frame(&state.store, &project.id, &session_id).await?;
-    Ok(session_delegation_enabled(&state.store, &session_id).await)
-}
-
-#[tauri::command]
-pub(crate) async fn set_session_delegation_enabled(
-    state: State<'_, crate::AppState>,
-    _window: crate::workspace_surface::WorkspaceSurface,
-    session_id: String,
-    enabled: bool,
-) -> Result<bool, String> {
-    let (project, scope) =
-        crate::exploration_commands::working_project_for_frame(&state, &session_id).await?;
-    let _activity = state.begin_project_activity(&project.id)?;
-    let _project_write_locked = crate::exploration_commands::conversation_project_write_locked(
-        &state.store,
-        &scope,
-        Some(&session_id),
-    )
-    .await?;
-    save_session_delegation_enabled(&state.store, &project.id, &session_id, enabled).await?;
-    crate::clear_idle_agents(&state).await;
-    Ok(enabled)
 }
 
 #[tauri::command]
@@ -297,10 +256,9 @@ fn root_limits_for_plan(
     plan: &DelegationPlan,
     host: &DelegationHostPolicy,
 ) -> AgentDelegationRootLimits {
-    let defaults = AgentDelegationRootLimits::default();
-    let multiply = |value: Option<u64>, fallback: u64| {
+    let multiply = |value: Option<u64>| {
         value
-            .unwrap_or(fallback)
+            .unwrap_or_default()
             .saturating_mul(u64::from(MAX_ROOT_AGENT_TASKS))
     };
     AgentDelegationRootLimits {
@@ -311,25 +269,11 @@ fn root_limits_for_plan(
         },
         max_tasks: MAX_ROOT_AGENT_TASKS,
         max_parallel: u32::try_from(plan.max_parallel).unwrap_or(2).clamp(1, 2),
-        // Per-task max_tokens limits generated output, while root accounting
-        // intentionally includes both input and output tokens. Scientific
-        // workflows that read several bounded artifacts can therefore consume
-        // substantially more root input than the sum of their output ceilings.
-        // Keep the aggregate guard bounded, but provide four times the legacy
-        // allowance so a valid five-node fan-in can reach synthesis.
-        max_tokens: multiply(
-            host.budget_ceiling.max_tokens.map(u64::from),
-            defaults.max_tokens / u64::from(MAX_ROOT_AGENT_TASKS),
-        )
-        .max(defaults.max_tokens.saturating_mul(4)),
-        max_tool_calls: multiply(
-            host.budget_ceiling.max_tool_calls.map(u64::from),
-            defaults.max_tool_calls / u64::from(MAX_ROOT_AGENT_TASKS),
-        ),
-        max_cost_microunits: multiply(
-            host.budget_ceiling.max_cost_microunits,
-            defaults.max_cost_microunits / u64::from(MAX_ROOT_AGENT_TASKS),
-        ),
+        // An unrestricted host must not acquire an implicit root budget after
+        // resolving unrestricted tasks. Zero is the persisted unlimited value.
+        max_tokens: multiply(host.budget_ceiling.max_tokens.map(u64::from)),
+        max_tool_calls: multiply(host.budget_ceiling.max_tool_calls.map(u64::from)),
+        max_cost_microunits: multiply(host.budget_ceiling.max_cost_microunits),
         // A finite batch deadline is the sum of its per-task limits, so serial
         // tasks do not consume one another's allowance. Any unlimited task
         // makes the root deadline unlimited as well.
@@ -338,6 +282,63 @@ fn root_limits_for_plan(
                 .timeout_secs
                 .map(|seconds| total.saturating_add(seconds))
         }),
+    }
+}
+
+fn inherited_legacy_timeout(spec: &AgentSpec) -> bool {
+    spec.timeout_secs == Some(600)
+        && spec
+            .request_preferences
+            .as_ref()
+            .is_some_and(|preferences| preferences.timeout_secs.is_none())
+}
+
+/// Validate an existing snapshot against the default that originally resolved
+/// it. Explicit timeouts, policy ceilings and all authorization checks remain
+/// intact. Retry can then re-resolve only the inherited defaults atomically.
+fn host_for_workflow_snapshot(
+    plan: &DelegationPlan,
+    host: &DelegationHostPolicy,
+) -> DelegationHostPolicy {
+    let mut compatible = host.clone();
+    if host.default_timeout_secs.is_none()
+        && host.timeout_ceiling_secs.is_none()
+        && plan
+            .steps
+            .iter()
+            .any(|step| inherited_legacy_timeout(&step.spec))
+    {
+        compatible.default_timeout_secs = Some(600);
+    }
+    compatible
+}
+
+fn retry_root_limits(
+    current: &AgentWorkflow,
+    original: &DelegationPlan,
+    revised: &DelegationPlan,
+    host: &DelegationHostPolicy,
+) -> Result<String, String> {
+    let stored: AgentDelegationRootLimits =
+        serde_json::from_str(&current.root_limits_json).map_err(|error| error.to_string())?;
+    let mut legacy = root_limits_for_plan(original, host);
+    let defaults = AgentDelegationRootLimits::default();
+    if host.budget_ceiling.max_tokens.is_none() {
+        legacy.max_tokens = defaults.max_tokens;
+    }
+    if host.budget_ceiling.max_tool_calls.is_none() {
+        legacy.max_tool_calls = defaults.max_tool_calls;
+    }
+    if host.budget_ceiling.max_cost_microunits.is_none() {
+        legacy.max_cost_microunits = defaults.max_cost_microunits;
+    }
+    // Only replace the exact root limits generated by the previous defaults.
+    // Custom or managed limits continue to constrain the retried workflow.
+    if stored == legacy {
+        serde_json::to_string(&root_limits_for_plan(revised, host))
+            .map_err(|error| error.to_string())
+    } else {
+        Ok(current.root_limits_json.clone())
     }
 }
 
@@ -354,7 +355,7 @@ async fn persist_resolved_dynamic_workflow(
     description: &str,
 ) -> Result<AgentWorkflowSnapshot, String> {
     if lineage.is_none() {
-        require_session_delegation(store, project_id, &frame_id).await?;
+        ensure_project_frame(store, project_id, &frame_id).await?;
     }
     if plan.schema_version != DYNAMIC_DELEGATION_SCHEMA_VERSION {
         return Err("Inline delegation requires a v2 Agent plan.".into());
@@ -396,7 +397,7 @@ pub(crate) async fn create_dynamic_agent_workflow_draft(
     policy: &(CapabilityRegistry, DelegationHostPolicy),
     resources: Option<&crate::delegation_resources::ScientificResourceCatalog>,
 ) -> Result<AgentWorkflowSnapshot, String> {
-    require_session_delegation(store, project_id, &frame_id).await?;
+    ensure_project_frame(store, project_id, &frame_id).await?;
     let workflow_id = uuid::Uuid::new_v4().to_string();
     let plan = dynamic_workflow::resolve_proposal(
         store,
@@ -604,10 +605,6 @@ async fn load_workflow_snapshot(
     store: &Store,
     workflow: AgentWorkflow,
 ) -> Result<AgentWorkflowSnapshot, String> {
-    let delegation_enabled = match workflow.frame_id.as_deref() {
-        Some(frame_id) => session_delegation_enabled(store, frame_id).await,
-        None => false,
-    };
     let steps = store
         .list_agent_workflow_steps(&workflow.id)
         .await
@@ -618,7 +615,21 @@ async fn load_workflow_snapshot(
         .map_err(|error| error.to_string())?;
     let plan = stored_dynamic_plan(&workflow)?;
     let approval_policy = dynamic_workflow::AgentApprovalPolicy::from_mode(plan.mode);
-    let mut dynamic = dynamic_workflow::summarize(&plan, &attempts)?;
+    let visible_attempts = attempts
+        .iter()
+        .filter(|attempt| {
+            !matches!(
+                workflow.status,
+                AgentWorkflowStatus::Approved | AgentWorkflowStatus::Running
+            ) || attempt.execution_generation == workflow.execution_generation
+                || (attempt.status == AgentWorkflowAttemptStatus::Succeeded
+                    && !attempts.iter().any(|newer| {
+                        newer.step_id == attempt.step_id && newer.attempt > attempt.attempt
+                    }))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut dynamic = dynamic_workflow::summarize(&plan, &visible_attempts)?;
     for task in &mut dynamic.tasks {
         let Some(result) = task.result.as_mut() else {
             continue;
@@ -646,13 +657,20 @@ async fn load_workflow_snapshot(
                 .await
                 .map_err(|error| error.to_string())?;
     }
+    let execution = Some(
+        store
+            .agent_workflow_execution_summary(&workflow.id)
+            .await
+            .map_err(|error| error.to_string())?,
+    );
     Ok(AgentWorkflowSnapshot {
         workflow,
         steps,
         attempts,
-        delegation_enabled,
+        delegation_enabled: true,
         approval_policy,
         dynamic,
+        execution,
     })
 }
 
@@ -799,12 +817,14 @@ pub(crate) async fn retry_agent_workflow_for_project(
     workflow_id: String,
     budget_overrides: Option<HashMap<String, dynamic_workflow::AgentBudgetProposal>>,
 ) -> Result<AgentWorkflowSnapshot, String> {
+    let workflow = project_workflow(&state.store, &project.id, &workflow_id).await?;
+    let frame = workflow.frame_id.as_deref().or(frame_id.as_deref());
     let snapshot = match budget_overrides.filter(|overrides| !overrides.is_empty()) {
         Some(overrides) => {
             let policy = dynamic_delegation_policy_for_project(
                 &state.store,
                 &project,
-                frame_id.as_deref(),
+                frame,
                 &state.app_data,
                 true,
             )
@@ -857,9 +877,21 @@ pub(crate) async fn prepare_agent_workflow_budget_retry(
         .await
         .map_err(|error| error.to_string())?;
     let original_plan = stored_dynamic_plan(&current)?;
+    let original_host = host_for_workflow_snapshot(&original_plan, &policy.1);
+    let refresh_default_timeout =
+        original_host.default_timeout_secs != policy.1.default_timeout_secs;
+    if overrides.is_empty()
+        && !refresh_default_timeout
+        && retry_root_limits(&current, &original_plan, &original_plan, &policy.1)?
+            == current.root_limits_json
+    {
+        // Ordinary retries keep their exact approved snapshot, including
+        // converted-node contracts that need not round-trip through the editor.
+        return prepare_agent_workflow_retry(store, project_id, workflow_id).await;
+    }
     policy
         .0
-        .validate_resolved_plan(&original_plan, &policy.1)
+        .validate_resolved_plan(&original_plan, &original_host)
         .map_err(|error| {
             format!("Stored Agent workflow can no longer be revised safely: {error}")
         })?;
@@ -917,7 +949,16 @@ pub(crate) async fn prepare_agent_workflow_budget_retry(
         .0
         .validate_resolved_plan(&plan, &policy.1)
         .map_err(|error| error.to_string())?;
-    ensure_retry_revises_only_budgets(&original_plan, &plan, &revised_step_ids)?;
+    ensure_retry_revises_only_limits(
+        &original_plan,
+        &plan,
+        &revised_step_ids,
+        refresh_default_timeout,
+    )?;
+    let root_limits_json = retry_root_limits(&current, &original_plan, &plan, &policy.1)?;
+    if plan == original_plan && root_limits_json == current.root_limits_json {
+        return prepare_agent_workflow_retry(store, project_id, workflow_id).await;
+    }
     let (mut replacement, steps) =
         workflow_records(&plan, project_id, project_root, current.frame_id.clone())?;
     replacement.workspace_id.clone_from(&current.workspace_id);
@@ -928,9 +969,7 @@ pub(crate) async fn prepare_agent_workflow_budget_retry(
         .parent_attempt_id
         .clone_from(&current.parent_attempt_id);
     replacement.depth = current.depth;
-    replacement
-        .root_limits_json
-        .clone_from(&current.root_limits_json);
+    replacement.root_limits_json = root_limits_json;
     replacement.description.clone_from(&current.description);
     replacement.version = current.version;
     replacement.enabled = current.enabled;
@@ -951,15 +990,18 @@ pub(crate) async fn prepare_agent_workflow_budget_retry(
     load_workflow_snapshot(store, updated).await
 }
 
-fn ensure_retry_revises_only_budgets(
+fn ensure_retry_revises_only_limits(
     original: &DelegationPlan,
     revised: &DelegationPlan,
     revised_step_ids: &HashSet<String>,
+    refresh_default_timeout: bool,
 ) -> Result<(), String> {
     let mut expected = original.clone();
     expected.requires_confirmation = revised.requires_confirmation;
     for step in &mut expected.steps {
-        if !revised_step_ids.contains(&step.id) {
+        let refresh_timeout = refresh_default_timeout && inherited_legacy_timeout(&step.spec);
+        let revise_budget = revised_step_ids.contains(&step.id);
+        if !revise_budget && !refresh_timeout {
             continue;
         }
         let actual = revised
@@ -967,14 +1009,23 @@ fn ensure_retry_revises_only_budgets(
             .iter()
             .find(|candidate| candidate.id == step.id)
             .ok_or_else(|| "Retry budget revision changed the workflow task graph.".to_string())?;
-        step.spec.budget.clone_from(&actual.spec.budget);
-        match (
-            step.spec.request_preferences.as_mut(),
-            actual.spec.request_preferences.as_ref(),
-        ) {
-            (Some(expected), Some(actual)) => expected.budget.clone_from(&actual.budget),
-            (None, None) => {}
-            _ => return Err("Retry budget revision changed the task request preferences.".into()),
+        if revise_budget {
+            step.spec.budget.clone_from(&actual.spec.budget);
+            match (
+                step.spec.request_preferences.as_mut(),
+                actual.spec.request_preferences.as_ref(),
+            ) {
+                (Some(expected), Some(actual)) => expected.budget.clone_from(&actual.budget),
+                (None, None) => {}
+                _ => {
+                    return Err(
+                        "Retry budget revision changed the task request preferences.".into(),
+                    )
+                }
+            }
+        }
+        if refresh_timeout {
+            step.spec.timeout_secs = None;
         }
         step.spec
             .approval_reasons
@@ -985,7 +1036,7 @@ fn ensure_retry_revises_only_budgets(
     }
     if expected != *revised {
         return Err(
-            "Retry budget revision would change more than task budgets; refresh or retry without an override."
+            "Retry would change more than task budgets or inherited timeout defaults; refresh the workflow."
                 .into(),
         );
     }
@@ -1056,43 +1107,23 @@ pub(crate) async fn run_agent_workflow_for_project(
     .await
 }
 
-async fn spawn_agent_workflow(
+/// Runs an approved workflow in the background. Its result is delivered to the
+/// owning conversation, which is always resumed to synthesize it.
+pub(crate) async fn spawn_agent_workflow(
     state: &crate::AppState,
     project: ActiveProject,
     workflow_id: String,
-) -> Result<(), String> {
-    spawn_agent_workflow_with_completion_override(state, project, workflow_id, None).await
-}
-
-pub(crate) async fn spawn_agent_workflow_with_auto_resume(
-    state: &crate::AppState,
-    project: ActiveProject,
-    workflow_id: String,
-    auto_resume: bool,
-) -> Result<(), String> {
-    spawn_agent_workflow_with_completion_override(state, project, workflow_id, Some(auto_resume))
-        .await
-}
-
-async fn spawn_agent_workflow_with_completion_override(
-    state: &crate::AppState,
-    project: ActiveProject,
-    workflow_id: String,
-    auto_resume: Option<bool>,
 ) -> Result<(), String> {
     let project_activity = state.begin_project_activity(&project.id)?;
     let workflow = project_workflow(&state.store, &project.id, &workflow_id).await?;
-    let frame_id = workflow
-        .frame_id
-        .as_deref()
-        .ok_or_else(|| "Agent workflow has no owning conversation.".to_string())?;
-    let completion =
-        crate::delegation_completion::session_completion_settings(&state.store, frame_id).await;
+    if workflow.frame_id.is_none() {
+        return Err("Agent workflow has no owning conversation.".to_string());
+    }
     let plan = stored_dynamic_plan(&workflow)?;
     let display_ids = crate::delegation_tool::display_task_ids(&plan);
     let delivery = state
         .store
-        .create_agent_workflow_delivery(&workflow_id, auto_resume.unwrap_or(completion.auto_resume))
+        .create_agent_workflow_delivery(&workflow_id, true)
         .await
         .map_err(|error| error.to_string())?;
     let store = state.store.clone();
@@ -1457,9 +1488,9 @@ async fn build_dynamic_delegation_policy(
         // Run budgets are unlimited by default: the host does not cap tokens,
         // tool calls, or cost unless the user sets a per-task budget.
         budget_ceiling: AgentBudget::default(),
-        default_timeout_secs: Some(600),
-        // Local users can explicitly opt out of the default wall timeout.
-        // Managed and nested policies may still install a finite ceiling.
+        // Local research can spend minutes compacting and fetching evidence.
+        // Wall deadlines are opt-in; managed/nested ceilings still apply.
+        default_timeout_secs: None,
         timeout_ceiling_secs: None,
         auto_safe: true,
         ..DelegationHostPolicy::default()
@@ -1826,6 +1857,7 @@ async fn execute_agent_workflow_with_delegator_inner(
         Some(policy) => policy,
         None => dynamic_delegation_policy(store).await?,
     };
+    let host = host_for_workflow_snapshot(&plan, &host);
     let completed_steps = if prior_steps.is_none() {
         persisted_successful_steps(store, workflow_id).await?
     } else {
@@ -1874,14 +1906,10 @@ async fn execute_agent_workflow_with_delegator_inner(
                 .await
         }
     };
-    if result.is_err() {
-        let _ = fail_owned_agent_workflow_execution(
-            store,
-            &observer,
-            workflow_id,
-            "Agent workflow execution stopped after a runtime or persistence error.",
-        )
-        .await;
+    if let Err(error) = &result {
+        let _ =
+            fail_owned_agent_workflow_execution(store, &observer, workflow_id, &error.to_string())
+                .await;
     }
     result.map_err(|error| error.to_string())
 }
@@ -2143,6 +2171,7 @@ impl TauriDelegator {
                     ObservabilityHost::Desktop,
                     &project.root,
                 )),
+                usage: Arc::new(StdMutex::new(HashMap::new())),
             },
             acp: AcpDelegator {
                 store,
@@ -2183,6 +2212,7 @@ impl TauriDelegator {
                     active: self.native.active.clone(),
                     provenance: self.native.provenance.clone(),
                     trace: self.native.trace.clone(),
+                    usage: self.native.usage.clone(),
                 }
                 .delegate_validated(request)
                 .await
@@ -2619,6 +2649,9 @@ struct NativeDelegator {
     active: Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>,
     provenance: Arc<Mutex<HashMap<String, String>>>,
     trace: AgentTrace,
+    // Owned outside the execution future so a hard timeout cannot discard the
+    // usage accumulated by completed model requests before status() reads it.
+    usage: Arc<StdMutex<HashMap<String, Arc<crate::native_delegation::UsageTracker>>>>,
 }
 
 fn add_browser_research_tools(
@@ -2720,12 +2753,9 @@ impl AgentDelegator for NativeDelegator {
             &api_url,
             &api_key,
             &model,
-            request
-                .spec
-                .budget
-                .max_tokens
-                .map(u64::from)
-                .unwrap_or(max_tokens),
+            // The model profile's output cap. `budget.max_tokens` bounds the
+            // whole run (input + output) and is enforced by BudgetedProvider.
+            max_tokens,
             &reasoning_effort,
             &service_tier,
             &user_agent,
@@ -2941,6 +2971,11 @@ impl AgentDelegator for NativeDelegator {
         let _dispatch = self
             .trace
             .start_span(SpanKind::Delegation, "agent.delegate");
+        let usage = Arc::new(crate::native_delegation::UsageTracker::default());
+        self.usage
+            .lock()
+            .unwrap()
+            .insert(request.request_id.clone(), usage.clone());
         let run = crate::native_delegation::run_native_agent(
             llm.as_ref(),
             request
@@ -2959,6 +2994,7 @@ impl AgentDelegator for NativeDelegator {
             prompt,
             &cancel,
             Some(&self.trace),
+            usage.clone(),
         )
         .await;
         self.active.lock().unwrap().remove(&request.request_id);
@@ -2970,10 +3006,11 @@ impl AgentDelegator for NativeDelegator {
         let run = match run {
             Ok(result) => result,
             Err(error) => {
-                return Ok(failed_backend_response(
+                return Ok(failed_backend_response_with_usage(
                     &request.request_id,
                     error.to_string(),
                     Some(child_frame_id),
+                    usage.snapshot(),
                 ));
             }
         };
@@ -3102,6 +3139,13 @@ impl AgentDelegator for NativeDelegator {
     }
 
     async fn status(&self, request_id: &str) -> anyhow::Result<Option<AgentDelegationResponse>> {
+        let usage = self
+            .usage
+            .lock()
+            .unwrap()
+            .get(request_id)
+            .map(|usage| usage.snapshot())
+            .unwrap_or_default();
         Ok(self
             .provenance
             .lock()
@@ -3115,7 +3159,7 @@ impl AgentDelegator for NativeDelegator {
                 artifact_ids: vec![],
                 artifacts: vec![],
                 evidence: vec![],
-                usage: Default::default(),
+                usage,
                 agent_session_id: None,
                 child_frame_id: Some(child_frame_id),
                 error: None,
@@ -3216,7 +3260,7 @@ fn native_tool_allowlist(request: &AgentDelegationRequest) -> Vec<String> {
     allowed
 }
 
-async fn sync_child_execution_contexts(
+pub(crate) async fn sync_child_execution_contexts(
     store: &Store,
     parent_frame_id: Option<&str>,
     child_frame_id: &str,
@@ -4537,6 +4581,13 @@ impl DelegationExecutionObserver for StoreDelegationObserver {
         self.store.agent_workflow_cancel_requested(&plan.id).await
     }
 
+    async fn workflow_cancellation_reason(
+        &self,
+        plan: &DelegationPlan,
+    ) -> anyhow::Result<Option<String>> {
+        self.store.agent_workflow_stop_reason(&plan.id).await
+    }
+
     async fn workflow_finished(
         &self,
         plan: &DelegationPlan,
@@ -4964,9 +5015,6 @@ mod tests {
             .create_frame("f", "p", "Agent", "local")
             .await
             .unwrap();
-        save_session_delegation_enabled(&store, "p", "f", true)
-            .await
-            .unwrap();
         (store, root)
     }
 
@@ -5370,6 +5418,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unrestricted_host_has_no_implicit_root_budget_or_deadline() {
+        let (store, root) = dynamic_fixture().await;
+        let (registry, mut host) = test_dynamic_policy();
+        host.budget_ceiling = AgentBudget::default();
+        host.default_timeout_secs = None;
+        host.timeout_ceiling_secs = None;
+        let mut bounded = dynamic_task("bounded", &[]);
+        bounded.timeout_secs = Some(900);
+        bounded.budget = Some(dynamic_workflow::AgentBudgetProposal {
+            max_tokens: Some(20_000),
+            max_tool_calls: Some(25),
+            max_cost_microunits: None,
+        });
+        let plan = dynamic_workflow::resolve_proposal(
+            &store,
+            "unlimited-root".into(),
+            dynamic_proposal(vec![dynamic_task("unlimited", &[]), bounded]),
+            &registry,
+            &host,
+            None,
+        )
+        .await
+        .unwrap();
+        let limits = root_limits_for_plan(&plan, &host);
+        assert_eq!(limits.max_tokens, 0);
+        assert_eq!(limits.max_tool_calls, 0);
+        assert_eq!(limits.max_cost_microunits, 0);
+        assert_eq!(limits.wall_time_secs, None);
+        assert_eq!(plan.steps[0].spec.timeout_secs, None);
+        assert_eq!(plan.steps[0].spec.budget, AgentBudget::default());
+        assert_eq!(plan.steps[1].spec.timeout_secs, Some(900));
+        assert_eq!(plan.steps[1].spec.budget.max_tokens, Some(20_000));
+        assert_eq!(plan.steps[1].spec.budget.max_tool_calls, Some(25));
+        host.budget_ceiling.max_tokens = Some(32_000);
+        assert_eq!(root_limits_for_plan(&plan, &host).max_tokens, 256_000);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn dynamic_policy_registers_native_and_each_available_acp_profile() {
         let (store, root) = dynamic_fixture().await;
         let command = std::env::current_exe()
@@ -5399,6 +5487,9 @@ mod tests {
             .unwrap();
 
         let (_, host) = dynamic_delegation_policy(&store).await.unwrap();
+        assert_eq!(host.default_timeout_secs, None);
+        assert_eq!(host.timeout_ceiling_secs, None);
+        assert_eq!(host.budget_ceiling, AgentBudget::default());
         assert!(host
             .executors
             .iter()
@@ -5990,8 +6081,14 @@ mod tests {
         sync_delegation_prompt(&mut prompt, true);
         assert_eq!(prompt.matches("<delegation_capability>").count(), 1);
         assert!(prompt.contains("call delegate_tasks"));
-        assert!(prompt.contains("background calls return a durable handle"));
-        assert!(prompt.contains("do not poll a background batch"));
+        assert!(prompt.contains("When dispatch_subagent is available"));
+        assert!(prompt.contains("prefer it for sustained exploration"));
+        assert!(prompt.contains("Preserve an explicitly selected Workflow template"));
+        assert!(prompt.contains("including single-node templates"));
+        assert!(prompt.contains("use background only after choosing a bounded workflow"));
+        assert!(prompt.contains("resumes you to synthesize it"));
+        assert!(!prompt.contains("completion policy"));
+        assert!(prompt.contains("Do not poll a background batch"));
         assert!(prompt.contains("## Specialist\nKeep this section."));
         sync_delegation_prompt(&mut prompt, false);
         assert_eq!(prompt, "Base prompt\n\n## Specialist\nKeep this section.");
@@ -6173,31 +6270,6 @@ mod tests {
         assert!(evidence.contains(r#"<host_evidence trust="read_only">"#));
         assert!(evidence.contains("captured this workspace diff independently"));
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
-    async fn delegation_setting_defaults_off_and_is_project_scoped() {
-        let path = std::env::temp_dir().join(format!(
-            "wisp_delegation_setting_{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
-        let store = Store::open(&path).await.unwrap();
-        store.create_project("p1", "One", "").await.unwrap();
-        store.create_project("p2", "Two", "").await.unwrap();
-        store
-            .create_frame("f1", "p1", "Agent", "model")
-            .await
-            .unwrap();
-        assert!(!session_delegation_enabled(&store, "f1").await);
-        assert!(save_session_delegation_enabled(&store, "p2", "f1", true)
-            .await
-            .is_err());
-        save_session_delegation_enabled(&store, "p1", "f1", true)
-            .await
-            .unwrap();
-        assert!(session_delegation_enabled(&store, "f1").await);
-        drop(store);
-        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
@@ -6517,10 +6589,25 @@ mod tests {
         .unwrap();
         assert_eq!(first.status, DelegationExecutionStatus::Failed);
 
-        let retried = prepare_agent_workflow_retry(&store, "p", &created.workflow.id)
-            .await
-            .unwrap();
+        let retried = prepare_agent_workflow_budget_retry(
+            &store,
+            "p",
+            &root,
+            &created.workflow.id,
+            HashMap::new(),
+            &policy,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(retried.workflow.status, AgentWorkflowStatus::Approved);
+        let wire: wisp_dto::AgentWorkflowSnapshot =
+            serde_json::from_value(serde_json::to_value(&retried).unwrap()).unwrap();
+        let round = wire.execution.unwrap();
+        assert_eq!(round.generation, 1);
+        assert!(round.started_at.is_none());
+        assert!(round.stop_reason.is_none());
+        assert!(wire.dynamic.tasks.iter().all(|task| task.result.is_none()));
         let second = execute_agent_workflow_with_delegator(
             &store,
             "p",
@@ -6544,6 +6631,135 @@ mod tests {
     struct ResumeSuccessfulStepsDelegator {
         failed_research_once: AtomicBool,
         calls: StdMutex<Vec<String>>,
+    }
+
+    #[tokio::test]
+    async fn retry_refreshes_legacy_defaults_and_keeps_explicit_limits_and_completed_work() {
+        let (store, root) = dynamic_fixture().await;
+        let (registry, mut old_host) = test_dynamic_policy();
+        old_host.budget_ceiling = AgentBudget::default();
+        old_host.default_timeout_secs = Some(600);
+        old_host.timeout_ceiling_secs = None;
+        let mut explicit = dynamic_task("explicit", &[]);
+        explicit.timeout_secs = Some(600);
+        explicit.budget = Some(dynamic_workflow::AgentBudgetProposal {
+            max_tokens: Some(16_000),
+            max_tool_calls: None,
+            max_cost_microunits: None,
+        });
+        let plan = dynamic_workflow::resolve_proposal(
+            &store,
+            "legacy-defaults".into(),
+            dynamic_proposal(vec![
+                dynamic_task("research", &[]),
+                dynamic_task("inspect", &[]),
+                explicit,
+            ]),
+            &registry,
+            &old_host,
+            None,
+        )
+        .await
+        .unwrap();
+        let (mut workflow, steps) = workflow_records(&plan, "p", &root, Some("f".into())).unwrap();
+        workflow.root_limits_json =
+            serde_json::to_string(&AgentDelegationRootLimits::default()).unwrap();
+        store
+            .create_agent_workflow_plan(&workflow, &steps)
+            .await
+            .unwrap();
+        assert!(store
+            .approve_agent_workflow_plan(&workflow.id, workflow.version)
+            .await
+            .unwrap());
+        let delegator = Arc::new(ResumeSuccessfulStepsDelegator {
+            failed_research_once: AtomicBool::new(false),
+            calls: StdMutex::new(vec![]),
+        });
+        let mut host = old_host.clone();
+        host.default_timeout_secs = None;
+        let first = execute_agent_workflow_with_delegator(
+            &store,
+            "p",
+            &workflow.id,
+            delegator.clone(),
+            Some((registry.clone(), host.clone())),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.status, DelegationExecutionStatus::Failed);
+        // Already approved snapshots remain valid before an explicit retry.
+        registry
+            .validate_resolved_plan(&plan, &host_for_workflow_snapshot(&plan, &host))
+            .unwrap();
+        let retried = prepare_agent_workflow_budget_retry(
+            &store,
+            "p",
+            &root,
+            &workflow.id,
+            HashMap::new(),
+            &(registry.clone(), host.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+        let revised = stored_dynamic_plan(&retried.workflow).unwrap();
+        let limits: AgentDelegationRootLimits =
+            serde_json::from_str(&retried.workflow.root_limits_json).unwrap();
+        assert_eq!(limits.max_tokens, 0);
+        assert_eq!(limits.max_tool_calls, 0);
+        assert_eq!(limits.max_cost_microunits, 0);
+        assert_eq!(limits.wall_time_secs, None);
+        assert_eq!(retried.workflow.execution_generation, 1);
+        for step in &revised.steps {
+            if step.input["task_id"] == "explicit" {
+                assert_eq!(step.spec.timeout_secs, Some(600));
+                assert_eq!(step.spec.budget.max_tokens, Some(16_000));
+            } else {
+                assert_eq!(step.spec.timeout_secs, None);
+            }
+        }
+        // A custom root cap must never be mistaken for the old implicit cap.
+        let mut custom = workflow.clone();
+        custom.root_limits_json = serde_json::to_string(&AgentDelegationRootLimits {
+            max_tokens: 100_000,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            retry_root_limits(&custom, &plan, &revised, &host).unwrap(),
+            custom.root_limits_json
+        );
+        let mut tampered = revised.clone();
+        tampered.steps[0].spec.permissions.write = true;
+        assert!(ensure_retry_revises_only_limits(&plan, &tampered, &HashSet::new(), true).is_err());
+        let second = execute_agent_workflow_with_delegator(
+            &store,
+            "p",
+            &workflow.id,
+            delegator.clone(),
+            Some((registry, host)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.status, DelegationExecutionStatus::Succeeded);
+        let calls = delegator.calls.lock().unwrap();
+        assert_eq!(calls.iter().filter(|id| *id == "research").count(), 2);
+        assert_eq!(calls.iter().filter(|id| *id == "inspect").count(), 1);
+        assert_eq!(calls.iter().filter(|id| *id == "explicit").count(), 1);
+        drop(calls);
+        assert_eq!(
+            store
+                .list_agent_workflow_attempts(&workflow.id)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[async_trait]
@@ -6901,9 +7117,6 @@ mod tests {
         .unwrap();
         store
             .create_frame("other", "p", "Agent", "local")
-            .await
-            .unwrap();
-        save_session_delegation_enabled(&store, "p", "other", true)
             .await
             .unwrap();
         let second = create_dynamic_agent_workflow_draft(

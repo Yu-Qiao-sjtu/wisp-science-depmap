@@ -179,6 +179,9 @@ impl ConfirmDecision {
 #[async_trait]
 pub trait ToolEnv: Send + Sync {
     fn project_root(&self) -> &Path;
+    /// Synchronous, host-only progress from nested workers. It never becomes
+    /// model input; headless environments may ignore it.
+    fn publish_progress(&self, _kind: &str, _payload: &serde_json::Value) {}
     /// Restrict read/search paths to the project root. Main Agents keep the
     /// legacy unrestricted default; delegated environments opt in.
     fn restrict_read_paths_to_project(&self) -> bool {
@@ -257,6 +260,15 @@ pub trait ToolEnv: Send + Sync {
     /// is set. Used for unattended IM turns.
     fn force_ask_mutations(&self) -> bool {
         false
+    }
+    /// The only tools that run without asking while
+    /// [`Self::force_ask_mutations`] is set. `None`, the default, lets every
+    /// tool classified read-only through, which suits a turn the user started
+    /// from somewhere else. A turn started by someone other than the user
+    /// names its few tools here: "read-only" also covers memory search, the
+    /// browser bridge and private connectors, which are not theirs to query.
+    fn unattended_tools(&self) -> Option<&'static [&'static str]> {
+        None
     }
     /// Whether this session is in plan mode: the agent researches and drafts a
     /// plan, so `Registry::run` refuses every tool outside

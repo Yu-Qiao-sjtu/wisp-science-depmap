@@ -5,36 +5,41 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { PACKAGES, RELEASES, assetName, downloadKey, validTag, validateManifest } from "../assets/download-catalog.mjs";
+import { PACKAGES, RELEASES, assetName, compareTags, contentType, downloadKey, validTag, validateManifest } from "../assets/download-catalog.mjs";
 
 const repo = "xuzhougeng/wisp-science";
 
-export function selectAssets(release) {
+export function selectAssets(release, fallbackReleases = []) {
   if (!validTag(release.tagName) || release.isDraft || release.isPrerelease) throw new Error("Expected a stable published release");
-  return PACKAGES.map(pkg => {
-    const name = assetName(release.tagName, pkg);
-    const matches = release.assets.filter(asset => asset.name === name);
+  const candidates = [release, ...fallbackReleases.filter(item => validTag(item.tagName) &&
+    !item.isDraft && !item.isPrerelease && compareTags(item.tagName, release.tagName) < 0)
+    .sort((a, b) => compareTags(b.tagName, a.tagName))];
+  return PACKAGES.flatMap(pkg => {
+    const source = candidates.find(item => item.assets.some(asset => asset.name === assetName(item.tagName, pkg))) || release;
+    const name = assetName(source.tagName, pkg);
+    const matches = source.assets.filter(asset => asset.name === name);
+    if (pkg.optional && matches.length === 0) return [];
     if (matches.length !== 1 || matches[0].size <= 0) throw new Error(`Missing or ambiguous installer: ${name}`);
-    return { ...pkg, name, size: matches[0].size };
+    return [{ ...pkg, tag: source.tagName, name, size: matches[0].size }];
   });
 }
 
 // Publish the small manifest only after all content-addressed installers succeed.
 // Dependencies are injectable so failure/retry behavior is tested without a network.
-export async function syncRelease(release, { download, upload, currentTag, directory }) {
-  const assets = selectAssets(release);
+export async function syncRelease(release, { download, upload, currentTag, directory, fallbackReleases = [] }) {
+  const assets = selectAssets(release, fallbackReleases);
   const manifest = { schema: 1, tag: release.tagName, packages: [] };
   for (const asset of assets) {
     const file = path.join(directory, asset.name);
-    await download(asset.name, file);
+    await download(asset.name, file, asset.tag);
     const { size } = await stat(file);
     if (size !== asset.size) throw new Error(`Size mismatch: ${asset.name}`);
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file)) hash.update(chunk);
     const sha256 = hash.digest("hex");
-    const key = downloadKey(release.tagName, asset.name, sha256);
-    await upload(key, file, "application/octet-stream", "public, max-age=31536000, immutable");
-    manifest.packages.push({ id: asset.id, name: asset.name, key, size, sha256 });
+    const key = downloadKey(asset.tag, asset.name, sha256);
+    await upload(key, file, contentType(asset.name), "public, max-age=31536000, immutable");
+    manifest.packages.push({ id: asset.id, tag: asset.tag, name: asset.name, key, size, sha256 });
   }
   validateManifest(manifest);
   if (await currentTag() !== release.tagName) throw new Error("Latest release changed during upload; retry sync");
@@ -48,7 +53,19 @@ async function main() {
   const gh = args => execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
   const latest = () => JSON.parse(gh(["release", "view", "--repo", repo, "--json", "tagName,isDraft,isPrerelease,assets"]));
   const release = latest();
-  try { selectAssets(release); } catch (error) {
+  const fallbackReleases = [];
+  const missing = () => PACKAGES.some(pkg => ![release, ...fallbackReleases].some(item =>
+    item.assets.some(asset => asset.name === assetName(item.tagName, pkg))));
+  if (missing()) {
+    const older = JSON.parse(gh(["release", "list", "--repo", repo, "--limit", "20", "--json", "tagName,isDraft,isPrerelease"]))
+      .filter(item => validTag(item.tagName) && !item.isDraft && !item.isPrerelease && compareTags(item.tagName, release.tagName) < 0)
+      .sort((a, b) => compareTags(b.tagName, a.tagName));
+    for (const item of older) {
+      fallbackReleases.push(JSON.parse(gh(["release", "view", item.tagName, "--repo", repo, "--json", "tagName,isDraft,isPrerelease,assets"])));
+      if (!missing()) break;
+    }
+  }
+  try { selectAssets(release, fallbackReleases); } catch (error) {
     if (process.env.SYNC_ALLOW_INCOMPLETE === "1") {
       console.log(`Waiting for all platforms: ${error.message}`);
       return;
@@ -56,7 +73,7 @@ async function main() {
     throw error;
   }
   if (process.argv.includes("--dry-run")) {
-    console.log(JSON.stringify({ tag: release.tagName, assets: selectAssets(release).map(a => a.name) }, null, 2));
+    console.log(JSON.stringify({ tag: release.tagName, assets: selectAssets(release, fallbackReleases).map(a => a.name) }, null, 2));
     return;
   }
   const directory = await mkdtemp(path.join(tmpdir(), "wisp-downloads-"));
@@ -65,7 +82,8 @@ async function main() {
   try {
     await syncRelease(release, {
       directory,
-      download: (name, file) => gh(["release", "download", release.tagName, "--repo", repo, "--pattern", name, "--output", file]),
+      fallbackReleases,
+      download: (name, file, tag) => gh(["release", "download", tag, "--repo", repo, "--pattern", name, "--output", file]),
       currentTag: async () => latest().tagName,
       upload: async (key, file, contentType, cacheControl) => {
         console.log(`Uploading ${key}`);

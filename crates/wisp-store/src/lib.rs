@@ -21,12 +21,15 @@ mod external_session_cache;
 mod global_memories;
 mod library;
 mod lineage;
+mod mandates;
 mod mcp_app_snapshots;
 pub mod mcp_secrets;
 mod method_search;
 mod models;
 mod persist_seq;
 mod plugins;
+mod project_chat_search;
+mod project_memos;
 mod project_snapshots;
 mod project_state_revisions;
 mod project_storage;
@@ -39,6 +42,7 @@ mod publications;
 mod remote_staging;
 mod research;
 mod research_archives;
+mod research_checklist;
 mod research_journey;
 mod resources;
 mod runs;
@@ -46,11 +50,14 @@ mod schedules;
 mod scientific_cycle;
 mod scientific_evidence;
 pub mod secrets;
+mod server_turns;
 mod session_artifacts;
 mod session_imports;
+mod session_timers;
 mod sessions;
 mod storage_prefs;
 mod turn_undo;
+mod upgrade_backup;
 
 pub use acp_sessions::AcpSessionBinding;
 pub use agent_workflow_attempts::{
@@ -73,13 +80,17 @@ pub use explorations::{
     ArtifactHead, ContextArchiveRecord, Exploration, ExplorationBaselineArtifactHead,
     ExplorationBaselineEntity, ExplorationCheckpoint, ExplorationEffect, ExplorationFamily,
     ExplorationPromotion, ExplorationPromotionStatus, ExplorationStatus, ExplorationSummary,
-    StateScope, WorkspaceSnapshotRecord, MAINLINE_SCOPE_KEY,
+    StateScope, WorkspaceSnapshotRecord, FRAME_READER_RETRY_PREFIX, MAINLINE_SCOPE_KEY,
 };
 pub use external_session_cache::ExternalSessionCacheRecord;
 pub use global_memories::GlobalMemory;
 pub use library::{
     LibraryItem, LibraryItemDetail, LibraryItemSummary, LibraryItemVersion, LibraryStore,
     NewLibraryItem,
+};
+pub use mandates::{
+    MandateRecord, MandateReport, MandateRequest, MandateRound, MANDATE_REQUEST_KINDS,
+    MANDATE_STATUSES,
 };
 pub use mcp_app_snapshots::McpAppSnapshot;
 pub use method_search::{
@@ -98,12 +109,14 @@ pub use provenance::{canonical_json, canonical_json_sha256};
 pub use remote_staging::RemoteStagingEntry;
 pub use schedules::{next_slot_after, ScheduleRecord, ScheduleRunRecord};
 pub use scientific_evidence::{NewScientificEvidence, ScientificEvidenceRecord};
+pub use server_turns::ServerTurn;
+pub use session_artifacts::SessionFamilyArtifacts;
 pub use session_imports::RecoveredWorkspaceSession;
 pub use sessions::{
     is_compaction_checkpoint, ModelTokenUsage, ProjectTokenUsage, SessionBranchDeltaMessage,
     SessionBranchLink, SessionBranchMerge, SessionBranchMergeCard, SessionBranchMergePreview,
-    SessionTokenUsage, SessionTokenUsagePage, SessionTranscriptPage, SessionUiEventRecord,
-    SessionUiEventSnapshot, TokenUsageDay, ToolCallUsage,
+    SessionDescendant, SessionTokenUsage, SessionTokenUsagePage, SessionTranscriptPage,
+    SessionUiEventRecord, SessionUiEventSnapshot, TokenUsageDay, ToolCallUsage,
 };
 pub use storage_prefs::{
     validate_local_results_dir, validate_remote_data_root, validate_remote_workdir_root,
@@ -145,6 +158,7 @@ const AGENT_WORKFLOW_DELIVERIES_MIGRATION: &str = "0019_agent_workflow_deliverie
 const AGENT_WORKFLOW_DELIVERIES_MIGRATION_SQL: &str =
     include_str!("../migrations/0019_agent_workflow_deliveries.sql");
 const AGENT_WORKFLOW_LINEAGE_MIGRATION: &str = "0020_agent_workflow_lineage";
+const AGENT_WORKFLOW_EXECUTION_ROUNDS_MIGRATION: &str = "agent_workflow_execution_rounds_v1";
 const PLUGIN_INSTALLATIONS_MIGRATION: &str = "0021_plugin_installations";
 const PLUGIN_INSTALLATIONS_MIGRATION_SQL: &str =
     include_str!("../migrations/0021_plugin_installations.sql");
@@ -220,6 +234,12 @@ const SESSION_FILE_OPERATIONS_MIGRATION: &str = "0066_session_file_operations";
 const SCIENTIFIC_CYCLE_MIGRATION: &str = "0067_scientific_cycle";
 const SCIENTIFIC_CYCLE_MIGRATION_SQL: &str =
     include_str!("../migrations/0067_scientific_cycle.sql");
+const SESSION_TIMERS_MIGRATION: &str = "0063_session_timers";
+const SERVER_TURNS_MIGRATION: &str = "0066_server_turns";
+const MANDATES_MIGRATION: &str = "0064_mandates";
+const RESEARCH_CHECKLIST_MIGRATION: &str = "0065_research_checklist";
+const PROJECT_MEMOS_MIGRATION: &str = "0067_project_memos";
+const PROJECT_STATUS_MIGRATION: &str = "0068_project_status";
 
 #[derive(Clone)]
 pub struct Store {
@@ -317,6 +337,7 @@ impl Store {
                 sqlx::query("PRAGMA journal_mode=WAL")
                     .execute(&pool)
                     .await?;
+                upgrade_backup::before_migration(&pool, &pool, None).await;
             }
             Self::migrate(&pool).await?;
             let store = Self {
@@ -498,6 +519,10 @@ impl Store {
         if !Self::migration_applied(pool, AGENT_WORKFLOW_LINEAGE_MIGRATION).await? {
             Self::apply_agent_workflow_lineage(pool).await?;
             Self::record_migration(pool, AGENT_WORKFLOW_LINEAGE_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, AGENT_WORKFLOW_EXECUTION_ROUNDS_MIGRATION).await? {
+            Self::apply_agent_workflow_execution_rounds(pool).await?;
+            Self::record_migration(pool, AGENT_WORKFLOW_EXECUTION_ROUNDS_MIGRATION).await?;
         }
         if !Self::migration_applied(pool, PLUGIN_INSTALLATIONS_MIGRATION).await? {
             Self::execute_sql_script(pool, PLUGIN_INSTALLATIONS_MIGRATION_SQL).await?;
@@ -816,6 +841,22 @@ impl Store {
             .await?;
             Self::record_migration(pool, SCHEDULES_MIGRATION).await?;
         }
+        if !Self::migration_applied(pool, SERVER_TURNS_MIGRATION).await? {
+            Self::execute_sql_script(pool, include_str!("../migrations/0066_server_turns.sql"))
+                .await?;
+            Self::record_migration(pool, SERVER_TURNS_MIGRATION).await?;
+        }
+        if !Self::migration_applied(pool, SESSION_TIMERS_MIGRATION).await? {
+            Self::add_columns_if_missing(
+                pool,
+                "schedules",
+                &[("replace_previous_turn", "INTEGER NOT NULL DEFAULT 0")],
+            )
+            .await?;
+            sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS ix_session_timer ON schedules(frame_id) WHERE replace_previous_turn=1").execute(pool).await?;
+            sqlx::query("CREATE TABLE IF NOT EXISTS session_timer_turns(frame_id TEXT PRIMARY KEY REFERENCES frames(id) ON DELETE CASCADE, base_epoch INTEGER NOT NULL, start_seq INTEGER NOT NULL, end_seq INTEGER, start_ui_seq INTEGER NOT NULL, end_ui_seq INTEGER)").execute(pool).await?;
+            Self::record_migration(pool, SESSION_TIMERS_MIGRATION).await?;
+        }
         if !Self::migration_applied(pool, ARTIFACT_SOURCE_DISCARDED_MIGRATION).await? {
             Self::add_columns_if_missing(
                 pool,
@@ -908,7 +949,7 @@ impl Store {
         // later folded into 0000_init.sql (or into an already-shipped apply_*
         // body) missing, and the next query then fails with "no such column".
         Self::ensure_schema_compat(pool).await?;
-        Ok(())
+        upgrade_backup::migrated(pool).await
     }
 
     /// Idempotent repair for schema objects that numbered migrations can miss
@@ -938,23 +979,55 @@ impl Store {
         sqlx::raw_sql(include_str!("../migrations/0060_research_recaps.sql"))
             .execute(pool)
             .await?;
+        // Researcher-private project memos; never read by the agent.
+        sqlx::raw_sql(include_str!("../migrations/0067_project_memos.sql"))
+            .execute(pool)
+            .await?;
+        Self::record_migration(pool, PROJECT_MEMOS_MIGRATION).await?;
+        // Derived per-project progress memory for the research assistant.
+        sqlx::raw_sql(include_str!("../migrations/0068_project_status.sql"))
+            .execute(pool)
+            .await?;
+        Self::record_migration(pool, PROJECT_STATUS_MIGRATION).await?;
         // The research assistant's dated plan items.
         sqlx::raw_sql(include_str!("../migrations/0063_assistant_tasks.sql"))
             .execute(pool)
             .await?;
+        Self::add_columns_if_missing(
+            pool,
+            "assistant_tasks",
+            &[("sync_revision", "INTEGER NOT NULL DEFAULT 0")],
+        )
+        .await?;
+        sqlx::raw_sql(include_str!("../migrations/0065_research_checklist.sql"))
+            .execute(pool)
+            .await?;
+        Self::record_migration(pool, RESEARCH_CHECKLIST_MIGRATION).await?;
+        // Research mandates and their round ledger.
+        sqlx::raw_sql(include_str!("../migrations/0064_mandates.sql"))
+            .execute(pool)
+            .await?;
+        Self::record_migration(pool, MANDATES_MIGRATION).await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS folders (\
              id TEXT PRIMARY KEY, \
              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, \
              name TEXT NOT NULL, \
              created_at INTEGER NOT NULL, \
-             updated_at INTEGER NOT NULL)",
+             updated_at INTEGER NOT NULL, \
+             position INTEGER NOT NULL DEFAULT 0)",
         )
         .execute(pool)
         .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS ix_folders_project ON folders(project_id)")
             .execute(pool)
             .await?;
+        Self::add_columns_if_missing(
+            pool,
+            "folders",
+            &[("position", "INTEGER NOT NULL DEFAULT 0")],
+        )
+        .await?;
 
         Self::add_columns_if_missing(
             pool,
@@ -979,6 +1052,7 @@ impl Store {
                 ("pinned", "INTEGER NOT NULL DEFAULT 0"),
                 ("shelved", "INTEGER NOT NULL DEFAULT 0"),
                 ("branched_from", "TEXT"),
+                ("dispatched_from", "TEXT"),
                 ("reasoning_effort", "TEXT"),
                 ("service_tier", "TEXT"),
                 ("acp_agent_selection", "TEXT"),
@@ -1043,6 +1117,8 @@ impl Store {
                 ("logs_path", "TEXT"),
                 ("exploration_id", "TEXT"),
                 ("review_dismissed_at", "INTEGER"),
+                ("background_requested_at", "INTEGER"),
+                ("background_notified_at", "INTEGER"),
             ],
         )
         .await?;
@@ -1693,6 +1769,42 @@ impl Store {
             }
             sqlx::query(statement).execute(pool).await?;
         }
+        Ok(())
+    }
+
+    async fn apply_agent_workflow_execution_rounds(pool: &SqlitePool) -> Result<()> {
+        Self::add_columns_if_missing(
+            pool,
+            "agent_workflows",
+            &[
+                ("execution_generation", "INTEGER NOT NULL DEFAULT 0"),
+                ("execution_started_at", "INTEGER"),
+                ("stop_reason", "TEXT"),
+            ],
+        )
+        .await?;
+        Self::add_columns_if_missing(
+            pool,
+            "agent_workflow_attempts",
+            &[("execution_generation", "INTEGER NOT NULL DEFAULT 0")],
+        )
+        .await?;
+        // Existing attempts belong to round zero. Retain a running batch's
+        // elapsed execution time on upgrade, excluding its draft/approval wait.
+        sqlx::query(
+            "UPDATE agent_workflows SET execution_started_at=COALESCE(\
+               (SELECT MIN(a.started_at) FROM agent_workflow_attempts a \
+                WHERE a.workflow_id=agent_workflows.id),approved_at,updated_at) \
+             WHERE execution_started_at IS NULL AND status='running'",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ix_agent_attempts_execution \
+             ON agent_workflow_attempts(root_workflow_id,execution_generation,status)",
+        )
+        .execute(pool)
+        .await?;
         Ok(())
     }
 

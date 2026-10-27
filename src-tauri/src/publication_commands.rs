@@ -142,7 +142,7 @@ pub(crate) struct VerifyPublicationRevisionInput {
     comparisons: Vec<ReproductionComparisonRequest>,
 }
 
-async fn revision_project(store: &Store, revision_id: &str) -> anyhow::Result<String> {
+pub(crate) async fn revision_project(store: &Store, revision_id: &str) -> anyhow::Result<String> {
     let revision = store
         .get_publication_revision(revision_id)
         .await?
@@ -539,7 +539,7 @@ pub(crate) async fn create_publication(
     }
 }
 
-async fn bind_evidence(
+pub(crate) async fn bind_evidence(
     store: &Store,
     project_id: &str,
     input: &BindPublicationEvidenceInput,

@@ -36,27 +36,40 @@ Do not implement broad product vision in one change. Prefer small PRs that add o
 - Do not refactor or split modules solely because a file is long. Require a concrete reason tied to the active change, such as mixed responsibilities causing repeated edits, a needed dependency or test boundary, or a measured maintenance problem, and stop once that problem is solved. Large composition/root modules are acceptable; do not pursue arbitrary line-count targets or speculative abstractions.
 - Every dismissible overlay, dialog, menu, and popover must participate in a window-level Escape stack ordered from the visually topmost surface down. Root-owned state belongs in the app stack; component-local state may use a scoped window listener that is removed on cleanup. Do not rely on a DOM `keydown` handler receiving a bubbled event or on `autofocus`. A local handler is only appropriate when an inner state must consume Escape before its parent; it must prevent propagation. Tests must press Escape immediately after opening, without first moving focus inside, and verify that one press closes only the topmost layer while its parent remains open.
 - UI icons come from one shared set: `compose_icon()` in `ui/src/app_support/messages.rs` (Lucide-style 24×24 stroke SVGs, `stroke="currentColor"`). Never introduce icon fonts, emoji/unicode glyphs, or per-component CSS mask icons (the removed `.gi` system); add a new `compose_icon` kind instead. Give each action a distinct, semantically matching icon — do not reuse the same icon for two different entries in one menu. Size icons via a component-scoped `svg` CSS selector, not by adding wrapper classes to the shared set.
-- Add or update tests with every behavior change.
+- Do not run local tests without the user's explicit permission. This includes unit, integration, end-to-end, smoke, and evaluation tests, plus scripts or development servers started to execute them. A request to implement, fix, commit, or push changes is not permission to run tests. Once authorized, stay within the approved scope; do not automatically expand to the full suite.
+- Add or update test code with every behavior change. Writing tests does not authorize running them.
+- Playwright tests in `ui-tests/` run fully parallel and sharded in CI: each test boots its own page and must not depend on another test running first or on module-level state another test mutated. Do not add `retries`; a failing test is a bug to fix.
 - Update docs when user-visible behavior changes. Update release notes only when explicitly requested or when preparing a release (see Cutting a release).
 - If `cargo fmt --all -- --check` fails because of formatting drift, run `cargo fmt --all` and keep formatting-only changes in a separate commit.
 
 ## Verification Commands
 
-Run the narrowest relevant checks first, then the full suite before declaring done:
+The commands below are references, not authorization to run local tests. Ask for explicit permission before executing tests unless the user has already authorized them in the current task. After approval, start with the narrowest relevant tests and run broader suites only within the approved scope. If permission has not been granted, continue implementation and source/diff review, and report that tests were not run.
+
+Workspace formatting and test commands:
 
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
 ```
 
-For UI or Tauri command changes, also run:
+For UI or Tauri command changes, relevant checks and tests (subject to the permission rule above):
 
 ```bash
 cd ui && cargo check --target wasm32-unknown-unknown
 cd ../ui-tests && npm ci && npx playwright test
 ```
 
-For MCP-related changes, also run:
+For website changes under `docs/` (subject to the same permission rule). These run in their own CI workflow, `.github/workflows/website.yml`, and need no Trunk:
+
+```bash
+npm test --prefix docs
+python3 -m unittest discover -s docs -p 'test_build_*.py'
+npm run build --prefix docs
+cd ui-tests && npm ci && npx playwright test --config playwright.website.config.ts
+```
+
+For MCP-related changes, the smoke test (subject to the same permission rule):
 
 ```bash
 cargo run -p wisp-mcp --example smoke
@@ -115,7 +128,7 @@ Future git tags are `depmap-vX.Y.Z`. That name does not collide with upstream Wi
    gh run list --branch depmap-vX.Y.Z
    ```
 
-   Create Release is a no-op when the release already exists. Platform workflows attach installers only; they must not be given a release body. Only watch those runs to completion when the user asked to ship or verify the published assets.
+   Create Release is a no-op when the release already exists. Platform workflows attach installers only; they must not be given a release body. Android Release is skipped until the repository variable `ANDROID_RELEASE_ENABLED` is `true`; once enabled it attaches the signed APK and refuses any APK whose signer does not match `ANDROID_SIGNING_CERT_SHA256`. Windows Release and Windows WinUI Preview Release sign with eSigner and fail when any `ESIGNER_*` secret is missing; `publish=false` is the signing dry-run. Relay Image publishes `ghcr.io/xuzhougeng/wisp-relay:X.Y.Z` and `latest` and attaches nothing to the release. Only watch those runs to completion when the user asked to ship or verify the published assets.
 
 Do not `git push origin depmap-vX.Y.Z` after `gh release create` — the tag already exists on GitHub. To fix notes on an existing release, edit the notes file and run the Create Release workflow with `overwrite_notes`, or `gh release edit`. Never use `tauri-action` / `action-gh-release` with a body on a published release.
 

@@ -165,6 +165,17 @@ impl Store {
                 f.created_at,f.created_at,a.id,c.frame_id,'continued','',NULL,0,0,NULL
               FROM research_archive_continuations c JOIN research_archives a ON a.id=c.archive_id JOIN frames f ON f.id=c.frame_id
               WHERE a.project_id=?1 AND ?2 IS NULL
+              UNION ALL
+              SELECT 'mandate-report:'||p.id, 'progress', 'Mandate report / 职责汇报 · '||m.name,
+                CAST(COALESCE(json_extract(p.report_json,'$.body.headline'),'') AS TEXT),
+                p.created_at,p.created_at,p.id,m.frame_id,'reported','',NULL,0,0,NULL
+              FROM mandate_reports p JOIN mandates m ON m.id=p.mandate_id
+              WHERE m.project_id=?1 AND ?2 IS NULL
+              UNION ALL
+              SELECT 'mandate-request:'||q.id, 'next', 'Mandate needs you / 职责等你处理 · '||m.name, q.what,
+                q.created_at,q.created_at,q.id,m.frame_id,q.status,'',NULL,0,0,NULL
+              FROM mandate_requests q JOIN mandates m ON m.id=q.mandate_id
+              WHERE m.project_id=?1 AND ?2 IS NULL AND q.status<>'withdrawn'
             ) WHERE occurred_at>=?3 AND occurred_at<?4 ORDER BY occurred_at DESC, id DESC LIMIT 2001
         "#
         );
@@ -361,6 +372,36 @@ impl Store {
         Ok(recap)
     }
 
+    /// The project's progress memory as stored JSON. It is derived from the
+    /// records, so it never touches the state generation.
+    pub async fn project_status(&self, project_id: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.project_status(project_id)).await;
+        }
+        Ok(
+            sqlx::query_scalar("SELECT status_json FROM project_status WHERE project_id=?")
+                .bind(project_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    pub async fn save_project_status(&self, project_id: &str, status_json: &str) -> Result<()> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.save_project_status(project_id, status_json)).await;
+        }
+        sqlx::query(
+            "INSERT INTO project_status(project_id,status_json,updated_at) VALUES(?,?,?) \
+             ON CONFLICT(project_id) DO UPDATE SET status_json=excluded.status_json, updated_at=excluded.updated_at",
+        )
+        .bind(project_id)
+        .bind(status_json)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn add_research_journal_entry(
         &self,
         scope: &StateScope,
@@ -506,6 +547,30 @@ mod tests {
             .unwrap();
         assert!(empty[0].history.entries.is_empty());
         assert!(empty[0].error.is_none());
+        store.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn project_status_is_one_row_per_project_and_leaves_with_it() {
+        let path = std::env::temp_dir().join(format!("project-status-{}.db", uuid::Uuid::new_v4()));
+        let store = Store::open(&path).await.unwrap();
+        store.create_project("p", "Project", "").await.unwrap();
+        assert_eq!(store.project_status("p").await.unwrap(), None);
+        store
+            .save_project_status("p", r#"{"through_at":1}"#)
+            .await
+            .unwrap();
+        store
+            .save_project_status("p", r#"{"through_at":2}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.project_status("p").await.unwrap().as_deref(),
+            Some(r#"{"through_at":2}"#)
+        );
+        store.delete_project("p").await.unwrap();
+        assert_eq!(store.project_status("p").await.unwrap(), None);
         store.pool.close().await;
         let _ = std::fs::remove_file(path);
     }
@@ -847,6 +912,131 @@ mod tests {
             second
         );
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn mandate_reports_and_requests_join_the_mainline_as_progress_and_next() {
+        let path =
+            std::env::temp_dir().join(format!("journey-mandates-{}.db", uuid::Uuid::new_v4()));
+        let store = Store::open(&path).await.unwrap();
+        store.create_project("p", "Project", "").await.unwrap();
+        store.create_project("other", "Other", "").await.unwrap();
+        let mandate = wisp_dto::MandateRecord {
+            id: "m1".into(),
+            project_id: "p".into(),
+            frame_id: Some("mandate-frame".into()),
+            name: "Literature watch".into(),
+            goal: "Track new papers".into(),
+            interval_secs: 86_400,
+            report_interval_secs: 7 * 86_400,
+            status: "active".into(),
+            next_run_at: 9_000,
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        };
+        store.create_mandate(&mandate).await.unwrap();
+        store
+            .save_mandate_report(&wisp_dto::MandateReport {
+                id: "report-1".into(),
+                mandate_id: "m1".into(),
+                period_from: 0,
+                period_until: 3_000,
+                rounds: 2,
+                body: ResearchRecap {
+                    headline: "Three papers filed".into(),
+                    ..Default::default()
+                },
+                created_at: 3_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let request = |id: &str, what: &str, created_at| wisp_dto::MandateRequest {
+            id: id.into(),
+            mandate_id: "m1".into(),
+            kind: "login".into(),
+            what: what.into(),
+            created_at,
+            ..Default::default()
+        };
+        // The first request is withdrawn by the second, which stays open.
+        store
+            .open_mandate_request(&request("ask-1", "Sign in to the publisher", 1_000))
+            .await
+            .unwrap();
+        store
+            .open_mandate_request(&request("ask-2", "Sign in with the library proxy", 2_000))
+            .await
+            .unwrap();
+
+        let journey = store
+            .research_journey(&StateScope::mainline("p"), 0, 86_400)
+            .await
+            .unwrap();
+        let rows: Vec<_> = journey
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.kind.as_str(),
+                    e.status.as_str(),
+                    e.summary.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "mandate-report:report-1",
+                    "progress",
+                    "reported",
+                    "Three papers filed"
+                ),
+                (
+                    "mandate-request:ask-2",
+                    "next",
+                    "open",
+                    "Sign in with the library proxy"
+                ),
+            ],
+            "newest first; the withdrawn request is not history worth showing"
+        );
+        assert_eq!(
+            journey.entries[0].title,
+            "Mandate report / 职责汇报 · Literature watch"
+        );
+        assert_eq!(
+            journey.entries[1].title,
+            "Mandate needs you / 职责等你处理 · Literature watch"
+        );
+        assert_eq!(
+            journey.entries[0].frame_id.as_deref(),
+            Some("mandate-frame")
+        );
+        assert!(!journey.entries[0].manual);
+
+        // An answered request stays in the record with its new status.
+        store
+            .answer_mandate_request("m1", "Signed in.", 4_000)
+            .await
+            .unwrap();
+        let journey = store
+            .research_journey(&StateScope::mainline("p"), 0, 86_400)
+            .await
+            .unwrap();
+        assert_eq!(journey.entries[1].status, "answered");
+        // Another project sees none of it.
+        assert!(store
+            .research_journey(&StateScope::mainline("other"), 0, 86_400)
+            .await
+            .unwrap()
+            .entries
+            .is_empty());
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 }

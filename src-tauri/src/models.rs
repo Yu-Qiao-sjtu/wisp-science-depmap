@@ -63,6 +63,10 @@ pub struct ModelProfile {
     /// to image analysis. Serialized so the UI can restore the checkbox.
     #[serde(default)]
     pub use_for_vision: bool,
+    /// Opt-in pool for on-demand expert consultations. Never auto-selected
+    /// as the everyday model when added or used as a fallback.
+    #[serde(default)]
+    pub use_for_expert: bool,
     /// Computed on read / accepted on save; true when this profile is assigned
     /// to the Scientific Illustrator's raster image-generation tool.
     #[serde(default)]
@@ -96,6 +100,11 @@ pub struct ModelProfile {
     /// Video resolution (`480p`, `720p`, `1080p`).
     #[serde(default)]
     pub video_resolution: Option<String>,
+    /// Route for this API endpoint, shared by every profile on it: `None` or
+    /// empty inherits Settings → Network, `none` is direct, else a proxy URL.
+    /// Omitted on save, it keeps the endpoint's current route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,7 +344,7 @@ fn secret_cache() -> &'static Mutex<HashMap<String, String>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn secret_get(name: &str) -> String {
+pub(crate) fn secret_get(name: &str) -> String {
     if let Some(v) = secret_cache().lock().unwrap().get(name) {
         return v.clone();
     }
@@ -349,7 +358,7 @@ fn secret_get(name: &str) -> String {
     v
 }
 
-fn secret_set(name: &str, value: &str) -> Result<(), String> {
+pub(crate) fn secret_set(name: &str, value: &str) -> Result<(), String> {
     wisp_store::secrets::Secret::set(name, value).map_err(|e| e.to_string())?;
     secret_cache()
         .lock()
@@ -358,7 +367,7 @@ fn secret_set(name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn secret_del(name: &str) -> Result<(), String> {
+pub(crate) fn secret_del(name: &str) -> Result<(), String> {
     let r = wisp_store::secrets::Secret::delete(name).map_err(|e| e.to_string());
     // Remember "absent" so existence checks don't re-hit (and re-prompt) the keyring.
     secret_cache()
@@ -435,18 +444,14 @@ const CREDENTIALS: &[Credential] = &[
         secret: "openfda_api_key",
         env: "OPENFDA_API_KEY",
     },
-    // TypeSafe Jev decision model (`wisp_llm::systemone`).
+    // The TypeSafe preset's key for the decision model (`decision_model.rs`),
+    // still exported to local tool processes.
     Credential {
         id: "typesafe_api_key",
         secret: "typesafe_api_key",
         env: "TYPESAFE_API_KEY",
     },
 ];
-
-/// The TypeSafe key for in-process Jev callers; empty when unset.
-pub fn typesafe_api_key() -> String {
-    secret_get("typesafe_api_key")
-}
 
 fn credential(id: &str) -> Option<&'static Credential> {
     CREDENTIALS.iter().find(|c| c.id == id)
@@ -706,7 +711,43 @@ async fn save_raw(store: &wisp_store::Store, profiles: &[ModelProfile]) -> Resul
     store
         .set_setting(PROFILES_KEY, &json)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    remember_routes(profiles);
+    Ok(())
+}
+
+fn remember_routes(profiles: &[ModelProfile]) {
+    crate::network::remember_model_routes(
+        profiles
+            .iter()
+            .map(|profile| crate::network::ModelRoute {
+                provider: profile.provider.clone(),
+                endpoint: normalize_endpoint(&profile.api_url),
+                url: effective_api_url(profile),
+                proxy: profile.proxy_url.clone().unwrap_or_default(),
+            })
+            .collect(),
+    );
+}
+
+/// Publish saved profiles' routes for `network::model_proxy`.
+pub(crate) async fn refresh_routes(store: &wisp_store::Store) {
+    remember_routes(&load_raw(store).await);
+}
+
+/// The saved route of `profile`'s API endpoint: its own when it stays on the
+/// same endpoint, else that of another model already on the endpoint.
+fn endpoint_proxy(profiles: &[ModelProfile], profile: &ModelProfile) -> Option<String> {
+    profiles
+        .iter()
+        .find(|old| old.id == profile.id && same_endpoint(&old.api_url, &profile.api_url))
+        .or_else(|| {
+            profiles.iter().find(|other| {
+                !is_subscription_provider(&other.provider)
+                    && same_endpoint(&other.api_url, &profile.api_url)
+            })
+        })
+        .and_then(|other| other.proxy_url.clone())
 }
 
 /// Ensure at least one profile exists. On the first read of a legacy install,
@@ -715,7 +756,8 @@ async fn save_raw(store: &wisp_store::Store, profiles: &[ModelProfile]) -> Resul
 async fn ensure(store: &wisp_store::Store) -> Vec<ModelProfile> {
     let profiles = load_raw(store).await;
     if !profiles.is_empty() {
-        return profiles;
+        remember_routes(&profiles);
+        return profiles.into_iter().map(with_subscription_window).collect();
     }
     let provider = store
         .get_setting("provider")
@@ -771,6 +813,7 @@ async fn ensure(store: &wisp_store::Store) -> Vec<ModelProfile> {
         session_header_name: String::new(),
         supports_vision: false,
         use_for_vision: false,
+        use_for_expert: false,
         use_for_image_generation: false,
         image_generation_capable: false,
         image_size: String::new(),
@@ -781,6 +824,7 @@ async fn ensure(store: &wisp_store::Store) -> Vec<ModelProfile> {
         video_duration_secs: None,
         video_aspect_ratio: None,
         video_resolution: None,
+        proxy_url: None,
     };
     let profiles = vec![default];
     let _ = save_raw(store, &profiles).await;
@@ -805,8 +849,7 @@ async fn active_id(store: &wisp_store::Store, profiles: &[ModelProfile]) -> Stri
     } else {
         profiles
             .iter()
-            .find(|p| is_chat_model(p))
-            .or_else(|| profiles.first())
+            .find(|p| is_default_chat_model(p))
             .map(|p| p.id.clone())
             .unwrap_or_default()
     }
@@ -819,6 +862,38 @@ pub async fn active_profile_id(store: &wisp_store::Store) -> String {
 
 pub async fn session_profile_id(store: &wisp_store::Store, frame_id: &str) -> String {
     resolve_session_profile(store, frame_id).await.0
+}
+
+/// Bind `target` to the chat model, reasoning effort and service tier that
+/// `source` runs on, so a branch or subagent keeps its origin's model instead
+/// of falling back to the global default.
+pub(crate) async fn copy_session_model_settings(
+    store: &wisp_store::Store,
+    source: &str,
+    target: &str,
+    project_id: &str,
+) -> Result<(), String> {
+    let model_id = session_profile_id(store, source).await;
+    store
+        .set_frame_model(target, project_id, &model_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let reasoning_effort = store
+        .frame_reasoning_effort(source)
+        .await
+        .map_err(|error| error.to_string())?;
+    store
+        .set_frame_reasoning_effort(target, project_id, reasoning_effort.as_deref())
+        .await
+        .map_err(|error| error.to_string())?;
+    let service_tier = store
+        .frame_service_tier(source)
+        .await
+        .map_err(|error| error.to_string())?;
+    store
+        .set_frame_service_tier(target, project_id, service_tier.as_deref())
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Chat profile for `frame_id`. A leftover id (deleted LM Studio profile, etc.)
@@ -1054,7 +1129,7 @@ async fn fresh_chatgpt_access_token(id: &str, access: String) -> String {
     let Some(creds) = load_global_chatgpt() else {
         return access;
     };
-    let client = crate::network::subscription_http_client();
+    let client = crate::network::subscription_http_client("chatgpt");
     match wisp_llm::chatgpt_auth::refresh_if_due(&client, creds, wisp_llm::codex_auth::now_ms())
         .await
     {
@@ -1107,7 +1182,7 @@ async fn fresh_xai_access_token(id: &str, access: String) -> String {
     if !access.is_empty() {
         creds.access_token = access.clone();
     }
-    let client = crate::network::subscription_http_client();
+    let client = crate::network::subscription_http_client("xai");
     match wisp_llm::xai_auth::refresh_if_due(&client, creds, wisp_llm::codex_auth::now_ms()).await {
         Ok(next) => {
             if next.access_token != access {
@@ -1149,7 +1224,7 @@ async fn fresh_access_token(provider: &str, id: &str) -> String {
     // Another model may have refreshed this account since this copy was written.
     let account = load_codex_account(&creds.account_id);
     let creds = fresher_codex(creds, account);
-    let client = crate::network::subscription_http_client();
+    let client = crate::network::subscription_http_client("codex");
     match wisp_llm::codex_auth::refresh_if_due(&client, creds, wisp_llm::codex_auth::now_ms()).await
     {
         Ok(next) => {
@@ -1329,6 +1404,18 @@ pub(crate) fn supports_video_generation(provider: &str, model: &str) -> bool {
 
 fn is_chat_model(p: &ModelProfile) -> bool {
     !profile_is_image_model(p) && !is_video_generation_model(&p.model)
+}
+
+fn is_default_chat_model(p: &ModelProfile) -> bool {
+    is_chat_model(p) && !p.use_for_expert
+}
+
+pub(crate) async fn expert_profiles(store: &wisp_store::Store) -> Vec<ModelProfile> {
+    ensure(store)
+        .await
+        .into_iter()
+        .filter(|profile| profile.use_for_expert && is_chat_model(profile))
+        .collect()
 }
 
 /// Match the WebView composer: only the built-in OpenAI chat transports expose Fast.
@@ -1596,6 +1683,27 @@ pub async fn active_llm_advanced(
     )
 }
 
+/// Subscription profiles have no editable context window (Wisp owns the
+/// endpoint), so the stored value is only the sign-in default. Resolve the
+/// ceiling from the provider instead: the ChatGPT backend serves Codex models
+/// with its own 272k limit, the other subscriptions ride the public API and
+/// take its catalog window.
+fn with_subscription_window(mut profile: ModelProfile) -> ModelProfile {
+    let window = match profile.provider.trim() {
+        // ponytail: one Codex ceiling; per-model (e.g. codex-spark 128k) if it ever matters.
+        "openai_codex" => Some(wisp_llm::codex_auth::CONTEXT_WINDOW),
+        p if is_subscription_provider(p) => {
+            crate::model_catalog::lookup(&profile.provider, &profile.api_url, &profile.model)
+                .map(|entry| entry.c)
+        }
+        _ => None,
+    };
+    if let Some(window) = window {
+        profile.context_window = window;
+    }
+    profile
+}
+
 fn effective_context_window(profile: &ModelProfile) -> u64 {
     let value = if profile.context_window >= 4_096 {
         profile.context_window
@@ -1744,23 +1852,34 @@ pub(crate) async fn decorated_models(store: &wisp_store::Store) -> Vec<ModelProf
     decorated(store).await
 }
 
-pub(crate) async fn delegation_profiles(store: &wisp_store::Store) -> Vec<ModelProfile> {
-    decorated(store)
+/// Profiles a specialist may bind (the Settings specialist model picker list).
+pub(crate) async fn chat_profiles(store: &wisp_store::Store) -> Vec<ModelProfile> {
+    ensure(store)
         .await
         .into_iter()
         .filter(is_chat_model)
         .collect()
 }
 
-/// A short unique id derived from the label (or a counter) that isn't taken.
+pub(crate) async fn delegation_profiles(store: &wisp_store::Store) -> Vec<ModelProfile> {
+    decorated(store)
+        .await
+        .into_iter()
+        .filter(is_default_chat_model)
+        .collect()
+}
+
+/// Random id for a new profile, never handed out again. `remove_model` leaves
+/// Specialist `model_id`s, reviewer backends and per-session model choices
+/// naming the old id; a recycled id would silently rebind them to an unrelated
+/// profile. Ids are opaque, so legacy `m{n}` and `default` profiles still work.
 fn fresh_id(existing: &[ModelProfile]) -> String {
-    for n in 1..10_000 {
-        let id = format!("m{n}");
+    loop {
+        let id = format!("m-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
         if !existing.iter().any(|p| p.id == id) {
             return id;
         }
     }
-    "m".into()
 }
 
 #[tauri::command]
@@ -1906,8 +2025,17 @@ async fn save_model_profile(
     profile.user_agent = wisp_llm::provider::normalize_user_agent(&profile.user_agent)?;
     profile.session_header_name =
         wisp_llm::provider::normalize_session_header_name(&profile.session_header_name)?;
+    let proxy_url = match profile.proxy_url.take() {
+        Some(value) => crate::network::normalize_proxy("Model API proxy", &value)?,
+        None => endpoint_proxy(&profiles, &profile).unwrap_or_default(),
+    };
+    profile.proxy_url = (!proxy_url.is_empty()).then_some(proxy_url);
     let existing = profiles.iter().find(|old| old.id == profile.id);
+    let newly_reserved = profile.use_for_expert && !existing.is_some_and(|old| old.use_for_expert);
     normalize_image_role(&mut profile, existing, restore_chat_model)?;
+    if profile.use_for_expert && !is_chat_model(&profile) {
+        return Err("Expert consultation requires a chat model.".into());
+    }
     if assign_vision && !can_describe_images(&profile) {
         return Err("Image analysis requires an API model marked as vision-capable.".into());
     }
@@ -1928,14 +2056,33 @@ async fn save_model_profile(
     }
     let id = profile.id.clone();
     let api_url = profile.api_url.clone();
+    let shared_proxy =
+        (!is_subscription_provider(&profile.provider)).then(|| profile.proxy_url.clone());
     let is_new = !profiles.iter().any(|p| p.id == id);
     if !is_chat_model(&profile) && !profiles.iter().any(|p| p.id != id && is_chat_model(p)) {
         return Err("At least one chat model is required.".into());
+    }
+    if !is_default_chat_model(&profile)
+        && !profiles
+            .iter()
+            .any(|p| p.id != id && is_default_chat_model(p))
+    {
+        return Err(
+            "Keep at least one everyday chat model before reserving an expert model.".into(),
+        );
     }
     if let Some(existing) = profiles.iter_mut().find(|p| p.id == id) {
         *existing = profile;
     } else {
         profiles.push(profile);
+    }
+    // One route per endpoint: every model on it follows the saved choice.
+    if let Some(proxy_url) = shared_proxy {
+        for sibling in profiles.iter_mut().filter(|p| {
+            !is_subscription_provider(&p.provider) && same_endpoint(&p.api_url, &api_url)
+        }) {
+            sibling.proxy_url = proxy_url.clone();
+        }
     }
     let mut assignments = Vec::new();
     for (setting, assign) in [
@@ -1968,12 +2115,18 @@ async fn save_model_profile(
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
     // Restoring an existing chat profile does not change the current default.
-    if is_new && profiles.iter().any(|p| p.id == id && is_chat_model(p)) {
+    if is_new
+        && profiles
+            .iter()
+            .any(|p| p.id == id && is_default_chat_model(p))
+    {
         active = id.clone();
-    } else if active == id && !profiles.iter().any(|p| p.id == id && is_chat_model(p)) {
+    } else if active == id
+        && (newly_reserved || !profiles.iter().any(|p| p.id == id && is_chat_model(p)))
+    {
         active = profiles
             .iter()
-            .find(|p| is_chat_model(p))
+            .find(|p| is_default_chat_model(p))
             .map(|p| p.id.clone())
             .unwrap_or_default();
     }
@@ -2004,11 +2157,11 @@ pub async fn remove_model(
     let mut profiles = ensure(&state.store).await;
     if profiles
         .iter()
-        .filter(|p| p.id != id && is_chat_model(p))
+        .filter(|p| p.id != id && is_default_chat_model(p))
         .count()
         == 0
     {
-        return Err("At least one chat model is required.".into());
+        return Err("At least one everyday chat model is required.".into());
     }
     profiles.retain(|p| p.id != id);
     save_raw(&state.store, &profiles).await?;
@@ -2024,7 +2177,7 @@ pub async fn remove_model(
         .flatten()
         .unwrap_or_default();
     if cur == id {
-        if let Some(first) = profiles.iter().find(|p| is_chat_model(p)) {
+        if let Some(first) = profiles.iter().find(|p| is_default_chat_model(p)) {
             let _ = state.store.set_setting(ACTIVE_KEY, &first.id).await;
         }
     }
@@ -2071,6 +2224,48 @@ pub async fn reorder_models(
     Ok(decorated(&state.store).await)
 }
 
+async fn ensure_chat_profile(store: &wisp_store::Store, id: &str) -> Result<(), String> {
+    match ensure(store).await.iter().find(|p| p.id == id) {
+        None => Err("Unknown model.".into()),
+        Some(p) if !is_chat_model(p) => {
+            Err("Image or video generation models cannot be used for chat.".into())
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// Bind one conversation to chat profile `id`. Its next turn rebuilds the
+/// agent with that model; a turn already running keeps the one it started on.
+pub(crate) async fn set_session_model(
+    state: &crate::AppState,
+    session_id: &str,
+    id: &str,
+) -> Result<(), String> {
+    ensure_chat_profile(&state.store, id).await?;
+    if crate::acp::session_agent_id(&state.store, session_id)
+        .await?
+        .is_some()
+    {
+        return Err("Start a new conversation to switch away from this ACP Agent".into());
+    }
+    let (project, scope) =
+        crate::exploration_commands::working_project_for_frame(state, session_id).await?;
+    let _activity = state.begin_project_activity(&project.id)?;
+    let _project_write_locked = crate::exploration_commands::conversation_project_write_locked(
+        &state.store,
+        &scope,
+        Some(session_id),
+    )
+    .await?;
+    state
+        .store
+        .set_frame_model(session_id, &project.id, id)
+        .await
+        .map_err(|error| error.to_string())?;
+    crate::clear_session_agent(state, session_id).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn set_active_model(
     state: State<'_, crate::AppState>,
@@ -2078,40 +2273,10 @@ pub async fn set_active_model(
     id: String,
     session_id: Option<String>,
 ) -> Result<Vec<ModelProfile>, String> {
-    let profiles = ensure(&state.store).await;
-    if !profiles.iter().any(|p| p.id == id) {
-        return Err("Unknown model.".into());
-    }
-    if profiles
-        .iter()
-        .find(|p| p.id == id)
-        .is_some_and(|p| !is_chat_model(p))
-    {
-        return Err("Image or video generation models cannot be used for chat.".into());
-    }
     if let Some(session_id) = session_id.filter(|value| !value.is_empty()) {
-        if crate::acp::session_agent_id(&state.store, &session_id)
-            .await?
-            .is_some()
-        {
-            return Err("Start a new conversation to switch away from this ACP Agent".into());
-        }
-        let (project, scope) =
-            crate::exploration_commands::working_project_for_frame(&state, &session_id).await?;
-        let _activity = state.begin_project_activity(&project.id)?;
-        let _project_write_locked = crate::exploration_commands::conversation_project_write_locked(
-            &state.store,
-            &scope,
-            Some(&session_id),
-        )
-        .await?;
-        state
-            .store
-            .set_frame_model(&session_id, &project.id, &id)
-            .await
-            .map_err(|error| error.to_string())?;
-        crate::clear_session_agent(&state, &session_id).await;
+        set_session_model(&state, &session_id, &id).await?;
     } else {
+        ensure_chat_profile(&state.store, &id).await?;
         state
             .store
             .set_setting(ACTIVE_KEY, &id)
@@ -2215,6 +2380,7 @@ mod tests {
             session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
+            use_for_expert: false,
             use_for_image_generation: false,
             image_generation_capable: false,
             image_size: String::new(),
@@ -2225,6 +2391,7 @@ mod tests {
             video_duration_secs: None,
             video_aspect_ratio: None,
             video_resolution: None,
+            proxy_url: None,
         }
     }
 
@@ -2262,6 +2429,177 @@ mod tests {
             profile.model = model.into();
             assert!(!supports_fast_service_tier(&profile));
         }
+    }
+
+    #[tokio::test]
+    async fn endpoint_route_is_shared_by_every_model_on_the_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = wisp_store::Store::open(&dir.path().join("routes.sqlite"))
+            .await
+            .unwrap();
+        let mut other = test_profile("other", "Other", "other-model");
+        other.api_url = "https://other.test/v1".into();
+        save_raw(
+            &store,
+            &[
+                test_profile("daily", "Daily", "daily-model"),
+                test_profile("pro", "Pro", "pro-model"),
+                other,
+            ],
+        )
+        .await
+        .unwrap();
+        store.set_setting(ACTIVE_KEY, "daily").await.unwrap();
+        let route = |profiles: &[ModelProfile], id: &str| {
+            profiles
+                .iter()
+                .find(|p| p.id == id || p.model == id)
+                .unwrap()
+                .proxy_url
+                .clone()
+        };
+
+        // A chosen route applies to the whole endpoint, not to other endpoints.
+        let mut daily = test_profile("daily", "Daily", "daily-model");
+        daily.proxy_url = Some(" none ".into());
+        let saved = save_model_profile(&store, daily, None, false)
+            .await
+            .unwrap();
+        assert_eq!(route(&saved, "daily").as_deref(), Some("none"));
+        assert_eq!(route(&saved, "pro").as_deref(), Some("none"));
+        assert_eq!(route(&saved, "other"), None);
+
+        // An omitted route keeps the endpoint's; a new model on it adopts it.
+        let saved = save_model_profile(
+            &store,
+            test_profile("pro", "Pro 2", "pro-model"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(route(&saved, "pro").as_deref(), Some("none"));
+        let saved = save_model_profile(&store, test_profile("", "Mini", "mini-model"), None, false)
+            .await
+            .unwrap();
+        assert_eq!(route(&saved, "mini-model").as_deref(), Some("none"));
+
+        // An invalid route changes nothing.
+        let before = store.get_setting(PROFILES_KEY).await.unwrap();
+        for value in ["https://user:secret@proxy.test", "localhost:7890"] {
+            let mut bad = test_profile("daily", "Daily", "daily-model");
+            bad.proxy_url = Some(value.into());
+            assert!(save_model_profile(&store, bad, None, false).await.is_err());
+        }
+        assert_eq!(store.get_setting(PROFILES_KEY).await.unwrap(), before);
+
+        // Choosing inherit clears the endpoint's route; a proxy URL replaces it.
+        let mut pro = test_profile("pro", "Pro", "pro-model");
+        pro.proxy_url = Some(String::new());
+        let saved = save_model_profile(&store, pro, None, false).await.unwrap();
+        assert!(saved.iter().all(|p| p.proxy_url.is_none()));
+        let mut other = test_profile("other", "Other", "other-model");
+        other.api_url = "https://other.test/v1".into();
+        other.proxy_url = Some("socks5://localhost:1080".into());
+        let saved = save_model_profile(&store, other, None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            route(&saved, "other").as_deref(),
+            Some("socks5://localhost:1080")
+        );
+        assert_eq!(route(&saved, "daily"), None);
+    }
+
+    #[tokio::test]
+    async fn expert_profiles_persist_without_replacing_the_everyday_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = wisp_store::Store::open(&dir.path().join("experts.sqlite"))
+            .await
+            .unwrap();
+        let everyday = test_profile("daily", "Everyday", "daily-model");
+        save_raw(&store, &[everyday]).await.unwrap();
+        store.set_setting(ACTIVE_KEY, "daily").await.unwrap();
+        let mut expert = test_profile("", "Senior expert", "expert-model");
+        expert.use_for_expert = true;
+        let saved = save_model_profile(&store, expert, None, false)
+            .await
+            .unwrap();
+        let expert_id = saved.iter().find(|p| p.use_for_expert).unwrap().id.clone();
+        assert_eq!(active_profile_id(&store).await, "daily");
+        assert_eq!(expert_profiles(&store).await[0].id, expert_id);
+        assert_eq!(delegation_profiles(&store).await.len(), 1);
+        assert_eq!(delegation_profiles(&store).await[0].id, "daily");
+        // A missing default must not select the first, expensive profile.
+        let mut reordered = load_raw(&store).await;
+        reordered.reverse();
+        save_raw(&store, &reordered).await.unwrap();
+        store
+            .set_setting(ACTIVE_KEY, "deleted-model")
+            .await
+            .unwrap();
+        assert_eq!(active_profile_id(&store).await, "daily");
+        // Users can still deliberately select it for a conversation.
+        store.create_project("p", "Project", "").await.unwrap();
+        store
+            .create_frame("f", "p", "OPERON", &expert_id)
+            .await
+            .unwrap();
+        store.set_frame_model("f", "p", &expert_id).await.unwrap();
+        assert_eq!(session_profile_id(&store, "f").await, expert_id);
+        let mut expert = profile_owned(&store, &expert_id).await.unwrap();
+        // Editing an explicitly selected expert must preserve that selection.
+        store.set_setting(ACTIVE_KEY, &expert_id).await.unwrap();
+        expert.reasoning_effort = "high".into();
+        save_model_profile(&store, expert.clone(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(active_profile_id(&store).await, expert_id);
+        expert.use_for_expert = false;
+        save_model_profile(&store, expert, None, false)
+            .await
+            .unwrap();
+        assert!(expert_profiles(&store).await.is_empty());
+        // Reserving the current default chooses the remaining everyday model.
+        expert = profile_owned(&store, &expert_id).await.unwrap();
+        expert.use_for_expert = true;
+        save_model_profile(&store, expert, None, false)
+            .await
+            .unwrap();
+        assert_eq!(active_profile_id(&store).await, "daily");
+    }
+
+    #[tokio::test]
+    async fn expert_assignment_requires_a_chat_model_and_an_everyday_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = wisp_store::Store::open(&dir.path().join("roles.sqlite"))
+            .await
+            .unwrap();
+        let daily = test_profile("daily", "Everyday", "daily-model");
+        save_raw(&store, &[daily.clone()]).await.unwrap();
+        let mut reserved = daily;
+        reserved.use_for_expert = true;
+        assert!(save_model_profile(&store, reserved, None, false)
+            .await
+            .unwrap_err()
+            .contains("everyday"));
+        assert!(!load_raw(&store).await[0].use_for_expert);
+        let mut image = test_profile("image", "Image", "gpt-image-2");
+        image.use_for_expert = true;
+        assert!(save_model_profile(&store, image, None, false)
+            .await
+            .unwrap_err()
+            .contains("chat model"));
+        assert!(expert_profiles(&store).await.is_empty());
+    }
+
+    #[test]
+    fn old_model_profiles_do_not_opt_in_to_expensive_expert_calls() {
+        let profile: ModelProfile = serde_json::from_value(serde_json::json!({
+            "id":"old", "provider":"openai", "api_url":"u", "model":"m"
+        }))
+        .unwrap();
+        assert!(!profile.use_for_expert);
     }
 
     #[tokio::test]
@@ -2342,6 +2680,75 @@ mod tests {
 
         assert_eq!(session_profile_id(&store, "a").await, "m2");
         assert_eq!(session_profile_id(&store, "b").await, "m1");
+        drop(store);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn derived_session_inherits_source_model_not_global_default() {
+        let tmp = std::env::temp_dir().join(format!(
+            "wisp_session_model_copy_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&tmp).await.unwrap();
+        store.create_project("p", "project", "").await.unwrap();
+        save_raw(
+            &store,
+            &[
+                test_profile("m1", "first", "model-1"),
+                test_profile("m2", "second", "model-2"),
+            ],
+        )
+        .await
+        .unwrap();
+        store.set_setting(ACTIVE_KEY, "m1").await.unwrap();
+        store
+            .create_frame("parent", "p", "OPERON", "m1")
+            .await
+            .unwrap();
+        store
+            .create_frame("child", "p", "OPERON", "m1")
+            .await
+            .unwrap();
+        store.set_frame_model("parent", "p", "m2").await.unwrap();
+        store
+            .set_frame_reasoning_effort("parent", "p", Some("high"))
+            .await
+            .unwrap();
+        store
+            .set_frame_service_tier("parent", "p", Some("priority"))
+            .await
+            .unwrap();
+
+        copy_session_model_settings(&store, "parent", "child", "p")
+            .await
+            .unwrap();
+        assert_eq!(session_profile_id(&store, "child").await, "m2");
+        assert_eq!(
+            store.frame_reasoning_effort("child").await.unwrap(),
+            Some("high".into())
+        );
+        assert_eq!(
+            store.frame_service_tier("child").await.unwrap(),
+            Some("priority".into())
+        );
+
+        // A later copy follows the source's switch, including cleared overrides.
+        store.set_frame_model("parent", "p", "m1").await.unwrap();
+        store
+            .set_frame_reasoning_effort("parent", "p", None)
+            .await
+            .unwrap();
+        store
+            .set_frame_service_tier("parent", "p", None)
+            .await
+            .unwrap();
+        copy_session_model_settings(&store, "parent", "child", "p")
+            .await
+            .unwrap();
+        assert_eq!(session_profile_id(&store, "child").await, "m1");
+        assert_eq!(store.frame_reasoning_effort("child").await.unwrap(), None);
+        assert_eq!(store.frame_service_tier("child").await.unwrap(), None);
         drop(store);
         let _ = std::fs::remove_file(&tmp);
     }
@@ -2659,6 +3066,26 @@ mod tests {
     }
 
     #[test]
+    fn subscription_profiles_take_the_provider_window_not_the_stored_default() {
+        let mut codex = test_profile("c", "Codex", "gpt-6-astra");
+        codex.provider = "openai_codex".into();
+        codex.api_url = wisp_llm::codex_auth::DEFAULT_BASE_URL.into();
+        codex.context_window = DEFAULT_CONTEXT_WINDOW;
+        let codex = with_subscription_window(codex);
+        assert_eq!(codex.context_window, 272_000);
+        assert_eq!(effective_context_window(&codex), 272_000);
+        // Sign in with ChatGPT rides the public API: catalog window applies.
+        let mut chatgpt = test_profile("g", "ChatGPT", "gpt-6-astra");
+        chatgpt.provider = "openai_chatgpt".into();
+        chatgpt.api_url = "https://api.openai.com/v1".into();
+        assert_eq!(with_subscription_window(chatgpt).context_window, 1_050_000);
+        // API-key profiles keep what the user typed.
+        let mut api = test_profile("a", "API", "gpt-6-astra");
+        api.context_window = 200_000;
+        assert_eq!(with_subscription_window(api).context_window, 200_000);
+    }
+
+    #[test]
     fn effective_context_window_respects_catalog_ceiling() {
         let ceiling =
             crate::model_catalog::lookup("openai", "https://api.kimi.com/coding/v1", "k3-256k")
@@ -2676,10 +3103,51 @@ mod tests {
     }
 
     #[test]
-    fn fresh_id_skips_taken() {
+    fn fresh_id_is_random_and_ignores_legacy_counters() {
         let existing = vec![test_profile("m1", "a", "x"), test_profile("m2", "b", "y")];
-        assert_eq!(fresh_id(&existing), "m3");
-        assert_eq!(fresh_id(&[]), "m1");
+        let id = fresh_id(&existing);
+        let suffix = id.strip_prefix("m-").unwrap();
+        assert_eq!(suffix.len(), 12, "{id}");
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        assert_ne!(fresh_id(&existing), id);
+    }
+
+    #[tokio::test]
+    async fn deleted_profile_id_is_not_reissued_to_the_next_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = wisp_store::Store::open(&dir.path().join("reuse.sqlite"))
+            .await
+            .unwrap();
+        save_raw(&store, &[test_profile("daily", "Everyday", "daily-model")])
+            .await
+            .unwrap();
+        store.set_setting(ACTIVE_KEY, "daily").await.unwrap();
+        let saved = save_model_profile(&store, test_profile("", "Old", "old-model"), None, false)
+            .await
+            .unwrap();
+        let old_id = saved
+            .iter()
+            .find(|p| p.model == "old-model")
+            .unwrap()
+            .id
+            .clone();
+        // The persistence step of remove_model.
+        let remaining: Vec<_> = saved.into_iter().filter(|p| p.id != old_id).collect();
+        save_raw(&store, &remaining).await.unwrap();
+
+        let saved = save_model_profile(&store, test_profile("", "New", "new-model"), None, false)
+            .await
+            .unwrap();
+        let new_id = saved
+            .iter()
+            .find(|p| p.model == "new-model")
+            .unwrap()
+            .id
+            .clone();
+        assert_ne!(new_id, old_id);
+        // A Specialist or session still naming the deleted id resolves to
+        // nothing instead of adopting the unrelated new profile.
+        assert!(profile_owned(&store, &old_id).await.is_none());
     }
 
     #[test]

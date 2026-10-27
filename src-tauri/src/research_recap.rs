@@ -37,7 +37,7 @@ const CATCH_UP_DAYS: i64 = 3;
 const MAX_RUN_ERRORS: usize = 3;
 static DAILY_RUNNING: AtomicBool = AtomicBool::new(false);
 
-fn clip(text: &str, chars: usize) -> String {
+pub(crate) fn clip(text: &str, chars: usize) -> String {
     let text = text.trim();
     match text.char_indices().nth(chars) {
         Some((index, _)) => format!("{}…", &text[..index]),
@@ -194,7 +194,7 @@ struct DraftItem {
 
 /// Parse the model's JSON and resolve its citations. Unknown handles are
 /// dropped; only cited sources are kept.
-fn to_recap(
+pub(crate) fn to_recap(
     raw: &str,
     handles: &HashMap<String, ResearchRecapSource>,
     day_start: i64,
@@ -263,9 +263,12 @@ fn to_recap(
     })
 }
 
-async fn complete(
+/// One tool-free completion on the Recap specialist's model. Returns the
+/// text and the model that wrote it.
+pub(crate) async fn complete(
     store: &Store,
     project_id: &str,
+    system: &str,
     input: &str,
 ) -> Result<(String, String), String> {
     let recap = crate::specialists::get(store, "recap")
@@ -289,7 +292,7 @@ async fn complete(
         &header,
         project_id,
     )?);
-    let messages = [Message::system(RECAP_SYSTEM), Message::user(input)];
+    let messages = [Message::system(system), Message::user(input)];
     let completion = tokio::time::timeout(RECAP_TIMEOUT, llm.complete(&messages, &[]))
         .await
         .map_err(|_| "Recap drafting timed out".to_string())?
@@ -320,7 +323,7 @@ pub(crate) async fn draft_recap(
     let Some((input, handles)) = day_digest(store, project_id, day_start, day_end).await? else {
         return Ok(None);
     };
-    let (raw, model) = complete(store, project_id, &input.to_string()).await?;
+    let (raw, model) = complete(store, project_id, RECAP_SYSTEM, &input.to_string()).await?;
     let recap = to_recap(&raw, &handles, day_start, &model)?;
     store
         .save_research_recap(project_id, &recap, replace)
@@ -433,7 +436,7 @@ pub(crate) fn local_day(day: NaiveDate) -> Option<(i64, i64)> {
     Some((start(day)?, start(day.succ_opt()?)?))
 }
 
-async fn load_daily(store: &Store) -> DailyRecapAutomation {
+pub(crate) async fn load_daily(store: &Store) -> DailyRecapAutomation {
     let mut daily: DailyRecapAutomation = store
         .get_setting(DAILY_KEY)
         .await
@@ -467,7 +470,8 @@ fn daily_due(daily: &DailyRecapAutomation, now: chrono::DateTime<Local>) -> bool
 }
 
 /// Draft missing recaps for the last `CATCH_UP_DAYS` complete days of every
-/// project. Existing and dismissed recaps are kept as they are.
+/// project, then bring each project's progress memory up to yesterday.
+/// Existing and dismissed recaps are kept as they are.
 async fn run_daily(store: Store) {
     if DAILY_RUNNING.swap(true, Ordering::SeqCst) {
         return;
@@ -483,6 +487,11 @@ async fn run_daily(store: Store) {
         }
     };
     'projects: for project in projects {
+        let mut failed = |error: String| {
+            tracing::warn!(target: "wisp", %error, project_id = %project.0, "daily recap failed");
+            errors.push(format!("{}: {error}", project.1));
+            errors.len() >= MAX_RUN_ERRORS
+        };
         for back in 1..=CATCH_UP_DAYS {
             let Some((start, end)) = local_day(today - chrono::Days::new(back as u64)) else {
                 continue;
@@ -491,12 +500,17 @@ async fn run_daily(store: Store) {
                 Ok(Some(_)) => drafted += 1,
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::warn!(target: "wisp", %error, project_id = %project.0, "daily recap failed");
-                    errors.push(format!("{}: {error}", project.1));
-                    if errors.len() >= MAX_RUN_ERRORS {
+                    if failed(error) {
                         break 'projects;
                     }
                 }
+            }
+        }
+        // The same complete days, folded into the project's progress memory.
+        if let Err(error) = crate::project_status::fold(&store, &project.0, project.3, today).await
+        {
+            if failed(error) {
+                break 'projects;
             }
         }
     }

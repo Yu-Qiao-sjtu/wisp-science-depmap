@@ -101,6 +101,16 @@ pub trait DelegationExecutionObserver: Send + Sync {
         Ok(false)
     }
 
+    async fn workflow_cancellation_reason(
+        &self,
+        plan: &DelegationPlan,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(self
+            .workflow_cancel_requested(plan)
+            .await?
+            .then(|| "Agent workflow cancellation was requested".into()))
+    }
+
     async fn workflow_finished(
         &self,
         _plan: &DelegationPlan,
@@ -295,9 +305,13 @@ impl DelegationExecutor {
         let mut running_agents = 0usize;
         let mut running_mutations = HashSet::<String>::new();
         let mut cancellation_applied = false;
+        let mut cancellation_reason = None;
 
         while !pending.is_empty() || !running.is_empty() {
-            if !cancellation_applied && self.observer.workflow_cancel_requested(&plan).await? {
+            if !cancellation_applied {
+                cancellation_reason = self.observer.workflow_cancellation_reason(&plan).await?;
+            }
+            if !cancellation_applied && cancellation_reason.is_some() {
                 cancellation_applied = true;
                 for (step_id, request_id) in &running_requests {
                     match running_kinds
@@ -317,7 +331,9 @@ impl DelegationExecutor {
                 }
                 for step_id in pending.drain(..) {
                     let request = &requests[&step_id];
-                    let reason = "Agent workflow cancellation was requested".to_string();
+                    let reason = cancellation_reason
+                        .clone()
+                        .expect("cancellation reason was checked");
                     self.observer.step_cancelled(request, &reason).await?;
                     responses.insert(
                         step_id,
@@ -416,13 +432,23 @@ impl DelegationExecutor {
                 value = running.next() => value,
                 _ = tokio::time::sleep(Duration::from_millis(100)), if !cancellation_applied => continue,
             };
-            if let Some((step_id, request, response, kind)) = next {
+            if let Some((step_id, request, mut response, kind)) = next {
                 running_requests.remove(&step_id);
                 running_kinds.remove(&step_id);
                 if kind == WorkflowTaskKind::Agent {
                     running_agents = running_agents.saturating_sub(1);
                 }
                 running_mutations.remove(&step_id);
+                if response.status == DelegationStatus::Cancelled {
+                    // A backend can observe the deadline before the scheduler's
+                    // next poll. Preserve that cause in both storage and delivery.
+                    response.error = self
+                        .observer
+                        .workflow_cancellation_reason(&plan)
+                        .await?
+                        .or(response.error)
+                        .or_else(|| Some("Agent workflow cancellation was requested".into()));
+                }
                 self.observer.step_finished(&request, &response).await?;
                 responses.insert(step_id, response);
             }
@@ -685,6 +711,20 @@ mod tests {
         cancelled_steps: AtomicUsize,
     }
 
+    struct DeadlineObserver;
+
+    #[async_trait]
+    impl DelegationExecutionObserver for DeadlineObserver {
+        async fn workflow_cancellation_reason(
+            &self,
+            _plan: &DelegationPlan,
+        ) -> anyhow::Result<Option<String>> {
+            Ok(Some(
+                "Agent workflow execution timed out after 600 seconds.".into(),
+            ))
+        }
+    }
+
     #[async_trait]
     impl DelegationExecutionObserver for CancelBeforeStartObserver {
         async fn workflow_cancel_requested(&self, _plan: &DelegationPlan) -> anyhow::Result<bool> {
@@ -721,7 +761,12 @@ mod tests {
                 artifact_ids: vec![],
                 artifacts: vec![],
                 evidence: vec![],
-                usage: Default::default(),
+                usage: crate::AgentUsage {
+                    input_tokens: 123,
+                    output_tokens: 45,
+                    tool_calls: 3,
+                    cost_microunits: 7,
+                },
                 agent_session_id: Some("session".into()),
                 child_frame_id: Some("frame".into()),
                 error: None,
@@ -1226,7 +1271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn timeout_preserves_backend_session_provenance() {
+    async fn timeout_preserves_backend_usage_and_session_provenance() {
         let (registry, mut host) = dynamic_policy();
         host.default_timeout_secs = Some(1);
         host.timeout_ceiling_secs = Some(1);
@@ -1241,6 +1286,10 @@ mod tests {
         assert!(response.error.as_deref().unwrap().contains("timed out"));
         assert_eq!(response.agent_session_id.as_deref(), Some("session"));
         assert_eq!(response.child_frame_id.as_deref(), Some("frame"));
+        assert_eq!(response.usage.input_tokens, 123);
+        assert_eq!(response.usage.output_tokens, 45);
+        assert_eq!(response.usage.tool_calls, 3);
+        assert_eq!(response.usage.cost_microunits, 7);
     }
 
     #[tokio::test]
@@ -1269,6 +1318,22 @@ mod tests {
             .steps
             .iter()
             .all(|step| step.response.status == DelegationStatus::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn workflow_timeout_cause_is_returned_for_every_pending_task() {
+        let (plan, registry, host) = fan_in_plan();
+        let result = DelegationExecutor::new(Arc::new(TimeoutDelegator))
+            .with_dynamic_policy(registry, host)
+            .with_observer(Arc::new(DeadlineObserver))
+            .execute(plan)
+            .await
+            .unwrap();
+        assert_eq!(result.status, DelegationExecutionStatus::Cancelled);
+        assert!(result.steps.iter().all(|step| {
+            step.response.error.as_deref()
+                == Some("Agent workflow execution timed out after 600 seconds.")
+        }));
     }
 
     #[tokio::test]

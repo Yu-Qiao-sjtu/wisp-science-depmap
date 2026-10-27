@@ -84,10 +84,10 @@ async function setup(page: Page, locale = "en", saved = false) {
 async function subscriptions(page: Page) { await page.getByTestId("models-category-subscriptions").click(); }
 
 for (const locale of ["en", "zh"]) {
-  test(`subscription accounts share Models tabs, with only ID and alias editable (${locale})`, async ({ page }, testInfo) => {
+  test(`subscription accounts share Models tabs and preserve the expert opt-in (${locale})`, async ({ page }, testInfo) => {
     await setup(page, locale, true);
     await expect(page.getByTestId("settings-nav-subscriptions")).toHaveCount(0);
-    await expect(page.getByRole("tab")).toHaveCount(3);
+    await expect(page.getByRole("tab")).toHaveCount(4);
     await expect(page.getByTestId("models-category-http")).toContainText("(2)");
     await expect(page.getByTestId("add-codex-login")).toHaveCount(0);
     await expect(page.getByText("My ChatGPT", { exact: true })).toHaveCount(0);
@@ -104,17 +104,30 @@ for (const locale of ["en", "zh"]) {
     for (const provider of ["codex", "xai"]) {
       await page.getByTestId(`subscription-account-${provider}`).locator(".subscription-model-edit").click();
       const form = page.getByTestId("subscription-model-form");
-      await expect(form.locator("input")).toHaveCount(2);
+      await expect(form.getByRole("textbox")).toHaveCount(2);
+      await expect(form.getByRole("checkbox")).toHaveCount(1);
+      const expert = form.getByRole("checkbox", {
+        name: locale === "zh" ? "高级专家模型（按需求助）" : "Expert model (on-demand help)",
+        exact: true,
+      });
+      await expect(expert).not.toBeChecked();
       await expect(form.locator("select")).toHaveCount(0);
       await expect(page.getByTestId("settings-provider")).toHaveCount(0);
       await expect(page.locator("#model-form-api-key")).toHaveCount(0);
       await page.getByTestId("subscription-model-label").fill(`Renamed ${provider}`);
+      await expert.check();
       await page.getByTestId("save-subscription-model").click();
       await expect(page.getByTestId(`subscription-account-${provider}`)).toContainText(`Renamed ${provider}`);
+      await expect(page.getByTestId(`subscription-account-${provider}`).getByTestId("expert-role-badge")).toBeVisible();
+      await page.getByTestId(`subscription-account-${provider}`).locator(".subscription-model-edit").click();
+      await expect(expert).toBeChecked();
+      await page.keyboard.press("Escape");
+      await expect(form).toHaveCount(0);
     }
     const edits = await page.evaluate(() => (window as any).__subscription.edits);
     expect(edits.map((p: any) => p.provider)).toEqual(["openai_codex", "xai_oauth"]);
     expect(edits.every((p: any) => p.max_tokens === 4096 && p.context_window === 128000)).toBe(true);
+    expect(edits.every((p: any) => p.use_for_expert === true)).toBe(true);
     await page.getByTestId("add-codex-model").click();
     await expect(page.getByTestId("codex-login-form").locator("input")).toHaveCount(2);
     await expect(page.getByTestId("codex-login-start")).toHaveCount(0);
@@ -146,7 +159,7 @@ for (const provider of ["codex", "xai"]) {
     for (const alias of ["Research", "Writing"]) {
       await page.getByTestId(`add-${provider}-model`).click();
       await expect(page.getByTestId("codex-login-form").locator("input")).toHaveCount(2);
-      await expect(page.getByTestId("codex-login-model")).toHaveValue(provider === "xai" ? "grok-4.6" : "gpt-5.5");
+      await expect(page.getByTestId("codex-login-model")).toHaveValue(provider === "xai" ? "grok-4.6" : "gpt-6.1-sol");
       await page.getByTestId("codex-login-label").fill(alias);
       await page.getByTestId("codex-login-save").click();
       await expect(page.getByTestId(`subscription-account-${provider}`)).toContainText(alias);
@@ -175,7 +188,7 @@ test("Sign in with ChatGPT is the first card, browser-only, and saves managed mo
   await page.getByTestId("codex-submit-redirect").click();
   await page.getByTestId("codex-login-save").click();
   await page.getByTestId("add-chatgpt-model").click();
-  await expect(page.getByTestId("codex-login-model")).toHaveValue("gpt-5.5");
+  await expect(page.getByTestId("codex-login-model")).toHaveValue("gpt-6.1-sol");
   await page.getByTestId("codex-login-label").fill("Plan GPT");
   await page.getByTestId("codex-login-save").click();
   const card = page.getByTestId("subscription-account-chatgpt");
@@ -187,9 +200,25 @@ test("Sign in with ChatGPT is the first card, browser-only, and saves managed mo
   expect(state.saves[0]).toMatchObject({ provider: "chatgpt", accountOnly: true, loginId: "login-1" });
   expect(state.saves[1]).toMatchObject({ provider: "chatgpt", accountOnly: false, useSaved: true, label: "Plan GPT" });
   await card.locator(".subscription-model-edit").click();
-  await expect(page.getByTestId("subscription-model-form").locator("input")).toHaveCount(2);
+  const form = page.getByTestId("subscription-model-form");
+  await expect(form.getByRole("textbox")).toHaveCount(2);
+  await expect(form.getByRole("checkbox")).toHaveCount(1);
+  await expect(form.getByTestId("use-for-expert")).not.toBeChecked();
   await expect(page.getByTestId("settings-provider")).toHaveCount(0);
   await expect(page.locator("#model-form-api-key")).toHaveCount(0);
+});
+
+test("a subscription model stays removable after it becomes the default", async ({ page }) => {
+  await setup(page, "en", true);
+  await subscriptions(page);
+  const rows = page.getByTestId("subscription-account-codex").getByTestId("subscription-model");
+  await expect(rows.getByTestId("remove-subscription-model")).toBeVisible();
+  await rows.locator("button:not(.subscription-model-edit)").first().click();
+  await expect(rows.locator(".settings-model-default")).toBeVisible();
+  await rows.getByTestId("remove-subscription-model").click();
+  await page.getByTestId("model-delete-confirm").locator("button.primary").click();
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByTestId("subscription-account-xai").getByTestId("subscription-model")).toHaveCount(1);
 });
 
 test("leaving before the challenge arrives cancels it without reopening sign-in", async ({ page }) => {

@@ -1,0 +1,580 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0A41B28BCE6E45B8A9E06098 /* WispScienceTests/WorkspaceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A329D3F98240F7B5DBE780 /* WispScienceTests/WorkspaceCacheTests.swift */; };
+		07CDD299A6739EE27E647098 /* WispScience/FilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D6105BB294F08C5B55F0E7 /* WispScience/FilesView.swift */; };
+		158BEEB8D350EC68CCD387D9 /* WispScienceTests/DemoDatasetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1D338C9D6D9214A4E4D211 /* WispScienceTests/DemoDatasetTests.swift */; };
+		1F126C1F3A5D3FAFFAF7E6F1 /* WispScience/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D10DFEE3741B92332A008B /* WispScience/WorkspaceView.swift */; };
+		201498D481044E0578DB62CE /* WispScience/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8E4F09BD49C4F5AA8F48796B /* WispScience/PrivacyInfo.xcprivacy */; };
+		49ED2460828CA24D45D253A9 /* WispScience/WispStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF40FF4CD5790DCA07FAB105 /* WispScience/WispStyle.swift */; };
+		5601FB6EA2C407EF0B17F277 /* WispScience/PreviewHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 138725FB71589C94EB20B851 /* WispScience/PreviewHost.swift */; };
+		5A87079A59A0FEF94F8B8302 /* WispScience/DemoDataset.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2D1E3AC69A6D9720329C82 /* WispScience/DemoDataset.swift */; };
+		60043D3BDDFDC29EAFFBD026 /* WispRemote in Frameworks */ = {isa = PBXBuildFile; productRef = 439CC1A65815FEA124EB5DCF /* WispRemote */; };
+		A30B0E9D54872919BD19E098 /* WispScience/RemoteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD0D31B82E2960BBB317CB9 /* WispScience/RemoteWorkspace.swift */; };
+		A519BF35D7810FF58B8964E5 /* WispScience/DemoData in Resources */ = {isa = PBXBuildFile; fileRef = 13354CFDFC5C4130EFC506EE /* WispScience/DemoData */; };
+		CF71693178A4E05626962CBD /* WispScienceUITests/WorkspaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E24B067E45BA2C51C61160C0 /* WispScienceUITests/WorkspaceUITests.swift */; };
+		D128F2F94A93D56E199F343B /* WispScience/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E76C459B1F19AC0A987695D5 /* WispScience/Assets.xcassets */; };
+		ED8C82E2E5CED917660B9246 /* WispScienceTests/PhotoPreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F89B9FE4684E9A9827DFB5F /* WispScienceTests/PhotoPreparationTests.swift */; };
+		EDD99A08A91255B989AA9F5B /* WispScience/ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC5C191FDFCD237E9B271468 /* WispScience/ConversationView.swift */; };
+		F8949BE74AB7742434A91A39 /* WispScience/WispScienceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 079360F350DC77D9AB69D16F /* WispScience/WispScienceApp.swift */; };
+		1FBD01C9E1D5FF04F57F00B5 /* WispScience/ResearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB225026D69A1E88CDAE5210 /* WispScience/ResearchModel.swift */; };
+		EC5141997F6093AF50ECA2A5 /* WispScience/ResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D6AB854960570789BF3F8A /* WispScience/ResearchView.swift */; };
+		77681D7788EC5F36256A99DF /* WispScienceTests/ResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085516411E5B9F6EC558AE97 /* WispScienceTests/ResearchTests.swift */; };
+		3CDD527B48FB58F868A49D20 /* WispScience/ChecklistModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FBF33D50F44BDA27C7FDCC6 /* WispScience/ChecklistModel.swift */; };
+		6383E1FE8E57A0F919E2E192 /* WispScience/ChecklistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03EEA59FD771D6FF48E62808 /* WispScience/ChecklistView.swift */; };
+		91890CFA5BF3030C55EAFD5C /* WispScience/NotebookModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A25967C5677578B8C81D4C1 /* WispScience/NotebookModel.swift */; };
+		8C010D519999A35DD1F67DDE /* WispScience/NotebookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9FC4831BFB82095F0B6293 /* WispScience/NotebookView.swift */; };
+		71E6A272F99C70103B55B656 /* WispScienceTests/OfflineResearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CBA8A574F78C18BE75BC3E /* WispScienceTests/OfflineResearchTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		17E110DBBD05D7E5BF6DACD4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F6F4DA8D93E88A08220E03B7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1B9BF672FF5942E80976BE4F;
+			remoteInfo = WispScience;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		24A329D3F98240F7B5DBE780 /* WispScienceTests/WorkspaceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceTests/WorkspaceCacheTests.swift; sourceTree = "<group>"; };
+		079360F350DC77D9AB69D16F /* WispScience/WispScienceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/WispScienceApp.swift; sourceTree = "<group>"; };
+		13354CFDFC5C4130EFC506EE /* WispScience/DemoData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = WispScience/DemoData; sourceTree = "<group>"; };
+		138725FB71589C94EB20B851 /* WispScience/PreviewHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/PreviewHost.swift; sourceTree = "<group>"; };
+		45D10DFEE3741B92332A008B /* WispScience/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/WorkspaceView.swift; sourceTree = "<group>"; };
+		53D6105BB294F08C5B55F0E7 /* WispScience/FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/FilesView.swift; sourceTree = "<group>"; };
+		5F89B9FE4684E9A9827DFB5F /* WispScienceTests/PhotoPreparationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceTests/PhotoPreparationTests.swift; sourceTree = "<group>"; };
+		783FF4C6CFA7CAFC75530ECE /* WispScienceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = WispScienceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		79242237A90885D84A107C9C /* WispScienceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = WispScienceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7B594B6DB375E1BF3F23CDD6 /* WispScience/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WispScience/Info.plist; sourceTree = "<group>"; };
+		807487B0BAC487E59CCB609F /* WispScience.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = WispScience.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8E4F09BD49C4F5AA8F48796B /* WispScience/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = WispScience/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		9A1D338C9D6D9214A4E4D211 /* WispScienceTests/DemoDatasetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceTests/DemoDatasetTests.swift; sourceTree = "<group>"; };
+		BBD0D31B82E2960BBB317CB9 /* WispScience/RemoteWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/RemoteWorkspace.swift; sourceTree = "<group>"; };
+		BC5C191FDFCD237E9B271468 /* WispScience/ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/ConversationView.swift; sourceTree = "<group>"; };
+		CF40FF4CD5790DCA07FAB105 /* WispScience/WispStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/WispStyle.swift; sourceTree = "<group>"; };
+		E24B067E45BA2C51C61160C0 /* WispScienceUITests/WorkspaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceUITests/WorkspaceUITests.swift; sourceTree = "<group>"; };
+		E76C459B1F19AC0A987695D5 /* WispScience/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WispScience/Assets.xcassets; sourceTree = "<group>"; };
+		EC2D1E3AC69A6D9720329C82 /* WispScience/DemoDataset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/DemoDataset.swift; sourceTree = "<group>"; };
+		FB225026D69A1E88CDAE5210 /* WispScience/ResearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/ResearchModel.swift; sourceTree = "<group>"; };
+		33D6AB854960570789BF3F8A /* WispScience/ResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/ResearchView.swift; sourceTree = "<group>"; };
+		085516411E5B9F6EC558AE97 /* WispScienceTests/ResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceTests/ResearchTests.swift; sourceTree = "<group>"; };
+		4FBF33D50F44BDA27C7FDCC6 /* WispScience/ChecklistModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/ChecklistModel.swift; sourceTree = "<group>"; };
+		03EEA59FD771D6FF48E62808 /* WispScience/ChecklistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/ChecklistView.swift; sourceTree = "<group>"; };
+		1A25967C5677578B8C81D4C1 /* WispScience/NotebookModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/NotebookModel.swift; sourceTree = "<group>"; };
+		0D9FC4831BFB82095F0B6293 /* WispScience/NotebookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScience/NotebookView.swift; sourceTree = "<group>"; };
+		91CBA8A574F78C18BE75BC3E /* WispScienceTests/OfflineResearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WispScienceTests/OfflineResearchTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2BFB650BCC3D6BE6A9942A5E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		89BA70CDC82F46E3D1AF1EFA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				60043D3BDDFDC29EAFFBD026 /* WispRemote in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E39E7376064F67C9D844F3FF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E96857C58F716104CAEAD648 = {
+			isa = PBXGroup;
+			children = (
+				91CBA8A574F78C18BE75BC3E /* WispScienceTests/OfflineResearchTests.swift */,
+				0D9FC4831BFB82095F0B6293 /* WispScience/NotebookView.swift */,
+				1A25967C5677578B8C81D4C1 /* WispScience/NotebookModel.swift */,
+				03EEA59FD771D6FF48E62808 /* WispScience/ChecklistView.swift */,
+				4FBF33D50F44BDA27C7FDCC6 /* WispScience/ChecklistModel.swift */,
+				085516411E5B9F6EC558AE97 /* WispScienceTests/ResearchTests.swift */,
+				33D6AB854960570789BF3F8A /* WispScience/ResearchView.swift */,
+				FB225026D69A1E88CDAE5210 /* WispScience/ResearchModel.swift */,
+				24A329D3F98240F7B5DBE780 /* WispScienceTests/WorkspaceCacheTests.swift */,
+				9A1D338C9D6D9214A4E4D211 /* WispScienceTests/DemoDatasetTests.swift */,
+				13354CFDFC5C4130EFC506EE /* WispScience/DemoData */,
+				EC2D1E3AC69A6D9720329C82 /* WispScience/DemoDataset.swift */,
+				CF40FF4CD5790DCA07FAB105 /* WispScience/WispStyle.swift */,
+				5F89B9FE4684E9A9827DFB5F /* WispScienceTests/PhotoPreparationTests.swift */,
+				BC5C191FDFCD237E9B271468 /* WispScience/ConversationView.swift */,
+				53D6105BB294F08C5B55F0E7 /* WispScience/FilesView.swift */,
+				138725FB71589C94EB20B851 /* WispScience/PreviewHost.swift */,
+				BBD0D31B82E2960BBB317CB9 /* WispScience/RemoteWorkspace.swift */,
+				079360F350DC77D9AB69D16F /* WispScience/WispScienceApp.swift */,
+				45D10DFEE3741B92332A008B /* WispScience/WorkspaceView.swift */,
+				E24B067E45BA2C51C61160C0 /* WispScienceUITests/WorkspaceUITests.swift */,
+				E76C459B1F19AC0A987695D5 /* WispScience/Assets.xcassets */,
+				8E4F09BD49C4F5AA8F48796B /* WispScience/PrivacyInfo.xcprivacy */,
+				7B594B6DB375E1BF3F23CDD6 /* WispScience/Info.plist */,
+				FE0A091FDBFB3E9C31B7A1BD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FE0A091FDBFB3E9C31B7A1BD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				783FF4C6CFA7CAFC75530ECE /* WispScienceTests.xctest */,
+				807487B0BAC487E59CCB609F /* WispScience.app */,
+				79242237A90885D84A107C9C /* WispScienceUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1B9BF672FF5942E80976BE4F /* WispScience */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 27C1943FD693859E5389CCC0 /* Build configuration list for PBXNativeTarget "WispScience" */;
+			buildPhases = (
+				7FF8C9FC6B7E2F79F2A9323E /* Sources */,
+				89BA70CDC82F46E3D1AF1EFA /* Frameworks */,
+				ACA16EC71E4125BC7D8202DD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WispScience;
+			packageProductDependencies = (
+				439CC1A65815FEA124EB5DCF /* WispRemote */,
+			);
+			productName = WispScience;
+			productReference = 807487B0BAC487E59CCB609F /* WispScience.app */;
+			productType = "com.apple.product-type.application";
+		};
+		75102BFF045F07C9142A4420 /* WispScienceUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA5FC19621FCC6B61933D043 /* Build configuration list for PBXNativeTarget "WispScienceUITests" */;
+			buildPhases = (
+				A3794CD3FA1CEB2A654F8B60 /* Sources */,
+				E39E7376064F67C9D844F3FF /* Frameworks */,
+				01314651D63E2B39C8E0DDA1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EEA1DD31B30EE093669087BF /* PBXTargetDependency */,
+			);
+			name = WispScienceUITests;
+			productName = WispScienceUITests;
+			productReference = 79242237A90885D84A107C9C /* WispScienceUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		B5FA9526562897732B55D017 /* WispScienceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB4B48DFE4AE62B15177353C /* Build configuration list for PBXNativeTarget "WispScienceTests" */;
+			buildPhases = (
+				DD609587EDA4EDBB22FE7F7D /* Sources */,
+				2BFB650BCC3D6BE6A9942A5E /* Frameworks */,
+				2617867DC20E81B89755D375 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EEA1DD31B30EE093669087BF /* PBXTargetDependency */,
+			);
+			name = WispScienceTests;
+			productName = WispScienceTests;
+			productReference = 783FF4C6CFA7CAFC75530ECE /* WispScienceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F6F4DA8D93E88A08220E03B7 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					1B9BF672FF5942E80976BE4F = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					75102BFF045F07C9142A4420 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 1B9BF672FF5942E80976BE4F;
+					};
+				};
+			};
+			buildConfigurationList = 52382992B572ED175561B3B2 /* Build configuration list for PBXProject "WispScience" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				en,
+				Base,
+			);
+			mainGroup = E96857C58F716104CAEAD648;
+			packageReferences = (
+				F759D710D18004EDBA5A0558 /* XCLocalSwiftPackageReference "." */,
+			);
+			productRefGroup = FE0A091FDBFB3E9C31B7A1BD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1B9BF672FF5942E80976BE4F /* WispScience */,
+				75102BFF045F07C9142A4420 /* WispScienceUITests */,
+				B5FA9526562897732B55D017 /* WispScienceTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		01314651D63E2B39C8E0DDA1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2617867DC20E81B89755D375 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ACA16EC71E4125BC7D8202DD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A519BF35D7810FF58B8964E5 /* WispScience/DemoData in Resources */,
+				D128F2F94A93D56E199F343B /* WispScience/Assets.xcassets in Resources */,
+				201498D481044E0578DB62CE /* WispScience/PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7FF8C9FC6B7E2F79F2A9323E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8C010D519999A35DD1F67DDE /* WispScience/NotebookView.swift in Sources */,
+				91890CFA5BF3030C55EAFD5C /* WispScience/NotebookModel.swift in Sources */,
+				6383E1FE8E57A0F919E2E192 /* WispScience/ChecklistView.swift in Sources */,
+				3CDD527B48FB58F868A49D20 /* WispScience/ChecklistModel.swift in Sources */,
+				EC5141997F6093AF50ECA2A5 /* WispScience/ResearchView.swift in Sources */,
+				1FBD01C9E1D5FF04F57F00B5 /* WispScience/ResearchModel.swift in Sources */,
+				5A87079A59A0FEF94F8B8302 /* WispScience/DemoDataset.swift in Sources */,
+				49ED2460828CA24D45D253A9 /* WispScience/WispStyle.swift in Sources */,
+				EDD99A08A91255B989AA9F5B /* WispScience/ConversationView.swift in Sources */,
+				07CDD299A6739EE27E647098 /* WispScience/FilesView.swift in Sources */,
+				5601FB6EA2C407EF0B17F277 /* WispScience/PreviewHost.swift in Sources */,
+				A30B0E9D54872919BD19E098 /* WispScience/RemoteWorkspace.swift in Sources */,
+				F8949BE74AB7742434A91A39 /* WispScience/WispScienceApp.swift in Sources */,
+				1F126C1F3A5D3FAFFAF7E6F1 /* WispScience/WorkspaceView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A3794CD3FA1CEB2A654F8B60 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF71693178A4E05626962CBD /* WispScienceUITests/WorkspaceUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD609587EDA4EDBB22FE7F7D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				71E6A272F99C70103B55B656 /* WispScienceTests/OfflineResearchTests.swift in Sources */,
+				77681D7788EC5F36256A99DF /* WispScienceTests/ResearchTests.swift in Sources */,
+				0A41B28BCE6E45B8A9E06098 /* WispScienceTests/WorkspaceCacheTests.swift in Sources */,
+				158BEEB8D350EC68CCD387D9 /* WispScienceTests/DemoDatasetTests.swift in Sources */,
+				ED8C82E2E5CED917660B9246 /* WispScienceTests/PhotoPreparationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		EEA1DD31B30EE093669087BF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1B9BF672FF5942E80976BE4F /* WispScience */;
+			targetProxy = 17E110DBBD05D7E5BF6DACD4 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		24B7DFA423B1C8A2130AE03E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = NO;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		40609A412964FFB79DAE9C3A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5FE44C1D4108931802BC082F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 6T3D7A4CXY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WispScience/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios";
+				PRODUCT_NAME = WispScience;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		703D9D07B9D6CC4423BEA64B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios.tests";
+				PRODUCT_NAME = WispScienceTests;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WispScience.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WispScience";
+			};
+			name = Debug;
+		};
+		7560B26E671EDA24F3F2809C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios.tests";
+				PRODUCT_NAME = WispScienceTests;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WispScience.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WispScience";
+			};
+			name = Release;
+		};
+		7D8D14389550AC24507B692C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios.uitests";
+				PRODUCT_NAME = WispScienceUITests;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WispScience;
+			};
+			name = Release;
+		};
+		A8C4CABD5DA2B1F3DAB7CD6F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 6T3D7A4CXY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WispScience/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios";
+				PRODUCT_NAME = WispScience;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C5455CD5ADA83990658179A9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "science.wisp-science.ios.uitests";
+				PRODUCT_NAME = WispScienceUITests;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WispScience;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		27C1943FD693859E5389CCC0 /* Build configuration list for PBXNativeTarget "WispScience" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5FE44C1D4108931802BC082F /* Debug */,
+				A8C4CABD5DA2B1F3DAB7CD6F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		52382992B572ED175561B3B2 /* Build configuration list for PBXProject "WispScience" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				40609A412964FFB79DAE9C3A /* Debug */,
+				24B7DFA423B1C8A2130AE03E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA5FC19621FCC6B61933D043 /* Build configuration list for PBXNativeTarget "WispScienceUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C5455CD5ADA83990658179A9 /* Debug */,
+				7D8D14389550AC24507B692C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FB4B48DFE4AE62B15177353C /* Build configuration list for PBXNativeTarget "WispScienceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				703D9D07B9D6CC4423BEA64B /* Debug */,
+				7560B26E671EDA24F3F2809C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		F759D710D18004EDBA5A0558 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		439CC1A65815FEA124EB5DCF /* WispRemote */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F759D710D18004EDBA5A0558 /* XCLocalSwiftPackageReference "." */;
+			productName = WispRemote;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = F6F4DA8D93E88A08220E03B7 /* Project object */;
+}

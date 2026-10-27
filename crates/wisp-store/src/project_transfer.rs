@@ -914,6 +914,10 @@ async fn copy_publication_children(
             sqlx::query("INSERT INTO scientific_cycle_edges SELECT edge.* FROM transfer.scientific_cycle_edges edge WHERE edge.cycle_id IN (SELECT cycle_id FROM transfer.scientific_cycle_nodes WHERE project_id=?)").bind(project_id).execute(&mut **tx).await?;
         }
     }
+    // Private memos travel with the project bundle; older bundles have none.
+    if attached_table_exists(tx, "project_memos").await? {
+        sqlx::query("INSERT INTO project_memos(id,project_id,title,body,pinned,created_at,updated_at) SELECT id,project_id,title,body,pinned,created_at,updated_at FROM transfer.project_memos WHERE project_id=?").bind(project_id).execute(&mut **tx).await?;
+    }
     Ok(())
 }
 
@@ -959,6 +963,10 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM agent_workflows WHERE project_id=?",
         "DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)",
         "DELETE FROM schedules WHERE project_id=?",
+        "DELETE FROM mandate_rounds WHERE mandate_id IN (SELECT id FROM mandates WHERE project_id=?)",
+        "DELETE FROM mandate_requests WHERE mandate_id IN (SELECT id FROM mandates WHERE project_id=?)",
+        "DELETE FROM mandate_reports WHERE mandate_id IN (SELECT id FROM mandates WHERE project_id=?)",
+        "DELETE FROM mandates WHERE project_id=?",
         "DELETE FROM project_plugins WHERE project_id=?",
         "DELETE FROM context_storage_prefs WHERE project_id=?",
         "DELETE FROM remote_staging WHERE project_id=?",
@@ -992,6 +1000,7 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM acp_sessions WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM execution_log WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM context_epochs WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
+        "DELETE FROM session_timer_turns WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM messages WHERE frame_id IN (SELECT id FROM frames WHERE project_id=?)",
         "DELETE FROM research_edges WHERE project_id=?",
         "DELETE FROM research_nodes WHERE project_id=?",
@@ -999,6 +1008,8 @@ pub(crate) async fn delete_project_children(
         "DELETE FROM research_recaps WHERE project_id=?",
         "DELETE FROM scientific_cycle_edges WHERE cycle_id IN (SELECT cycle_id FROM scientific_cycle_nodes WHERE project_id=?)",
         "DELETE FROM scientific_cycle_nodes WHERE project_id=?",
+        "DELETE FROM project_memos WHERE project_id=?",
+        "DELETE FROM project_status WHERE project_id=?",
         "DELETE FROM artifacts WHERE project_id=?",
         "DELETE FROM external_resources WHERE project_id=?",
         "DELETE FROM runs WHERE project_id=?",
@@ -1465,6 +1476,7 @@ impl Store {
             ("research_recaps", "*", "id"),
             ("scientific_cycle_nodes", "*", "id"),
             ("scientific_cycle_edges", "*", "id"),
+            ("project_memos", "*", "id"),
         ];
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", database.display()))?
             .read_only(true);
@@ -1484,7 +1496,10 @@ impl Store {
             // rows, so an upgrade alone never changes a published fingerprint.
             let late = matches!(
                 *table,
-                "research_recaps" | "scientific_cycle_nodes" | "scientific_cycle_edges"
+                "research_recaps"
+                    | "scientific_cycle_nodes"
+                    | "scientific_cycle_edges"
+                    | "project_memos"
             );
             if !exists
                 || (late

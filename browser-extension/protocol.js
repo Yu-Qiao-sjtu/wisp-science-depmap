@@ -1,7 +1,7 @@
 // Wisp DepMap Browser Bridge protocol constants (Protocol v2).
 var WISP_PROTOCOL = {
   version: 2,
-  extensionVersion: "0.4.1",
+  extensionVersion: "0.5.0",
   product: "wisp-depmap",
   capabilities: [
     "article_scan",
@@ -14,7 +14,9 @@ var WISP_PROTOCOL = {
     "pause_control",
     "runtime_reload",
     "chatgpt_turn",
-    "chat_turn"
+    "chat_turn",
+    "side_panel",
+    "tab_scope"
   ]
 };
 
@@ -31,9 +33,11 @@ function readBridgeConfig() {
   return { session: session, endpoint: endpoint, product: product };
 }
 
-function handshakePayload(tabs, paused) {
+// browserInstance identifies one browser process: tab and window ids are only
+// meaningful inside it, so Wisp drops remembered ids when it changes.
+function handshakePayload(tabs, paused, browserInstance) {
   var cfg = readBridgeConfig();
-  return {
+  var payload = {
     type: "ext_ready",
     product: cfg.product,
     protocol_version: WISP_PROTOCOL.version,
@@ -44,6 +48,8 @@ function handshakePayload(tabs, paused) {
     paused: !!paused,
     tabs: tabs || []
   };
+  if (browserInstance) payload.browser_instance = String(browserInstance);
+  return payload;
 }
 
 function parseIncomingRequest(request) {

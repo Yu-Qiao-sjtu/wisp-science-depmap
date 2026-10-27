@@ -20,7 +20,10 @@ mod assistant;
 pub mod feishu;
 pub mod feishu_card;
 pub mod feishu_registration;
+pub mod lab;
+pub mod lab_mail;
 pub mod pbbp2;
+pub mod remote;
 pub mod weixin;
 
 use wisp_dto::{AssistantWeixinStatus, WeixinDestination};
@@ -66,6 +69,36 @@ pub(crate) async fn assistant_notification_binding(store: &Store) -> Option<weix
     }
     load_weixin_binding_for(store, destination).await
 }
+
+/// Tell the researcher something they did not ask for in that moment, on
+/// every channel they left enabled: the assistant's WeChat and the Feishu
+/// bot's bound owner. Channels that are off or unbound are skipped silently.
+/// WeChat delivery waits for iLink's reply window, like dispatch reports.
+pub(crate) async fn notify_owner(store: &Store, project_id: &str, text: &str) {
+    let text: String = text.chars().take(REPLY_MAX_CHARS).collect();
+    if let Some(binding) = assistant_notification_binding(store).await {
+        weixin::notify_assistant(binding, project_id.into(), text.clone());
+    }
+    if get_setting(store, "feishu_enabled").await != "true" {
+        return;
+    }
+    let Some(owner) = load_feishu_owner(store).await else {
+        return;
+    };
+    let app_id = get_setting(store, "feishu_app_id").await;
+    let secret = load_secret(FEISHU_SECRET).await;
+    if app_id.is_empty() || secret.is_empty() {
+        return;
+    }
+    let international = get_setting(store, "feishu_international").await == "true";
+    let sent = match feishu::FeishuRest::new(&app_id, &secret, international) {
+        Ok(client) => client.send_text_to_user(&owner, &text).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = sent {
+        tracing::warn!(target: "wisp", %error, "failed to notify the Feishu owner");
+    }
+}
 #[derive(Clone, Copy)]
 struct WeixinKeys {
     enabled: &'static str,
@@ -110,6 +143,11 @@ pub struct ChannelManager {
     weixin_config_lock: tokio::sync::Mutex<()>,
     feishu_registrations:
         tokio::sync::Mutex<HashMap<String, feishu_registration::RegistrationFlow>>,
+    remote: StdMutex<Option<watch::Sender<bool>>>,
+    /// The lab mailbox poller, running only while this computer is a member.
+    lab: StdMutex<Option<watch::Sender<bool>>>,
+    remote_status: Arc<StdMutex<ChannelStatus>>,
+    remote_clients: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl ChannelManager {
@@ -118,6 +156,7 @@ impl ChannelManager {
         set_status(&mgr.feishu_status, "stopped", "");
         set_status(&mgr.weixin_status, "stopped", "");
         set_status(&mgr.assistant_weixin_status, "stopped", "");
+        set_status(&mgr.remote_status, "stopped", "");
         mgr
     }
 
@@ -210,6 +249,9 @@ pub async fn autostart(app: AppHandle) {
             mgr.start_weixin(&app, destination).await;
         }
     }
+    drop(_guard);
+    remote::autostart(&app).await;
+    lab::autostart(&app).await;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -997,18 +1039,10 @@ async fn route_status_text(store: &Store, route: &SharedRoute) -> String {
 /// the last non-empty assistant text for turns that end in plain text.
 pub(crate) async fn last_assistant_text(store: &Store, frame_id: &str) -> Option<String> {
     let msgs = store.load_messages(frame_id).await.ok()?;
-    msgs.iter()
-        .rev()
-        .filter(|m| {
-            m.role == wisp_llm::Role::Assistant
-                || (m.role == wisp_llm::Role::Tool
-                    && m.tool_name.as_deref() == Some("attempt_completion"))
-        })
-        .map(|m| m.content.as_text())
-        .find(|t| !t.trim().is_empty())
+    crate::subagent_activity::final_answer(&msgs)
 }
 
-const HELP_TEXT: &str = "可用命令:\n/status — 查看 IM 目标项目和会话\n/project — 列出项目\n/project <序号|名称|ID> — 切换 IM 目标项目\n/session — 列出当前 IM 项目的最近会话\n/session <序号|标题|ID> — 切换 IM 会话\n/new — 在当前 IM 项目开启新会话\n/approval — 查看待审批请求（微信）\n/approve <编号> — 批准一次（微信）\n/reject <编号> [原因] — 拒绝（微信）\n/stop — 停止当前任务\n/help — 显示本帮助\n\n微信和飞书共用同一个 IM 目标项目。桌面端在某个项目里发言只会更新该项目的最近会话，不会把 IM 目标抢走。/project、/session 和 /new 会显式切换这个 IM 目标。";
+const HELP_TEXT: &str = "可用命令:\n/status — 查看 IM 目标项目和会话\n/project — 列出项目\n/project <序号|名称|ID> — 切换 IM 目标项目\n/session — 列出当前 IM 项目的最近会话\n/session <序号|标题|ID> — 切换 IM 会话\n/new — 在当前 IM 项目开启新会话\n/approval — 查看待审批请求（微信）\n/approve <编号> — 批准一次（微信）\n/reject <编号> [原因] — 拒绝（微信）\n/mandates — 查看全部研究职责的状态、KPI 和等你处理的事项\n/stop — 停止当前任务\n/help — 显示本帮助\n\n微信和飞书共用同一个 IM 目标项目。桌面端在某个项目里发言只会更新该项目的最近会话，不会把 IM 目标抢走。/project、/session 和 /new 会显式切换这个 IM 目标。";
 
 /// Route one inbound IM text: chat commands are handled locally, everything
 /// else drives an agent turn. Returns the reply to send back (may be empty).
@@ -1047,6 +1081,11 @@ pub(crate) async fn handle_inbound_observed(
     let argument = parts.next().unwrap_or_default().trim();
     match command.as_str() {
         "/help" => return HELP_TEXT.to_string(),
+        "/mandates" | "/mandate" => {
+            return crate::mandates::summary_text(&state.store)
+                .await
+                .unwrap_or_else(|error| format!("读取研究职责失败: {error}"))
+        }
         "/approval" | "/approvals" => {
             if channel != "weixin" {
                 return "文本审批命令目前仅支持绑定 owner 的微信一对一会话。".into();
@@ -1260,6 +1299,22 @@ async fn send_inbound_turn(
     text: &str,
     progress: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 ) -> String {
+    match run_inbound_turn(app, window_label, session_id, text, false, progress).await {
+        Ok(reply) => reply,
+        Err(e) => format!("处理失败:{e}"),
+    }
+}
+
+/// Run one IM turn and return its reply. `resume` continues the session's
+/// failed turn instead of sending `text` as a new message.
+async fn run_inbound_turn(
+    app: &AppHandle,
+    window_label: &str,
+    session_id: String,
+    text: &str,
+    resume: bool,
+    progress: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
+) -> Result<String, String> {
     let state = app.state::<AppState>();
     let progress = progress.map(prepare_progress_observer);
     let result = crate::send_message_inner(
@@ -1270,7 +1325,7 @@ async fn send_inbound_turn(
         text.to_string(),
         None,
         None,
-        None,
+        Some(resume),
         None,
         progress.as_ref().map(PendingProgress::id),
         None,
@@ -1279,13 +1334,11 @@ async fn send_inbound_turn(
         crate::TurnOrigin::Im,
     )
     .await;
-    match result {
-        Ok(frame_id) => match last_assistant_text(&state.store, &frame_id).await {
-            Some(text) => truncate_reply(&text, REPLY_MAX_CHARS),
-            None => "(本轮完成,但没有文本回复)".to_string(),
-        },
-        Err(e) => format!("处理失败:{e}"),
-    }
+    let frame_id = result?;
+    Ok(match last_assistant_text(&state.store, &frame_id).await {
+        Some(text) => truncate_reply(&text, REPLY_MAX_CHARS),
+        None => "(本轮完成,但没有文本回复)".to_string(),
+    })
 }
 
 // ------------------------------------------------------------------ commands
@@ -1308,12 +1361,14 @@ pub struct ChannelsStatus {
     pub weixin_state: String,
     pub weixin_detail: String,
     pub device: crate::device_bridge::DeviceBridgeSettingsStatus,
+    pub remote: wisp_dto::RemoteAccessStatus,
 }
 
 #[tauri::command]
 pub(crate) async fn channels_status(
     state: State<'_, AppState>,
     mgr: State<'_, ChannelManager>,
+    app: AppHandle,
 ) -> Result<ChannelsStatus, String> {
     let feishu = status_snapshot(&mgr.feishu_status);
     let weixin = status_snapshot(&mgr.weixin_status);
@@ -1336,6 +1391,7 @@ pub(crate) async fn channels_status(
         weixin_state: weixin.state,
         weixin_detail: weixin.detail,
         device: crate::device_bridge::settings_status(&state).await,
+        remote: remote::status(&app).await,
     })
 }
 

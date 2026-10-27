@@ -12,16 +12,36 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub mod codex_login;
+pub mod execution_plan;
+pub mod native_assistant;
 pub mod native_calendar;
 pub mod native_conversations;
+pub mod native_files;
+pub mod native_history;
 pub mod native_journey;
 pub mod native_library;
 pub mod native_projects;
 pub mod native_publication;
+pub mod native_queue;
+pub mod native_search;
+pub mod native_session_export;
+pub mod native_session_import;
+pub mod native_session_transfer;
 pub mod native_settings;
 pub mod project_browser;
+mod project_chat_search;
+pub mod remote_access;
+pub mod research_checklist;
+pub mod specialist_package;
+pub use project_chat_search::*;
+mod decision_model;
+pub use decision_model::*;
 mod session_artifacts;
 pub use session_artifacts::*;
+mod session_excerpt;
+pub use session_excerpt::*;
+mod swarm;
+pub use swarm::*;
 
 mod mcp_app_child;
 pub use mcp_app_child::*;
@@ -64,7 +84,10 @@ pub enum WorkspacePathKind {
     Unavailable,
 }
 
-/// Bounded numeric renderer diagnostics. Never includes user or plugin content.
+/// Bounded renderer diagnostics: counters plus the first fault line. Never
+/// includes user or plugin content; `first_fault` quotes a Rust panic location
+/// or a WebAssembly trap, not a script error message, and `first_invalid_args`
+/// only names a command and argument.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiHealthSnapshot {
@@ -80,6 +103,14 @@ pub struct UiHealthSnapshot {
     pub media_blob_urls: u32,
     pub media_blob_bytes: u64,
     pub media_owners: u32,
+    /// First line of the first Rust panic or wasm trap since the document
+    /// loaded (`panicked at ui/src/x.rs:1:2: msg` or `RuntimeError: ...`),
+    /// empty while the renderer is healthy. Bounded by sender and receiver.
+    pub first_fault: String,
+    /// First command the backend refused to deserialize since the document
+    /// loaded (Tauri's `invalid args … for command …` prefix), without serde's
+    /// detail, which can quote a value. Empty while every payload matched.
+    pub first_invalid_args: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
@@ -120,13 +151,13 @@ pub struct ContextUsageSnapshot {
     pub estimated: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContextToolDetail {
     pub name: String,
     pub description: String,
 }
 
-#[derive(Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContextUsageDetails {
     #[serde(default)]
     pub system_prompt: String,
@@ -240,7 +271,7 @@ pub struct CustomCredentialStatus {
     pub present: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageResource {
     pub id: String,
@@ -409,11 +440,27 @@ pub enum AgentEvent {
         frame_id: String,
         questions: Vec<String>,
     },
+    /// AfterTurn: the agent's `open_branch` call was realized. `branch_id` is
+    /// a new branch of `frame_id`; `brief` is its unsent composer draft.
+    BranchOpened {
+        frame_id: String,
+        branch_id: String,
+        title: String,
+        brief: String,
+    },
     /// An AfterTurn hook failed; the finished turn is unaffected.
     HookFailed {
         frame_id: String,
         hook: String,
         message: String,
+    },
+    /// A Run the user moved to the background ended; its notice follows as
+    /// a `BackgroundReply`. `status` is the Run's snake_case status.
+    RunBackgroundFinished {
+        frame_id: String,
+        run_id: String,
+        title: String,
+        status: String,
     },
 }
 
@@ -1430,6 +1477,7 @@ mod session_context_window_tests {
             session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
+            use_for_expert: false,
             use_for_image_generation: false,
             image_generation_capable: false,
             image_size: String::new(),
@@ -1440,6 +1488,7 @@ mod session_context_window_tests {
             video_duration_secs: None,
             video_aspect_ratio: None,
             video_resolution: None,
+            proxy_url: String::new(),
         }
     }
 
@@ -1622,7 +1671,7 @@ pub struct LibraryItemVersion {
     pub created_at: i64,
 }
 
-#[derive(Deserialize, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq)]
 pub struct SessionSearchInfo {
     pub id: String,
     pub project_id: String,
@@ -1634,9 +1683,13 @@ pub struct SessionSearchInfo {
     pub activity_at: i64,
     #[serde(default)]
     pub status: String,
+    /// Shelved out of everyday navigation; returned only by keyword searches
+    /// that ask for shelved sessions, so the row can carry an archived badge.
+    #[serde(default)]
+    pub shelved: bool,
 }
 
-#[derive(Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComposerReferenceArg {
     Artifact {
@@ -1753,7 +1806,7 @@ fn default_ui_font_size() -> u16 {
 fn default_code_font_size() -> u16 {
     12
 }
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -1881,6 +1934,14 @@ pub struct UploadFileResult {
     pub error: Option<String>,
 }
 
+/// One file copied into the directory currently shown in the local Files panel.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LocalFileUploadResult {
+    pub source: String,
+    pub path: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub provider: String,
@@ -1897,6 +1958,8 @@ pub struct Settings {
     pub max_iter: i64,
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
+    #[serde(default = "default_auto_compact_percent")]
+    pub auto_compact_percent: u64,
     #[serde(default)]
     pub semantic_compact_on_model_switch: bool,
     #[serde(default = "default_semantic_compact_idle_hours")]
@@ -1907,6 +1970,9 @@ pub struct Settings {
     pub auto_continue_limit: u64,
     #[serde(default = "default_follow_up_questions")]
     pub follow_up_questions: bool,
+    /// Show a usage tip on the empty conversation screen.
+    #[serde(default = "default_show_tips")]
+    pub show_tips: bool,
     #[serde(default = "default_resume_last_session")]
     pub resume_last_session: bool,
     /// Store new projects in their own folders. Existing locations are preserved.
@@ -1946,6 +2012,21 @@ pub struct Settings {
     pub pet_directory: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// Play a sound for task notifications, independent of the banner (#1595).
+    #[serde(default)]
+    pub notification_sound_enabled: bool,
+    /// Sound id from `list_notification_sounds`; empty means the platform default.
+    #[serde(default)]
+    pub notification_sound: String,
+}
+
+/// One entry of the platform sound catalog returned by `list_notification_sounds`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationSound {
+    pub id: String,
+    /// English fallback label; the UI localizes the ids it knows.
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2087,6 +2168,10 @@ fn default_auto_compact() -> bool {
     true
 }
 
+fn default_auto_compact_percent() -> u64 {
+    80
+}
+
 fn default_semantic_compact_idle_hours() -> u64 {
     24
 }
@@ -2096,6 +2181,10 @@ fn default_auto_continue_limit() -> u64 {
 }
 
 fn default_follow_up_questions() -> bool {
+    true
+}
+
+fn default_show_tips() -> bool {
     true
 }
 
@@ -2152,6 +2241,89 @@ pub struct ChannelsStatus {
     pub weixin_detail: String,
     #[serde(default)]
     pub device: DeviceBridgeStatus,
+    #[serde(default)]
+    pub remote: RemoteAccessStatus,
+}
+
+/// This computer's membership in a Wisp Lab (docs/wisp-lab.md), as the
+/// settings pane shows it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LabStatus {
+    /// "none" | "pending" | "active" | "removed" | "error"
+    #[serde(default)]
+    pub state: String,
+    /// Why `state` is "error": a `lab:<code>` refusal or a transport message.
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
+    pub has_token: bool,
+    #[serde(default)]
+    pub member_name: String,
+    #[serde(default)]
+    pub member_id: String,
+    #[serde(default)]
+    pub lab_name: String,
+    #[serde(default)]
+    pub leader: bool,
+    /// Active members, plus the ones awaiting review when `leader`.
+    #[serde(default)]
+    pub members: Vec<LabMemberInfo>,
+    #[serde(default)]
+    pub knowledge_base: Option<LabKnowledgeBaseInfo>,
+    /// The project whose conversations answer other members' agents. Empty:
+    /// their questions get a note that this computer takes no lab mail.
+    #[serde(default)]
+    pub inbox_project_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LabMemberInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub leader: bool,
+    #[serde(default)]
+    pub pending: bool,
+}
+
+/// The lab's knowledge base: a synced project the leader publishes.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LabKnowledgeBaseInfo {
+    pub project_id: String,
+    /// Whether that project already exists on this computer.
+    #[serde(default)]
+    pub local: bool,
+    /// Its local name; empty until the project was downloaded.
+    #[serde(default)]
+    pub project_name: String,
+}
+
+/// Remote web access (#1460): the desktop dials out to a self-hosted relay
+/// and browsers open `link`, whose fragment carries the connection code.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemoteAccessStatus {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
+    pub has_token: bool,
+    /// "stopped" | "connecting" | "running" | "error"
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub detail: String,
+    /// Grouped connection code, present once one was generated.
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub link: Option<String>,
+    /// Browsers currently connected through the relay.
+    #[serde(default)]
+    pub clients: u32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2240,11 +2412,14 @@ impl Default for Settings {
             workspace_dir: String::new(),
             max_iter: default_max_iter(),
             auto_compact: true,
+            auto_compact_percent: default_auto_compact_percent(),
             semantic_compact_on_model_switch: false,
             semantic_compact_idle_hours: default_semantic_compact_idle_hours(),
             auto_continue: false,
             auto_continue_limit: default_auto_continue_limit(),
             follow_up_questions: true,
+            // Off until get_settings answers, so a disabled tip never flashes at startup.
+            show_tips: false,
             resume_last_session: true,
             decentralized_project_storage: false,
             max_tokens: 8192,
@@ -2264,6 +2439,8 @@ impl Default for Settings {
             pet_enabled: false,
             pet_directory: String::new(),
             notifications_enabled: true,
+            notification_sound_enabled: false,
+            notification_sound: String::new(),
         }
     }
 }
@@ -2481,6 +2658,10 @@ pub struct SessionInfo {
     /// Source session this one was branched from; nested under it in the sidebar.
     #[serde(default)]
     pub branched_from: Option<String>,
+    /// Conversation whose agent started this one as a subagent (#1061): nested
+    /// under it in the sidebar, and watched rather than written to.
+    #[serde(default)]
+    pub dispatched_from: Option<String>,
     #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
@@ -2660,7 +2841,7 @@ pub struct ExplorationPromotionResult {
 
 /// One Codex CLI or Claude Code conversation offered by the import modal.
 /// `state` is "new" | "imported" | "updatable".
-#[derive(Deserialize, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct ExternalSessionInfo {
     pub path: String,
     pub session_id: String,
@@ -2671,13 +2852,13 @@ pub struct ExternalSessionInfo {
     pub state: String,
 }
 
-#[derive(Deserialize, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct ExternalSessionPreviewLine {
     pub role: String,
     pub text: String,
 }
 
-#[derive(Deserialize, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq)]
 pub struct ExternalImportSummary {
     pub imported: usize,
     pub updated: usize,
@@ -2790,6 +2971,10 @@ pub struct LoadedSessionPage {
     /// `None` when the session has no compaction or `first_kept_seq` is unknown.
     #[serde(default)]
     pub in_context_from_user_index: Option<usize>,
+    /// Ids still parked in the backend turn queue. `None` from a host that
+    /// predates the field, which keeps every optimistic queue row.
+    #[serde(default)]
+    pub queued_turn_ids: Option<Vec<String>>,
 }
 
 /// Current compaction metadata, refreshed without loading or replacing history.
@@ -3030,7 +3215,7 @@ pub struct Artifact {
     pub source_discarded: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileContent {
     pub path: String,
     pub mime: String,
@@ -3040,20 +3225,20 @@ pub struct FileContent {
     #[serde(default)]
     pub truncated: bool,
     /// Full on-disk size (bytes), present when known.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_bytes: Option<u64>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_unix_millis: Option<u64>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct DirectoryListing {
     pub path: String,
     pub entries: Vec<DirEntry>,
@@ -3073,7 +3258,7 @@ pub struct UploadToContextItem {
     pub status: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct FileSearchHit {
     pub path: String,
     pub name: String,
@@ -3091,6 +3276,11 @@ pub struct ProjectInfo {
     pub mcp_server_count: usize,
     pub memory_file_count: usize,
 }
+
+/// The global research assistant keeps its one conversation in this hidden
+/// project. It never appears in user-facing lists and is opened as the
+/// assistant, never as a workspace.
+pub const ASSISTANT_PROJECT_ID: &str = "assistant:research";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSummary {
@@ -3254,6 +3444,8 @@ pub struct ModelProfile {
     #[serde(default)]
     pub use_for_vision: bool,
     #[serde(default)]
+    pub use_for_expert: bool,
+    #[serde(default)]
     pub use_for_image_generation: bool,
     #[serde(default)]
     pub image_generation_capable: bool,
@@ -3273,6 +3465,9 @@ pub struct ModelProfile {
     pub video_aspect_ratio: Option<String>,
     #[serde(default)]
     pub video_resolution: Option<String>,
+    /// Route of this profile's API endpoint; empty inherits Settings → Network.
+    #[serde(default)]
+    pub proxy_url: String,
 }
 
 /// Known image IDs used for automatic hints, never as an acceptance allowlist.
@@ -3405,6 +3600,13 @@ pub struct RecentSession {
     /// Project sidebar pin state. Global recent-session queries do not fetch it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
+    /// Persisted conversation relationships, fetched only for project sidebars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branched_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatched_from: Option<String>,
 }
 
 #[derive(Clone, serde::Deserialize, PartialEq)]
@@ -3422,6 +3624,39 @@ pub struct SkillRow {
     #[serde(default)]
     pub managed_by: Option<String>,
     pub dir: String,
+    /// Every discovered copy of this name, active copy first. More than one
+    /// entry means the other copies are shadowed by discovery precedence.
+    #[serde(default)]
+    pub copies: Vec<SkillCopy>,
+}
+
+/// One discovered package directory for a Skill name.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillCopy {
+    pub scope: String,
+    pub dir: String,
+    pub effective: bool,
+    /// Its SKILL.md is byte-identical to the active copy's.
+    #[serde(default)]
+    pub same_as_effective: bool,
+}
+
+/// Resolved install directories offered by **Add skill**.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillInstallLocations {
+    pub global_dir: String,
+    pub project_dir: String,
+}
+
+/// Where an install or promotion put a Skill, and which copy still wins
+/// discovery when the new one is shadowed.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SkillInstallReceipt {
+    pub name: String,
+    pub scope: String,
+    pub dir: String,
+    #[serde(default)]
+    pub shadowed_by: Option<SkillCopy>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -3600,6 +3835,9 @@ pub struct ConnRow {
     pub name: String,
     pub enabled: bool,
     pub transport: ConnTransport,
+    /// This connection's own route; empty inherits Settings → Network.
+    #[serde(default)]
+    pub proxy_url: String,
 }
 #[derive(Clone, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -3731,6 +3969,10 @@ pub struct ConnForm {
     pub env: Vec<ConnSecretField>,
     pub auth: String,
     pub enabled: bool,
+    /// Empty inherits the Network page, `none` is direct, else a proxy URL.
+    pub proxy_url: String,
+    /// Custom proxy chosen while its address is still empty.
+    pub proxy_custom: bool,
 }
 
 impl ConnForm {
@@ -3754,6 +3996,7 @@ pub struct ModelFormEntry {
     pub model: String,
     pub supports_vision: bool,
     pub use_for_vision: bool,
+    pub use_for_expert: bool,
     pub use_for_image_generation: bool,
     pub use_for_video_generation: bool,
 }
@@ -3792,6 +4035,7 @@ mod image_generation_model_tests {
             session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
+            use_for_expert: false,
             use_for_image_generation: false,
             image_generation_capable: false,
             image_size: String::new(),
@@ -3802,6 +4046,7 @@ mod image_generation_model_tests {
             video_duration_secs: None,
             video_aspect_ratio: None,
             video_resolution: None,
+            proxy_url: String::new(),
         }
     }
 
@@ -3867,6 +4112,7 @@ mod video_generation_model_tests {
             session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
+            use_for_expert: false,
             use_for_image_generation: false,
             image_generation_capable: false,
             image_size: String::new(),
@@ -3877,6 +4123,7 @@ mod video_generation_model_tests {
             video_duration_secs: None,
             video_aspect_ratio: None,
             video_resolution: None,
+            proxy_url: String::new(),
         }
     }
 
@@ -3939,6 +4186,7 @@ pub struct ModelForm {
     pub session_header_name: String,
     pub supports_vision: bool,
     pub use_for_vision: bool,
+    pub use_for_expert: bool,
     pub use_for_image_generation: bool,
     pub image_generation_capable: bool,
     /// Explicit recovery intent; ordinary assignment changes keep the role.
@@ -3951,6 +4199,11 @@ pub struct ModelForm {
     pub video_duration_secs: Option<u32>,
     pub video_aspect_ratio: Option<String>,
     pub video_resolution: Option<String>,
+    /// Endpoint route chosen in this form. `None` until edited: the form shows
+    /// and keeps the endpoint's saved route.
+    pub proxy_url: Option<String>,
+    /// Custom proxy chosen while its address is still empty.
+    pub proxy_custom: bool,
     /// Used only when adding a provider (`id` is `None`): one row per model
     /// that should be created with the shared API URL and key.
     pub entries: Vec<ModelFormEntry>,
@@ -4103,6 +4356,10 @@ pub struct TurnMemoryProposal {
     pub failure_rate: f64,
     #[serde(default)]
     pub global_memories: Vec<GlobalMemory>,
+    /// The research mandate this conversation carries, by name. When present
+    /// the draft can also be saved as one of its standing instructions.
+    #[serde(default)]
+    pub mandate: Option<String>,
 }
 
 /// Paths found without launching interpreters or installing packages.
@@ -4209,7 +4466,7 @@ pub struct ResearchGraph {
     pub edges: Vec<ResearchEdge>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationInfo {
     pub id: String,
     pub project_id: String,
@@ -4238,7 +4495,7 @@ pub struct PublicationSourcePage {
     pub has_more: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationRevisionInfo {
     pub id: String,
     pub publication_id: String,
@@ -4252,7 +4509,7 @@ pub struct PublicationRevisionInfo {
     pub published_at: Option<i64>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationItemInfo {
     pub id: String,
     pub revision_id: String,
@@ -4263,7 +4520,7 @@ pub struct PublicationItemInfo {
     pub ordinal: i64,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationItemLinkInfo {
     pub source_item_id: String,
     pub target_item_id: String,
@@ -4286,7 +4543,7 @@ pub struct PublicationEvidenceBinding {
     pub source_snapshot_json: String,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct PublicationEvidenceReview {
     pub binding_id: String,
     pub reviewer: String,
@@ -4296,21 +4553,21 @@ pub struct PublicationEvidenceReview {
     pub report_json: String,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationEvidenceSupersession {
     pub old_binding_id: String,
     pub new_binding_id: String,
     pub reason: String,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationWaiverInfo {
     pub finding_code: String,
     pub author: String,
     pub reason: String,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct PublicationReadinessFinding {
     pub code: String,
     pub message: String,
@@ -4322,7 +4579,7 @@ pub struct PublicationReadinessFinding {
     pub details: serde_json::Value,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct PublicationReadinessInfo {
     pub revision_id: String,
     pub target_visibility: String,
@@ -4337,7 +4594,7 @@ pub struct PublicationReadinessInfo {
     pub can_freeze: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationEvidenceDriftInfo {
     pub binding_id: String,
     pub bound_version_id: String,
@@ -4347,7 +4604,7 @@ pub struct PublicationEvidenceDriftInfo {
     pub has_drift: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PublicationLineageInfo {
     pub binding_id: String,
     pub source_label: String,
@@ -4371,7 +4628,7 @@ pub struct PublicationLineageInfo {
     pub environment_captured: bool,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct CapsuleBuildInfo {
     pub id: String,
     pub revision_id: String,
@@ -4386,7 +4643,7 @@ pub struct CapsuleBuildInfo {
     pub completed_at: Option<i64>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReproductionRunInfo {
     pub id: String,
     pub source_run_id: String,
@@ -4403,7 +4660,7 @@ pub struct ReproductionRunInfo {
     pub completed_at: Option<i64>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReproductionResultInfo {
     pub reproduction_run_id: String,
     pub output_id: String,
@@ -4414,7 +4671,7 @@ pub struct ReproductionResultInfo {
     pub report_json: String,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct PublicationWorkspaceInfo {
     #[serde(default)]
     pub publications: Vec<PublicationInfo>,
@@ -4448,7 +4705,7 @@ pub struct PublicationWorkspaceInfo {
     pub reproduction_results: Vec<ReproductionResultInfo>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct PublicationFreezeOutcome {
     pub frozen: bool,
     pub revision: PublicationRevisionInfo,
@@ -4459,12 +4716,15 @@ pub struct PublicationFreezeOutcome {
 pub enum RightTab {
     Artifacts,
     Agents,
+    Runs,
     Notebook,
     Highlights,
     File,
     Provenance,
     Hosts,
     SideChat,
+    /// Researcher-private project memos; never read by the agent.
+    Memos,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -4498,29 +4758,67 @@ pub struct QuickActionRun {
     pub started: bool,
 }
 
+/// One subagent the conversation started, whichever mechanism ran it: a
+/// watch-only child conversation (`dispatch_subagent`, #1061) or an in-process
+/// `explore` run whose anchor lives in the parent transcript. The Agents pane
+/// lists these beside `delegate_tasks` workflows.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SubagentActivity {
+    pub id: String,
+    /// `conversation`, `explore` or `expert` (an on-demand consultation).
+    pub kind: String,
+    pub title: String,
+    /// `running`, `completed`, `failed` or `idle` (ended without an answer).
+    pub status: String,
+    pub instruction: String,
+    /// First line of the answer, for the list row.
+    pub summary: String,
+    /// Markdown; empty until the subagent answers.
+    pub answer: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub ended_at: Option<i64>,
+    pub tool_calls: u32,
+    /// Child conversation to open in the chat, for `conversation` kind.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Archived full trace on disk, for `explore` kind.
+    #[serde(default)]
+    pub trace_path: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentWorkflowSnapshot {
     pub workflow: AgentWorkflow,
+    /// Always true since delegation stopped being a per-conversation switch;
+    /// kept so older native clients keep decoding the snapshot.
+    #[serde(default = "default_true")]
     pub delegation_enabled: bool,
     #[serde(default)]
     pub approval_policy: AgentApprovalPolicy,
     pub dynamic: DynamicAgentWorkflowSummary,
+    #[serde(default)]
+    pub execution: Option<AgentWorkflowExecutionSummary>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentCompletionPolicy {
-    #[default]
-    Inline,
-    Background,
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentWorkflowUsage {
+    pub tokens: u64,
+    pub tool_calls: u64,
+    pub cost_microunits: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AgentCompletionSettings {
-    #[serde(default)]
-    pub policy: AgentCompletionPolicy,
-    #[serde(default)]
-    pub auto_resume: bool,
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentWorkflowExecutionSummary {
+    /// Zero-based execution round, independent of background delivery numbers.
+    pub generation: i64,
+    pub started_at: Option<i64>,
+    pub stop_reason: Option<String>,
+    pub wall_time_secs: Option<u64>,
+    /// A zero limit denotes an unlimited resource dimension; usage still counts normally.
+    pub limits: AgentWorkflowUsage,
+    pub usage: AgentWorkflowUsage,
+    pub cumulative_usage: AgentWorkflowUsage,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -5136,7 +5434,7 @@ pub struct RuntimeSlot {
 /// the always-NULL `script_path`). No blanket `allow(dead_code)`: an unread
 /// field here means the UI is dropping data again, and the warning is the
 /// whole point.
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RunRecord {
     pub id: String,
     pub frame_id: Option<String>,
@@ -5194,6 +5492,10 @@ pub struct RunSummary {
     pub cleaned_at: Option<i64>,
     #[serde(default)]
     pub cleanup_error: Option<String>,
+    /// Set once the user moved the Run to the background; its completion is
+    /// reported to the owning conversation.
+    #[serde(default)]
+    pub background_requested_at: Option<i64>,
     #[serde(default)]
     pub output_fingerprint: String,
 }
@@ -5219,6 +5521,7 @@ impl From<&RunRecord> for RunSummary {
             harvested_at: run.harvested_at,
             cleaned_at: run.cleaned_at,
             cleanup_error: run.cleanup_error.clone(),
+            background_requested_at: None,
             output_fingerprint: String::new(),
         }
     }
@@ -5676,8 +5979,12 @@ pub struct NetworkSettings {
 
 mod research_journey;
 pub use research_journey::*;
+mod project_memos;
+pub use project_memos::*;
 mod automation;
 pub use automation::*;
+mod mandate;
+pub use mandate::*;
 mod research_archive;
 pub use research_archive::*;
 /// Host-authored logical binding. Never accepts an iframe-supplied connector.

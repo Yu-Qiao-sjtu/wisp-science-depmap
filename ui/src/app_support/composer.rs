@@ -11,11 +11,22 @@ pub(crate) enum ComposerPickerMode {
     Artifact,
     Session,
     Skill,
+    /// Researcher-private memos behind `/memo `; selecting one pastes its
+    /// body into the composer and nothing is sent.
+    Memo,
 }
+
+/// The composer prefix that opens the memo picker. The text after it, up to
+/// the caret, filters the list; Escape removes the whole token again.
+pub(crate) const MEMO_TOKEN: &str = "/memo ";
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum ComposerPickerItem {
     Artifact(ArtifactInfo),
+    /// A private project memo offered by `/memo`; selecting it pastes the body.
+    Memo(crate::dto::ProjectMemo),
+    /// Shown instead of memos when the project has none: opens the Memos pane.
+    OpenMemos,
     Session(SessionSearchInfo),
     Project {
         id: String,
@@ -85,6 +96,74 @@ pub(crate) struct ComposerQuote {
     pub(crate) source: Option<String>,
 }
 
+/// Source prefix of a quote that holds turns of an earlier conversation. It
+/// keeps such a quote out of the workspace-file edit path, whatever the
+/// conversation was titled.
+pub(crate) const EXCERPT_SOURCE_PREFIX: &str = "conversation:";
+pub(crate) const EXPERIENCE_SOURCE_PREFIX: &str = "experience:";
+
+/// Range selection for reusing conversation turns: the first
+/// clicked user turn, remembered until a second click or Escape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExcerptSelection {
+    pub(crate) session_id: String,
+    /// Transcript row of the first turn, for highlighting.
+    pub(crate) ui_index: usize,
+    /// Absolute visual user index (history paging offset applied).
+    pub(crate) user_index: usize,
+}
+
+/// Composer quote for a rendered excerpt. The source names the conversation
+/// and the 1-based turn range the way the sidebar and transcript count them.
+pub(crate) fn excerpt_quote(excerpt: &SessionExcerpt, locale: Locale) -> ComposerQuote {
+    let title = excerpt.title.trim();
+    let title = if title.is_empty() {
+        t(locale, "excerpt.untitled")
+    } else {
+        title.to_string()
+    };
+    let start = (excerpt.start_user_index + 1).to_string();
+    let end = (excerpt.end_user_index + 1).to_string();
+    let label = if excerpt.start_user_index == excerpt.end_user_index {
+        tf(
+            locale,
+            "excerpt.source_single",
+            &[("title", &title), ("n", &start)],
+        )
+    } else {
+        tf(
+            locale,
+            "excerpt.source",
+            &[("title", &title), ("start", &start), ("end", &end)],
+        )
+    };
+    ComposerQuote::from_selection(
+        excerpt.text.trim(),
+        Some(format!("{EXCERPT_SOURCE_PREFIX}{label}")),
+    )
+}
+
+/// Chip caption for a quote source: an excerpt source drops its prefix.
+pub(crate) fn quote_source_label(source: &str) -> &str {
+    source
+        .strip_prefix(EXCERPT_SOURCE_PREFIX)
+        .or_else(|| source.strip_prefix(EXPERIENCE_SOURCE_PREFIX))
+        .unwrap_or(source)
+}
+
+pub(crate) fn experience_quote(
+    excerpt: &SessionExcerpt,
+    content: &str,
+    locale: Locale,
+) -> ComposerQuote {
+    let mut quote = excerpt_quote(excerpt, locale);
+    quote.text = content.trim().to_string();
+    quote.source = quote
+        .source
+        .map(|source| format!("{EXPERIENCE_SOURCE_PREFIX}{}", quote_source_label(&source)));
+    quote
+}
+
 impl ComposerQuote {
     pub(crate) fn plain(text: impl Into<String>) -> Self {
         Self {
@@ -104,6 +183,8 @@ impl ComposerQuote {
         self.source.as_deref().filter(|source| {
             !source.starts_with("artifact:")
                 && !source.starts_with("artifact-version:")
+                && !source.starts_with(EXCERPT_SOURCE_PREFIX)
+                && !source.starts_with(EXPERIENCE_SOURCE_PREFIX)
                 && remote_file_path(source).is_none()
                 && matches!(
                     file_kind(source),
@@ -496,13 +577,21 @@ fn message_with_quotes_inner(
     let mut out = String::new();
     for quote in quotes {
         if let Some(source) = quote.source.as_deref() {
-            let source = prompt_safe_source(source);
-            if quote.workspace_source().is_some() {
-                out.push_str("Selected excerpt from workspace file `");
+            if let Some(label) = source.strip_prefix(EXCERPT_SOURCE_PREFIX) {
+                out.push_str("Quoted turns from an earlier conversation `");
+                out.push_str(&prompt_safe_source(label));
+            } else if let Some(label) = source.strip_prefix(EXPERIENCE_SOURCE_PREFIX) {
+                out.push_str("Reusable experience distilled from conversation `");
+                out.push_str(&prompt_safe_source(label));
             } else {
-                out.push_str("Selected excerpt from reference `");
+                let source = prompt_safe_source(source);
+                if quote.workspace_source().is_some() {
+                    out.push_str("Selected excerpt from workspace file `");
+                } else {
+                    out.push_str("Selected excerpt from reference `");
+                }
+                out.push_str(&source);
             }
-            out.push_str(&source);
             out.push_str("`:\n");
         }
         for line in quote.text.trim().lines() {
@@ -637,6 +726,9 @@ pub(crate) fn active_composer_trigger(
     caret_utf16: usize,
 ) -> Option<(usize, usize, ComposerPickerMode, String)> {
     let end = utf16_to_byte_index(text, caret_utf16)?;
+    if let Some((at, query)) = memo_token(&text[..end]) {
+        return Some((at, end, ComposerPickerMode::Memo, query));
+    }
     let (at, trigger) = text[..end]
         .char_indices()
         .rev()
@@ -659,6 +751,84 @@ pub(crate) fn active_composer_trigger(
         _ => return None,
     };
     Some((at, end, mode, query.to_string()))
+}
+
+/// Order the `#` picker's session candidates: the current project's sessions
+/// first, otherwise exactly the server's rank (title hits before body-only
+/// hits, newest first), which the stable sort keeps. A session never offers
+/// itself as a reference.
+pub(crate) fn order_session_candidates(
+    rows: Vec<SessionSearchInfo>,
+    current_project: Option<&str>,
+    active_session: Option<&str>,
+) -> Vec<SessionSearchInfo> {
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .filter(|s| active_session != Some(s.id.as_str()))
+        .collect();
+    rows.sort_by_key(|s| current_project != Some(s.project_id.as_str()));
+    rows
+}
+
+/// Reference chips for a sidebar drag dropped on the composer: the one
+/// conversation, or every conversation directly in the group, in sidebar
+/// order. The open conversation never references itself (as with `#`), and
+/// unknown ids attach nothing.
+pub(crate) fn dropped_session_chips(
+    drop: &ContextDrop,
+    sessions: &[SessionInfo],
+    project_name: &str,
+    active_session: Option<&str>,
+) -> Vec<ComposerReferenceChip> {
+    sessions
+        .iter()
+        .filter(|s| match drop {
+            ContextDrop::Session(id) => s.id == *id,
+            ContextDrop::Folder(folder) => s.folder_id.as_deref() == Some(folder.as_str()),
+        })
+        .filter(|s| active_session != Some(s.id.as_str()))
+        .map(|s| ComposerReferenceChip::Session {
+            id: s.id.clone(),
+            title: s.title.clone(),
+            project_name: project_name.to_string(),
+        })
+        .collect()
+}
+
+/// Append chips the composer does not hold yet, keyed like every other
+/// reference, so repeated drops of the same conversation stay one chip.
+pub(crate) fn push_unique_references(
+    items: &mut Vec<ComposerReferenceChip>,
+    chips: Vec<ComposerReferenceChip>,
+) -> usize {
+    let mut added = 0;
+    for chip in chips {
+        if !items.iter().any(|item| item.key() == chip.key()) {
+            items.push(chip);
+            added += 1;
+        }
+    }
+    added
+}
+
+/// `/memo <query>` ending at the caret: the token start and the filter text.
+/// The same boundary rules as the single-character triggers apply to the
+/// slash, and the query stays on one line.
+fn memo_token(head: &str) -> Option<(usize, String)> {
+    let at = head.rfind(MEMO_TOKEN)?;
+    if let Some(previous) = head[..at].chars().next_back() {
+        if previous.is_ascii_alphanumeric()
+            || previous == '_'
+            || matches!(previous, ':' | '/' | '\\' | '.')
+        {
+            return None;
+        }
+    }
+    let query = &head[at + MEMO_TOKEN.len()..];
+    if query.contains('\n') {
+        return None;
+    }
+    Some((at, query.trim_start().to_string()))
 }
 
 /// Whether an input edit should keep or open the picker for the active token.
@@ -689,6 +859,7 @@ pub(crate) fn composer_picker_accepts_edit(
 /// payload (branch send / side-chat question); the rest run a UI action
 /// directly. CLI-only commands like `/quit` do not belong here.
 pub(crate) const SLASH_COMMANDS: &[&str] = &[
+    "timer",
     "archive",
     "compact",
     "fork",
@@ -705,6 +876,7 @@ pub(crate) const SLASH_COMMANDS: &[&str] = &[
     "upload",
     "share",
     "trajectory",
+    "memo",
 ];
 
 /// Each command owns a distinct icon in the `/` picker so rows scan by
@@ -728,6 +900,8 @@ pub(crate) fn slash_command_icon(name: &str) -> &'static str {
         "upload" => "upload",
         "share" => "share",
         "trajectory" => "timeline",
+        "timer" => "clock",
+        "memo" => "notebook",
         _ => "terminal",
     }
 }
@@ -771,10 +945,14 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<(&'static str, &str)> {
 
 /// True for commands the picker fills into the composer — `/compact` for
 /// confirmation, `/fork`, `/btw`, and `/permission` because they need a
-/// payload. Action commands (`/rewind`, `/review`, …) run immediately on
-/// selection instead.
+/// payload, `/memo` because its token keeps the memo picker open while the
+/// researcher filters. Action commands (`/rewind`, `/review`, …) run
+/// immediately on selection instead.
 pub(crate) fn slash_command_fills_text(name: &str) -> bool {
-    matches!(name, "compact" | "fork" | "btw" | "permission")
+    matches!(
+        name,
+        "compact" | "fork" | "btw" | "permission" | "timer" | "memo"
+    )
 }
 
 /// How far to move `scrollTop` so the row spanning `item_top..item_bottom`
@@ -905,10 +1083,158 @@ mod picker_scroll_tests {
 #[cfg(test)]
 mod mention_tests {
     use super::{
-        active_composer_trigger, composer_picker_accepts_edit, parse_slash_command,
+        active_composer_trigger, composer_picker_accepts_edit, dropped_session_chips,
+        order_session_candidates, parse_slash_command, push_unique_references,
         slash_command_fills_text, slash_command_icon, slash_command_matches, ComposerPickerMode,
-        SLASH_COMMANDS,
+        ComposerReferenceChip, ContextDrop, SLASH_COMMANDS,
     };
+    use crate::dto::{SessionInfo, SessionSearchInfo};
+
+    fn sidebar_session(id: &str, title: &str, folder: Option<&str>) -> SessionInfo {
+        SessionInfo {
+            running: false,
+            id: id.into(),
+            title: title.into(),
+            ts: 0,
+            folder_id: folder.map(str::to_string),
+            branched_from: None,
+            dispatched_from: None,
+            pinned: false,
+            branch_state: None,
+            stale_prompt: false,
+        }
+    }
+
+    fn chip_ids(chips: &[ComposerReferenceChip]) -> Vec<String> {
+        chips
+            .iter()
+            .map(|chip| match chip {
+                ComposerReferenceChip::Session { id, .. } => id.clone(),
+                other => panic!("not a session chip: {}", other.key()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dropped_conversation_becomes_one_session_chip_labelled_by_project() {
+        let sessions = vec![sidebar_session("s1", "QC review", None)];
+        let chips = dropped_session_chips(
+            &ContextDrop::Session("s1".into()),
+            &sessions,
+            "Atlas",
+            Some("other"),
+        );
+        assert_eq!(chips.len(), 1);
+        assert_eq!(chips[0].label(), "Atlas / QC review");
+        assert_eq!(chips[0].key(), "session:s1");
+    }
+
+    #[test]
+    fn dropped_group_attaches_its_conversations_but_not_the_open_one() {
+        let sessions = vec![
+            sidebar_session("a", "First", Some("g1")),
+            sidebar_session("loose", "Loose", None),
+            sidebar_session("me", "Open", Some("g1")),
+            sidebar_session("b", "Second", Some("g1")),
+            sidebar_session("c", "Elsewhere", Some("g2")),
+        ];
+        let chips = dropped_session_chips(
+            &ContextDrop::Folder("g1".into()),
+            &sessions,
+            "Atlas",
+            Some("me"),
+        );
+        assert_eq!(chip_ids(&chips), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dropping_the_open_conversation_or_an_unknown_id_attaches_nothing() {
+        let sessions = vec![sidebar_session("me", "Open", None)];
+        assert!(dropped_session_chips(
+            &ContextDrop::Session("me".into()),
+            &sessions,
+            "Atlas",
+            Some("me")
+        )
+        .is_empty());
+        assert!(dropped_session_chips(
+            &ContextDrop::Session("ghost".into()),
+            &sessions,
+            "Atlas",
+            None
+        )
+        .is_empty());
+        assert!(dropped_session_chips(
+            &ContextDrop::Folder("empty".into()),
+            &sessions,
+            "Atlas",
+            None
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn repeated_drops_do_not_duplicate_chips() {
+        let sessions = vec![
+            sidebar_session("a", "First", Some("g1")),
+            sidebar_session("b", "Second", Some("g1")),
+        ];
+        let mut items =
+            dropped_session_chips(&ContextDrop::Session("a".into()), &sessions, "Atlas", None);
+        let added = push_unique_references(
+            &mut items,
+            dropped_session_chips(&ContextDrop::Folder("g1".into()), &sessions, "Atlas", None),
+        );
+        assert_eq!(added, 1);
+        assert_eq!(chip_ids(&items), vec!["a", "b"]);
+        assert_eq!(
+            push_unique_references(
+                &mut items,
+                dropped_session_chips(&ContextDrop::Folder("g1".into()), &sessions, "Atlas", None)
+            ),
+            0
+        );
+    }
+
+    fn session(id: &str, project: &str, activity_at: i64) -> SessionSearchInfo {
+        SessionSearchInfo {
+            id: id.into(),
+            project_id: project.into(),
+            project_name: project.into(),
+            title: id.into(),
+            ts: activity_at,
+            activity_at,
+            status: "complete".into(),
+            shelved: false,
+        }
+    }
+
+    #[test]
+    fn session_candidates_keep_server_rank_within_each_project_group() {
+        // The server already ranks title hits above newer body-only hits;
+        // regrouping by project must not reorder them by activity again.
+        let rows = vec![
+            session("other-title", "other", 9),
+            session("current-title", "current", 1),
+            session("current-body", "current", 5),
+            session("me", "current", 7),
+        ];
+        let ordered = order_session_candidates(rows, Some("current"), Some("me"));
+        assert_eq!(
+            ordered.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["current-title", "current-body", "other-title"]
+        );
+    }
+
+    #[test]
+    fn session_candidates_without_a_project_keep_server_order() {
+        let rows = vec![session("a", "p1", 1), session("b", "p2", 9)];
+        let ordered = order_session_candidates(rows, None, None);
+        assert_eq!(
+            ordered.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
 
     #[test]
     fn slash_commands_filter_by_query() {
@@ -920,6 +1246,7 @@ mod mention_tests {
         assert!(slash_command_matches("s").contains(&"save-as-skill"));
         assert_eq!(slash_command_matches("shar"), vec!["share"]);
         assert_eq!(slash_command_matches("traj"), vec!["trajectory"]);
+        assert_eq!(slash_command_matches("me"), vec!["remember", "memo"]);
         assert!(slash_command_matches("literature-review").is_empty());
     }
 
@@ -951,6 +1278,7 @@ mod mention_tests {
         );
         assert_eq!(parse_slash_command("/share"), Some(("share", "")));
         assert_eq!(parse_slash_command("/trajectory"), Some(("trajectory", "")));
+        assert_eq!(parse_slash_command("/memo gpu"), Some(("memo", "gpu")));
         // Unknown commands, substrings, and embedded commands are not intercepted.
         assert_eq!(parse_slash_command("/compact2"), None);
         assert_eq!(parse_slash_command("/quit"), None);
@@ -964,6 +1292,7 @@ mod mention_tests {
         assert!(slash_command_fills_text("fork"));
         assert!(slash_command_fills_text("btw"));
         assert!(slash_command_fills_text("permission"));
+        assert!(slash_command_fills_text("memo"));
         assert!(!slash_command_fills_text("rewind"));
         assert!(!slash_command_fills_text("plan"));
         assert!(!slash_command_fills_text("upload"));
@@ -982,6 +1311,29 @@ mod mention_tests {
         assert!(
             matches!(active_composer_trigger("/literature-review", 18), Some((0, 18, ComposerPickerMode::Skill, q)) if q == "literature-review")
         );
+    }
+
+    #[test]
+    fn memo_token_opens_the_memo_picker_and_filters_after_the_space() {
+        assert!(
+            matches!(active_composer_trigger("/memo ", 6), Some((0, 6, ComposerPickerMode::Memo, q)) if q.is_empty())
+        );
+        assert!(
+            matches!(active_composer_trigger("/memo gpu 02", 12), Some((0, 12, ComposerPickerMode::Memo, q)) if q == "gpu 02")
+        );
+        // Draft text before the token stays; the token itself is the range.
+        assert!(
+            matches!(active_composer_trigger("Compare methods /memo ssh", 25), Some((16, 25, ComposerPickerMode::Memo, q)) if q == "ssh")
+        );
+        // Without the space it is still the `/` command list.
+        assert!(
+            matches!(active_composer_trigger("/memo", 5), Some((0, 5, ComposerPickerMode::Skill, q)) if q == "memo")
+        );
+        // A path or a word glued to the slash is not a memo token, nor is a
+        // token the caret has left on an earlier line.
+        assert_eq!(active_composer_trigger("docs/memo notes", 15), None);
+        assert_eq!(active_composer_trigger("x/memo notes", 12), None);
+        assert_eq!(active_composer_trigger("/memo a\nb", 9), None);
     }
 
     #[test]

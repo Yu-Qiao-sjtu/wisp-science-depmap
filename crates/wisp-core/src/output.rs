@@ -114,6 +114,10 @@ pub trait Output: Send + Sync {
     fn force_ask_mutations(&self) -> bool {
         false
     }
+    /// See [`wisp_tools::ToolEnv::unattended_tools`].
+    fn unattended_tools(&self) -> Option<&'static [&'static str]> {
+        None
+    }
     fn restrict_read_paths_to_project(&self) -> bool {
         false
     }
@@ -316,6 +320,9 @@ impl<'a> ToolEnvAdapter<'a> {
 
 #[async_trait::async_trait]
 impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
+    fn publish_progress(&self, kind: &str, payload: &Value) {
+        self.out.tool_presentation(kind, payload, None);
+    }
     fn project_root(&self) -> &std::path::Path {
         &self.root
     }
@@ -365,6 +372,9 @@ impl<'a> wisp_tools::ToolEnv for ToolEnvAdapter<'a> {
     }
     fn force_ask_mutations(&self) -> bool {
         self.out.force_ask_mutations()
+    }
+    fn unattended_tools(&self) -> Option<&'static [&'static str]> {
+        self.out.unattended_tools()
     }
     fn danger_auto_approve(&self) -> bool {
         self.out.danger_auto_approve()

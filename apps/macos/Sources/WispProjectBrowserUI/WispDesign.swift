@@ -9,7 +9,7 @@ enum WispDesign {
     static let resources = resourceBundle(in: .main, module: { Bundle.module })
 
     static func resourceBundle(in main: Bundle, module: () -> Bundle) -> Bundle {
-        if let url = main.url(forResource: "WispSciencePreview_WispProjectBrowserUI", withExtension: "bundle"),
+        if let url = main.url(forResource: "WispScience_WispProjectBrowserUI", withExtension: "bundle"),
            let bundle = Bundle(url: url) { return bundle }
         // Keep this lazy: SwiftPM's accessor can trap in a relocated .app.
         return module()
@@ -79,15 +79,28 @@ enum WispDesign {
         if name.hasPrefix("icon-") { image.isTemplate = true }
         return image
     }
+
+    // SwiftUI's AppKit Menu bridge can rasterize a custom label without its
+    // foreground style. Preserve the shared SVG shape and paint its palette
+    // color before handing that label to the bridge.
+    static func menuIcon(_ name: String, size: CGFloat, scheme: ColorScheme) -> NSImage {
+        let source = image("icon-" + name)
+        return NSImage(size: NSSize(width: size, height: size), flipped: false) { bounds in
+            NSColor(color("text", scheme)).setFill(); bounds.fill()
+            source.draw(in: bounds, from: .zero, operation: .destinationIn, fraction: 1)
+            return true
+        }
+    }
 }
 
 struct WispIcon: View {
     let name: String
     var size: CGFloat = 18
+    var menuScheme: ColorScheme? = nil
 
     var body: some View {
-        Image(nsImage: WispDesign.image("icon-\(name)"))
-            .renderingMode(.template).resizable().frame(width: size, height: size)
+        Image(nsImage: menuScheme.map { WispDesign.menuIcon(name, size: size, scheme: $0) } ?? WispDesign.image("icon-\(name)"))
+            .renderingMode(menuScheme == nil ? .template : .original).resizable().frame(width: size, height: size)
             .accessibilityHidden(true)
     }
 }
@@ -97,12 +110,13 @@ struct WispButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var primary = false
     var compact = false
+    var height: CGFloat? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(WispDesign.font(size: 13, weight: .medium))
             .foregroundStyle(primary ? Color.white : WispDesign.color("text", scheme))
-            .padding(.horizontal, compact ? 8 : 12).frame(height: compact ? 30 : 38)
+            .padding(.horizontal, compact ? 8 : 12).frame(height: height ?? (compact ? 30 : 38))
             .background(compact && !primary ? Color.clear : WispDesign.color(primary ? "clay" : "bg-elev", scheme), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(compact ? Color.clear : WispDesign.color("border", scheme)))
             .opacity(!enabled ? 0.45 : (configuration.isPressed ? 0.7 : 1))
@@ -129,7 +143,7 @@ struct WispUnavailableAction: View {
             }
         }
         .buttonStyle(WispButtonStyle(primary: primary, compact: expanded || compact)).disabled(true)
-        .help("\(title) · 原生预览尚未接入")
+        .help("\(title) · 原生版尚未接入")
         .accessibilityLabel("\(title)（尚未接入）")
     }
 }

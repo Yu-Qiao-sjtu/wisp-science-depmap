@@ -265,6 +265,24 @@ fn resource_conflict_confirmation_has_dedicated_ui_payload_and_no_saved_grant() 
 }
 
 #[test]
+fn dangerous_command_preview_keeps_the_whole_command() {
+    let (tool, preview) = super::parse_confirm_payload(
+        "Dangerous command detected (delete): rm -r ~/data # note: ok",
+    );
+    assert_eq!(tool, "shell");
+    assert_eq!(preview, "rm -r ~/data # note: ok");
+}
+
+#[test]
+fn follow_up_parser_rejects_inverted_bracket_range() {
+    assert!(super::parse_follow_up_questions("see x] then [").is_err());
+    assert_eq!(
+        super::parse_follow_up_questions(r#"ok ["a", "b", "c"]"#).unwrap(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()]
+    );
+}
+
+#[test]
 fn mcp_app_tool_confirm_payload_parses_and_keys_a_grant() {
     let message =
         "Run tool 'figure_preview_exact' from MCP App 'Figure Library' (connector 'figure-library')?";
@@ -518,6 +536,144 @@ fn mcp_app_context_is_latest_only_and_session_scoped() {
 }
 
 #[test]
+fn mcp_app_context_update_keeps_live_state_and_composer_event_together() {
+    let runtime = SessionRuntime::new();
+    let other = SessionRuntime::new();
+    let instance = "mcp-app:session-a:ui://figures/view";
+    for text in ["First selected figure", "Replacement selected figure"] {
+        let context = super::normalize_mcp_app_context(
+            "Scientific Figure Library",
+            serde_json::json!({
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": {"templateId": "selected", "apiKey": "hidden"}
+            }),
+        )
+        .unwrap();
+        let event = super::apply_mcp_app_context_update(
+            Some(&runtime),
+            instance.into(),
+            "Scientific Figure Library".into(),
+            context,
+        )
+        .unwrap();
+        let AgentEvent::AppContextUpdate {
+            frame_id,
+            context_id,
+            instance_id,
+            app_name,
+            update_mode,
+            state,
+            summary,
+            structured_preview,
+        } = event
+        else {
+            panic!("context must produce a composer event, not a turn event");
+        };
+        assert_eq!(frame_id, "session-a");
+        assert_eq!(context_id, instance);
+        assert_eq!(instance_id, instance);
+        assert_eq!(app_name, "Scientific Figure Library");
+        assert_eq!(update_mode, "replace");
+        assert_eq!(state, "active");
+        assert_eq!(summary, text);
+        assert!(!structured_preview.unwrap().contains("hidden"));
+        assert!(runtime.mcp_app_context_injection().unwrap().contains(text));
+        assert!(other.mcp_app_context_injection().is_none());
+        assert!(super::should_persist_ui_event(
+            &AgentEvent::AppContextUpdate {
+                frame_id,
+                context_id,
+                instance_id,
+                app_name,
+                update_mode,
+                state,
+                summary,
+                structured_preview: None,
+            }
+        ));
+    }
+    assert!(!runtime
+        .mcp_app_context_injection()
+        .unwrap()
+        .contains("First selected figure"));
+    let event = super::apply_mcp_app_context_update(
+        Some(&runtime),
+        instance.into(),
+        "Scientific Figure Library".into(),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(event, AgentEvent::AppContextUpdate {
+        state, update_mode, summary, structured_preview: None, ..
+    } if state == "cleared" && update_mode == "clear" && summary.is_empty()));
+    assert!(runtime.mcp_app_context_injection().is_none());
+}
+
+#[test]
+fn mcp_app_context_update_handles_released_runtime_and_invalid_identity() {
+    let instance = "mcp-app:session-a:ui://figures/view";
+    assert!(matches!(super::apply_mcp_app_context_update(
+        None, instance.into(), "Figures".into(), None,
+    ).unwrap(), AgentEvent::AppContextUpdate { state, .. } if state == "cleared"));
+    let runtime = SessionRuntime::new();
+    let context = || {
+        super::normalize_mcp_app_context(
+            "Figures",
+            serde_json::json!({"content": [{"type": "text", "text": "selected"}]}),
+        )
+        .unwrap()
+    };
+    assert!(super::apply_mcp_app_context_update(
+        None,
+        instance.into(),
+        "Figures".into(),
+        context()
+    )
+    .is_err());
+    assert!(super::apply_mcp_app_context_update(
+        Some(&runtime),
+        "invalid".into(),
+        "Figures".into(),
+        context()
+    )
+    .is_err());
+    assert!(runtime.mcp_app_context_injection().is_none());
+}
+
+#[test]
+fn mcp_app_context_update_bounds_notice_without_truncating_model_state() {
+    let runtime = SessionRuntime::new();
+    let text = "a".repeat(super::MAX_MCP_APP_NOTICE_TEXT_BYTES + 100);
+    let context = super::normalize_mcp_app_context(
+        "Figures", serde_json::json!({
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": {"selection": "b".repeat(super::MAX_MCP_APP_NOTICE_STRUCTURED_BYTES + 100)}
+        }),
+    ).unwrap();
+    let event = super::apply_mcp_app_context_update(
+        Some(&runtime),
+        "mcp-app:session-a:figures".into(),
+        "Figures".into(),
+        context,
+    )
+    .unwrap();
+    let AgentEvent::AppContextUpdate {
+        summary,
+        structured_preview,
+        ..
+    } = event
+    else {
+        panic!();
+    };
+    assert_eq!(summary.len(), super::MAX_MCP_APP_NOTICE_TEXT_BYTES);
+    assert_eq!(
+        structured_preview.unwrap().len(),
+        super::MAX_MCP_APP_NOTICE_STRUCTURED_BYTES
+    );
+    assert!(runtime.mcp_app_context_injection().unwrap().contains(&text));
+}
+
+#[test]
 fn mcp_app_context_notice_projects_text_and_structured_preview() {
     let context = super::normalize_mcp_app_context(
         "  Motif   for   Claude  ",
@@ -734,11 +890,16 @@ fn live_agent_settings_refresh_max_iter_on_reused_agent() {
     );
     assert_eq!(agent.max_iter, 100);
 
-    super::apply_live_agent_settings(&mut agent, 0, true, true, 7);
+    super::apply_live_agent_settings(&mut agent, 0, true, 80, true, 7);
     assert_eq!(agent.max_iter, 0);
+    agent.ctx.append_user("u".repeat(280_000)); // ≈70K of the 128K window
+    assert!(!agent.ctx.needs_auto_compact());
 
-    super::apply_live_agent_settings(&mut agent, 50, false, false, 10);
+    super::apply_live_agent_settings(&mut agent, 50, true, 50, false, 10);
     assert_eq!(agent.max_iter, 50);
+    assert!(agent.ctx.needs_auto_compact());
+    assert_eq!(super::clamp_auto_compact_percent(0), 10);
+    assert_eq!(super::clamp_auto_compact_percent(500), 95);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -933,6 +1094,26 @@ fn reloaded_tool_items_keep_notebook_source() {
     assert_eq!(items[1].tool_name.as_deref(), Some("r"));
     assert_eq!(items[1].input.as_deref(), Some("summary(data)"));
     assert_eq!(items[1].text, "summary");
+}
+
+#[test]
+fn reloaded_image_generation_retains_the_preview_path() {
+    let mut assistant = wisp_llm::Message::assistant("");
+    assistant.tool_calls = vec![wisp_llm::ToolCall {
+        id: "image-call".into(),
+        kind: "function".into(),
+        function: wisp_llm::FunctionCall {
+            name: "generate_image".into(),
+            arguments: r#"{"path":"figures/counts.png","prompt":"counts"}"#.into(),
+        },
+    }];
+    let items = messages_to_items(&[
+        assistant,
+        wisp_llm::Message::tool("image-call", "generate_image", "Saved figures/counts.png"),
+    ]);
+    assert_eq!(items[0].input.as_deref(), Some("figures/counts.png"));
+    let bytes = serde_json::to_value(&items[0]).unwrap();
+    assert_eq!(bytes["tool_name"], "generate_image");
 }
 
 #[test]
@@ -2242,6 +2423,86 @@ fn branch_merge_projection_never_relabels_the_previous_answer() {
 }
 
 #[test]
+fn transcript_rows_bind_to_their_persisted_message_seq() {
+    let mut assistant = wisp_llm::Message::assistant("answer");
+    assistant.reasoning = Some("thinking".into());
+    let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: None,
+        messages: vec![(4, wisp_llm::Message::user("question")), (6, assistant)],
+        branch_merges: vec![],
+        reviews: vec![],
+        resources: vec![],
+        ui_events: vec![],
+        next_before_seq: None,
+        user_offset: 0,
+        latest_seq: 6,
+    };
+    let items = transcript_page_items(&page).unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (item.role.as_str(), item.seq))
+            .collect::<Vec<_>>(),
+        vec![
+            ("user", Some(4)),
+            ("reasoning", Some(6)),
+            ("assistant", Some(6))
+        ]
+    );
+
+    let events = [
+        AgentEvent::User {
+            frame_id: "f".into(),
+            text: "question".into(),
+            queue_id: None,
+        },
+        AgentEvent::MessageBoundary {
+            frame_id: "f".into(),
+            seq: 4,
+        },
+        AgentEvent::Text {
+            frame_id: "f".into(),
+            delta: "answer".into(),
+        },
+        AgentEvent::MessageBoundary {
+            frame_id: "f".into(),
+            seq: 6,
+        },
+        AgentEvent::ToolCall {
+            frame_id: "f".into(),
+            name: "python".into(),
+            preview: "print(1)".into(),
+        },
+    ];
+    let page = wisp_store::SessionTranscriptPage {
+        event_message_prefix_len: Some(0),
+        messages: vec![
+            (4, wisp_llm::Message::user("question")),
+            (6, wisp_llm::Message::assistant("answer")),
+        ],
+        branch_merges: vec![],
+        reviews: vec![],
+        resources: vec![],
+        ui_events: events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect(),
+        next_before_seq: None,
+        user_offset: 0,
+        latest_seq: 6,
+    };
+    let items = transcript_page_items(&page).unwrap();
+    // The live tool call after the last boundary has no saved message yet.
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (item.role.as_str(), item.seq))
+            .collect::<Vec<_>>(),
+        vec![("user", Some(4)), ("assistant", Some(6)), ("tool", None)]
+    );
+}
+
+#[test]
 fn resource_bindings_cover_messages_rendered_as_assistant_output() {
     assert!(message_uses_resource_bindings(
         &wisp_llm::Message::assistant("answer")
@@ -2382,6 +2643,19 @@ fn copy_dir_recursive_copies_nested_files() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[cfg(unix)]
+#[test]
+fn copy_dir_recursive_refuses_symlinks() {
+    let base = std::env::temp_dir().join(format!("wisp_copy_symlink_{}", std::process::id()));
+    let from = base.join("from");
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::write(base.join("secret"), "key").unwrap();
+    std::os::unix::fs::symlink(base.join("secret"), from.join("SKILL.md")).unwrap();
+    let error = copy_dir_recursive(&from, &base.join("to")).unwrap_err();
+    assert!(error.to_string().contains("symlink"), "{error}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn validate_skill_name_rejects_traversal() {
     use super::validate_skill_name;
@@ -2487,6 +2761,7 @@ fn mcp_connection_serde_roundtrip() {
             env: vec![wisp_dto::McpSecretEntry::plaintext("K", "secret-value")],
             cwd: None,
         },
+        proxy_url: String::new(),
     };
     let http = McpConnection {
         id: "2".into(),
@@ -2500,6 +2775,7 @@ fn mcp_connection_serde_roundtrip() {
             )],
             auth: McpHttpAuth::OAuth,
         },
+        proxy_url: String::new(),
     };
     for c in [stdio, http] {
         let json = serde_json::to_string(&c).unwrap();
@@ -2519,6 +2795,13 @@ fn mcp_connection_serde_roundtrip() {
         }
         _ => panic!("expected stdio"),
     }
+    // Saved connections without a route inherit Settings → Network.
+    assert!(migrated.proxy_url.is_empty());
+    let routed: McpConnection = serde_json::from_str(
+        r#"{"id":"4","name":"r","enabled":true,"proxy_url":"none","transport":{"kind":"http","url":"u"}}"#,
+    )
+    .unwrap();
+    assert_eq!(routed.proxy_url, "none");
     // tag shape
     let j = serde_json::to_value(&McpConnection {
         id: "3".into(),
@@ -2529,6 +2812,7 @@ fn mcp_connection_serde_roundtrip() {
             headers: vec![],
             auth: McpHttpAuth::None,
         },
+        proxy_url: String::new(),
     })
     .unwrap();
     assert_eq!(j["transport"]["kind"], "http");
@@ -2697,6 +2981,7 @@ fn capability_skill_counts_use_enabled_bundled_vs_project_added_inventory() {
         managed: false,
         managed_by: None,
         dir: format!("/{scope}/{name}"),
+        copies: vec![],
     };
     let skills = vec![
         skill("bundled-on", "bundled", true),
@@ -2830,25 +3115,71 @@ fn project_workspace_data_deletion_rejects_filesystem_root() {
 }
 
 #[test]
-fn app_activation_restores_workspace_windows_but_not_the_pet() {
+fn app_activation_restores_workspaces_but_keeps_native_host_contexts_hidden() {
     assert!(should_activate_workspace_window("main"));
     assert!(should_activate_workspace_window("proj-default"));
     assert!(!should_activate_workspace_window("pet"));
+    assert!(!should_activate_workspace_window("native-settings-123"));
 }
 
 #[test]
 fn window_focus_tracking_survives_unordered_focus_handoff() {
-    let assert_reset = || assert!(!super::app_has_focus());
+    let assert_reset = || assert!(super::focused_window_labels().is_empty());
     assert_reset();
     super::record_window_focus("main", true);
-    assert!(super::app_has_focus());
+    assert!(super::focused_window_labels().contains("main"));
     // Focus moves main → project window; gain may arrive before loss.
     super::record_window_focus("proj-a", true);
     super::record_window_focus("main", false);
-    assert!(super::app_has_focus());
+    assert_eq!(
+        super::focused_window_labels(),
+        HashSet::from(["proj-a".to_string()])
+    );
     // Destroyed window must not pin the app as focused forever.
     super::record_window_focus("proj-a", false);
     assert_reset();
+}
+
+// Foreground suppression is per session, not per app (#1619): the user working
+// in project A's window must still hear that project B's conversation ended.
+#[test]
+fn notification_is_silent_only_for_the_session_shown_in_a_foreground_window() {
+    let viewed = HashMap::from([
+        ("main".to_string(), "session-a".to_string()),
+        ("proj-b".to_string(), "session-b".to_string()),
+    ]);
+    let front = |labels: &[&str]| labels.iter().map(|l| l.to_string()).collect::<HashSet<_>>();
+
+    // Project A in front, project B's conversation ends in the background.
+    assert!(!super::session_in_foreground(
+        &front(&["main"]),
+        "session-b",
+        &viewed
+    ));
+    // The user is looking at the conversation that just ended.
+    assert!(super::session_in_foreground(
+        &front(&["proj-b"]),
+        "session-b",
+        &viewed
+    ));
+    // Same project window, but another conversation is on screen.
+    assert!(!super::session_in_foreground(
+        &front(&["main"]),
+        "session-a-sibling",
+        &viewed
+    ));
+    // Every window in the background keeps the existing behaviour.
+    assert!(!super::session_in_foreground(
+        &front(&[]),
+        "session-a",
+        &viewed
+    ));
+    // A focused window that views nothing (home / assistant) never silences.
+    assert!(!super::session_in_foreground(
+        &front(&["home-1"]),
+        "session-a",
+        &viewed
+    ));
 }
 
 // Click-to-open (#434, #499): a notification arms one navigation for its
@@ -3044,6 +3375,7 @@ fn queue_driver_claim_is_single_and_reclaimable() {
         message: format!("m{id}"),
         attachments: vec![],
         references: vec![],
+        unattended: false,
     };
     let rt = SessionRuntime::new();
 
@@ -3086,6 +3418,7 @@ fn unconsumed_cutin_returns_to_the_front_of_the_queue() {
         message: "close tabs".into(),
         attachments: vec![],
         references: vec![],
+        unattended: false,
     });
 
     begin_queued_cutin(&rt, 7).unwrap();
@@ -3103,6 +3436,7 @@ fn consumed_cutin_is_not_queued_again() {
         message: "use tab.close".into(),
         attachments: vec![],
         references: vec![],
+        unattended: false,
     });
 
     begin_queued_cutin(&rt, 8).unwrap();
@@ -3121,6 +3455,7 @@ async fn queued_cutin_precedes_the_fifo_driver_already_waiting_for_the_turn() {
             message: format!("message {id}"),
             attachments: vec![format!("file-{id}.png")],
             references: vec![],
+            unattended: false,
         });
     }
     rt.draining.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3162,6 +3497,7 @@ fn queued_cutin_handoff_preserves_arrival_order_and_does_not_steal_direct_guidan
             message: format!("message {id}"),
             attachments: vec![],
             references: vec![],
+            unattended: false,
         });
     }
     let consumed = begin_queued_cutin(&rt, 2).unwrap();
@@ -3197,6 +3533,7 @@ fn queue_reorder_swaps_and_clamps() {
         message: format!("m{id}"),
         attachments: vec![],
         references: vec![],
+        unattended: false,
     };
     let ids = |q: &[QueuedItem]| q.iter().map(|it| it.id).collect::<Vec<_>>();
 
@@ -3786,4 +4123,54 @@ async fn mcp_app_default_allows_calls_longer_than_old_limits() {
     assert!(!task.is_finished());
     tokio::time::advance(std::time::Duration::from_secs(10)).await;
     assert!(task.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn mcp_tool_named_like_a_builtin_is_aliased_not_dropped() {
+    let router = axum::Router::new().route(
+        "/",
+        axum::routing::post(
+            |axum::Json(request): axum::Json<serde_json::Value>| async move {
+                let result = if request["method"] == "tools/list" {
+                    serde_json::json!({"tools": [
+                        {"name": "search", "description": "", "inputSchema": {"type": "object"}},
+                        {"name": "write_note", "description": "", "inputSchema": {"type": "object"}}
+                    ]})
+                } else {
+                    serde_json::json!({"protocolVersion": "2024-11-05", "capabilities": {},
+                                       "serverInfo": {"name": "fixture", "version": "1"}})
+                };
+                axum::Json(
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": result}),
+                )
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let service = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = Arc::new(
+        wisp_mcp::McpClient::connect_http_with_proxy(&url, &[], "none")
+            .await
+            .unwrap(),
+    );
+    let mut registry = wisp_tools::Registry::builtins();
+    let registered = super::register_mcp_with_approval(
+        &mut registry,
+        client,
+        "bm",
+        "rev",
+        "Basic Memory",
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        registered.names,
+        ["Basic_Memory__search".to_string(), "write_note".to_string()]
+    );
+    assert!(registry.get("Basic_Memory__search").unwrap().defer_schema());
+    assert!(!registry.get("search").unwrap().defer_schema());
+    service.abort();
 }

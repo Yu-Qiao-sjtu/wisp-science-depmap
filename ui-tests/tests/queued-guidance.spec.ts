@@ -119,6 +119,28 @@ test("cut-in lifecycle shows its wait and reconciles only the exact queue ID", a
   await expect(row).toHaveCount(0);
 });
 
+test("a cut-in folded into the running turn clears its waiting row", async ({ page }) => {
+  await page.addInitScript(parallelMock);
+  await page.goto("/");
+  await page.locator(".proj-card-main").first().click();
+  await page.locator("#composer-input").fill("alpha");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await page.locator("#composer-input").fill("Use the revised question");
+  await page.getByRole("button", { name: "Queue…", exact: true }).click();
+  const row = page.locator(".msg.user.queued", { hasText: "Use the revised question" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Guide now", exact: true }).click();
+  await expect(row).toContainText("Sent · waiting for the current step");
+  // The loop folds the message into the running turn: the parked row and its
+  // waiting hint are gone and the text is an ordinary user turn, while the
+  // original turn is still running.
+  await expect(page.locator(".queue-state")).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  await expect(page.locator(".msg.user:not(.queued)", { hasText: "Use the revised question" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+});
+
 test("the row menu jumps the queue before it stops the running turn", async ({ page }) => {
   const row = await queueWithDelayedAcceptance(page);
   await page.evaluate(() => (window as any).__releaseEnqueue());
@@ -152,4 +174,64 @@ test("Escape closes the row menu without touching the queued message", async ({ 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Interrupt & replace", exact: true })).toHaveCount(0);
   await expect(row).toBeVisible();
+});
+
+test("reopening a conversation drops a queued row whose start this window missed (#1486)", async ({ page }) => {
+  await page.addInitScript(parallelMock);
+  await page.goto("/");
+  await page.locator(".proj-card-main").first().click();
+  await page.locator("#composer-input").fill("alpha");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  // The backend parks the follow-up, but none of its lifecycle events reach
+  // this window (it is showing another project when the message starts). Only
+  // the reloaded page says what is still parked.
+  await page.evaluate(() => {
+    const win = window as any;
+    const core = win.__TAURI__.core;
+    const invoke = core.invoke;
+    core.invoke = async (cmd: string, args: any) => {
+      const arg = (key: string) => (args instanceof Map ? args.get(key) : args?.[key]);
+      if (cmd === "enqueue_turn") {
+        win.__parkedId = String(arg("id"));
+        return null;
+      }
+      if (cmd === "load_session") {
+        const user = (text: string) => ({ role: "user", text, tool_name: null, ok: null });
+        return {
+          items: win.__parkedStarted
+            ? [user("persisted marker"), user("Use the revised question")]
+            : [user("persisted marker")],
+          next_before_seq: null,
+          user_offset: 0,
+          queued_turn_ids: win.__parkedStarted ? [] : [win.__parkedId],
+        };
+      }
+      return invoke(cmd, args);
+    };
+  });
+  await page.locator("#composer-input").fill("Use the revised question");
+  await page.getByRole("button", { name: "Queue…", exact: true }).click();
+  const row = page.locator(".msg.user.queued", { hasText: "Use the revised question" });
+  const sent = page.locator(".msg.user:not(.queued)", { hasText: "Use the revised question" });
+  await expect(row).toBeVisible();
+
+  const leaveAndReturn = async () => {
+    await page.locator(".sidebar").getByRole("button", { name: "New session" }).click();
+    await expect(row).toHaveCount(0);
+    await page.locator(".side-item.ses", { hasText: "alpha" }).click();
+    await expect(page.locator(".msg.user", { hasText: "persisted marker" })).toBeVisible();
+  };
+
+  // Still parked in the backend: the reload keeps the row.
+  await leaveAndReturn();
+  await expect(row).toHaveCount(1);
+  await expect(sent).toHaveCount(0);
+
+  // Started while this window was away: the reload shows it as sent, not parked.
+  await page.evaluate(() => { (window as any).__parkedStarted = true; });
+  await leaveAndReturn();
+  await expect(sent).toHaveCount(1);
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("composer-queue")).toHaveCount(0);
 });

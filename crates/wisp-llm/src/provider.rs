@@ -250,8 +250,19 @@ pub fn is_retriable(err: &LlmError) -> bool {
     match err {
         LlmError::Api { status, body } => {
             let lower = body.to_ascii_lowercase();
+            // Compatible gateways can report an upstream transport failure in
+            // an HTTP 200 SSE error envelope. Keep this narrow: authentication,
+            // billing and invalid-request errors must not become retry loops.
+            let in_band_transport = (200..=299).contains(status)
+                && (lower.contains("upstream connection reset")
+                    || lower.contains("connection reset by peer")
+                    || lower.contains("upstream timeout")
+                    || lower.contains("upstream timed out")
+                    || lower.contains("unexpected eof")
+                    || (lower.contains("eof") && lower.contains("codex: post")));
             matches!(*status, 408 | 429)
                 || (500..=599).contains(status)
+                || in_band_transport
                 || lower.contains("overloaded")
                 || lower.contains("rate_limit")
                 || lower.contains("1305")
@@ -599,12 +610,15 @@ pub fn is_opencode_endpoint(base_url: &str) -> bool {
 /// True when the request will hit DeepSeek's thinking-mode default.
 ///
 /// Match the public API host or a `deepseek-*` model id so a custom gateway
-/// that still serves V4 Flash/Pro gets the same toggle. Other OpenAI-compatible
-/// hosts must not receive `thinking`, which they reject.
+/// that still serves V4 Flash/Pro gets the same toggle. Gateway-style
+/// `vendor/model` ids (`deepseek/deepseek-v4.1-flash`) match on their last
+/// path segment, like the model catalog lookup. Other OpenAI-compatible hosts
+/// must not receive `thinking`, which they reject.
 pub(crate) fn is_deepseek_endpoint(base_url: &str, model: &str) -> bool {
     let url = base_url.to_ascii_lowercase();
-    let model = model.to_ascii_lowercase();
-    url.contains("deepseek.com") || model.starts_with("deepseek-")
+    let model = model.trim().to_ascii_lowercase();
+    let tail = model.rsplit('/').next().unwrap_or(model.as_str());
+    url.contains("deepseek.com") || tail.starts_with("deepseek-")
 }
 
 /// Callbacks the agent loop receives while a streamed completion is in flight.
@@ -636,6 +650,11 @@ impl StreamSink for NullSink {
 pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
     fn model(&self) -> &str;
+    /// Output-token cap this provider sends with each request, when it sends
+    /// one. Lets a truncation report name the real limit.
+    fn max_output_tokens(&self) -> Option<u64> {
+        None
+    }
     /// Non-streaming completion.
     async fn complete(&self, messages: &[Message], tools: &[ToolSchema]) -> Result<Completion>;
     /// Streaming completion; deltas go to `sink`, the assembled result is returned.
@@ -702,6 +721,44 @@ impl Utf8Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deepseek_endpoint_matches_host_or_model_tail_segment() {
+        assert!(is_deepseek_endpoint(
+            "https://api.deepseek.com",
+            "deepseek-v4-flash"
+        ));
+        assert!(is_deepseek_endpoint(
+            "https://API.DeepSeek.com/v1",
+            "anything"
+        ));
+        assert!(is_deepseek_endpoint(
+            "https://gateway.test/v1",
+            "deepseek-v4-pro"
+        ));
+        // Gateway ids carry a vendor prefix; the toggle keys off the last segment.
+        assert!(is_deepseek_endpoint(
+            "https://api.commandcode.ai/provider/v1",
+            "deepseek/deepseek-v4.1-flash"
+        ));
+        assert!(is_deepseek_endpoint(
+            "https://gateway.test/v1",
+            " DeepSeek/DeepSeek-V4-Pro "
+        ));
+        // Other vendors behind the same gateway never receive `thinking`.
+        assert!(!is_deepseek_endpoint(
+            "https://api.commandcode.ai/provider/v1",
+            "google/gemini-3.8-flash"
+        ));
+        assert!(!is_deepseek_endpoint(
+            "https://gateway.test/v1",
+            "deepseek/other-v1"
+        ));
+        assert!(!is_deepseek_endpoint(
+            "https://api.openai.com/v1",
+            "gpt-5.6-sol"
+        ));
+    }
 
     #[test]
     fn opencode_identity_is_scoped_to_the_endpoint_and_conversation() {
@@ -1167,6 +1224,37 @@ mod tests {
             status: 400,
             body: "invalid request".into(),
         }));
+    }
+
+    #[test]
+    fn in_band_gateway_transport_failures_are_retried_without_retrying_permanent_errors() {
+        for body in [
+            "Codex: Post \"https://example.invalid/responses\": EOF (502: you can retry your request)",
+            "upstream connection reset",
+            "connection reset by peer",
+            "upstream timeout",
+            "upstream timed out",
+            "unexpected EOF",
+        ] {
+            assert!(is_retriable(&LlmError::Api { status: 200, body: body.into() }), "{body}");
+            for status in [400, 401, 403, 404, 422] {
+                assert!(!is_retriable(&LlmError::Api { status, body: body.into() }), "{status}: {body}");
+            }
+        }
+        for body in [
+            "insufficient balance",
+            "invalid API key",
+            "invalid request",
+            "JSON parse error: EOF",
+        ] {
+            assert!(
+                !is_retriable(&LlmError::Api {
+                    status: 200,
+                    body: body.into()
+                }),
+                "{body}"
+            );
+        }
     }
 
     #[test]

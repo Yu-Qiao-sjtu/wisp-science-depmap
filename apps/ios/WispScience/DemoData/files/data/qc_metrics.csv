@@ -1,0 +1,7 @@
+sample_id,group,read_pairs_million,mapped_pct,q30_pct,duplicate_pct
+Control_01,control,24.8,96.2,93.8,12.4
+Control_02,control,25.3,95.8,94.1,11.8
+Control_03,control,23.9,96.5,93.5,13.1
+Treatment_01,treatment,26.1,95.4,94.3,12.0
+Treatment_02,treatment,24.5,96.1,93.9,12.7
+Treatment_03,treatment,25.7,95.9,94.0,11.5

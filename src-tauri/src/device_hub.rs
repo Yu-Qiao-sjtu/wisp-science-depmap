@@ -187,7 +187,10 @@ impl DeviceHub {
             | AgentEvent::FileChanged { .. }
             | AgentEvent::MemoryProposal { .. }
             | AgentEvent::FollowUps { .. }
+            | AgentEvent::BranchOpened { .. }
             | AgentEvent::HookFailed { .. }
+            // Not this conversation's turn: one may be running right now.
+            | AgentEvent::RunBackgroundFinished { .. }
             | AgentEvent::BackgroundReply(_) => return,
         };
         self.set_base(frame_id, project_id, state);

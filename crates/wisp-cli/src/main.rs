@@ -769,8 +769,7 @@ async fn register_mcp_tools(
             let autopilot = wisp_mcp::desktop_autopilot::DesktopAutopilot::for_catalog(
                 &tools,
                 client.clone(),
-                &std::env::var("TYPESAFE_API_KEY").unwrap_or_default(),
-                None,
+                wisp_llm::systemone::DecisionModel::from_env(|k| std::env::var(k).ok()),
                 false,
             );
             for t in tools {
@@ -813,7 +812,8 @@ fn default_provider_url(kind: &str) -> &'static str {
 fn default_provider_model(kind: &str) -> &'static str {
     match kind {
         "anthropic" => "claude-sonnet-5",
-        "openai_responses" | "openai_codex" => "gpt-5.5",
+        "openai_responses" => "gpt-5.5",
+        "openai_codex" => wisp_llm::codex_auth::DEFAULT_MODEL,
         "openai_chatgpt" => wisp_llm::chatgpt_auth::DEFAULT_MODEL,
         "xai_oauth" => wisp_llm::xai_auth::DEFAULT_MODEL,
         _ => "deepseek-v4-flash",
@@ -1403,6 +1403,12 @@ async fn main() -> Result<()> {
         true,
         vision_cfg.clone(),
     );
+    agent.add_tool(Box::new(
+        wisp_core::MapItemsTool::from_config(cfg.clone(), max_context).with_decision(
+            wisp_llm::systemone::DecisionModel::from_env(|k| std::env::var(k).ok())
+                .map(|model| model.with_proxy(cfg.proxy.clone())),
+        ),
+    ));
     agent.ctx.supports_vision = parse_wisp_vision(std::env::var("WISP_VISION").ok().as_deref())
         .unwrap_or(DEFAULT_HEADLESS_VISION);
     if let Some(vision) = &vision_cfg {

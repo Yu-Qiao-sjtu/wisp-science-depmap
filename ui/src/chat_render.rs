@@ -8,7 +8,7 @@ use crate::text::{event_target_value, format_duration_ms, md_to_html, tool_card_
 use crate::window_capture_escape;
 use leptos::*;
 use serde_wasm_bindgen::to_value;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -105,6 +105,7 @@ mod submitted_run_id_tests {
             harvested_at: None,
             cleaned_at: None,
             cleanup_error: None,
+            background_requested_at: None,
             output_fingerprint: String::new(),
         }
     }
@@ -251,6 +252,11 @@ pub(crate) struct CompletedRunCards {
     pub clock: ReadSignal<i64>,
     pub dismissed: RwSignal<HashSet<String>>,
 }
+
+/// Root-owned entry into the side chat for one Run (`(run id, title)`), shared
+/// through the Leptos context so a run card anywhere can ask about itself.
+#[derive(Clone, Copy)]
+pub(crate) struct SideChatRun(pub(crate) Callback<(String, String)>);
 
 /// True for items whose `render_item` produces an empty view, so the thread
 /// loop can drop their wrapper `<div>` and avoid a dangling `.thread` gap (#19).
@@ -1608,6 +1614,7 @@ fn plan_step_status_key(status: &str) -> &'static str {
     match status {
         "done" => "execution_plan.done",
         "running" => "execution_plan.running",
+        "unfinished" => "execution_plan.unfinished",
         "cancelled" => "execution_plan.cancelled",
         _ => "execution_plan.pending",
     }
@@ -1722,12 +1729,16 @@ pub(crate) fn ComposerPlanProgress(
                     view! {
                         <ol class="execution-plan-list composer-plan-steps" data-testid="composer-plan-steps">
                             {rows.into_iter().map(|(status, text)| {
-                                let key = plan_step_status_key(status);
+                                // Keep the recorded progress intact; a stopped
+                                // turn cannot have a currently running step.
+                                let display_status = move || {
+                                    if status == "running" && !busy.get() { "unfinished" } else { status }
+                                };
                                 view! {
-                                    <li data-status=status>
-                                        <span class="execution-plan-mark" aria-hidden="true">{compose_icon(plan_step_icon(status))}</span>
+                                    <li data-status=display_status>
+                                        <span class="execution-plan-mark" aria-hidden="true">{move || compose_icon(plan_step_icon(display_status()))}</span>
                                         <span class="execution-plan-text">{text}</span>
-                                        <span class="execution-plan-status">{move || t(locale.get(), key)}</span>
+                                        <span class="execution-plan-status">{move || t(locale.get(), plan_step_status_key(display_status()))}</span>
                                     </li>
                                 }
                             }).collect_view()}
@@ -2053,6 +2064,126 @@ pub(crate) fn acp_tool_step_body(content: &str, locations: &str) -> String {
     parts.join("\n")
 }
 
+/// Right-pane "Runs" tab: the active conversation's background Runs and file
+/// transfers, so a long session can be checked without scrolling the transcript.
+/// Cards are the conversation `RunMonitorCard` in embedded mode: no dismiss
+/// button, and transcript dismissals never hide a row here.
+#[component]
+pub(crate) fn SessionRunsPane(
+    runs: RwSignal<Vec<RunSummary>>,
+    clock: ReadSignal<i64>,
+    active_session: RwSignal<Option<String>>,
+    dismissed_runs: RwSignal<HashSet<String>>,
+    locale: RwSignal<Locale>,
+) -> impl IntoView {
+    let run_refresh_health = use_context::<RunRefreshHealth>();
+    let groups = create_memo(move |_| {
+        let Some(frame_id) = active_session.get() else {
+            return SessionRunGroups::default();
+        };
+        runs.with(|records| session_run_groups(records, &frame_id))
+    });
+    // Keyed by id only: a poll that changes a run's output must update the
+    // mounted card, not remount it (and reset its output scroll).
+    let active_ids = create_memo(move |_| {
+        groups.with(|groups| {
+            groups
+                .active
+                .iter()
+                .map(|run| run.id.clone())
+                .collect::<Vec<_>>()
+        })
+    });
+    let completed_ids = create_memo(move |_| {
+        groups.with(|groups| {
+            groups
+                .completed
+                .iter()
+                .map(|run| run.id.clone())
+                .collect::<Vec<_>>()
+        })
+    });
+    let completed_open = create_rw_signal(false);
+    // Reopening the tab for another conversation must not inherit a group
+    // state that was expanded for the previous one.
+    create_effect(move |_| {
+        let _ = active_session.get();
+        completed_open.set(false);
+    });
+    let has_runs = create_memo(move |_| {
+        !(active_ids.with(Vec::is_empty) && completed_ids.with(Vec::is_empty))
+    });
+    let card = move |id: String| {
+        view! {
+            <RunMonitorCard
+                run_id=id
+                runs=runs
+                clock=clock
+                tool_ok=None
+                tool_output=String::new()
+                dismissed_runs=dismissed_runs
+                embedded=true
+            />
+        }
+    };
+    view! {
+        {move || if !has_runs.get() {
+            view! {
+                <div class="rp-empty" data-testid="session-runs-empty">
+                    <span class="rp-empty-icon"></span>
+                    <div class="rp-empty-title">{move || t(locale.get(), "right.no_runs.title")}</div>
+                    <p>{move || t(locale.get(), "right.no_runs.body")}</p>
+                </div>
+            }
+            .into_view()
+        } else {
+            view! {
+                <div class="rp-runs" data-testid="session-runs-pane">
+                    <section class="control-section rp-runs-group" data-testid="session-runs-active">
+                        <div class="control-section-head">
+                            <span>{move || t(locale.get(), "right.runs_active")}</span>
+                            <div class="control-head-actions">
+                                <span class="control-count" data-testid="session-runs-active-count">
+                                    {move || active_ids.with(Vec::len).to_string()}
+                                </span>
+                                <button type="button" class="icon-btn control-refresh"
+                                    title=move || t(locale.get(), "runs.refresh")
+                                    aria-label=move || t(locale.get(), "runs.refresh")
+                                    on:click=move |_| refresh_runs(runs, locale, run_refresh_health)
+                                >{compose_icon("sync")}</button>
+                            </div>
+                        </div>
+                        {move || active_ids.with(Vec::is_empty).then(|| view! {
+                            <div class="control-empty">{t(locale.get(), "right.runs_active_empty")}</div>
+                        })}
+                        <For each=move || active_ids.get() key=|id| id.clone() children=card />
+                    </section>
+                    {move || (!completed_ids.with(Vec::is_empty)).then(|| view! {
+                        <section class="control-section rp-runs-group" data-testid="session-runs-completed">
+                            <button type="button" class="control-section-head rp-runs-toggle"
+                                aria-expanded=move || completed_open.get().to_string()
+                                on:click=move |_| completed_open.update(|open| *open = !*open)>
+                                <span class="rp-runs-toggle-label">
+                                    {move || compose_icon(if completed_open.get() { "chevron-down" } else { "chevron-right" })}
+                                    <span>{move || tf(
+                                        locale.get(),
+                                        "right.runs_completed",
+                                        &[("n", &completed_ids.with(Vec::len).to_string())],
+                                    )}</span>
+                                </span>
+                            </button>
+                            <Show when=move || completed_open.get()>
+                                <For each=move || completed_ids.get() key=|id| id.clone() children=card />
+                            </Show>
+                        </section>
+                    })}
+                </div>
+            }
+            .into_view()
+        }}
+    }
+}
+
 #[component]
 pub(crate) fn ProvenancePane(
     items: RwSignal<Vec<ChatItem>>,
@@ -2183,7 +2314,16 @@ pub(crate) fn RunMonitorCard(
     let locale = use_locale();
     let completed_cards = use_context::<CompletedRunCards>();
     let fallback = serde_json::from_str::<RunRecord>(&tool_output).ok();
+    let monitor_query_failed =
+        tool_ok == Some(false) && fallback.is_none() && !tool_output.trim().is_empty();
     let detail = create_rw_signal(fallback.clone());
+    let detail_error = create_rw_signal(None::<String>);
+    let detail_retry_at = create_rw_signal(None::<i64>);
+    let run_refresh_health = use_context::<RunRefreshHealth>();
+    let refresh_warning = move || {
+        run_refresh_health
+            .and_then(|health| run_refresh_warning(&health.0.get(), clock.get(), locale.get()))
+    };
     let lookup_id = run_id.clone();
     let selected_id = run_id.clone();
     let fallback_for_selection = fallback.as_ref().map(RunSummary::from);
@@ -2200,23 +2340,61 @@ pub(crate) fn RunMonitorCard(
         .or_else(|| fallback_for_selection.clone())
     });
     let detail_epoch = Rc::new(Cell::new(0_u64));
+    let detail_pending = Rc::new(Cell::new(false));
+    let last_requested_summary = Rc::new(RefCell::new(None::<RunSummary>));
+    on_cleanup({
+        let detail_epoch = Rc::clone(&detail_epoch);
+        move || detail_epoch.set(detail_epoch.get().wrapping_add(1))
+    });
     create_effect({
         let detail_epoch = Rc::clone(&detail_epoch);
+        let detail_pending = Rc::clone(&detail_pending);
+        let last_requested_summary = Rc::clone(&last_requested_summary);
         move |_| {
             let Some(summary) = selected_run.get() else {
                 return;
             };
+            let retry_due = detail_retry_at
+                .get()
+                .is_some_and(|retry_at| clock.get() >= retry_at);
+            let summary_changed = last_requested_summary.borrow().as_ref() != Some(&summary);
+            if detail_pending.get() || (!summary_changed && !retry_due) {
+                return;
+            }
+            detail_pending.set(true);
+            *last_requested_summary.borrow_mut() = Some(summary.clone());
             let epoch = detail_epoch.get().wrapping_add(1);
             detail_epoch.set(epoch);
             let detail_epoch = Rc::clone(&detail_epoch);
+            let detail_pending = Rc::clone(&detail_pending);
             spawn_local(async move {
                 let args = to_value(&serde_json::json!({ "runId": &summary.id })).unwrap();
-                let Ok(value) = invoke_checked("get_run_detail", args).await else {
+                let result = invoke_checked("get_run_detail", args)
+                    .await
+                    .map_err(js_error_text)
+                    .and_then(|value| {
+                        serde_wasm_bindgen::from_value::<RunRecord>(value)
+                            .map_err(|error| error.to_string())
+                    });
+                if detail_epoch.get() != epoch {
                     return;
+                }
+                detail_pending.set(false);
+                let record = match result {
+                    Ok(record) => record,
+                    Err(error) => {
+                        detail_error.try_update(|value| *value = Some(error));
+                        detail_retry_at.try_update(|value| {
+                            *value = Some(js_sys::Date::now() as i64 / 1000 + 5);
+                        });
+                        return;
+                    }
                 };
-                let Ok(record) = serde_wasm_bindgen::from_value::<RunRecord>(value) else {
+                detail_error.try_update(|value| *value = None);
+                detail_retry_at.try_update(|value| *value = None);
+                if selected_run.get_untracked().as_ref() != Some(&summary) {
                     return;
-                };
+                }
                 // A Run may settle between the summary poll and this detail
                 // read. Wait for the next summary instead of briefly rendering
                 // a newer lifecycle inside an older card and remounting it on
@@ -2225,7 +2403,7 @@ pub(crate) fn RunMonitorCard(
                     && record.ended_at == summary.ended_at
                     && record.exit_code == summary.exit_code;
                 let changed = detail.with_untracked(|current| current.as_ref() != Some(&record));
-                if detail_epoch.get() == epoch && same_lifecycle && changed {
+                if same_lifecycle && changed {
                     detail.set(Some(record));
                     schedule_run_output_follow();
                 }
@@ -2239,6 +2417,12 @@ pub(crate) fn RunMonitorCard(
     // Manual entry point: the review button on the card opens the modal
     // directly, for any card.
     let review_modal = use_context::<crate::overlays::RunReviewModal>().map(|modal| modal.0);
+    let side_chat_run = use_context::<SideChatRun>().map(|ask| ask.0);
+    // Covers the gap until the next run poll carries `background_requested_at`,
+    // and cards drawn from a tool result whose Run is not in the polled list.
+    let moved_to_background = create_rw_signal(false);
+    let background_pending = create_rw_signal(false);
+    let background_error = create_rw_signal(None::<String>);
     view! {
         {move || {
             if !embedded
@@ -2252,7 +2436,8 @@ pub(crate) fn RunMonitorCard(
             let run = selected_run.get();
             let Some(run) = run else {
                 let failed = tool_ok == Some(false);
-                let status = if failed { "failed" } else { "running" };
+                // A failed status lookup does not establish that the Run failed.
+                let status = "unknown";
                 let status_class = format!("run-status {status}");
                 let detail = if failed && !tool_output.trim().is_empty() {
                     tool_output.clone()
@@ -2270,10 +2455,14 @@ pub(crate) fn RunMonitorCard(
                             <span class=status_class>{run_status_label(locale.get(), status)}</span>
                         </div>
                         <div class="run-monitor-empty">{detail}</div>
+                        {move || refresh_warning().map(|warning| view! {
+                            <div class="context-error" data-testid="run-monitor-refresh-error">{warning}</div>
+                        })}
                     </article>
                 }.into_view();
             };
             let title = run_title(&run);
+            let ask_run = (run.id.clone(), title.clone());
             let status = run.status.clone();
             let status_class = format!("run-status {status}");
             let active = matches!(status.as_str(), "submitted" | "running" | "cancelling");
@@ -2282,6 +2471,9 @@ pub(crate) fn RunMonitorCard(
                 "succeeded" | "failed" | "cancelled" | "timed_out" | "lost"
             );
             let cancellable = matches!(status.as_str(), "submitted" | "running" | "cancelling");
+            let backgrounded = run.background_requested_at.is_some() || moved_to_background.get();
+            // Ends a turn waiting on the Run; its conversation is told when it ends.
+            let can_background = active && !backgrounded && run.frame_id.is_some();
             let force_cancel = status == "cancelling";
             let cancel_label = if force_cancel {
                 t(locale.get(), "runs.force_cancel")
@@ -2293,6 +2485,7 @@ pub(crate) fn RunMonitorCard(
             let meta_kind = run.kind.clone();
             let ended_at = run.ended_at;
             let last_heartbeat = run.last_polled_at;
+            let heartbeat_id = run.id.clone();
             let timeout_secs = run.timeout_secs;
             let settled_now = js_sys::Date::now() as i64 / 1000;
             let progress = run_progress(&run);
@@ -2354,6 +2547,45 @@ pub(crate) fn RunMonitorCard(
                                 <span class=status_class>{run_status_label(locale.get(), &status)}</span>
                             }.into_view()
                         }}
+                        {side_chat_run.map(|ask| {
+                            let tip = t(locale.get(), "runs.ask_side_chat");
+                            view! {
+                                <button type="button" class="icon-btn run-monitor-ask"
+                                    data-testid="run-monitor-ask"
+                                    title=tip.clone()
+                                    aria-label=tip
+                                    on:click=move |_| ask.call(ask_run.clone())
+                                >{compose_icon("chat")}</button>
+                            }
+                        })}
+                        {can_background.then(|| {
+                            let run_id = cancel_id.clone();
+                            let tip = t(locale.get(), "runs.background");
+                            view! {
+                                <button type="button" class="icon-btn run-monitor-background"
+                                    data-testid="run-monitor-background"
+                                    title=tip.clone()
+                                    aria-label=tip
+                                    disabled=move || background_pending.get()
+                                    on:click=move |_| {
+                                        let run_id = run_id.clone();
+                                        background_pending.set(true);
+                                        background_error.set(None);
+                                        spawn_local(async move {
+                                            let arg = to_value(&serde_json::json!({ "runId": &run_id })).unwrap();
+                                            match invoke_checked("background_run", arg).await {
+                                                Ok(_) => {
+                                                    moved_to_background.try_set(true);
+                                                }
+                                                Err(error) => {
+                                                    background_error.try_set(Some(js_error_text(error)));
+                                                }
+                                            }
+                                            background_pending.try_set(false);
+                                        });
+                                    }>{compose_icon("bell")}</button>
+                            }
+                        })}
                         {cancellable.then(|| {
                             let run_id = cancel_id.clone();
                             let tip = cancel_label.clone();
@@ -2399,6 +2631,17 @@ pub(crate) fn RunMonitorCard(
                     </div>
                     <div class="run-monitor-meta">{move || {
                         let now = if active { clock.get() } else { settled_now };
+                        // Heartbeat-only polls land in `runs` untracked (see
+                        // `refresh_runs`); this closure already re-runs on
+                        // every clock tick, so the freshest value is read here.
+                        let last_heartbeat = runs
+                            .with_untracked(|records| {
+                                records
+                                    .iter()
+                                    .find(|record| record.id == heartbeat_id)
+                                    .and_then(|record| record.last_polled_at)
+                            })
+                            .or(last_heartbeat);
                         run_monitor_meta(
                             locale.get(),
                             &meta_context,
@@ -2411,6 +2654,12 @@ pub(crate) fn RunMonitorCard(
                             now,
                         )
                     }}</div>
+                    {(active && backgrounded).then(|| view! {
+                        <div class="run-monitor-background-note" data-testid="run-monitor-backgrounded">
+                            {compose_icon("bell")}
+                            <span>{t(locale.get(), "runs.backgrounded")}</span>
+                        </div>
+                    })}
                     {progress.map(|progress| run_progress_meter(progress, locale.get()))}
                     {command.map(|command| view! { <div class="run-monitor-command">{command}</div> })}
                     {remote_workdir.map(|workdir| view! {
@@ -2441,6 +2690,24 @@ pub(crate) fn RunMonitorCard(
                         </details>
                     })}
                     {poll_error.map(|error| view! { <div class="context-error">{error}</div> })}
+                    {monitor_query_failed.then(|| view! {
+                        <div class="context-error" data-testid="run-monitor-tool-error">
+                            {tf(locale.get(), "runs.monitor_failed", &[("error", &tool_output)])}
+                        </div>
+                    })}
+                    {move || active.then(refresh_warning).flatten().map(|warning| view! {
+                        <div class="context-error" data-testid="run-monitor-refresh-error">{warning}</div>
+                    })}
+                    {move || detail_error.get().map(|error| view! {
+                        <div class="context-error" data-testid="run-monitor-detail-error">
+                            {tf(locale.get(), "runs.detail_failed", &[("error", &error)])}
+                        </div>
+                    })}
+                    {move || background_error.get().map(|error| view! {
+                        <div class="context-error" data-testid="run-monitor-background-error">
+                            {tf(locale.get(), "runs.background_failed", &[("error", &error)])}
+                        </div>
+                    })}
                 </article>
             }.into_view()
         }}
@@ -2460,12 +2727,15 @@ pub(crate) fn render_item(
     compact_assistant: bool,
     can_modify: bool,
     can_branch: Signal<bool>,
+    can_excerpt: Signal<bool>,
+    excerpt_start: Signal<Option<usize>>,
     show_actions: Signal<bool>,
     can_undo: Signal<bool>,
     show_explore: Signal<bool>,
     can_explore: Signal<bool>,
     on_edit: impl Fn(usize) + Clone + 'static,
     on_branch: impl Fn(usize) + Clone + 'static,
+    on_excerpt: Callback<usize>,
     on_undo: Callback<usize>,
     explore_turn_index: usize,
     on_explore: Callback<usize>,
@@ -2493,9 +2763,12 @@ pub(crate) fn render_item(
                 busy=busy
                 can_modify=can_modify
                 can_branch=can_branch
+                can_excerpt=can_excerpt
+                excerpt_start=excerpt_start
                 on_copy=Callback::new(copy_text)
                 on_edit=Callback::new(on_edit)
                 on_branch=Callback::new(on_branch)
+                on_excerpt=on_excerpt
                 on_file=on_file
             />
         }

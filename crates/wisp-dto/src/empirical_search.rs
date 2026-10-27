@@ -64,10 +64,8 @@ pub fn admit_score(node: &CandidateNode, frozen: bool, approved: bool) -> Result
 }
 
 pub fn prefer<'a>(left: &'a CandidateNode, right: &'a CandidateNode) -> &'a CandidateNode {
-    let left_failed =
-        left.outcome != CandidateOutcome::Scored || left.run_id.trim().is_empty();
-    let right_failed =
-        right.outcome != CandidateOutcome::Scored || right.run_id.trim().is_empty();
+    let left_failed = left.outcome != CandidateOutcome::Scored || left.run_id.trim().is_empty();
+    let right_failed = right.outcome != CandidateOutcome::Scored || right.run_id.trim().is_empty();
     if left_failed != right_failed {
         return if left_failed { right } else { left };
     }

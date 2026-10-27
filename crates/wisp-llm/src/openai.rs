@@ -577,6 +577,9 @@ impl Provider for OpenAiProvider {
     fn model(&self) -> &str {
         &self.cfg.model
     }
+    fn max_output_tokens(&self) -> Option<u64> {
+        Some(self.cfg.max_tokens)
+    }
 
     async fn complete(&self, messages: &[Message], tools: &[ToolSchema]) -> Result<Completion> {
         let body = self.build_body(messages, tools, false);
@@ -1436,6 +1439,21 @@ mod tests {
     fn deepseek_reader_disables_thinking_and_omits_effort() {
         let mut cfg =
             crate::ProviderConfig::openai("https://api.deepseek.com", "", "deepseek-v4-flash");
+        cfg.thinking_enabled = Some(false);
+        cfg.reasoning_effort = Some("high".into());
+        let provider = OpenAiProvider::new(cfg);
+        let body = provider.build_body(&[Message::user("hi")], &[], false);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn gateway_vendor_prefixed_deepseek_id_still_disables_thinking() {
+        let mut cfg = crate::ProviderConfig::openai(
+            "https://api.commandcode.ai/provider/v1",
+            "",
+            "deepseek/deepseek-v4.1-flash",
+        );
         cfg.thinking_enabled = Some(false);
         cfg.reasoning_effort = Some("high".into());
         let provider = OpenAiProvider::new(cfg);

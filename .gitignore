@@ -1,6 +1,11 @@
 /target
 /apps/macos/.build/
 /apps/macos/.swiftpm/
+/apps/ios/.build/
+/apps/ios/.swiftpm/
+/apps/ios/DerivedData/
+/apps/ios/**/*.xcuserstate
+/apps/ios/**/xcuserdata/
 /apps/windows/**/bin/
 /apps/windows/**/obj/
 /**/target

@@ -17,7 +17,11 @@ use wasm_bindgen::JsCast;
 #[derive(Clone, Copy)]
 pub(crate) struct SessionArtifactChoiceState {
     pub selected: RwSignal<bool>,
+    /// Reviewed previews by conversation id, including the branches and
+    /// subagents deleted along with a selected conversation.
     pub previews: RwSignal<std::collections::HashMap<String, SessionArtifactPreview>>,
+    /// Selected conversation → the branches and subagents previewed with it.
+    pub children: RwSignal<std::collections::HashMap<String, Vec<String>>>,
     pub busy: RwSignal<bool>,
     pub error: RwSignal<Option<String>>,
 }
@@ -26,6 +30,7 @@ impl SessionArtifactChoiceState {
         Self {
             selected: create_rw_signal(false),
             previews: create_rw_signal(Default::default()),
+            children: create_rw_signal(Default::default()),
             busy: create_rw_signal(false),
             error: create_rw_signal(None),
         }
@@ -36,18 +41,23 @@ impl SessionArtifactChoiceState {
     }
 }
 
+/// `with_children`: the conversations are deleted with their branches and
+/// subagents, whose artifacts are previewed and deleted too.
 #[component]
 pub(crate) fn SessionArtifactChoice(
     locale: RwSignal<Locale>,
     ids: Vec<String>,
     target: Option<String>,
     state: SessionArtifactChoiceState,
+    #[prop(optional)] with_children: Option<Signal<bool>>,
 ) -> impl IntoView {
     state.selected.set(false);
     state.previews.set(Default::default());
+    state.children.set(Default::default());
     state.error.set(None);
     state.busy.set(false);
     let moving = target.is_some();
+    let with_children = with_children.unwrap_or_else(|| Signal::derive(|| false));
     let generation = std::rc::Rc::new(std::cell::Cell::new(0u64));
     let alive = std::rc::Rc::new(std::cell::Cell::new(true));
     let cleanup = alive.clone();
@@ -58,31 +68,60 @@ pub(crate) fn SessionArtifactChoice(
         state.busy.set(true);
         state.error.set(None);
         state.previews.set(Default::default());
+        state.children.set(Default::default());
         let ids = ids.clone();
         let target = target.clone();
         let alive = alive.clone();
         let generation = generation.clone();
+        let family = with_children.get_untracked();
         spawn_local(async move {
             let mut previews = std::collections::HashMap::new();
+            let mut children = std::collections::HashMap::new();
             let mut error = None;
-            for id in ids {
-                let args =
-                    to_value(&serde_json::json!({"id":id,"targetProjectId":target})).unwrap();
-                match invoke_checked("preview_session_artifacts", args).await {
+            if family {
+                let args = to_value(&serde_json::json!({ "ids": ids })).unwrap();
+                let families = match invoke_checked("preview_session_family_artifacts", args).await
+                {
                     Ok(value) => {
-                        match serde_wasm_bindgen::from_value::<SessionArtifactPreview>(value) {
-                            Ok(preview) => {
-                                previews.insert(id, preview);
-                            }
-                            Err(e) => {
-                                error = Some(e.to_string());
-                                break;
+                        serde_wasm_bindgen::from_value::<Vec<SessionFamilyArtifactPreview>>(value)
+                            .map_err(|e| e.to_string())
+                    }
+                    Err(e) => Err(localize_backend(locale.get_untracked(), &js_error_text(e))),
+                };
+                match families {
+                    Ok(families) => {
+                        for family in families {
+                            let ids = family.children.iter().map(|child| child.id.clone());
+                            children.insert(family.id.clone(), ids.collect::<Vec<_>>());
+                            previews.insert(family.id, family.preview);
+                            for child in family.children {
+                                previews.insert(child.id, child.preview);
                             }
                         }
                     }
-                    Err(e) => {
-                        error = Some(localize_backend(locale.get_untracked(), &js_error_text(e)));
-                        break;
+                    Err(e) => error = Some(e),
+                }
+            } else {
+                for id in ids {
+                    let args =
+                        to_value(&serde_json::json!({"id":id,"targetProjectId":target})).unwrap();
+                    match invoke_checked("preview_session_artifacts", args).await {
+                        Ok(value) => {
+                            match serde_wasm_bindgen::from_value::<SessionArtifactPreview>(value) {
+                                Ok(preview) => {
+                                    previews.insert(id, preview);
+                                }
+                                Err(e) => {
+                                    error = Some(e.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error =
+                                Some(localize_backend(locale.get_untracked(), &js_error_text(e)));
+                            break;
+                        }
                     }
                 }
             }
@@ -90,9 +129,19 @@ pub(crate) fn SessionArtifactChoice(
                 return;
             }
             state.previews.set(previews);
+            state.children.set(children);
             state.error.set(error);
             state.busy.set(false);
         });
+    });
+    // Deleting the children too changes every preview, the selected ones'
+    // included, so a reviewed preview is discarded when that choice changes.
+    create_effect(move |previous: Option<bool>| {
+        let family = with_children.get();
+        if previous.is_some_and(|previous| previous != family) && state.selected.get_untracked() {
+            reload.call(());
+        }
+        family
     });
     view! {
         <div class="session-artifact-choice">
@@ -129,6 +178,125 @@ pub(crate) fn SessionArtifactChoice(
                 }}
             })}
         </div>
+    }
+}
+
+/// Whether deleting conversations also deletes their subagents, branches and
+/// explorations. Checked by default; unchecked keeps them standalone.
+#[derive(Clone, Copy)]
+pub(crate) struct SessionChildrenChoiceState {
+    pub selected: RwSignal<bool>,
+    /// `None` until the backend has counted the children.
+    pub preview: RwSignal<Option<SessionChildrenPreview>>,
+    pub failed: RwSignal<bool>,
+}
+impl SessionChildrenChoiceState {
+    pub(crate) fn new() -> Self {
+        Self {
+            selected: create_rw_signal(true),
+            preview: create_rw_signal(None),
+            failed: create_rw_signal(false),
+        }
+    }
+    /// Delete waits for the count, so nothing unseen is removed, and an open
+    /// exploration round cannot be kept.
+    pub(crate) fn blocked(self) -> bool {
+        match self.preview.get() {
+            None => !self.failed.get(),
+            Some(preview) => !self.selected.get() && preview.explorations > 0,
+        }
+    }
+    /// Whether the conversations are deleted along with children (tracked).
+    pub(crate) fn deletes_children(self) -> bool {
+        Self::cascade(self.preview.get().as_ref(), self.selected.get()) == Some(true)
+    }
+    /// `None` keeps the backend's original refusal for a conversation with
+    /// branches: nothing was counted, or the count could not be loaded.
+    pub(crate) fn include_children(self) -> Option<bool> {
+        Self::cascade(
+            self.preview.get_untracked().as_ref(),
+            self.selected.get_untracked(),
+        )
+    }
+    /// Selected conversations that go with a selected ancestor when children
+    /// are deleted, so they are not deleted on their own.
+    pub(crate) fn nested(self) -> std::collections::HashSet<String> {
+        self.preview
+            .get_untracked()
+            .map(|preview| preview.nested.into_iter().collect())
+            .unwrap_or_default()
+    }
+    /// A selection that already holds every branch and subagent shows no
+    /// choice; each family is still deleted as one, from its top conversation.
+    fn cascade(preview: Option<&SessionChildrenPreview>, selected: bool) -> Option<bool> {
+        let preview = preview?;
+        if !preview.is_empty() {
+            Some(selected)
+        } else if !preview.nested.is_empty() {
+            Some(true)
+        } else {
+            None
+        }
+    }
+}
+
+#[component]
+pub(crate) fn SessionChildrenChoice(
+    locale: RwSignal<Locale>,
+    ids: Vec<String>,
+    state: SessionChildrenChoiceState,
+) -> impl IntoView {
+    state.selected.set(true);
+    state.preview.set(None);
+    state.failed.set(false);
+    let alive = std::rc::Rc::new(std::cell::Cell::new(true));
+    let cleanup = alive.clone();
+    on_cleanup(move || cleanup.set(false));
+    spawn_local(async move {
+        let args = to_value(&serde_json::json!({ "ids": ids })).unwrap();
+        let preview = invoke_checked("preview_session_children", args)
+            .await
+            .ok()
+            .and_then(|value| serde_wasm_bindgen::from_value::<SessionChildrenPreview>(value).ok());
+        if !alive.get() {
+            return;
+        }
+        match preview {
+            Some(preview) => state.preview.set(Some(preview)),
+            None => state.failed.set(true),
+        }
+    });
+    move || {
+        let preview = state.preview.get().filter(|preview| !preview.is_empty())?;
+        let loc = locale.get();
+        let counts = [
+            ("subagent.group", preview.subagents),
+            ("branch.group", preview.branches),
+            ("exploration.group", preview.explorations),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(key, n)| format!("{} {n}", t(loc, key)))
+        .collect::<Vec<_>>()
+        .join(" · ");
+        let keep_hint = if preview.explorations > 0 {
+            "session.children.exploration_blocks"
+        } else {
+            "session.children.keep"
+        };
+        Some(view! {
+            <div class="session-artifact-choice" data-testid="session-children-choice">
+                <label class="session-artifact-toggle">
+                    <input type="checkbox" prop:checked=move || state.selected.get()
+                        on:change=move |ev| state.selected.set(event_target_checked(&ev)) />
+                    <span>{t(loc, "session.children.delete")}</span>
+                </label>
+                <div class="hint">{counts}</div>
+                {move || (!state.selected.get()).then(|| view! {
+                    <p role="status">{t(loc, keep_hint)}</p>
+                })}
+            </div>
+        })
     }
 }
 
@@ -1660,7 +1828,7 @@ pub(crate) fn ShelvedSessionsOverlay(
                                     on:click=move |_| on_open.call(open_session.clone())>
                                     {compose_icon("chat")}<span>{session.title}</span>
                                 </button>
-                                <button type="button" class="btn" on:click=move |_| on_restore.call(restore_id.clone())>
+                                <button type="button" class="btn-ghost shelved-session-restore" on:click=move |_| on_restore.call(restore_id.clone())>
                                     {compose_icon("undo")}<span>{move || t(locale.get(), "session.restore")}</span>
                                 </button>
                             </div>
@@ -1672,7 +1840,7 @@ pub(crate) fn ShelvedSessionsOverlay(
                 </div>
                 {move || loading.get().then(|| view! { <p role="status">{move || t(locale.get(), "loading")}</p> })}
                 {move || cursor.get().is_some().then(|| view! {
-                    <button type="button" class="btn" disabled=move || loading.get()
+                    <button type="button" class="btn-ghost shelved-sessions-more" disabled=move || loading.get()
                         on:click=move |_| fetch.call(cursor.get_untracked())>{move || t(locale.get(), "sidebar.load_older")}</button>
                 })}
             </section>

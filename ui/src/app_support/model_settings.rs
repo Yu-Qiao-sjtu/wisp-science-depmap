@@ -6,6 +6,34 @@
 
 use super::*;
 use crate::bindings::invoke_timeout;
+use crate::network_settings::route_error;
+
+/// Wait this long for `save_model`. A reply lost on the way back from the
+/// backend (macOS 12 stall) must not leave the Models panel busy forever.
+const SAVE_MODEL_TIMEOUT_MS: u32 = 60_000;
+
+/// Invoke arguments as plain objects and `null`, never an ES `Map` and
+/// `undefined`. `serde_wasm_bindgen::to_value` builds a `Map`; on a macOS 12
+/// WKWebView the Models panel's save and validate flows stopped inside that
+/// path before the IPC request left the renderer, and resumed with this shape.
+/// Every command deserializes JSON, so plain objects are the exact contract.
+/// A serialization error is returned, not unwrapped: a wasm panic is a trap
+/// that leaves `settings_busy` set for good.
+fn json_args(value: &serde_json::Value) -> Result<JsValue, serde_wasm_bindgen::Error> {
+    serde::Serialize::serialize(value, &serde_wasm_bindgen::Serializer::json_compatible())
+}
+
+/// The backend committed the profile, but the reply did not deserialize. The
+/// form closes (a retry would add a duplicate), so the notice is also toasted.
+fn report_unreadable_reply(loc: Locale, err: &serde_wasm_bindgen::Error) -> String {
+    let text = tf(
+        loc,
+        "status.save_response_unreadable",
+        &[("msg", &err.to_string())],
+    );
+    show_actionable_warning_toast(&text);
+    text
+}
 
 /// Resolve selectable efforts from the exact catalog entry. A keyed result
 /// prevents a slow lookup for the previous model or endpoint leaking into the
@@ -22,15 +50,16 @@ pub(crate) fn use_model_efforts(
         };
         result.set(None);
         spawn_local(async move {
-            let args = to_value(&serde_json::json!({
+            let args = json_args(&serde_json::json!({
                 "provider": request_key.0,
                 "apiUrl": request_key.1,
                 "model": request_key.2,
-            }))
-            .unwrap();
-            let efforts = invoke_checked("model_catalog_lookup", args)
-                .await
-                .ok()
+            }));
+            let reply = match args {
+                Ok(args) => invoke_checked("model_catalog_lookup", args).await.ok(),
+                Err(_) => None,
+            };
+            let efforts = reply
                 .and_then(|value| {
                     serde_wasm_bindgen::from_value::<Option<CatalogEntryDto>>(value).ok()
                 })
@@ -50,12 +79,13 @@ pub(crate) fn use_model_efforts(
 }
 
 async fn catalog_limits_or_default(provider: &str, api_url: &str, model: &str) -> (u64, u64) {
-    let args = to_value(&serde_json::json!({
+    let Ok(args) = json_args(&serde_json::json!({
         "provider": provider,
         "apiUrl": api_url,
         "model": model,
-    }))
-    .unwrap();
+    })) else {
+        return (8192, 128_000);
+    };
     match invoke_checked("model_catalog_lookup", args).await {
         Ok(value) => serde_wasm_bindgen::from_value::<Option<CatalogEntryDto>>(value)
             .ok()
@@ -64,6 +94,25 @@ async fn catalog_limits_or_default(provider: &str, api_url: &str, model: &str) -
             .unwrap_or((8192, 128_000)),
         Err(_) => (8192, 128_000),
     }
+}
+
+/// The Specialists page's import/export dialog. One layer at a time: either a
+/// package preview awaiting explicit confirmation, or an export paused because
+/// the instructions look like they contain a secret.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SpecialistTransfer {
+    Import {
+        preview: specialist_package::SpecialistImportPreview,
+        /// Local profile to bind ("" follows the active model).
+        model_id: String,
+        reviewed: bool,
+        error: Option<String>,
+    },
+    SecretWarning {
+        id: String,
+        name: String,
+        findings: Vec<specialist_package::SecretFinding>,
+    },
 }
 
 /// Owned form state plus injected cross-domain wiring. `RwSignal` is `Copy`,
@@ -76,6 +125,7 @@ pub(crate) struct ModelSettingsState {
     pub(crate) model_form_msg: RwSignal<Option<(bool, String)>>,
     pub(crate) specialists: RwSignal<Vec<Specialist>>,
     pub(crate) specialist_form: RwSignal<Option<Specialist>>,
+    pub(crate) specialist_transfer: RwSignal<Option<SpecialistTransfer>>,
     // Cross-domain signals injected by `App`.
     pub(crate) models: RwSignal<Vec<ModelProfile>>,
     pub(crate) acp_agents: RwSignal<Vec<AcpAgentProfile>>,
@@ -101,6 +151,7 @@ impl ModelSettingsState {
             model_form_msg: create_rw_signal(None::<(bool, String)>),
             specialists: create_rw_signal(vec![]),
             specialist_form: create_rw_signal(None::<Specialist>),
+            specialist_transfer: create_rw_signal(None::<SpecialistTransfer>),
             models,
             acp_agents,
             settings,
@@ -143,7 +194,7 @@ impl ModelSettingsState {
             return;
         };
         spawn_local(async move {
-            let arg = to_value(&serde_json::json!({
+            let arg = json_args(&serde_json::json!({
                 "profile": {
                     "id": profile.id,
                     "label": profile.label,
@@ -161,6 +212,7 @@ impl ModelSettingsState {
                     "session_header_name": profile.session_header_name,
                     "supports_vision": profile.supports_vision,
                     "use_for_vision": profile.use_for_vision,
+                    "use_for_expert": profile.use_for_expert,
                     "use_for_image_generation": profile.use_for_image_generation,
                     "image_size": profile.image_size,
                     "image_quality": profile.image_quality,
@@ -176,8 +228,11 @@ impl ModelSettingsState {
                 "useForVision": profile.use_for_vision,
                 "useForImageGeneration": profile.use_for_image_generation,
                 "useForVideoGeneration": profile.use_for_video_generation,
-            }))
-            .unwrap();
+            }));
+            let arg = match arg {
+                Ok(arg) => arg,
+                Err(err) => return show_warning_toast(&err.to_string()),
+            };
             match invoke_checked("save_model", arg).await {
                 Ok(v) => {
                     if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
@@ -229,7 +284,12 @@ impl ModelSettingsState {
             (has_key && key.is_empty())
                 || matches!(provider_value(&form.provider), "openai_codex" | "xai_oauth"),
         );
-        if let Some(err_key) = settings_required_error_key(&cfg, &key) {
+        if let Some(err_key) = settings_required_error_key(&cfg, &key).or_else(|| {
+            route_error(
+                form.proxy_url.as_deref().unwrap_or_default(),
+                form.proxy_custom,
+            )
+        }) {
             let err = t(loc, err_key);
             let text = tf(loc, "status.save_failed", &[("msg", &err)]);
             model_form_msg.set(Some((false, text)));
@@ -260,7 +320,7 @@ impl ModelSettingsState {
         settings_busy.set(true);
         model_form_msg.set(Some((true, t(loc, "status.saving_settings").into())));
         let provider = provider_value(&form.provider);
-        let profile = serde_json::json!({
+        let mut profile = serde_json::json!({
             "id": form.id.clone().unwrap_or_default(),
             "label": form.label.trim(),
             "provider": provider,
@@ -277,6 +337,7 @@ impl ModelSettingsState {
             "session_header_name": form.session_header_name,
             "supports_vision": form.supports_vision,
             "use_for_vision": form.use_for_vision,
+            "use_for_expert": form.use_for_expert && !form.is_image_model() && !is_video_generation_model(&form.model) && !form.use_for_video_generation,
             "use_for_image_generation": form.use_for_image_generation,
             "image_size": form.image_size.trim(),
             "image_quality": form.image_quality.trim(),
@@ -287,29 +348,50 @@ impl ModelSettingsState {
             "video_aspect_ratio": form.video_aspect_ratio,
             "video_resolution": form.video_resolution,
         });
+        // Omitted keeps the endpoint's saved route.
+        if let Some(proxy_url) = form.proxy_url.as_deref() {
+            profile["proxy_url"] = proxy_url.trim().into();
+        }
         let key_arg = if key.is_empty() { None } else { Some(key) };
         spawn_local(async move {
-            let arg = to_value(&serde_json::json!({
+            let arg = match json_args(&serde_json::json!({
                 "profile": profile,
                 "key": key_arg,
                 "useForVision": form.use_for_vision,
                 "useForImageGeneration": form.use_for_image_generation,
                 "useForVideoGeneration": form.use_for_video_generation,
                 "restoreChatModel": form.restore_chat_model,
-            }))
-            .unwrap();
-            match invoke_checked("save_model", arg).await {
+            })) {
+                Ok(arg) => arg,
+                Err(err) => {
+                    let text = tf(loc, "status.save_failed", &[("msg", &err.to_string())]);
+                    model_form_msg.set(Some((false, text)));
+                    settings_busy.set(false);
+                    return;
+                }
+            };
+            match invoke_timeout("save_model", arg, SAVE_MODEL_TIMEOUT_MS).await {
                 Ok(v) => {
-                    if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
-                        models.set(list);
-                    }
+                    let outcome: (bool, String) =
+                        match serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
+                            Ok(list) => {
+                                models.set(list);
+                                (true, t(loc, "status.settings_saved").into())
+                            }
+                            Err(err) => {
+                                // The profile is already stored: say so and
+                                // reload the list instead of showing a stale one.
+                                self.refresh_models();
+                                (false, report_unreadable_reply(loc, &err))
+                            }
+                        };
                     let v = invoke("get_settings", JsValue::UNDEFINED).await;
                     if let Ok(cfg) = serde_wasm_bindgen::from_value::<Settings>(v) {
                         settings.set(normalized_settings(cfg));
                     }
                     model_form.set(None);
                     model_form_key.set(String::new());
-                    model_form_msg.set(Some((true, t(loc, "status.settings_saved").into())));
+                    model_form_msg.set(Some(outcome));
                 }
                 Err(err) => {
                     model_form_msg.set(Some((false, localize_backend(loc, &js_error_text(err)))));
@@ -355,10 +437,11 @@ impl ModelSettingsState {
             return;
         }
         let existing = models.get();
-        let has_chat = entries
+        let has_chat = entries.iter().any(|entry| {
+            !entry.is_image_model() && !entry.is_video_model() && !entry.use_for_expert
+        }) || existing
             .iter()
-            .any(|entry| !entry.is_image_model() && !entry.is_video_model())
-            || existing.iter().any(|profile| profile.is_chat_model());
+            .any(|profile| profile.is_chat_model() && !profile.use_for_expert);
         if !has_chat {
             model_form_msg.set(Some((false, t(loc, "models.need_chat").into())));
             return;
@@ -371,11 +454,23 @@ impl ModelSettingsState {
             )));
             return;
         }
+        if let Some(err_key) = route_error(
+            form.proxy_url.as_deref().unwrap_or_default(),
+            form.proxy_custom,
+        ) {
+            let err = t(loc, err_key);
+            model_form_msg.set(Some((
+                false,
+                tf(loc, "status.save_failed", &[("msg", &err)]),
+            )));
+            return;
+        }
+        let proxy_url = form.proxy_url.as_deref().map(str::trim).map(str::to_string);
         // Image and video models first, then extra chat models, first chat
         // last so `save_model` leaves the cheaper/default chat profile active.
-        let first_chat = entries
-            .iter()
-            .position(|entry| !entry.is_image_model() && !entry.is_video_model());
+        let first_chat = entries.iter().position(|entry| {
+            !entry.is_image_model() && !entry.is_video_model() && !entry.use_for_expert
+        });
         let mut ordered = Vec::with_capacity(entries.len());
         if let Some(first) = first_chat {
             let default_chat = entries.remove(first);
@@ -414,7 +509,7 @@ impl ModelSettingsState {
                 let image = entry.is_image_model();
                 let video = entry.is_video_model();
                 let media = image || video;
-                let profile = serde_json::json!({
+                let mut profile = serde_json::json!({
                     "id": "",
                     "label": entry.label.trim(),
                     "provider": provider,
@@ -431,6 +526,7 @@ impl ModelSettingsState {
                     "session_header_name": form.session_header_name,
                     "supports_vision": entry.supports_vision && !media,
                     "use_for_vision": entry.use_for_vision && !media,
+                    "use_for_expert": entry.use_for_expert && !media,
                     "use_for_image_generation": image,
                     "image_size": "",
                     "image_quality": "",
@@ -441,15 +537,23 @@ impl ModelSettingsState {
                     "video_aspect_ratio": Option::<String>::None,
                     "video_resolution": Option::<String>::None,
                 });
-                let arg = to_value(&serde_json::json!({
+                if let Some(proxy_url) = &proxy_url {
+                    profile["proxy_url"] = proxy_url.as_str().into();
+                }
+                let arg = match json_args(&serde_json::json!({
                     "profile": profile,
                     "key": key_arg,
                     "useForVision": entry.use_for_vision && !media,
                     "useForImageGeneration": image,
                     "useForVideoGeneration": video,
-                }))
-                .unwrap();
-                match invoke_checked("save_model", arg).await {
+                })) {
+                    Ok(arg) => arg,
+                    Err(err) => {
+                        last_err = Some(err.to_string());
+                        break;
+                    }
+                };
+                match invoke_timeout("save_model", arg, SAVE_MODEL_TIMEOUT_MS).await {
                     Ok(v) => last_ok = Some(v),
                     Err(err) => {
                         last_err = Some(js_error_text(err));
@@ -462,9 +566,16 @@ impl ModelSettingsState {
                 settings_busy.set(false);
                 return;
             }
+            let mut outcome: (bool, String) = (true, t(loc, "status.settings_saved").into());
             if let Some(v) = last_ok {
-                if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
-                    models.set(list);
+                match serde_wasm_bindgen::from_value::<Vec<ModelProfile>>(v) {
+                    Ok(list) => models.set(list),
+                    Err(err) => {
+                        // Every profile is already stored: say so and reload
+                        // the list instead of showing a stale one.
+                        self.refresh_models();
+                        outcome = (false, report_unreadable_reply(loc, &err));
+                    }
                 }
             }
             let v = invoke("get_settings", JsValue::UNDEFINED).await;
@@ -473,7 +584,7 @@ impl ModelSettingsState {
             }
             model_form.set(None);
             model_form_key.set(String::new());
-            model_form_msg.set(Some((true, t(loc, "status.settings_saved").into())));
+            model_form_msg.set(Some(outcome));
             settings_busy.set(false);
         });
     }
@@ -532,7 +643,10 @@ impl ModelSettingsState {
             (form, has_key, profile_id)
         };
         let cfg = model_form_to_settings(&form, has_key);
-        if let Some(err_key) = settings_required_error_key(&cfg, &key) {
+        let proxy_url = model_form_proxy(&listed, &form);
+        if let Some(err_key) = settings_required_error_key(&cfg, &key)
+            .or_else(|| route_error(&proxy_url, form.proxy_custom))
+        {
             let err = t(loc, err_key);
             model_form_msg.set(Some((
                 false,
@@ -548,18 +662,26 @@ impl ModelSettingsState {
         let image = form.is_image_model();
         let vision = cfg.supports_vision && !image;
         spawn_local(async move {
-            let res = invoke_timeout(
-                "validate_settings",
-                to_value(&serde_json::json!({
-                    "settings": cfg,
-                    "key": key,
-                    "profileId": profile_id,
-                    "useForImageGeneration": image,
-                }))
-                .unwrap(),
-                35_000,
-            )
-            .await;
+            let args = match json_args(&serde_json::json!({
+                "settings": cfg,
+                "key": key,
+                "profileId": profile_id,
+                "useForImageGeneration": image,
+                "proxyUrl": proxy_url.trim(),
+            })) {
+                Ok(args) => args,
+                Err(err) => {
+                    let text = tf(
+                        loc,
+                        "status.validation_failed",
+                        &[("msg", &err.to_string())],
+                    );
+                    model_form_msg.set(Some((false, text)));
+                    settings_busy.set(false);
+                    return;
+                }
+            };
+            let res = invoke_timeout("validate_settings", args, 35_000).await;
             match res {
                 Ok(v) => {
                     let raw = v
@@ -694,6 +816,197 @@ impl ModelSettingsState {
                     Err(error) => model_form_msg.set(Some((false, error.to_string()))),
                 },
                 Err(error) => model_form_msg.set(Some((false, js_error_text(error)))),
+            }
+            settings_busy.set(false);
+        });
+    }
+
+    /// Export a saved custom specialist to a `.wisp-specialist.json` package.
+    /// The backend pauses with a secret warning until the user acknowledges it.
+    pub(crate) fn export_specialist(self, id: String, acknowledge_secrets: bool) {
+        let Self {
+            specialists,
+            specialist_form,
+            specialist_transfer,
+            model_form_msg,
+            settings_busy,
+            settings_message,
+            locale,
+            ..
+        } = self;
+        let report = move |ok: bool, text: String| {
+            if specialist_form.get_untracked().is_some() {
+                model_form_msg.set(Some((ok, text)));
+            } else {
+                settings_message.set(Some((ok, text)));
+            }
+        };
+        let loc = locale.get_untracked();
+        let name = specialists
+            .get_untracked()
+            .into_iter()
+            .find(|spec| spec.id == id)
+            .map(|spec| spec.name)
+            .unwrap_or_default();
+        settings_busy.set(true);
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({
+                "id": id,
+                "acknowledgeSecrets": acknowledge_secrets,
+            }))
+            .unwrap();
+            match invoke_checked("export_specialist", args).await {
+                Ok(value) => match serde_wasm_bindgen::from_value::<
+                    specialist_package::SpecialistExportOutcome,
+                >(value)
+                {
+                    Ok(specialist_package::SpecialistExportOutcome::SecretWarning { findings }) => {
+                        specialist_transfer.set(Some(SpecialistTransfer::SecretWarning {
+                            id,
+                            name,
+                            findings,
+                        }));
+                    }
+                    Ok(specialist_package::SpecialistExportOutcome::Cancelled) => {
+                        specialist_transfer.set(None);
+                    }
+                    Ok(specialist_package::SpecialistExportOutcome::Exported { path }) => {
+                        specialist_transfer.set(None);
+                        report(true, tf(loc, "specialists.export.done", &[("path", &path)]));
+                    }
+                    Err(error) => {
+                        specialist_transfer.set(None);
+                        report(false, error.to_string());
+                    }
+                },
+                Err(error) => {
+                    specialist_transfer.set(None);
+                    report(
+                        false,
+                        tf(
+                            loc,
+                            "specialists.export.failed",
+                            &[("msg", &localize_backend(loc, &js_error_text(error)))],
+                        ),
+                    );
+                }
+            }
+            settings_busy.set(false);
+        });
+    }
+
+    /// Pick a package and open its preview. Nothing is written until the user
+    /// confirms the preview.
+    pub(crate) fn pick_specialist_import(self) {
+        let Self {
+            specialist_transfer,
+            settings_busy,
+            settings_message,
+            locale,
+            ..
+        } = self;
+        let loc = locale.get_untracked();
+        let fail = move |error: JsValue| {
+            settings_message.set(Some((
+                false,
+                tf(
+                    loc,
+                    "specialists.import.failed",
+                    &[("msg", &localize_backend(loc, &js_error_text(error)))],
+                ),
+            )));
+        };
+        settings_message.set(None);
+        spawn_local(async move {
+            let path = match invoke_checked("pick_specialist_package", JsValue::UNDEFINED).await {
+                Ok(value) => value.as_string(),
+                Err(error) => return fail(error),
+            };
+            let Some(path) = path else {
+                return;
+            };
+            settings_busy.set(true);
+            let args = to_value(&serde_json::json!({ "path": path })).unwrap();
+            match invoke_checked("preview_specialist_import", args).await {
+                Ok(value) => match serde_wasm_bindgen::from_value::<
+                    specialist_package::SpecialistImportPreview,
+                >(value)
+                {
+                    Ok(preview) => {
+                        // Only an exact provider + model match is preselected;
+                        // anything else follows the active model until chosen.
+                        let model_id = preview
+                            .model_matches
+                            .iter()
+                            .find(|matched| matched.same_provider)
+                            .map(|matched| matched.id.clone())
+                            .unwrap_or_default();
+                        specialist_transfer.set(Some(SpecialistTransfer::Import {
+                            preview,
+                            model_id,
+                            reviewed: false,
+                            error: None,
+                        }));
+                    }
+                    Err(error) => settings_message.set(Some((false, error.to_string()))),
+                },
+                Err(error) => fail(error),
+            }
+            settings_busy.set(false);
+        });
+    }
+
+    pub(crate) fn confirm_specialist_import(self) {
+        let Self {
+            specialists,
+            specialist_transfer,
+            settings_busy,
+            settings_message,
+            locale,
+            ..
+        } = self;
+        let Some(SpecialistTransfer::Import {
+            preview,
+            model_id,
+            reviewed,
+            ..
+        }) = specialist_transfer.get_untracked()
+        else {
+            return;
+        };
+        if !reviewed || preview.name_conflict.is_some() || settings_busy.get_untracked() {
+            return;
+        }
+        let loc = locale.get_untracked();
+        let name = preview.package.name.trim().to_string();
+        settings_busy.set(true);
+        spawn_local(async move {
+            let args = to_value(&serde_json::json!({
+                "package": preview.package,
+                "modelId": model_id,
+            }))
+            .unwrap();
+            let failure = match invoke_checked("import_specialist", args).await {
+                Ok(value) => match serde_wasm_bindgen::from_value::<Vec<Specialist>>(value) {
+                    Ok(list) => {
+                        specialists.set(list);
+                        specialist_transfer.set(None);
+                        settings_message.set(Some((
+                            true,
+                            tf(loc, "specialists.import.done", &[("name", &name)]),
+                        )));
+                        None
+                    }
+                    Err(error) => Some(error.to_string()),
+                },
+                Err(error) => Some(localize_backend(loc, &js_error_text(error))),
+            };
+            if let Some(message) = failure {
+                specialist_transfer.update(|transfer| {
+                    if let Some(SpecialistTransfer::Import { error, .. }) = transfer {
+                        *error = Some(message);
+                    }
+                });
             }
             settings_busy.set(false);
         });

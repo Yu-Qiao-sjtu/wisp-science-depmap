@@ -45,6 +45,7 @@ dirs = "5"
 dunce = { workspace = true }
 reqwest = { workspace = true }
 regex = { workspace = true }
+roxmltree = "0.21"
 url = { workspace = true }
 glob = { workspace = true }
 ignore = { workspace = true }
@@ -56,12 +57,13 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 same-file = { workspace = true }
+tempfile = "3"
 portable-pty = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # TIFF -> PNG transcode for OOXML preview media plus PNG/WebP Pet atlases.
-image = { version = "0.25", default-features = false, features = ["tiff", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["tiff", "png", "webp", "jpeg", "gif", "bmp"] }
 which = "7"
 walkdir = { workspace = true }
 wisp-core = { workspace = true }
@@ -94,6 +96,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_System_LibraryLoader",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
@@ -102,12 +105,11 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6.15"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSUserNotification"] }
+objc2 = "0.6"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2 = "0.6"
 tao = "0.37.0"
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

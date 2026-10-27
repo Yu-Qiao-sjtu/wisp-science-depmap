@@ -10,6 +10,9 @@ struct NativeSelectableMessage: NSViewRepresentable {
     var monospaced = false
     var markdown: String?
     var revealed: String?
+    var images: [String: NSImage] = [:]
+    var unavailableImages: Set<String> = []
+    var openImage: ((String) -> Void)?
     @Environment(\.colorScheme) private var scheme
 
     func makeNSView(context: Context) -> NativeMessageTextView {
@@ -27,19 +30,24 @@ struct NativeSelectableMessage: NSViewRepresentable {
     func updateNSView(_ view: NativeMessageTextView, context: Context) { configure(view) }
     private func configure(_ view: NativeMessageTextView) {
         view.quote = quote; view.save = save
+        view.openImage = openImage
         view.linkTextAttributes = [.foregroundColor: NSColor(WispDesign.color("clay", scheme)), .underlineStyle: NSUnderlineStyle.single.rawValue]
-        view.apply(markdown.map { NativeMarkdownContent.render($0, saved: saved, revealed: revealed, scheme: scheme, width: view.bounds.width > 0 ? view.bounds.width : 600) }
+        view.apply(markdown.map { NativeMarkdownContent.render($0, saved: saved, revealed: revealed, scheme: scheme, width: view.bounds.width.isFinite && view.bounds.width > 0 ? view.bounds.width : 600, images: images, unavailableImages: unavailableImages) }
                    ?? Self.content(text, saved: saved, scheme: scheme, monospaced: monospaced))
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NativeMessageTextView, context: Context) -> CGSize? {
-        let width = max(1, proposal.width ?? 400)
+        // SwiftUI probes an unbounded width before placing a ScrollView child.
+        // Passing infinity to AppKit poisons table/code layout even after resize.
+        let proposed = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        let current = nsView.bounds.width.isFinite && nsView.bounds.width > 0 ? nsView.bounds.width : 400
+        let width = max(1, proposed ?? current)
         if nsView.frame.size.width != width { nsView.frame.size.width = width; configure(nsView) }
         guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
         container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
-        return CGSize(width: width, height: max(20, ceil(layout.usedRect(for: container).height)))
+        return CGSize(width: width, height: nsView.contentHeight())
     }
-    static func dismantleNSView(_ view: NativeMessageTextView, coordinator: ()) { view.quote = nil; view.save = nil }
+    static func dismantleNSView(_ view: NativeMessageTextView, coordinator: ()) { view.quote = nil; view.save = nil; view.openImage = nil }
     static func content(_ text: AttributedString, saved: [String], scheme: ColorScheme, monospaced: Bool = false) -> NSAttributedString {
         let value = NSMutableAttributedString(text)
         let plain = value.string
@@ -68,6 +76,7 @@ struct NativeSelectableMessage: NSViewRepresentable {
                 if intent.contains(.strikethrough) { value.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
             }
             value.addAttribute(.font, value: font, range: range)
+            if let image = run.imageURL { value.addAttribute(NativeImageContent.referenceKey, value: image.absoluteString, range: range) }
         }
         for excerpt in Set(saved) {
             for range in NativeSavedExcerpt.ranges(in: plain, excerpt: excerpt) {
@@ -85,6 +94,20 @@ final class NativeSelectionAction: NSObject {
     @objc func invoke(_ sender: Any?) { perform() }
 }
 class NativeMessageTextView: NSTextView {
+    func contentHeight() -> CGFloat {
+        guard let storage = textStorage, let layout = layoutManager, let container = textContainer else { return 20 }
+        layout.ensureLayout(for: container)
+        var height = layout.usedRect(for: container).height
+        // Markdown paragraph separators must remain selectable, but the empty
+        // AppKit insertion line after a final paragraph adds no reading content.
+        if storage.length > 0, storage.string.hasSuffix("\n"),
+           let paragraph = storage.attribute(.paragraphStyle, at: storage.length - 1, effectiveRange: nil) as? NSParagraphStyle,
+           paragraph.textBlocks.isEmpty {
+            let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: 0, length: max(0, storage.length - 1)), actualCharacterRange: nil)
+            height = layout.boundingRect(forGlyphRange: glyphs, in: container).maxY
+        }
+        return max(20, ceil(height))
+    }
     override func accessibilityValue() -> String? {
         textStorage.map { NativeMathContent.plainText($0) } ?? ""
     }
@@ -99,9 +122,12 @@ class NativeMessageTextView: NSTextView {
     private var copyLayoutWidth: CGFloat = -1
     private var copyButtons: [NSButton] = []
     private var copyActions: [NativeSelectionAction] = []
+    private var imageButtons: [NSButton] = []
+    private var imageActions: [NativeSelectionAction] = []
+    var openImage: ((String) -> Void)?
     override func accessibilityChildren() -> [Any]? {
         let existing = super.accessibilityChildren() ?? []
-        return existing + copyButtons.filter { button in !existing.contains { ($0 as? NSView) === button } }
+        return existing + (copyButtons + imageButtons).filter { button in !existing.contains { ($0 as? NSView) === button } }
     }
     override func layout() {
         super.layout()
@@ -136,11 +162,31 @@ class NativeMessageTextView: NSTextView {
             button.toolTip = title
             button.setAccessibilityLabel(title)
             button.identifier = NSUserInterfaceItemIdentifier(identifier)
-            button.frame = NSRect(x: max(0, bounds.width - 32), y: max(0, textContainerOrigin.y + rect.minY - 28), width: 24, height: 24)
+            button.frame = NSRect(x: max(0, bounds.width - 32), y: max(0, textContainerOrigin.y + rect.minY - (code != nil ? 4 : 28)), width: 24, height: 24)
             if button.superview !== self { addSubview(button) }
             copyButtons.append(button); copyActions.append(action)
         }
         for button in previous.values where !copyButtons.contains(where: { $0 === button }) { button.removeFromSuperview() }
+        let previousImages = Dictionary(uniqueKeysWithValues: imageButtons.compactMap { button in button.identifier.map { ($0.rawValue, button) } })
+        imageButtons = []; imageActions = []
+        storage.enumerateAttribute(NativeImageContent.previewKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let reference = value as? String else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+            let action = NativeSelectionAction { [weak self] in self?.openImage?(reference) }
+            let identifier = "message-image-\(range.location)"
+            let button = previousImages[identifier] ?? NSButton(title: "", target: nil, action: nil)
+            button.target = action; button.action = #selector(NativeSelectionAction.invoke(_:))
+            button.isBordered = false
+            let name = storage.attribute(NativeMathContent.sourceKey, at: range.location, effectiveRange: nil) as? String ?? reference
+            let title = localized("打开图片预览") + " · " + (name.isEmpty ? reference : name)
+            button.toolTip = title; button.setAccessibilityLabel(title)
+            button.identifier = NSUserInterfaceItemIdentifier(identifier)
+            button.frame = rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            if button.superview !== self { addSubview(button) }
+            imageButtons.append(button); imageActions.append(action)
+        }
+        for button in previousImages.values where !imageButtons.contains(where: { $0 === button }) { button.removeFromSuperview() }
     }
 
     var quote: ((String) -> Void)?
@@ -148,11 +194,17 @@ class NativeMessageTextView: NSTextView {
     func apply(_ content: NSAttributedString) {
         guard let storage = textStorage, !storage.isEqual(to: content) else { return }
         let selected = selectedRange()
+        let plainStart = selected.location <= storage.length ? (NativeMathContent.plainText(storage.attributedSubstring(from: NSRange(location: 0, length: selected.location))) as NSString).length : 0
+        let plainLength = NSMaxRange(selected) <= storage.length ? (NativeMathContent.plainText(storage.attributedSubstring(from: selected)) as NSString).length : 0
         storage.setAttributedString(content)
         copyLayoutWidth = -1
         needsLayout = true
-        let start = min(selected.location, storage.length)
-        setSelectedRange(NSRange(location: start, length: min(selected.length, storage.length - start)))
+        if selected.length > 0, plainLength > 0, plainStart + plainLength <= (NativeMathContent.plainText(content) as NSString).length {
+            setSelectedRange(NativeMathContent.renderedRange(NSRange(location: plainStart, length: plainLength), in: content))
+        } else {
+            let start = min(selected.location, storage.length)
+            setSelectedRange(NSRange(location: start, length: min(selected.length, storage.length - start)))
+        }
     }
     func selectionActions() -> [NSMenuItem] {
         let range = selectedRange()
@@ -164,7 +216,7 @@ class NativeMessageTextView: NSTextView {
         return [("引用到侧聊", "chat", quote), ("收藏划线", "star", save)].compactMap { title, icon, callback in
             guard let callback else { return nil }
             let action = NativeSelectionAction { callback(selected) }
-            let item = NSMenuItem(title: title, action: #selector(NativeSelectionAction.invoke(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: localized(title), action: #selector(NativeSelectionAction.invoke(_:)), keyEquivalent: "")
             item.target = action; item.representedObject = action
             let image = WispDesign.image("icon-" + icon); image.size = NSSize(width: 16, height: 16); item.image = image
             return item
@@ -184,7 +236,7 @@ class NativeMessageTextView: NSTextView {
         return [("复制代码", NativeMarkdownContent.codeCopy), ("复制表格", NativeMarkdownContent.tableCopy), ("复制公式", NativeMathContent.formulaCopy)].compactMap { title, key in
             guard let text = storage.attribute(key, at: index, effectiveRange: nil) as? String else { return nil }
             let action = NativeSelectionAction { copy(text) }
-            let item = NSMenuItem(title: title, action: #selector(NativeSelectionAction.invoke(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: localized(title), action: #selector(NativeSelectionAction.invoke(_:)), keyEquivalent: "")
             item.target = action; item.representedObject = action
             return item
         }
