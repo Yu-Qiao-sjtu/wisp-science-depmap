@@ -536,9 +536,20 @@ mod tests {
         let paths = local_paths(&working, &["results/qc.csv".into(), "results".into()]).unwrap();
         assert_eq!(paths[0].requested_path, "results/qc.csv");
         assert_eq!(paths[1].relative_path, "results");
+        let strip_verbatim = |path: &Path| {
+            path.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('/', "\\")
+        };
         assert_eq!(
-            Path::new(&paths[0].absolute_path),
-            working.canonicalize().unwrap().join("results/qc.csv")
+            strip_verbatim(Path::new(&paths[0].absolute_path)),
+            strip_verbatim(
+                &working
+                    .canonicalize()
+                    .unwrap()
+                    .join("results")
+                    .join("qc.csv")
+            )
         );
         assert!(local_paths(&working, &[]).is_err());
         assert!(local_paths(&working, &["results".into(), "results".into()]).is_err());

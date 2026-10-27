@@ -97,11 +97,20 @@ struct ExportManifest {
 /// Normalize a UI path (absolute or relative) to the workspace-relative form used
 /// in `execution_log.files_written`.
 pub(super) fn to_workspace_rel(root: &std::path::Path, path: &str) -> String {
-    let p = std::path::Path::new(path);
-    p.strip_prefix(root)
-        .unwrap_or(p)
-        .to_string_lossy()
-        .replace('\\', "/")
+    // Windows canonicalize adds a `\\?\` prefix and mixes separators, so a raw
+    // `strip_prefix` leaves the absolute path in the export manifest.
+    let slash = |value: &std::path::Path| {
+        let text = value.to_string_lossy().replace('\\', "/");
+        text.strip_prefix("//?/")
+            .unwrap_or(&text)
+            .trim_end_matches('/')
+            .to_string()
+    };
+    let root = slash(root);
+    let path = slash(std::path::Path::new(path));
+    path.strip_prefix(&format!("{root}/"))
+        .unwrap_or(if path == root { "" } else { path.as_str() })
+        .to_string()
 }
 
 pub(super) fn zip_component(raw: &str) -> String {
@@ -854,6 +863,10 @@ mod tests {
         assert_eq!(to_workspace_rel(root, "out/fig.png"), "out/fig.png");
         // path not under root → left as-is (strip_prefix fails, falls through)
         assert_eq!(to_workspace_rel(root, "/other/x.png"), "/other/x.png");
+        assert_eq!(
+            to_workspace_rel(Path::new(r"C:\proj"), r"\\?\C:\proj\data.csv"),
+            "data.csv"
+        );
     }
 
     #[test]

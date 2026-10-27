@@ -6082,7 +6082,7 @@ export function tauriMock(fixtures?: { xlsxBase64?: string; pptxBase64?: string;
               title: "Mock conversation",
               start_user_index: start,
               end_user_index: end,
-              text: "User:\nfirst idea\n\nAssistant:\nHello from mock wisp-science.\n\nUser:\nsecond idea\n\nAssistant:\nHello from mock wisp-science.",
+              text: "User:\nfirst idea\n\nAssistant:\nHello from mock wisp-depmap.\n\nUser:\nsecond idea\n\nAssistant:\nHello from mock wisp-depmap.",
               truncated: false,
             };
           }

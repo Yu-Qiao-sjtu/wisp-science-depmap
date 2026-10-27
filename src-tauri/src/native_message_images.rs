@@ -276,6 +276,7 @@ mod tests {
         )
         .await
         .is_err());
-        std::fs::remove_dir_all(root).unwrap();
+        // SQLite may still hold the file on Windows after the assertions.
+        let _ = std::fs::remove_dir_all(root);
     }
 }

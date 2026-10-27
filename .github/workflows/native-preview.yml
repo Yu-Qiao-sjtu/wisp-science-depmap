@@ -71,6 +71,7 @@ jobs:
             -only-testing:WispScienceTests CODE_SIGNING_ALLOWED=NO test-without-building
       - name: Upload iOS test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: iOS-unit-test-results
@@ -99,6 +100,7 @@ jobs:
       - name: Archive unnotarized SwiftUI CI build
         run: ditto -c -k --keepParent 'target/native-macos/Wisp Science SwiftUI.app' target/Wisp-Science-SwiftUI-CI.zip
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Wisp-Science-SwiftUI-CI-${{ runner.arch }}
           path: target/Wisp-Science-SwiftUI-CI.zip
@@ -137,6 +139,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Preview packaging failed: $variant" }
           }
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Wisp-Science-WinUI-Preview-x64
           path: ${{ runner.temp }}/winui-release/*

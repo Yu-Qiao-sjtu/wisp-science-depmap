@@ -172,6 +172,7 @@ jobs:
 
       - name: Upload headless eval artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: headless-agent-eval-${{ matrix.os }}
@@ -417,6 +418,7 @@ jobs:
       # artifact per shard so the four runners do not collide.
       - name: Upload Playwright results
         if: failure()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: playwright-results-${{ matrix.shard }}

@@ -55,6 +55,7 @@ jobs:
         run: ./gradlew :remote:test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:lintDebug --console=plain
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: android-test-results
           path: |

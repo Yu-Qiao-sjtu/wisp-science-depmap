@@ -2868,7 +2868,7 @@ test("composer # finds archived sessions by keyword and says when nothing matche
   await composerInput.pressSequentially("genome");
   const archived = menu.locator(".mention-item").filter({ hasText: "Archived genome assembly notes" });
   await expect(archived).toBeVisible();
-  await expect(archived.locator(".mention-item-sub")).toHaveText("wisp-science · Archived");
+  await expect(archived.locator(".mention-item-sub")).toHaveText("wisp-depmap · Archived");
   await expect.poll(() => lastInvokeArgs(page, "search_sessions")).toMatchObject({
     query: "genome",
     preferredProjectId: "default",
@@ -5042,7 +5042,7 @@ test("quote a range of turns into a new conversation as composer context", async
   await enterApp(page);
   await composer(page).fill("first idea");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
   await composer(page).fill("second idea");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".msg.user", { hasText: "second idea" })).toBeVisible();
@@ -5589,7 +5589,7 @@ test("dragging a sidebar conversation or group onto the composer attaches them a
   // only the other member.
   await expect(sidebar.locator('[data-session-id="drag-qc"]')).toHaveClass(/active/);
   await group.dragTo(composer(page));
-  await expect(labels).toHaveText(["wisp-science / Alignment notes"]);
+  await expect(labels).toHaveText(["wisp-depmap / Alignment notes"]);
   await cards.first().getByRole("button").click();
   await expect(cards).toHaveCount(0);
 
@@ -5601,7 +5601,7 @@ test("dragging a sidebar conversation or group onto the composer attaches them a
   await composer(page).fill("Compare these");
   await loose.dragTo(composer(page));
   await expect(cards).toHaveCount(1);
-  await expect(cards).toHaveAttribute("title", "wisp-science / Loose notes");
+  await expect(cards).toHaveAttribute("title", "wisp-depmap / Loose notes");
   await expect(composer(page)).toHaveValue("Compare these");
   await expect(composer(page)).toBeFocused();
   await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
@@ -5613,7 +5613,7 @@ test("dragging a sidebar conversation or group onto the composer attaches them a
   // A group adds every conversation in it, after the chips already there,
   // and moves nothing in the sidebar.
   await group.dragTo(composer(page));
-  await expect(labels).toHaveText(["wisp-science / Loose notes", "wisp-science / QC review", "wisp-science / Alignment notes"]);
+  await expect(labels).toHaveText(["wisp-depmap / Loose notes", "wisp-depmap / QC review", "wisp-depmap / Alignment notes"]);
   await group.dragTo(composer(page));
   await expect(cards).toHaveCount(3);
   expect(await page.evaluate(() =>
@@ -5622,7 +5622,7 @@ test("dragging a sidebar conversation or group onto the composer attaches them a
 
   // Removing one chip leaves the others; sending carries the rest as references.
   await cards.nth(1).getByRole("button").click();
-  await expect(labels).toHaveText(["wisp-science / Loose notes", "wisp-science / Alignment notes"]);
+  await expect(labels).toHaveText(["wisp-depmap / Loose notes", "wisp-depmap / Alignment notes"]);
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
     references: [{ kind: "session", id: "drag-loose" }, { kind: "session", id: "drag-align" }],
@@ -17242,7 +17242,6 @@ test("failed dynamic tasks and dependency-blocked tasks stay distinct", async ({
 
 test("clearing a failed task retry token limit requests unlimited budget", async ({ page }) => {
   await enterApp(page, "/?mockAgentWorkflow=partial");
-  await enableDelegation(page);
   await page.getByRole("button", { name: "Toggle panel" }).click();
   await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
   const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();

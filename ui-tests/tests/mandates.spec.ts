@@ -136,7 +136,7 @@ test("a mandate needs a goal and a future end date; the two forms share one Esca
   await form.getByTestId("mandate-save").click();
   const card = automation.locator(".mandate-card");
   await expect(card.locator("strong").first()).toHaveText("Improve the alignment benchmark");
-  await expect(card).toContainText("wisp-science · Next round 2026-09-09 16:00");
+  await expect(card).toContainText("wisp-depmap · Next round 2026-09-09 16:00");
   await expect(card).not.toContainText("until");
   await expect(card.locator(".mandate-kpis")).toHaveCount(0);
 });
@@ -176,7 +176,7 @@ test("a mandate that asks for help waits; replying on the card starts it again",
   await card.getByRole("button", { name: /Run a round now/ }).click();
   await expect(card).toHaveAttribute("data-status", "waiting");
   await expect(card.locator(".mandate-status")).toHaveText("Needs you");
-  await expect(card).toContainText("wisp-science · Waiting for you");
+  await expect(card).toContainText("wisp-depmap · Waiting for you");
   const request = card.getByTestId("mandate-request");
   await expect(request).toContainText("Sign-in · asked 2026-09-09 16:00");
   await expect(request).toContainText("NeedsSign in to the journal's submission system");

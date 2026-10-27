@@ -37,6 +37,7 @@ jobs:
       - name: Build standalone binary
         run: cargo build --release --locked -p wisp-server
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: wisp-server-linux-${{ matrix.arch }}
           path: |
