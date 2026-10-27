@@ -7,6 +7,7 @@
 !python
 !r
 !skills
+!specialists
 src-tauri/gen
 **/target
 **/__pycache__

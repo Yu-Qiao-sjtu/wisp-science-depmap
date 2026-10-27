@@ -60,12 +60,25 @@ function render() {
   document.getElementById("checksum-details").hidden = !asset;
   setText("package-checksum", asset?.sha256 || "");
   if (asset) primary.href = `${DOWNLOAD_ORIGIN}/downloads/${asset.key}`;
-  setText("install-help", !pkg ? "" : pkg.os === "macos"
-    ? text("打开 DMG，将 wisp-depmap 拖入 Applications。", "Open the DMG and drag wisp-depmap into Applications.")
-    : pkg.os === "windows" ? text("运行安装包并按提示完成安装。", "Run the installer and follow the setup steps.")
-    : pkg.os === "android" ? text("下载后打开 APK；首次安装需允许浏览器“安装未知应用”。升级时直接覆盖安装，无需卸载。", "Open the downloaded APK and allow your browser to install unknown apps the first time. Install updates over the existing app; no uninstall needed.")
-    : pkg.format === "deb" ? text("使用软件安装器打开 DEB，或运行 sudo apt install ./文件名.deb。", "Open the DEB with your software installer, or run sudo apt install ./filename.deb.")
-    : text("为 AppImage 添加执行权限后运行：chmod +x 文件名.AppImage。", "Make the AppImage executable with chmod +x filename.AppImage, then run it."));
+  setText("install-help", installHelp(pkg));
+}
+
+function installHelp(pkg) {
+  if (!pkg) return "";
+  if (pkg.format === "swiftui") return text(
+    "SwiftUI 需要 macOS 13 或更高版本。打开 DMG，将应用拖入 Applications，可与常规版并存。",
+    "SwiftUI requires macOS 13 or later. Open the DMG and drag the app into Applications. It installs alongside the standard app.");
+  if (pkg.format === "winui-framework") return text(
+    "轻量安装包会联网补齐缺失的运行时。",
+    "The lightweight installer downloads missing .NET and Windows App Runtime components.");
+  if (pkg.format === "winui-self-contained") return text(
+    "此包已包含 .NET 与 Windows App Runtime，下载更大。",
+    "Includes .NET and the Windows App Runtime. The download is larger.");
+  if (pkg.os === "macos") return text("打开 DMG，将 wisp-depmap 拖入 Applications。", "Open the DMG and drag wisp-depmap into Applications.");
+  if (pkg.os === "windows") return text("运行安装包并按提示完成安装。", "Run the installer and follow the setup steps.");
+  if (pkg.os === "android") return text("下载后打开 APK；首次安装需允许浏览器“安装未知应用”。升级时直接覆盖安装，无需卸载。", "Open the downloaded APK and allow your browser to install unknown apps the first time. Install updates over the existing app; no uninstall needed.");
+  if (pkg.format === "deb") return text("使用软件安装器打开 DEB，或运行 sudo apt install ./文件名.deb。", "Open the DEB with your software installer, or run sudo apt install ./filename.deb.");
+  return text("为 AppImage 添加执行权限后运行：chmod +x 文件名.AppImage。", "Make the AppImage executable with chmod +x filename.AppImage, then run it.");
 }
 
 os.value = /MacIntel/.test(navigator.platform) && navigator.maxTouchPoints > 1 ? "" : detectOS(navigator.platform, navigator.userAgent);
